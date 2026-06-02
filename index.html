@@ -557,10 +557,10 @@ async function seedIfEmpty() {
 
 // Load all live data
 async function loadAllData() {
-  showLoadingOverlay(true, 'Connecting to live database...');
+  // Loading in background - no overlay
   try {
     await seedIfEmpty();
-    showLoadingOverlay(true, 'Loading portfolio data...');
+    // Loading portfolio data...
     const [props, subs, meets, actions, visits, docs] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
@@ -652,8 +652,8 @@ async function loadAllData() {
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
     if(dot){dot.style.background='#5DCAA5';}if(lbl){lbl.textContent='Live database';}
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings`);
-  } catch(e) { console.error('Load error:',e); showToast('Database connection error — retrying...','warn'); setTimeout(loadAllData, 3000); }
-  showLoadingOverlay(false);
+  } catch(e) { console.error('Load error:',e); showToast('Loading in demo mode — database connecting...','warn'); }
+  // Load complete
 }
 
 function showLoadingOverlay(show, msg='Loading...') {
@@ -1456,14 +1456,25 @@ async function _finishLogin(){
     document.getElementById('sb-username').textContent=currentConsultantName;
     document.getElementById('sb-avatar').textContent=currentConsultantName.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   }
-  // Load live data
-  if(client==='park') await loadAllData();
+  // Show portal immediately with static data, then load live data in background
   populatePortfolio();populateMilestonesTable();
   renderDocFolders();populateDocFolderFilter();populatePanelPropertyList();
   if(role==='consultant')gotoView('submit',null);
   else gotoView('dashboard',null);
   setFirstNavActive();updateQueueBadge();refreshDashActions();
-  if(AT_CONNECTED) showToast('Connected to live database ✓','success');
+  // Load live data in background - portal is already usable
+  if(client==='park') {
+    loadAllData().then(() => {
+      if(AT_CONNECTED) {
+        populatePortfolio();populateMilestonesTable();
+        renderDocFolders();refreshDashActions();
+        showToast('Live database connected ✓','success');
+      }
+    }).catch(e => {
+      console.error('Background load failed:', e);
+      showToast('Running with demo data — database unavailable','warn');
+    });
+  }
 }
 
 function doLogout(){document.getElementById('portal-screen').classList.remove('active');document.getElementById('login-screen').style.display='flex';}
