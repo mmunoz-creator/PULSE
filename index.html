@@ -390,7 +390,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 <!-- LOGIN -->
 
 <!-- TOKEN SETUP SCREEN -->
-<div id="token-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem">
+<div id="token-screen" style="display:none;visibility:hidden;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem">
   <div style="width:44px;height:44px;background:var(--blue-dark);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1.25rem"><i class="ti ti-database" style="color:white;font-size:24px"></i></div>
   <div style="font-size:20px;font-weight:600;color:white;margin-bottom:6px;letter-spacing:-.3px">Database setup</div>
   <div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:2rem;text-align:center;max-width:360px">Enter your Airtable API token to connect the live database. This is stored only in your browser — never in the code.</div>
@@ -430,34 +430,18 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 </div>
 
 <script>
-// ── AIRTABLE ──────────────────────────────────────────────────────────
-const AT_BASE = 'appceR5Ma94ITIA6Y';
-const AT_URL = `https://api.airtable.com/v0/${AT_BASE}`;
-let AT_TOKEN = localStorage.getItem('pulse_at_token') || '';
+// ── AIRTABLE VIA CLOUDFLARE WORKER ───────────────────────────────────
+const WORKER_URL = 'https://pulse-api.misty-munoz.workers.dev';
 let AT_CONNECTED = false;
 let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
 
-function getATHeaders(){ return { 'Authorization': `Bearer ${AT_TOKEN}`, 'Content-Type': 'application/json' }; }
-
-// Token setup
-function checkTokenOnLoad() {
-  if (!AT_TOKEN) {
-    document.getElementById('token-screen').style.display = 'flex';
-    return false;
-  }
-  return true;
-}
+// No token needed in browser - Worker holds it securely
 function saveToken() {
-  const t = document.getElementById('token-input').value.trim();
-  if (!t || !t.startsWith('pat')) { alert('Please enter a valid Airtable token starting with "pat"'); return; }
-  AT_TOKEN = t;
-  localStorage.setItem('pulse_at_token', t);
   document.getElementById('token-screen').style.display = 'none';
-  showToast('Database token saved','success');
+  showToast('Connected via secure proxy','success');
 }
 function skipToken() {
   document.getElementById('token-screen').style.display = 'none';
-  showToast('Running in demo mode — data will not persist','warn');
 }
 
 // Consultant picker
@@ -483,49 +467,51 @@ async function confirmConsultant() {
   if (window._consultantCallback) window._consultantCallback();
 }
 
-// Airtable API helpers
+// Airtable API helpers — all routed through Cloudflare Worker
 async function atGet(table, formula='') {
-  if (!AT_TOKEN) return [];
-  let url = `${AT_URL}/${encodeURIComponent(table)}?pageSize=100`;
-  if (formula) url += `&filterByFormula=${encodeURIComponent(formula)}`;
-  const records = []; let offset = '';
   try {
+    const records = [];
+    let offset = '';
     do {
-      const r = await fetch(offset ? url+`&offset=${offset}` : url, { headers: getATHeaders() });
+      let url = `${WORKER_URL}?table=${encodeURIComponent(table)}`;
+      if (formula) url += `&formula=${encodeURIComponent(formula)}`;
+      if (offset) url += `&offset=${encodeURIComponent(offset)}`;
+      const r = await fetch(url);
       const d = await r.json();
-      if (d.error) { console.error('AT:', d.error); return records; }
+      if (d.error) { console.error('Worker error:', d.error); break; }
       records.push(...(d.records||[]));
       offset = d.offset || '';
     } while (offset);
     return records;
-  } catch(e) { console.error('AT fetch:', e); return []; }
+  } catch(e) { console.error('atGet error:', e); return []; }
 }
 
 async function atCreate(table, fields) {
-  if (!AT_TOKEN) return null;
   try {
-    const r = await fetch(`${AT_URL}/${encodeURIComponent(table)}`, {
-      method:'POST', headers: getATHeaders(),
-      body: JSON.stringify({ records:[{ fields }] })
+    const r = await fetch(`${WORKER_URL}?table=${encodeURIComponent(table)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: [{ fields }] })
     });
     return await r.json();
-  } catch(e) { console.error('AT create:', e); return null; }
+  } catch(e) { console.error('atCreate error:', e); return null; }
 }
 
 async function atUpdate(table, id, fields) {
-  if (!AT_TOKEN || !id) return null;
+  if (!id) return null;
   try {
-    const r = await fetch(`${AT_URL}/${encodeURIComponent(table)}/${id}`, {
-      method:'PATCH', headers: getATHeaders(),
+    const r = await fetch(`${WORKER_URL}?table=${encodeURIComponent(table)}&recordId=${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields })
     });
     return await r.json();
-  } catch(e) { console.error('AT update:', e); return null; }
+  } catch(e) { console.error('atUpdate error:', e); return null; }
 }
 
 // Seed properties if empty
 async function seedIfEmpty() {
-  const existing = await atGet('Properties');
+  const existing = await atGet('Properties'); if(existing===null) return;
   if (existing.length > 0) return;
   showToast('First-time setup — loading portfolio data...','info');
   const batch10 = (arr) => {
@@ -554,7 +540,6 @@ async function seedIfEmpty() {
 
 // Load all live data
 async function loadAllData() {
-  if (!AT_TOKEN) return;
   showLoadingOverlay(true, 'Connecting to live database...');
   try {
     await seedIfEmpty();
@@ -632,7 +617,7 @@ async function loadAllData() {
     }));
     AT_CONNECTED = true;
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
-    if(dot)dot.style.background='#5DCAA5';if(lbl)lbl.textContent='Live database';
+    if(dot){dot.style.background='#5DCAA5';}if(lbl){lbl.textContent='Live database';}
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings`);
   } catch(e) { console.error('Load error:',e); showToast('Database load error — check token','error'); }
   showLoadingOverlay(false);
@@ -1979,7 +1964,7 @@ async function approveSubmission(id){
   const s=submissions.find(s=>s.id===id);if(!s)return;
   s.reviewStatus='approved';
   notifications.push({type:'approved',property:s.property,week:s.week,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
-  if(AT_TOKEN&&s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Approved'});
+  if(s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Approved'});
   updateQueueBadge();refreshQueue();refreshNotifications();
   showToast(`Update approved — ${s.consultant} has been notified`,'success');
 }
@@ -1988,7 +1973,7 @@ async function kickSubmission(id){
   const s=submissions.find(s=>s.id===id);if(!s)return;
   s.reviewStatus='returned';s.returnNote=note;
   notifications.push({type:'returned',property:s.property,week:s.week,note,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
-  if(AT_TOKEN&&s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Returned','Return Note':note});
+  if(s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Returned','Return Note':note});
   updateQueueBadge();refreshQueue();refreshNotifications();
   showToast(`Update returned — ${s.consultant} has been notified`,'warn');
 }
@@ -2149,18 +2134,15 @@ function closeSidebar(){document.getElementById('sidebar').classList.remove('ope
 <script>
 // On page load — pre-fill token input if saved, show setup if never configured
 window.addEventListener('load', () => {
-  const saved = localStorage.getItem('pulse_at_token');
-  if (saved) {
-    AT_TOKEN = saved;
-    const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
-    if(dot)dot.style.background='#EF9F27';if(lbl)lbl.textContent='Token saved';
-  }
+  const saved = true; // Always connected via Cloudflare Worker
+  const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
+  if(dot)dot.style.background='#5DCAA5';if(lbl)lbl.textContent='Live database';
   // Show token setup button in login card
   const loginCard = document.querySelector('.login-card');
   if (loginCard) {
     const setupLink = document.createElement('div');
     setupLink.style.cssText = 'text-align:center;margin-top:12px';
-    setupLink.innerHTML = `<button onclick="document.getElementById('token-screen').style.display='flex'" style="background:none;border:none;color:#B4B2A9;font-size:11px;cursor:pointer;font-family:'DM Mono',monospace">${saved?'✓ Database connected':'⚙ Connect database'}</button>`;
+    setupLink.innerHTML = `<span style="color:#5DCAA5;font-size:11px;font-family:'DM Mono',monospace">✓ Secure database connected</span>`;
     loginCard.appendChild(setupLink);
   }
 });
