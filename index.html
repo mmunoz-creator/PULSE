@@ -1489,7 +1489,7 @@ async function _finishLogin(){
     loadAllData().then(() => {
       if(AT_CONNECTED) {
         populatePortfolio();populateMilestonesTable();
-        renderDocFolders();refreshDashActions();
+        renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();
         showToast('Live database connected ✓','success');
       }
     }).catch(e => {
@@ -1727,39 +1727,67 @@ async function saveMeeting(){
   if(!notes){alert('Please add meeting minutes / key discussion notes.');return;}
   const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const published=document.getElementById('m-publish').checked;
+  const meetingDate=document.getElementById('m-date').value;
+  const meetingType=document.getElementById('m-type').value;
+  const meetingFormat=document.getElementById('m-format').value;
+  const elevco=document.getElementById('m-elevco').value;
+  const location=document.getElementById('m-location').value;
+  const attVDA=document.getElementById('m-att-vda').value;
+  const attElev=document.getElementById('m-att-elev').value;
+  const attClient=document.getElementById('m-att-client').value;
+  const agenda=document.getElementById('m-agenda').value;
+  // Write to Airtable first
+  const res=await atCreate('Meetings',{
+    'Property Name':propName,
+    'Meeting Date':meetingDate,
+    'Meeting Type':meetingType,
+    'Meeting Format':meetingFormat,
+    'Elevator Company':elevco,
+    'Location':location,
+    'VDA Attendees':attVDA,
+    'Elevator Company Attendees':attElev,
+    'Client Attendees':attClient,
+    'Agenda':agenda,
+    'Discussion Notes':notes,
+    'Visibility':published?'Published':'Internal',
+  });
+  const atId=res?.records?.[0]?.id||null;
   const meeting={
-    id:'m'+Date.now(),property:propName,
-    date:document.getElementById('m-date').value,
-    type:document.getElementById('m-type').value,
-    format:document.getElementById('m-format').value,
-    elevco:document.getElementById('m-elevco').value,
-    location:document.getElementById('m-location').value,
-    attVDA:document.getElementById('m-att-vda').value,
-    attElev:document.getElementById('m-att-elev').value,
-    attClient:document.getElementById('m-att-client').value,
-    agenda:document.getElementById('m-agenda').value,
+    id:atId||'m'+Date.now(),atId,property:propName,
+    date:meetingDate,type:meetingType,format:meetingFormat,
+    elevco,location,attVDA,attElev,attClient,agenda,
     notes,published,createdAt:dateStr,
   };
   meetings.push(meeting);
-  // Collect action items
-  document.querySelectorAll('#action-items-list .action-row').forEach(row=>{
+  // Collect and write action items
+  const actionRows=document.querySelectorAll('#action-items-list .action-row');
+  for(const row of actionRows){
     const desc=row.querySelector('[id$="-desc"]')?.value?.trim();
-    if(!desc)return;
-    actionItems.push({
-      id:'a'+Date.now()+Math.random(),meetingId:meeting.id,property:propName,
-      description:desc,
-      owner:row.querySelector('[id$="-owner"]')?.value||'PM',
-      due:row.querySelector('[id$="-due"]')?.value||'TBD',
-      priority:row.querySelector('[id$="-priority"]')?.value||'Medium',
-      status:'Open',createdAt:dateStr,
+    if(!desc)continue;
+    const owner=row.querySelector('[id$="-owner"]')?.value||'PM';
+    const due=row.querySelector('[id$="-due"]')?.value||'TBD';
+    const priority=row.querySelector('[id$="-priority"]')?.value||'Medium';
+    const aRes=await atCreate('Action Items',{
+      'Property Name':propName,
+      'Meeting ID':atId||meeting.id,
+      'Description':desc,
+      'Owner':owner,
+      'Due Date':due,
+      'Priority':priority,
+      'Status':'Open',
     });
-  });
+    actionItems.push({
+      id:aRes?.records?.[0]?.id||'a'+Date.now()+Math.random(),
+      meetingId:meeting.id,property:propName,
+      description:desc,owner,due,priority,status:'Open',createdAt:dateStr,
+    });
+  }
   closePanel();
-  // Clear form
   ['m-location','m-att-vda','m-att-elev','m-att-client','m-agenda','m-notes'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   if(currentProp&&currentProp.n===propName){renderPropMeetings(currentProp);renderPropertyView(currentProp);}
   renderAllMeetings();refreshDashActions();
-  alert('Meeting logged successfully.'+(published?' Published to client portal.':' Visible to internal team only.'));
+  if(!atId)showToast('Meeting saved locally — Airtable write failed','warn');
+  else showToast('Meeting logged'+(published?' and published to client portal.':' — internal only.'),'success');
 }
 
 function renderPropMeetings(p){
@@ -1773,7 +1801,10 @@ function renderPropMeetings(p){
     visible.slice().reverse().map(m=>`<div class="meeting-card">
       <div class="meeting-card-header">
         <div><div class="meeting-card-title">${m.type}</div><div class="meeting-card-meta">${m.date} · ${m.elevco} · ${m.format}</div></div>
-        <span class="badge ${m.published?'b-public':'b-internal'}">${m.published?'Published':'Internal'}</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="badge ${m.published?'b-public':'b-internal'}">${m.published?'Published':'Internal'}</span>
+          <button class="btn btn-icon" onclick="downloadMeetingMinutes('${m.id}')" title="Download minutes"><i class="ti ti-download" style="font-size:14px"></i></button>
+        </div>
       </div>
       ${m.attVDA||m.attElev||m.attClient?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6">${m.attVDA?`VDA: ${m.attVDA} `:''}${m.attElev?`· Elev: ${m.attElev} `:''}${m.attClient?`· Client: ${m.attClient}`:''}</div>`:''}
       ${m.agenda?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px"><strong>Agenda:</strong> ${m.agenda}</div>`:''}
@@ -1790,6 +1821,155 @@ function renderPropMeetings(p){
 }
 
 async function closeAction(id){const a=actionItems.find(x=>x.id===id);if(a)a.status='Closed';if(currentProp)renderPropMeetings(currentProp);renderAllMeetings();refreshDashActions();}
+
+// DOWNLOAD HELPERS
+function downloadMeetingMinutes(meetingId){
+  const m=meetings.find(x=>x.id===meetingId);if(!m)return;
+  const propActions=actionItems.filter(a=>a.meetingId===meetingId);
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>
+    body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:13px;color:#2C2C2A;max-width:800px;margin:40px auto;padding:0 32px;line-height:1.6}
+    .header{background:#0a1628;color:white;padding:24px 28px;border-radius:8px;margin-bottom:28px}
+    .header-logo{font-size:20px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
+    .header-sub{font-size:11px;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px}
+    .header-prop{font-size:16px;font-weight:600;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.15)}
+    .header-meta{font-size:12px;color:rgba(255,255,255,0.6);margin-top:4px}
+    .section{margin-bottom:24px}
+    .section-title{font-size:11px;font-weight:700;color:#5F5E5A;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #185FA5;padding-bottom:6px;margin-bottom:12px}
+    .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;margin-bottom:16px}
+    .meta-item .label{font-size:10px;color:#B4B2A9;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px}
+    .meta-item .value{font-size:13px;color:#2C2C2A;font-weight:500}
+    .notes-box{background:#f8f8f6;border-left:3px solid #185FA5;padding:14px 16px;border-radius:0 6px 6px 0;white-space:pre-wrap;font-size:13px;line-height:1.7}
+    .action-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #e8e6e0;font-size:12px}
+    .action-row:last-child{border-bottom:none}
+    .dot{width:8px;height:8px;border-radius:50%;background:#A32D2D;flex-shrink:0;margin-top:4px}
+    .action-desc{flex:1}
+    .action-meta{font-size:11px;color:#B4B2A9;margin-top:2px}
+    .badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;font-family:monospace}
+    .b-high{background:#FCEBEB;color:#A32D2D}.b-medium{background:#FAEEDA;color:#854F0B}.b-low{background:#EAF3DE;color:#3B6D11}
+    .footer{text-align:center;font-size:10px;color:#B4B2A9;margin-top:40px;padding-top:16px;border-top:1px solid #e8e6e0;font-family:monospace}
+    @media print{body{margin:20px;padding:0 20px}}
+  </style></head><body>
+  <div class="header">
+    <div class="header-logo">PULSE</div>
+    <div class="header-sub">VDA Modernization Project Assurance · Meeting Minutes</div>
+    <div class="header-prop">${m.property}</div>
+    <div class="header-meta">${m.type} · ${m.date} · ${m.format}${m.location?' · '+m.location:''}</div>
+  </div>
+  <div class="section">
+    <div class="section-title">Meeting details</div>
+    <div class="meta-grid">
+      <div class="meta-item"><div class="label">Property</div><div class="value">${m.property}</div></div>
+      <div class="meta-item"><div class="label">Date</div><div class="value">${m.date}</div></div>
+      <div class="meta-item"><div class="label">Meeting type</div><div class="value">${m.type}</div></div>
+      <div class="meta-item"><div class="label">Format</div><div class="value">${m.format}</div></div>
+      <div class="meta-item"><div class="label">Elevator company</div><div class="value">${m.elevco||'—'}</div></div>
+      <div class="meta-item"><div class="label">Location / link</div><div class="value">${m.location||'—'}</div></div>
+    </div>
+  </div>
+  ${m.attVDA||m.attElev||m.attClient?`<div class="section">
+    <div class="section-title">Attendees</div>
+    <div class="meta-grid">
+      ${m.attVDA?`<div class="meta-item"><div class="label">VDA team</div><div class="value">${m.attVDA}</div></div>`:''}
+      ${m.attElev?`<div class="meta-item"><div class="label">Elevator company</div><div class="value">${m.attElev}</div></div>`:''}
+      ${m.attClient?`<div class="meta-item"><div class="label">Client / owner</div><div class="value">${m.attClient}</div></div>`:''}
+    </div>
+  </div>`:''}
+  ${m.agenda?`<div class="section">
+    <div class="section-title">Agenda</div>
+    <div class="notes-box">${m.agenda}</div>
+  </div>`:''}
+  <div class="section">
+    <div class="section-title">Discussion notes & decisions</div>
+    <div class="notes-box">${m.notes}</div>
+  </div>
+  ${propActions.length>0?`<div class="section">
+    <div class="section-title">Action items (${propActions.length})</div>
+    ${propActions.map(a=>`<div class="action-row">
+      <div class="dot"></div>
+      <div class="action-desc">
+        <strong>${a.description}</strong>
+        <div class="action-meta">Owner: ${a.owner} · Due: ${a.due} · <span class="badge b-${a.priority.toLowerCase()}">${a.priority}</span></div>
+      </div>
+    </div>`).join('')}
+  </div>`:''}
+  <div class="footer">PULSE · Park Hotels &amp; Resorts · VDA Modernization Project Assurance · Confidential<br>Generated ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
+  </body></html>`;
+  const blob=new Blob([html],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`Meeting-Minutes-${m.property.replace(/\s+/g,'-')}-${m.date}.html`;
+  a.click();URL.revokeObjectURL(url);
+  showToast('Meeting minutes downloaded — open in browser to print/save as PDF','info');
+}
+
+function downloadFieldUpdate(subId){
+  const s=submissions.find(x=>x.id===subId);if(!s)return;
+  const statusColor={pending:'#854F0B',approved:'#3B6D11',returned:'#A32D2D'}[s.reviewStatus]||'#5F5E5A';
+  const statusBg={pending:'#FAEEDA',approved:'#EAF3DE',returned:'#FCEBEB'}[s.reviewStatus]||'#F1EFE8';
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>
+    body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:13px;color:#2C2C2A;max-width:800px;margin:40px auto;padding:0 32px;line-height:1.6}
+    .header{background:#0a1628;color:white;padding:24px 28px;border-radius:8px;margin-bottom:28px}
+    .header-logo{font-size:20px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
+    .header-sub{font-size:11px;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px}
+    .header-prop{font-size:16px;font-weight:600;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.15)}
+    .header-meta{font-size:12px;color:rgba(255,255,255,0.6);margin-top:4px}
+    .section{margin-bottom:24px}
+    .section-title{font-size:11px;font-weight:700;color:#5F5E5A;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #185FA5;padding-bottom:6px;margin-bottom:12px}
+    .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;margin-bottom:16px}
+    .meta-item .label{font-size:10px;color:#B4B2A9;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px}
+    .meta-item .value{font-size:13px;color:#2C2C2A;font-weight:500}
+    .notes-box{background:#f8f8f6;border-left:3px solid #185FA5;padding:14px 16px;border-radius:0 6px 6px 0;white-space:pre-wrap;font-size:13px;line-height:1.7}
+    .status-pill{display:inline-block;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;font-family:monospace;text-transform:uppercase;letter-spacing:0.5px;background:${statusBg};color:${statusColor}}
+    .savings-box{background:#EAF3DE;border-left:3px solid #3B6D11;padding:12px 16px;border-radius:0 6px 6px 0;font-size:13px;color:#3B6D11;font-weight:500}
+    .footer{text-align:center;font-size:10px;color:#B4B2A9;margin-top:40px;padding-top:16px;border-top:1px solid #e8e6e0;font-family:monospace}
+    @media print{body{margin:20px;padding:0 20px}}
+  </style></head><body>
+  <div class="header">
+    <div class="header-logo">PULSE</div>
+    <div class="header-sub">VDA Modernization Project Assurance · Weekly Field Update</div>
+    <div class="header-prop">${s.property}</div>
+    <div class="header-meta">Week of ${s.week} · Submitted ${s.submittedAt}</div>
+  </div>
+  <div class="section">
+    <div class="section-title">Update details</div>
+    <div class="meta-grid">
+      <div class="meta-item"><div class="label">Property</div><div class="value">${s.property}</div></div>
+      <div class="meta-item"><div class="label">Report week</div><div class="value">${s.week}</div></div>
+      <div class="meta-item"><div class="label">Submitted by</div><div class="value">${s.consultant}</div></div>
+      <div class="meta-item"><div class="label">Submitted date</div><div class="value">${s.submittedAt}</div></div>
+      <div class="meta-item"><div class="label">Units updated</div><div class="value">${s.units||'—'}</div></div>
+      <div class="meta-item"><div class="label">Project phase</div><div class="value">${s.phase}</div></div>
+      <div class="meta-item"><div class="label">Progress status</div><div class="value">${s.status}</div></div>
+      <div class="meta-item"><div class="label">Review status</div><div class="value"><span class="status-pill">${s.reviewStatus}</span></div></div>
+      <div class="meta-item"><div class="label">Comment type</div><div class="value">${s.commentType}</div></div>
+      <div class="meta-item"><div class="label">Issue status</div><div class="value">${s.issueStatus}</div></div>
+    </div>
+  </div>
+  <div class="section">
+    <div class="section-title">Weekly notes</div>
+    <div class="notes-box">${s.notes}</div>
+  </div>
+  ${s.savings?`<div class="section">
+    <div class="section-title">Savings identified</div>
+    <div class="savings-box">💰 ${s.savings}</div>
+  </div>`:''}
+  ${s.returnNote?`<div class="section">
+    <div class="section-title">Return note from PM</div>
+    <div class="notes-box" style="border-left-color:#854F0B">${s.returnNote}</div>
+  </div>`:''}
+  <div class="footer">PULSE · Park Hotels &amp; Resorts · VDA Modernization Project Assurance · Confidential<br>Generated ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
+  </body></html>`;
+  const blob=new Blob([html],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`Field-Update-${s.property.replace(/\s+/g,'-')}-${s.week}.html`;
+  a.click();URL.revokeObjectURL(url);
+  showToast('Field update downloaded — open in browser to print/save as PDF','info');
+}
 
 function renderAllMeetings(){
   const openAI=actionItems.filter(a=>a.status==='Open');
@@ -2029,7 +2209,13 @@ function renderPropUpdates(p){
   if(visible.length===0){el.innerHTML=`<div class="empty-state" style="padding:1.5rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates yet</div></div>`;return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
   el.innerHTML=visible.slice().reverse().map(s=>`<div class="update-card">
-    <div class="update-card-header"><div class="update-card-title">Week of ${s.week} · ${s.units}</div><span class="badge ${scl[s.reviewStatus]}">${s.reviewStatus}</span></div>
+    <div class="update-card-header">
+      <div class="update-card-title">Week of ${s.week} · ${s.units}</div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="badge ${scl[s.reviewStatus]}">${s.reviewStatus}</span>
+        <button class="btn btn-icon" onclick="downloadFieldUpdate('${s.id}')" title="Download update"><i class="ti ti-download" style="font-size:14px"></i></button>
+      </div>
+    </div>
     <div class="update-card-meta">${s.phase} · ${s.status} · ${s.submittedAt}</div>
     <div class="update-card-body">${s.notes}</div>
     <div class="update-card-tags"><span class="badge b-nac">${s.commentType}</span><span class="badge b-nac">${s.issueStatus}</span>${s.savings?`<span class="badge b-track">${s.savings}</span>`:''}</div>
@@ -2118,8 +2304,8 @@ function refreshMyUpdates(){
   const c=document.getElementById('my-updates-container');if(!c)return;
   if(submissions.length===0){c.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates submitted yet</div></div>`;return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
-  c.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Property</th><th>Week</th><th>Submitted</th><th>Status</th><th>Return note</th></tr></thead><tbody>`+
-    submissions.slice().reverse().map(s=>`<tr><td>${s.property}</td><td style="font-family:'DM Mono',monospace;font-size:11px">${s.week}</td><td style="font-family:'DM Mono',monospace;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td></tr>`).join('')+
+  c.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Property</th><th>Week</th><th>Submitted</th><th>Status</th><th>Return note</th><th></th></tr></thead><tbody>`+
+    submissions.slice().reverse().map(s=>`<tr><td>${s.property}</td><td style="font-family:'DM Mono',monospace;font-size:11px">${s.week}</td><td style="font-family:'DM Mono',monospace;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td><button class="btn btn-icon" onclick="downloadFieldUpdate('${s.id}')" title="Download"><i class="ti ti-download" style="font-size:13px"></i></button></td></tr>`).join('')+
     `</tbody></table></div>`;
 }
 function refreshNotifications(){
