@@ -528,31 +528,42 @@ async function atDelete(table, id) {
 
 // Seed properties if empty
 async function seedIfEmpty() {
-  const existing = await atGet('Properties'); if(existing===null) return;
-  if (existing.length > 0) return;
+  const existing = await atGet('Properties');
+  if (existing.length > 0) { console.log(`Properties: ${existing.length} records found`); return; }
+  console.log('Seeding 44 properties via Worker...');
   showToast('First-time setup — loading portfolio data...','info');
+  const props = window.PROPERTIES_SEED || [];
   const batch10 = (arr) => {
     const chunks = [];
     for (let i=0; i<arr.length; i+=10) chunks.push(arr.slice(i,i+10));
     return chunks;
   };
-  const records = (window.PROPERTIES_SEED||[]).map(p => ({ fields: {
-    'Property Name': p.n, 'State': p.s, 'Address': p.addr,
-    'Elevator Company': p.ec, 'VDA Consultant': p.v,
-    'VDA Project Number': p.vda, 'Unit Count': String(p.units||0),
-    'Unit Description': p.ud||'', 'Status': p.st,
-    'Schedule': (!p.r||p.r==='—') ? '' : p.r,
-    'Asset Type': p.type, 'Forecasted Budget': p.budget||0,
-    'Comments': p.comment||'', 'Target Completion': p.target||'TBD'
-  }}));
-  for (const chunk of batch10(records)) {
-    await fetch(`${AT_URL}/Properties`, {
-      method:'POST', headers: getATHeaders(),
-      body: JSON.stringify({ records: chunk })
-    });
+  let seeded = 0;
+  for (const chunk of batch10(props)) {
+    const records = chunk.map(p => ({ fields: {
+      'Property Name': p.n, 'State': p.s, 'Address': p.addr,
+      'Elevator Company': p.ec, 'VDA Consultant': p.v,
+      'VDA Project Number': p.vda, 'Unit Count': String(p.units||0),
+      'Unit Description': p.ud||'', 'Status': p.st,
+      'Schedule': (!p.r||p.r==='—') ? '' : p.r,
+      'Asset Type': p.type, 'Forecasted Budget': p.budget||0,
+      'Comments': p.comment||'', 'Target Completion': p.target||'TBD'
+    }}));
+    try {
+      const r = await fetch(`${WORKER_URL}?table=Properties`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records })
+      });
+      const d = await r.json();
+      if (d.records) seeded += d.records.length;
+      else console.error('Seed batch error:', JSON.stringify(d));
+    } catch(e) { console.error('Seed batch failed:', e); }
     await new Promise(r=>setTimeout(r,300));
   }
-  showToast('Portfolio loaded into database!','success');
+  console.log(`Seeded ${seeded} properties`);
+  if (seeded > 0) showToast(`Portfolio loaded — ${seeded} properties added!`,'success');
+  else showToast('Seed failed — check console for details','error');
 }
 
 // Load all live data
