@@ -124,7 +124,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .b-behind{background:#FCEBEB;color:#A32D2D}.b-track{background:#EAF3DE;color:#3B6D11}.b-ahead{background:#E6F1FB;color:#185FA5}
 .b-pending{background:#FAEEDA;color:#854F0B}.b-approved{background:#EAF3DE;color:#3B6D11}.b-returned{background:#FCEBEB;color:#A32D2D}
 .b-core{background:#EEEDFE;color:#534AB7}.b-noncore{background:#F1EFE8;color:#5F5E5A}
-.b-public{background:#EAF3DE;color:#3B6D11}.b-restricted{background:#FAEEDA;color:#854F0B}.b-internal{background:#FCEBEB;color:#A32D2D}
+.b-draft{background:#EEEDFE;color:#534AB7}
 .b-ms-complete{background:#EAF3DE;color:#3B6D11}.b-ms-inprog{background:#E6F1FB;color:#185FA5}
 .b-ms-atrisk{background:#FAEEDA;color:#854F0B}.b-ms-notstart{background:#F1EFE8;color:#5F5E5A}
 .b-high{background:#FCEBEB;color:#A32D2D}.b-medium{background:#FAEEDA;color:#854F0B}.b-low{background:#EAF3DE;color:#3B6D11}
@@ -622,7 +622,7 @@ async function loadAllData() {
       returnNote: r.fields['Return Note']||'',
     }));
     meetings = meets.map(r => ({
-      id: r.id,
+      id: r.id, atId: r.id,
       property: r.fields['Property Name']||'',
       date: r.fields['Meeting Date']||'',
       type: r.fields['Meeting Type']||'',
@@ -635,6 +635,8 @@ async function loadAllData() {
       agenda: r.fields['Agenda']||'',
       notes: r.fields['Discussion Notes']||'',
       published: r.fields['Visibility']==='Published',
+      isDraft: r.fields['Visibility']==='Draft',
+      visibility: r.fields['Visibility']||'Internal',
       createdAt: r.fields['Meeting Date']||'',
     }));
     actionItems = actions.map(r => ({
@@ -780,11 +782,12 @@ window.PROPERTIES_SEED = [
 <div class="slide-panel" id="meeting-panel">
   <div class="panel-head">
     <div>
-      <div class="panel-head-title">Log meeting</div>
+      <div class="panel-head-title" id="panel-head-title">Log meeting</div>
       <div class="panel-head-sub" id="panel-prop-sub">Select a property</div>
     </div>
     <button class="panel-close" onclick="closePanel()"><i class="ti ti-x"></i></button>
   </div>
+  <input type="hidden" id="editing-draft-id" value="">
   <div class="panel-body">
     <!-- Meeting details -->
     <div class="panel-section">
@@ -891,6 +894,7 @@ window.PROPERTIES_SEED = [
   </div>
   <div class="panel-footer">
     <button class="btn btn-primary" onclick="saveMeeting()"><i class="ti ti-check"></i>Save meeting log</button>
+    <button class="btn" onclick="saveMeetingDraft()"><i class="ti ti-device-floppy"></i>Save draft</button>
     <button class="btn" onclick="closePanel()">Cancel</button>
   </div>
 </div>
@@ -1603,7 +1607,18 @@ function renderPropertyView(p){
   // Details
   document.getElementById('prop-details-list').innerHTML=`
     <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">VDA Project #</span><span style="font-family:'DM Mono',monospace">${p.vda||'—'}</span></div>
-    <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">Asset type</span><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}">${p.type}</span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px">
+      <div>
+        <div style="color:var(--gray-mid)">Core asset</div>
+        <div style="font-size:10px;color:var(--gray-light);margin-top:1px">Toggle on for Core, off for Non-core</div>
+      </div>
+      ${(role==='pm'||role==='admin')?`
+        <label class="toggle" title="${p.type==='Core'?'Core':'Non-core'}">
+          <input type="checkbox" id="asset-type-toggle" ${p.type==='Core'?'checked':''} onchange="updateAssetType('${p.id}','${p.n.replace(/'/g,"\\'")}',this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      `:`<span class="badge ${p.type==='Core'?'b-core':'b-noncore'}">${p.type}</span>`}
+    </div>
     <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">Elevator company</span><span>${p.ec}</span></div>
     <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">VDA consultant</span><span>${p.v}</span></div>
     <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:var(--gray-mid)">Status notes</span><span style="max-width:60%;text-align:right;font-size:11px;color:var(--gray-mid)">${p.comment||'—'}</span></div>`;
@@ -1680,6 +1695,8 @@ function openMeetingPanel(){
   document.getElementById('m-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('action-items-list').innerHTML='';
   document.getElementById('m-publish').checked=false;
+  document.getElementById('editing-draft-id').value='';
+  document.getElementById('panel-head-title').textContent='Log meeting';
   document.getElementById('panel-overlay').classList.add('open');
   document.getElementById('meeting-panel').classList.add('open');
 }
@@ -1690,12 +1707,107 @@ function openMeetingPanelGlobal(){
   document.getElementById('m-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('action-items-list').innerHTML='';
   document.getElementById('m-publish').checked=false;
+  document.getElementById('editing-draft-id').value='';
+  document.getElementById('panel-head-title').textContent='Log meeting';
   document.getElementById('panel-overlay').classList.add('open');
   document.getElementById('meeting-panel').classList.add('open');
+}
+
+async function openDraft(meetingId){
+  const m=meetings.find(x=>x.id===meetingId);if(!m)return;
+  // Populate form with draft data
+  document.getElementById('m-property').value=m.property;
+  document.getElementById('m-date').value=m.date;
+  document.getElementById('m-type').value=m.type;
+  document.getElementById('m-format').value=m.format||'In-person';
+  document.getElementById('m-elevco').value=m.elevco||'';
+  document.getElementById('m-location').value=m.location||'';
+  document.getElementById('m-att-vda').value=m.attVDA||'';
+  document.getElementById('m-att-elev').value=m.attElev||'';
+  document.getElementById('m-att-client').value=m.attClient||'';
+  document.getElementById('m-agenda').value=m.agenda||'';
+  document.getElementById('m-notes').value=m.notes||'';
+  document.getElementById('m-publish').checked=false;
+  document.getElementById('action-items-list').innerHTML='';
+  document.getElementById('editing-draft-id').value=m.id;
+  document.getElementById('panel-head-title').textContent='Continue draft';
+  document.getElementById('panel-prop-sub').textContent=m.property;
+  // Reload saved action items for this draft
+  const draftActions=actionItems.filter(a=>a.meetingId===meetingId);
+  draftActions.forEach(a=>{
+    const id='ar-'+actionRowCount++;
+    const row=document.createElement('div');row.className='action-row';row.id=id;
+    row.innerHTML=`<input class="form-input" type="text" placeholder="Action description" id="${id}-desc" value="${(a.description||'').replace(/"/g,'&quot;')}">
+      <input class="form-input" type="text" placeholder="Owner" id="${id}-owner" value="${(a.owner||'').replace(/"/g,'&quot;')}">
+      <input class="form-input" type="date" id="${id}-due" value="${a.due&&a.due!=='TBD'?a.due:''}">
+      <select class="form-select" id="${id}-priority"><option value="High"${a.priority==='High'?' selected':''}>High</option><option value="Medium"${a.priority==='Medium'?' selected':''}>Medium</option><option value="Low"${a.priority==='Low'?' selected':''}>Low</option></select>
+      <button class="remove-action-btn" onclick="this.parentElement.remove()"><i class="ti ti-x"></i></button>`;
+    document.getElementById('action-items-list').appendChild(row);
+  });
+  document.getElementById('panel-overlay').classList.add('open');
+  document.getElementById('meeting-panel').classList.add('open');
+}
+
+async function saveMeetingDraft(){
+  const propName=document.getElementById('m-property').value;
+  if(!propName){alert('Please select a property first.');return;}
+  const existingDraftId=document.getElementById('editing-draft-id').value;
+  const meetingDate=document.getElementById('m-date').value;
+  const meetingType=document.getElementById('m-type').value;
+  const meetingFormat=document.getElementById('m-format').value;
+  const elevco=document.getElementById('m-elevco').value;
+  const location=document.getElementById('m-location').value;
+  const attVDA=document.getElementById('m-att-vda').value;
+  const attElev=document.getElementById('m-att-elev').value;
+  const attClient=document.getElementById('m-att-client').value;
+  const agenda=document.getElementById('m-agenda').value;
+  const notes=document.getElementById('m-notes').value;
+  const fields={
+    'Property Name':propName,
+    'Meeting Date':meetingDate,
+    'Meeting Type':meetingType,
+    'Elevator Company':elevco,
+    'Location':location,
+    'VDA Attendees':attVDA,
+    'Elevator Company Attendees':attElev,
+    'Client Attendees':attClient,
+    'Agenda':agenda,
+    'Discussion Notes':notes,
+    'Visibility':'Draft',
+    'Logged by':'PM User',
+  };
+  let atId=existingDraftId;
+  if(existingDraftId){
+    // Update existing draft
+    await atUpdate('Meetings',existingDraftId,fields);
+    const m=meetings.find(x=>x.id===existingDraftId);
+    if(m){Object.assign(m,{property:propName,date:meetingDate,type:meetingType,format:meetingFormat,elevco,location,attVDA,attElev,attClient,agenda,notes,published:false});}
+  } else {
+    const res=await atCreate('Meetings',fields);
+    atId=res?.records?.[0]?.id||null;
+    const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    meetings.push({id:atId||'m'+Date.now(),atId,property:propName,date:meetingDate,type:meetingType,format:meetingFormat,elevco,location,attVDA,attElev,attClient,agenda,notes,published:false,isDraft:true,createdAt:dateStr});
+    if(atId)document.getElementById('editing-draft-id').value=atId;
+  }
+  // Save action items
+  const actionRows=document.querySelectorAll('#action-items-list .action-row');
+  for(const row of actionRows){
+    const desc=row.querySelector('[id$="-desc"]')?.value?.trim();if(!desc)continue;
+    const owner=row.querySelector('[id$="-owner"]')?.value||'PM';
+    const due=row.querySelector('[id$="-due"]')?.value||'TBD';
+    const priority=row.querySelector('[id$="-priority"]')?.value||'Medium';
+    await atCreate('Action Items',{'Property Name':propName,'Meeting ID':atId||'','Description':desc,'Owner':owner,'Due Date':due,'Priority':priority,'Status':'Open'});
+  }
+  closePanel();
+  renderAllMeetings();
+  if(currentProp&&currentProp.n===propName)renderPropMeetings(currentProp);
+  showToast('Draft saved — pick it up anytime from the Meeting log','success');
 }
 function closePanel(){
   document.getElementById('panel-overlay').classList.remove('open');
   document.getElementById('meeting-panel').classList.remove('open');
+  document.getElementById('editing-draft-id').value='';
+  document.getElementById('panel-head-title').textContent='Log meeting';
 }
 function populatePanelPropertyList(){
   const sel=document.getElementById('m-property');
@@ -1727,6 +1839,7 @@ async function saveMeeting(){
   if(!notes){alert('Please add meeting minutes / key discussion notes.');return;}
   const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const published=document.getElementById('m-publish').checked;
+  const existingDraftId=document.getElementById('editing-draft-id').value;
   const meetingDate=document.getElementById('m-date').value;
   const meetingType=document.getElementById('m-type').value;
   const meetingFormat=document.getElementById('m-format').value;
@@ -1736,12 +1849,18 @@ async function saveMeeting(){
   const attElev=document.getElementById('m-att-elev').value;
   const attClient=document.getElementById('m-att-client').value;
   const agenda=document.getElementById('m-agenda').value;
+  // If finalizing a draft, delete the draft record first
+  if(existingDraftId){
+    await atDelete('Meetings',existingDraftId);
+    meetings=meetings.filter(m=>m.id!==existingDraftId);
+    actionItems=actionItems.filter(a=>a.meetingId!==existingDraftId);
+  }
+  document.getElementById('editing-draft-id').value='';
   // Write to Airtable first
   const res=await atCreate('Meetings',{
     'Property Name':propName,
     'Meeting Date':meetingDate,
     'Meeting Type':meetingType,
-    'Meeting Format':meetingFormat,
     'Elevator Company':elevco,
     'Location':location,
     'VDA Attendees':attVDA,
@@ -1750,6 +1869,7 @@ async function saveMeeting(){
     'Agenda':agenda,
     'Discussion Notes':notes,
     'Visibility':published?'Published':'Internal',
+    'Logged by':'PM User',
   });
   const atId=res?.records?.[0]?.id||null;
   const meeting={
@@ -1802,13 +1922,13 @@ function renderPropMeetings(p){
       <div class="meeting-card-header">
         <div><div class="meeting-card-title">${m.type}</div><div class="meeting-card-meta">${m.date} · ${m.elevco} · ${m.format}</div></div>
         <div style="display:flex;align-items:center;gap:6px">
-          <span class="badge ${m.published?'b-public':'b-internal'}">${m.published?'Published':'Internal'}</span>
-          <button class="btn btn-icon" onclick="downloadMeetingMinutes('${m.id}')" title="Download minutes"><i class="ti ti-download" style="font-size:14px"></i></button>
+          <span class="badge ${m.published?'b-public':m.isDraft||m.visibility==='Draft'?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft||m.visibility==='Draft'?'Draft':'Internal'}</span>
+          ${m.isDraft||m.visibility==='Draft'?`<button class="btn btn-icon" onclick="openDraft('${m.id}')" title="Continue draft"><i class="ti ti-pencil" style="font-size:14px"></i></button>`:`<button class="btn btn-icon" onclick="downloadMeetingMinutes('${m.id}')" title="Download minutes"><i class="ti ti-download" style="font-size:14px"></i></button>`}
         </div>
       </div>
       ${m.attVDA||m.attElev||m.attClient?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6">${m.attVDA?`VDA: ${m.attVDA} `:''}${m.attElev?`· Elev: ${m.attElev} `:''}${m.attClient?`· Client: ${m.attClient}`:''}</div>`:''}
       ${m.agenda?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px"><strong>Agenda:</strong> ${m.agenda}</div>`:''}
-      <div class="meeting-card-body">${m.notes}</div>
+      <div class="meeting-card-body">${m.notes||''}</div>
     </div>`).join('');
   const aList=document.getElementById('prop-actions-list');
   if(aList)aList.innerHTML=propActions.length===0?
@@ -1931,7 +2051,11 @@ function renderAllMeetings(){
     `<div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged yet</div></div>`:
     meetings.slice().reverse().slice(0,5).map(m=>`<div class="meeting-card">
       <div class="meeting-card-header"><div><div class="meeting-card-title">${m.type} — ${m.property}</div><div class="meeting-card-meta">${m.date} · ${m.elevco}</div></div>
-      <span class="badge ${m.published?'b-public':'b-internal'}">${m.published?'Published':'Internal'}</span></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="badge ${m.published?'b-public':m.isDraft?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft?'Draft':'Internal'}</span>
+        ${m.isDraft?`<button class="btn btn-icon" onclick="openDraft('${m.id}')" title="Continue draft"><i class="ti ti-pencil" style="font-size:14px"></i></button>`:`<button class="btn btn-icon" onclick="downloadMeetingMinutes('${m.id}')" title="Download minutes"><i class="ti ti-download" style="font-size:14px"></i></button>`}
+      </div></div>
+      ${m.notes?`<div class="meeting-card-body" style="font-size:11px;color:var(--gray-mid);margin-top:6px">${m.notes.slice(0,120)}${m.notes.length>120?'...':''}</div>`:''}
     </div>`).join('');
 }
 
@@ -1941,6 +2065,23 @@ function refreshDashActions(){
   if(count)count.textContent=openAI.length+' open';
   if(el)el.innerHTML=openAI.length===0?`<div style="font-size:12px;color:var(--gray-mid)">No open action items across portfolio.</div>`:
     openAI.slice(0,4).map(a=>`<div class="action-item-row"><div class="action-dot dot-open"></div><div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${a.owner} · Due: ${a.due}</span></div></div>`).join('');
+}
+
+async function updateAssetType(propId, propName, isCore){
+  const newType=isCore?'Core':'Non-core';
+  // Update local portfolio
+  const p=PORTFOLIO.find(x=>x.n===propName);
+  if(p)p.type=newType;
+  // Write to Airtable
+  if(propId){
+    await atUpdate('Properties',propId,{'Asset Type':newType});
+    showToast(`${propName} set to ${newType}`,'success');
+  } else {
+    showToast(`${propName} set to ${newType} — Airtable ID missing, refresh to persist`,'warn');
+  }
+  // Refresh any visible tables
+  populatePortfolio();
+  populateMilestonesTable();
 }
 
 // SITE VISITS
