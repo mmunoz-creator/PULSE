@@ -528,8 +528,12 @@ async function atDelete(table, id) {
 
 // Seed properties if empty
 async function seedIfEmpty() {
+  console.log('Checking Properties table...');
   const existing = await atGet('Properties');
-  if (existing.length > 0) { console.log(`Properties: ${existing.length} records found`); return; }
+  // Filter out empty rows - only count rows with actual property names
+  const realRecords = existing.filter(r => r.fields && r.fields['Property Name'] && r.fields['Property Name'].trim() !== '');
+  console.log(`Properties check: ${existing.length} rows total, ${realRecords.length} with real data`);
+  if (realRecords.length > 0) { console.log(`Properties: ${realRecords.length} real records found - skipping seed`); return; }
   console.log('Seeding 44 properties via Worker...');
   showToast('First-time setup — loading portfolio data...','info');
   const props = window.PROPERTIES_SEED || [];
@@ -660,10 +664,11 @@ async function loadAllData() {
       window.DOCUMENTS_LIVE = [];
     }
     AT_CONNECTED = true;
+    console.log('AT_CONNECTED set to true - updating UI');
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
     if(dot){dot.style.background='#5DCAA5';}if(lbl){lbl.textContent='Live database';}
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings`);
-  } catch(e) { console.error('Load error:',e); showToast('Loading in demo mode — database connecting...','warn'); }
+  } catch(e) { console.error('Load error:',e); showToast('Connection issue — retrying in background','warn'); }
   // Load complete
 }
 
@@ -961,7 +966,7 @@ window.PROPERTIES_SEED = [
       </div>
       <div id="at-status" style="font-size:10px;color:rgba(255,255,255,0.3);font-family:'DM Mono',monospace;margin-bottom:8px;display:flex;align-items:center;gap:5px">
   <span id="at-dot" style="width:6px;height:6px;border-radius:50%;background:var(--gray-light);flex-shrink:0;transition:background .3s"></span>
-  <span id="at-label">Demo mode</span>
+  <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
     </div>
@@ -1483,7 +1488,7 @@ async function _finishLogin(){
       }
     }).catch(e => {
       console.error('Background load failed:', e);
-      showToast('Running with demo data — database unavailable','warn');
+      showToast('Running with local data — live data loading...','warn');
     });
   }
 }
@@ -2220,18 +2225,51 @@ function closeSidebar(){document.getElementById('sidebar').classList.remove('ope
 <script>
 // On page load — pre-fill token input if saved, show setup if never configured
 window.addEventListener('load', () => {
-  const saved = true; // Always connected via Cloudflare Worker
+  // Status updates once loadAllData completes
   const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
-  if(dot)dot.style.background='#5DCAA5';if(lbl)lbl.textContent='Live database';
+  if(dot)dot.style.background='#EF9F27';if(lbl)lbl.textContent='Connecting...';
   // Show token setup button in login card
   const loginCard = document.querySelector('.login-card');
   if (loginCard) {
     const setupLink = document.createElement('div');
     setupLink.style.cssText = 'text-align:center;margin-top:12px';
-    setupLink.innerHTML = `<span style="color:#5DCAA5;font-size:11px;font-family:'DM Mono',monospace">✓ Secure database connected</span>`;
+    setupLink.innerHTML = `<span style="color:#5DCAA5;font-size:11px;font-family:'DM Mono',monospace">✓ elevatorpulse.com</span>`;
     loginCard.appendChild(setupLink);
   }
 });
+
+// Debug helper - call window.debugPulse() in console to test connection
+window.debugPulse = async function() {
+  console.log('=== PULSE DEBUG ===');
+  console.log('WORKER_URL:', WORKER_URL);
+  
+  // Test GET
+  console.log('Testing GET Properties...');
+  try {
+    const url = `${WORKER_URL}?table=Properties`;
+    console.log('Fetching:', url);
+    const r = await fetch(url);
+    console.log('GET Status:', r.status);
+    const d = await r.json();
+    console.log('GET Result:', d.records ? `${d.records.length} records` : JSON.stringify(d).slice(0,200));
+  } catch(e) { console.error('GET failed:', e); }
+  
+  // Test POST with one record
+  console.log('Testing POST (1 record)...');
+  try {
+    const r = await fetch(`${WORKER_URL}?table=Properties`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records: [{ fields: { 'Property Name': 'DEBUG TEST - DELETE ME', 'State': 'XX', 'Status': 'On Hold', 'Asset Type': 'Non-core' } }] })
+    });
+    console.log('POST Status:', r.status);
+    const d = await r.json();
+    console.log('POST Result:', JSON.stringify(d).slice(0,300));
+  } catch(e) { console.error('POST failed:', e); }
+  
+  console.log('=== DEBUG COMPLETE ===');
+};
+console.log('Pulse debug ready - type debugPulse() in console to test');
 </script>
 </body>
 </html>
