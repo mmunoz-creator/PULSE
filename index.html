@@ -477,8 +477,14 @@ async function atGet(table, formula='') {
       if (formula) url += `&formula=${encodeURIComponent(formula)}`;
       if (offset) url += `&offset=${encodeURIComponent(offset)}`;
       const r = await fetch(url);
+      if (!r.ok) { 
+        console.error(`atGet ${table} failed: ${r.status} ${r.statusText}`);
+        const text = await r.text();
+        console.error('Response:', text);
+        return [];
+      }
       const d = await r.json();
-      if (d.error) { console.error('Worker error:', d.error); break; }
+      if (d.error) { console.error('Airtable error:', JSON.stringify(d.error)); return records; }
       records.push(...(d.records||[]));
       offset = d.offset || '';
     } while (offset);
@@ -507,6 +513,17 @@ async function atUpdate(table, id, fields) {
     });
     return await r.json();
   } catch(e) { console.error('atUpdate error:', e); return null; }
+}
+
+async function atDelete(table, id) {
+  if (!id) return null;
+  try {
+    const r = await fetch(`${WORKER_URL}?table=${encodeURIComponent(table)}&recordId=${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return await r.json();
+  } catch(e) { console.error('atDelete error:', e); return null; }
 }
 
 // Seed properties if empty
@@ -544,9 +561,10 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     showLoadingOverlay(true, 'Loading portfolio data...');
-    const [props, subs, meets, actions, visits] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
-      atGet('Meetings'), atGet('Action Items'), atGet('Site Visits')
+      atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
+      atGet('Documents')
     ]);
     if (props.length > 0) {
       window.PORTFOLIO = props.map(r => ({
@@ -615,11 +633,26 @@ async function loadAllData() {
       consultant: r.fields['Consultant Name']||'',
       purpose: r.fields['Purpose']||'',
     }));
+    // Map documents from Airtable
+    if (docs.length > 0) {
+      window.DOCUMENTS_LIVE = docs.map(r => ({
+        id: r.id,
+        name: r.fields['Document Name'] || '',
+        property: r.fields['Property Name'] || '',
+        type: r.fields['Document Type'] || 'Other',
+        uploaded: r.fields['Upload Date'] || '',
+        visibility: r.fields['Visibility'] || 'Internal',
+        size: r.fields['File Size'] || '',
+        uploadedBy: r.fields['Uploaded By'] || '',
+      }));
+    } else {
+      window.DOCUMENTS_LIVE = [];
+    }
     AT_CONNECTED = true;
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
     if(dot){dot.style.background='#5DCAA5';}if(lbl){lbl.textContent='Live database';}
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings`);
-  } catch(e) { console.error('Load error:',e); showToast('Database load error — check token','error'); }
+  } catch(e) { console.error('Load error:',e); showToast('Database connection error — retrying...','warn'); setTimeout(loadAllData, 3000); }
   showLoadingOverlay(false);
 }
 
@@ -1381,27 +1414,7 @@ const PORTFOLIO=[
   {n:'Juniper Hotel Cupertino',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:3,unitDesc:'3 Elev',vda:'—',type:'Non-core',budget:1536000,addr:'10050 S De Anza Blvd, Cupertino, CA',comment:'On Hold.',ms:[]},
 ];
 
-const DOCUMENTS=[
-  {id:'d1',name:'Casa Marina MOD Contract',property:'Casa Marina Key West',type:'Contract',uploaded:'Mar 2, 2026',visibility:'Public',size:'2.4 MB'},
-  {id:'d2',name:'Casa Marina Fixture Drawings — PE6 & PE7',property:'Casa Marina Key West',type:'Fixture Drawing',uploaded:'Mar 15, 2026',visibility:'Public',size:'8.1 MB'},
-  {id:'d3',name:'Casa Marina Schedule of Values',property:'Casa Marina Key West',type:'Schedule of Values',uploaded:'Mar 2, 2026',visibility:'Restricted',size:'0.8 MB'},
-  {id:'d4',name:'Casa Marina Site Survey Report',property:'Casa Marina Key West',type:'Survey',uploaded:'Dec 10, 2023',visibility:'Restricted',size:'5.2 MB'},
-  {id:'d5',name:'Royal Palm RFP Response — Elevated',property:'Royal Palm South Beach',type:'RFP',uploaded:'Jan 15, 2026',visibility:'Public',size:'3.2 MB'},
-  {id:'d6',name:'Royal Palm Fixture Drawings — All units',property:'Royal Palm South Beach',type:'Fixture Drawing',uploaded:'Feb 1, 2026',visibility:'Public',size:'12.4 MB'},
-  {id:'d7',name:'Royal Palm Schedule of Values',property:'Royal Palm South Beach',type:'Schedule of Values',uploaded:'May 20, 2024',visibility:'Restricted',size:'0.9 MB'},
-  {id:'d8',name:'NYC Hilton MOD Contract — Schindler',property:'New York Hilton Midtown',type:'Contract',uploaded:'Jan 5, 2026',visibility:'Public',size:'3.8 MB'},
-  {id:'d9',name:'NYC Hilton Schedule of Values',property:'New York Hilton Midtown',type:'Schedule of Values',uploaded:'Jan 5, 2026',visibility:'Restricted',size:'1.1 MB'},
-  {id:'d10',name:'VDA Fee Proposal — NYC',property:'New York Hilton Midtown',type:'Other',uploaded:'Feb 8, 2026',visibility:'Internal',size:'0.6 MB'},
-  {id:'d11',name:'Hilton Denver Elevator Survey',property:'Hilton Denver City Center',type:'Survey',uploaded:'Dec 20, 2025',visibility:'Public',size:'5.6 MB'},
-  {id:'d12',name:'Hilton Denver MOD Contract — Otis',property:'Hilton Denver City Center',type:'Contract',uploaded:'Dec 10, 2025',visibility:'Public',size:'2.9 MB'},
-  {id:'d13',name:'JW Marriott SF Site Survey',property:'JW Marriott San Francisco',type:'Survey',uploaded:'May 1, 2026',visibility:'Restricted',size:'4.2 MB'},
-  {id:'d14',name:'JW Marriott SF RFP Package',property:'JW Marriott San Francisco',type:'RFP',uploaded:'Apr 10, 2026',visibility:'Public',size:'2.1 MB'},
-  {id:'d15',name:'HHV Tapa Fixture Drawings',property:'HHV Tapa Low Rise',type:'Fixture Drawing',uploaded:'Apr 22, 2026',visibility:'Public',size:'9.3 MB'},
-  {id:'d16',name:'Hilton New Orleans MOD Contract',property:'Hilton New Orleans Riverside',type:'Contract',uploaded:'Sep 1, 2024',visibility:'Public',size:'4.1 MB'},
-  {id:'d17',name:'Hilton New Orleans Schedule of Values',property:'Hilton New Orleans Riverside',type:'Schedule of Values',uploaded:'Sep 1, 2024',visibility:'Restricted',size:'1.4 MB'},
-  {id:'d18',name:'McLean Tysons Tech Specification',property:'Hilton McLean Tysons Corner',type:'Survey',uploaded:'Nov 15, 2022',visibility:'Public',size:'6.1 MB'},
-  {id:'d19',name:'VDA Internal Fee Schedule Q2 2026',property:'All',type:'Other',uploaded:'Apr 1, 2026',visibility:'Internal',size:'0.4 MB'},
-];
+const DOCUMENTS=[];  // Documents loaded from Airtable
 
 const DOC_STYLES={
   'Contract':{bg:'#E6F1FB',color:'#185FA5',icon:'ti-file-certificate'},
@@ -1818,6 +1831,7 @@ function docItemHtml(d){
     <div class="doc-item-icon" style="background:${st.bg}"><i class="ti ${st.icon}" style="font-size:18px;color:${st.color}"></i></div>
     <div style="flex:1;min-width:0"><div class="doc-name">${d.name}</div><div class="doc-meta">${d.type} · ${d.size} · ${d.uploaded}</div></div>
     ${role!=='client'?`<span class="badge ${vc}" style="flex-shrink:0">${d.visibility}</span>`:''}
+    ${(role==='pm'||role==='admin')?`<button class="btn btn-icon" style="flex-shrink:0;background:var(--red-pale);border-color:#f7c1c1" onclick="deleteDoc('${d.id}','${d.name}')"><i class="ti ti-trash" style="color:var(--red)"></i></button>`:''}
     <button class="btn btn-icon" style="flex-shrink:0"><i class="ti ti-download"></i></button>
   </div>`;
 }
@@ -1834,10 +1848,60 @@ function folderHtml(propName,docs,isOpen){
       <i class="ti ti-chevron-right doc-folder-chevron${isOpen?' open':''}" id="${id}-chevron"></i>
     </div>
     <div class="doc-folder-body${isOpen?' open':''}" id="${id}-body">
-      ${canUpload?`<div class="doc-folder-actions"><button class="btn" style="font-size:11px"><i class="ti ti-upload"></i>Upload document</button></div>`:''}
+      ${canUpload?`<div class="doc-folder-actions" style="display:flex;gap:8px;align-items:center">
+      <button class="btn" style="font-size:11px" onclick="showDocUpload('${propName}')"><i class="ti ti-upload"></i>Upload document</button>
+    </div>`:''}
       ${docs.length===0?`<div class="doc-folder-empty">No documents uploaded yet${canUpload?' — click Upload above to add':''}</div>`:docs.map(d=>docItemHtml(d)).join('')}
     </div>
   </div>`;
+}
+
+async function showDocUpload(propName) {
+  const docName = prompt('Document name:', '');
+  if (!docName) return;
+  const docType = prompt('Document type:\n1. Contract\n2. RFP\n3. Survey\n4. Fixture Drawing\n5. Schedule of Values\n6. Other\nEnter number:', '1');
+  const typeMap = {'1':'Contract','2':'RFP','3':'Survey','4':'Fixture Drawing','5':'Schedule of Values','6':'Other'};
+  const type = typeMap[docType] || 'Other';
+  const visibility = role==='client' ? 'Public' : 
+    prompt('Visibility:\n1. Public (client can see)\n2. Restricted (PM & Admin only)\n3. Internal (Admin only)\nEnter number:', '1');
+  const visMap = {'1':'Public','2':'Restricted','3':'Internal'};
+  const vis = typeof visibility === 'string' && visibility.length > 1 ? visibility : (visMap[visibility]||'Restricted');
+  const today = new Date().toISOString().split('T')[0];
+  const newDoc = {
+    id: 'doc_'+Date.now(),
+    name: docName, property: propName,
+    type, visibility: vis,
+    uploaded: today, size: 'Pending upload',
+    uploadedBy: role==='pm'?'VDA PM':role==='admin'?'Admin':'Consultant'
+  };
+  // Write to Airtable
+  const res = await atCreate('Documents', {
+    'Document Name': docName,
+    'Property Name': propName,
+    'Document Type': type,
+    'Visibility': vis,
+    'Upload Date': today,
+    'Uploaded By': newDoc.uploadedBy,
+    'File Size': 'See attachment'
+  });
+  if (res?.records?.[0]) newDoc.id = res.records[0].id;
+  // Add to local cache
+  if (!window.DOCUMENTS_LIVE) window.DOCUMENTS_LIVE = [];
+  window.DOCUMENTS_LIVE.push(newDoc);
+  showToast(`Document "${docName}" logged. Attach the file in Airtable.`, 'success');
+  renderDocFolders();
+  if (currentProp && currentProp.n === propName) renderPropDocFolder(currentProp);
+}
+
+async function deleteDoc(docId, docName) {
+  if (!confirm(`Delete "${docName}"?`)) return;
+  await atDelete('Documents', docId);
+  if (window.DOCUMENTS_LIVE) {
+    window.DOCUMENTS_LIVE = window.DOCUMENTS_LIVE.filter(d => d.id !== docId);
+  }
+  showToast(`"${docName}" deleted`, 'warn');
+  renderDocFolders();
+  if (currentProp) renderPropDocFolder(currentProp);
 }
 
 function toggleFolder(id){
@@ -1856,7 +1920,7 @@ function renderDocFolders(){
   const tf=document.getElementById('doc-type-filter')?.value||'all';
   const container=document.getElementById('doc-folders-container');if(!container)return;
 
-  let docs=DOCUMENTS;
+  let docs=window.DOCUMENTS_LIVE||DOCUMENTS;
   if(role==='client')docs=docs.filter(d=>d.visibility==='Public');
   if(tf!=='all')docs=docs.filter(d=>d.type===tf);
 
@@ -1866,7 +1930,7 @@ function renderDocFolders(){
   let shown=0;
   propNames.forEach(name=>{
     let propDocs=docs.filter(d=>d.property===name||d.property==='All');
-    if(propDocs.length===0&&pf==='all'&&tf==='all')return; // hide empty in all view
+    if(propDocs.length===0&&pf==='all'&&tf==='all'&&(role!=='pm'&&role!=='admin'))return;
     html+=folderHtml(name,propDocs,pf!=='all'||shown<2);
     shown++;
   });
@@ -1876,11 +1940,11 @@ function renderDocFolders(){
 
 function renderPropDocFolder(p){
   const el=document.getElementById('prop-single-folder');if(!el)return;
-  let docs=DOCUMENTS.filter(d=>d.property===p.n||d.property==='All');
+  let docs=(window.DOCUMENTS_LIVE||DOCUMENTS).filter(d=>d.property===p.n||d.property==='All');
   if(role==='client')docs=docs.filter(d=>d.visibility==='Public');
   const canUpload=role==='pm'||role==='admin';
   el.innerHTML=`<div style="margin-bottom:.75rem">
-    ${canUpload?`<button class="btn" style="font-size:11px"><i class="ti ti-upload"></i>Upload document to ${p.n}</button>`:''}
+    ${canUpload?`<button class="btn" style="font-size:11px" onclick="showDocUpload('${p.n}')"><i class="ti ti-upload"></i>Upload document</button>`:''}
   </div>
   ${docs.length===0?`<div class="empty-state" style="padding:2rem"><i class="ti ti-files-off"></i><div class="empty-state-title">No documents for this property</div><div class="empty-state-sub">${canUpload?'Click Upload above to add documents':''}</div></div>`:
   `<div class="card" style="padding:0;overflow:hidden">${docs.map(d=>docItemHtml(d)).join('')}</div>`}`;
