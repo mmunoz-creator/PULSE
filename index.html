@@ -388,6 +388,323 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 <body>
 <div id="app">
 <!-- LOGIN -->
+
+<!-- TOKEN SETUP SCREEN -->
+<div id="token-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem">
+  <div style="width:44px;height:44px;background:var(--blue-dark);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1.25rem"><i class="ti ti-database" style="color:white;font-size:24px"></i></div>
+  <div style="font-size:20px;font-weight:600;color:white;margin-bottom:6px;letter-spacing:-.3px">Database setup</div>
+  <div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:2rem;text-align:center;max-width:360px">Enter your Airtable API token to connect the live database. This is stored only in your browser — never in the code.</div>
+  <div style="background:white;border-radius:12px;padding:1.5rem;width:100%;max-width:420px">
+    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'DM Mono',monospace;display:block;margin-bottom:6px">Airtable API token</label>
+    <input type="password" id="token-input" placeholder="pat..." style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;font-family:'DM Mono',monospace;margin-bottom:12px">
+    <button onclick="saveToken()" style="width:100%;padding:10px;background:#185FA5;color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer">Connect database</button>
+    <div style="text-align:center;margin-top:10px"><button onclick="skipToken()" style="background:none;border:none;color:#B4B2A9;font-size:12px;cursor:pointer">Skip for now — use demo data</button></div>
+  </div>
+</div>
+
+<!-- CONSULTANT PICKER SCREEN -->
+<div id="consultant-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem">
+  <div style="width:44px;height:44px;background:#0F6E56;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1.25rem"><i class="ti ti-hard-hat" style="color:white;font-size:24px"></i></div>
+  <div style="font-size:20px;font-weight:600;color:white;margin-bottom:6px;letter-spacing:-.3px">Who are you?</div>
+  <div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:2rem;text-align:center">Select your name — it will be attached to all updates you submit this session.</div>
+  <div style="background:white;border-radius:12px;padding:1.5rem;width:100%;max-width:380px">
+    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'DM Mono',monospace;display:block;margin-bottom:6px">Your name</label>
+    <select id="consultant-name-select" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A">
+      <option value="">Select your name...</option>
+      <option>Paul Parios</option>
+      <option>Nick Nikolai</option>
+      <option>Jim Himes</option>
+      <option>Ron Welts</option>
+      <option>Ken Donner</option>
+      <option>Dane Carollo</option>
+      <option>Jeff Sena</option>
+      <option>Jeff Hart</option>
+      <option>Rob Campbell</option>
+      <option>Robb Parks</option>
+      <option>Mike Loefler</option>
+      <option>Chris Shields</option>
+      <option>Jake Seibert</option>
+    </select>
+    <button onclick="confirmConsultant()" style="width:100%;padding:10px;background:#0F6E56;color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer">Continue to portal</button>
+  </div>
+</div>
+
+<script>
+// ── AIRTABLE ──────────────────────────────────────────────────────────
+const AT_BASE = 'appceR5Ma94ITIA6Y';
+const AT_URL = `https://api.airtable.com/v0/${AT_BASE}`;
+let AT_TOKEN = localStorage.getItem('pulse_at_token') || '';
+let AT_CONNECTED = false;
+let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
+
+function getATHeaders(){ return { 'Authorization': `Bearer ${AT_TOKEN}`, 'Content-Type': 'application/json' }; }
+
+// Token setup
+function checkTokenOnLoad() {
+  if (!AT_TOKEN) {
+    document.getElementById('token-screen').style.display = 'flex';
+    return false;
+  }
+  return true;
+}
+function saveToken() {
+  const t = document.getElementById('token-input').value.trim();
+  if (!t || !t.startsWith('pat')) { alert('Please enter a valid Airtable token starting with "pat"'); return; }
+  AT_TOKEN = t;
+  localStorage.setItem('pulse_at_token', t);
+  document.getElementById('token-screen').style.display = 'none';
+  showToast('Database token saved','success');
+}
+function skipToken() {
+  document.getElementById('token-screen').style.display = 'none';
+  showToast('Running in demo mode — data will not persist','warn');
+}
+
+// Consultant picker
+function showConsultantPicker(callback) {
+  const screen = document.getElementById('consultant-screen');
+  screen.style.display = 'flex';
+  window._consultantCallback = callback;
+  // Pre-select if already set this session
+  if (currentConsultantName) {
+    const sel = document.getElementById('consultant-name-select');
+    sel.value = currentConsultantName;
+  }
+}
+async function confirmConsultant() {
+  const name = document.getElementById('consultant-name-select').value;
+  if (!name) { alert('Please select your name to continue.'); return; }
+  currentConsultantName = name;
+  sessionStorage.setItem('pulse_consultant', name);
+  document.getElementById('consultant-screen').style.display = 'none';
+  // Update sidebar display
+  document.getElementById('sb-username').textContent = name;
+  document.getElementById('sb-avatar').textContent = name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  if (window._consultantCallback) window._consultantCallback();
+}
+
+// Airtable API helpers
+async function atGet(table, formula='') {
+  if (!AT_TOKEN) return [];
+  let url = `${AT_URL}/${encodeURIComponent(table)}?pageSize=100`;
+  if (formula) url += `&filterByFormula=${encodeURIComponent(formula)}`;
+  const records = []; let offset = '';
+  try {
+    do {
+      const r = await fetch(offset ? url+`&offset=${offset}` : url, { headers: getATHeaders() });
+      const d = await r.json();
+      if (d.error) { console.error('AT:', d.error); return records; }
+      records.push(...(d.records||[]));
+      offset = d.offset || '';
+    } while (offset);
+    return records;
+  } catch(e) { console.error('AT fetch:', e); return []; }
+}
+
+async function atCreate(table, fields) {
+  if (!AT_TOKEN) return null;
+  try {
+    const r = await fetch(`${AT_URL}/${encodeURIComponent(table)}`, {
+      method:'POST', headers: getATHeaders(),
+      body: JSON.stringify({ records:[{ fields }] })
+    });
+    return await r.json();
+  } catch(e) { console.error('AT create:', e); return null; }
+}
+
+async function atUpdate(table, id, fields) {
+  if (!AT_TOKEN || !id) return null;
+  try {
+    const r = await fetch(`${AT_URL}/${encodeURIComponent(table)}/${id}`, {
+      method:'PATCH', headers: getATHeaders(),
+      body: JSON.stringify({ fields })
+    });
+    return await r.json();
+  } catch(e) { console.error('AT update:', e); return null; }
+}
+
+// Seed properties if empty
+async function seedIfEmpty() {
+  const existing = await atGet('Properties');
+  if (existing.length > 0) return;
+  showToast('First-time setup — loading portfolio data...','info');
+  const batch10 = (arr) => {
+    const chunks = [];
+    for (let i=0; i<arr.length; i+=10) chunks.push(arr.slice(i,i+10));
+    return chunks;
+  };
+  const records = (window.PROPERTIES_SEED||[]).map(p => ({ fields: {
+    'Property Name': p.n, 'State': p.s, 'Address': p.addr,
+    'Elevator Company': p.ec, 'VDA Consultant': p.v,
+    'VDA Project Number': p.vda, 'Unit Count': String(p.units||0),
+    'Unit Description': p.ud||'', 'Status': p.st,
+    'Schedule': (!p.r||p.r==='—') ? '' : p.r,
+    'Asset Type': p.type, 'Forecasted Budget': p.budget||0,
+    'Comments': p.comment||'', 'Target Completion': p.target||'TBD'
+  }}));
+  for (const chunk of batch10(records)) {
+    await fetch(`${AT_URL}/Properties`, {
+      method:'POST', headers: getATHeaders(),
+      body: JSON.stringify({ records: chunk })
+    });
+    await new Promise(r=>setTimeout(r,300));
+  }
+  showToast('Portfolio loaded into database!','success');
+}
+
+// Load all live data
+async function loadAllData() {
+  if (!AT_TOKEN) return;
+  showLoadingOverlay(true, 'Connecting to live database...');
+  try {
+    await seedIfEmpty();
+    showLoadingOverlay(true, 'Loading portfolio data...');
+    const [props, subs, meets, actions, visits] = await Promise.all([
+      atGet('Properties'), atGet('Field Updates'),
+      atGet('Meetings'), atGet('Action Items'), atGet('Site Visits')
+    ]);
+    if (props.length > 0) {
+      window.PORTFOLIO = props.map(r => ({
+        id: r.id, n: r.fields['Property Name']||'',
+        s: r.fields['State']||'', addr: r.fields['Address']||'',
+        ec: r.fields['Elevator Company']||'TBD',
+        v: r.fields['VDA Consultant']||'',
+        vda: r.fields['VDA Project Number']||'—',
+        units: r.fields['Unit Count']||'0',
+        ud: r.fields['Unit Description']||'',
+        st: r.fields['Status']||'On Hold',
+        r: r.fields['Schedule']||'—',
+        type: r.fields['Asset Type']||'Non-core',
+        budget: r.fields['Forecasted Budget']||0,
+        comment: r.fields['Comments']||'',
+        target: r.fields['Target Completion']||'TBD',
+        ms: []
+      }));
+    }
+    submissions = subs.map(r => ({
+      id: r.id, atId: r.id,
+      property: r.fields['Property Name']||'',
+      consultant: r.fields['Consultant Name']||'',
+      units: r.fields['Units Updated']||'',
+      phase: r.fields['Project Phase']||'',
+      status: r.fields['Progress Status']||'',
+      week: r.fields['Report Week']||'',
+      notes: r.fields['Weekly Notes']||'',
+      commentType: r.fields['Comment Type']||'General',
+      issueStatus: r.fields['Issue Status']||'N/A',
+      savings: r.fields['Savings Identified']||'',
+      submittedAt: r.fields['Submitted Date']||'',
+      reviewStatus: (r.fields['Review Status']||'Pending').toLowerCase(),
+      returnNote: r.fields['Return Note']||'',
+    }));
+    meetings = meets.map(r => ({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      date: r.fields['Meeting Date']||'',
+      type: r.fields['Meeting Type']||'',
+      format: r.fields['Meeting Format']||'',
+      elevco: r.fields['Elevator Company']||'',
+      location: r.fields['Location']||'',
+      attVDA: r.fields['VDA Attendees']||'',
+      attElev: r.fields['Elevator Company Attendees']||'',
+      attClient: r.fields['Client Attendees']||'',
+      agenda: r.fields['Agenda']||'',
+      notes: r.fields['Discussion Notes']||'',
+      published: r.fields['Visibility']==='Published',
+      createdAt: r.fields['Meeting Date']||'',
+    }));
+    actionItems = actions.map(r => ({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      meetingId: r.fields['Meeting ID']||'',
+      description: r.fields['Description']||'',
+      owner: r.fields['Owner']||'',
+      due: r.fields['Due Date']||'TBD',
+      priority: r.fields['Priority']||'Medium',
+      status: r.fields['Status']||'Open',
+    }));
+    siteVisits = visits.map(r => ({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      date: r.fields['Visit Date']||'',
+      consultant: r.fields['Consultant Name']||'',
+      purpose: r.fields['Purpose']||'',
+    }));
+    AT_CONNECTED = true;
+    const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
+    if(dot)dot.style.background='#5DCAA5';if(lbl)lbl.textContent='Live database';
+    console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings`);
+  } catch(e) { console.error('Load error:',e); showToast('Database load error — check token','error'); }
+  showLoadingOverlay(false);
+}
+
+function showLoadingOverlay(show, msg='Loading...') {
+  let o = document.getElementById('loading-overlay');
+  if (!o) {
+    o = document.createElement('div');
+    o.id = 'loading-overlay';
+    o.style.cssText = 'position:fixed;inset:0;background:rgba(10,22,40,0.9);z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;color:white;font-family:"DM Sans",sans-serif';
+    o.innerHTML = `<div style="width:40px;height:40px;background:#185FA5;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:16px"><i class="ti ti-activity" style="font-size:22px"></i></div><div style="font-size:15px;font-weight:600;margin-bottom:6px">Pulse</div><div style="font-size:12px;color:rgba(255,255,255,0.5)" id="loading-msg"></div>`;
+    document.body.appendChild(o);
+  }
+  document.getElementById('loading-msg').textContent = msg;
+  o.style.display = show ? 'flex' : 'none';
+}
+
+function showToast(msg, type='info') {
+  const colors={info:'#185FA5',success:'#3B6D11',warn:'#854F0B',error:'#A32D2D'};
+  const t=document.createElement('div');
+  t.style.cssText=`position:fixed;bottom:24px;right:24px;background:${colors[type]};color:white;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:500;z-index:999;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:320px;line-height:1.4`;
+  t.textContent=msg;document.body.appendChild(t);
+  setTimeout(()=>t.remove(),4000);
+}
+</script>
+<script>
+window.PROPERTIES_SEED = [
+  {n:'Hilton Denver City Center',s:'CO',ec:'Otis',st:'Awarded',r:'On Track',v:'Dane Carollo',units:'12',ud:'5 Elev / 4 Esc',vda:'65153',type:'Core',budget:4400000,addr:'1701 California Street, Denver, CO',comment:'On site next week - 2nd car on pace for Thanksgiving pending AHJ inspection',target:'Aug 2025'},
+  {n:'Hilton New Orleans Riverside',s:'LA',ec:'Schindler',st:'Awarded',r:'On Track',v:'Ken Donner',units:'53',ud:'27 Elev / 4 Esc',vda:'72398',type:'Core',budget:19313175,addr:'2 Poydras Street, New Orleans, LA',comment:'Fixture Drawings - Schindler. Ken has submittals',target:'TBD'},
+  {n:'Hilton Chicago',s:'IL',ec:'TBD',st:'Active',r:'—',v:'Jeff Hart',units:'36',ud:'14 Elev',vda:'74588',type:'Core',budget:7000000,addr:'720 South Michigan Avenue, Chicago, IL',comment:'Waiting for revised bids to include destination dispatch',target:'TBD'},
+  {n:'Hilton Hawaiian Village',s:'HI',ec:'Otis',st:'Active',r:'On Track',v:'Jeff Sena',units:'64',ud:'10 Elev',vda:'67870',type:'Core',budget:5352500,addr:'2005 Kalia Road, Honolulu, HI',comment:'Moving forward with 6 units. Jeff completed final punch report.',target:'TBD'},
+  {n:'HHV Diamond Head Apartments',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:'2',ud:'2 Elev',vda:'67869',type:'Non-core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'',target:'NAC'},
+  {n:'HHV Rainbow Tower',s:'HI',ec:'TBD (Otis preferred)',st:'Active',r:'—',v:'Jeff Sena',units:'0',ud:'TBD',vda:'—',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'Cab design not finalized. Combining into one proposal.',target:'TBD'},
+  {n:'HHV Tapa Low Rise',s:'HI',ec:'Otis',st:'Active',r:'Behind',v:'Jeff Sena',units:'4',ud:'4 Elev',vda:'71667',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'Low Rise ready - waiting for designers and cab interiors to finalize.',target:'TBD'},
+  {n:'HHV Tapa High Rise',s:'HI',ec:'Otis',st:'Active',r:'—',v:'Jeff Sena',units:'4',ud:'4 Elev',vda:'71667',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'High Rise - contract should be ready soon.',target:'TBD'},
+  {n:'HHV Alii Tower',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:'3',ud:'3 Elev',vda:'79546',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'No proposals yet - Jeff working on.',target:'TBD'},
+  {n:'HHV Kalia',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:'3',ud:'3 Elev',vda:'77472',type:'Non-core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'No proposals yet - Jeff working on.',target:'TBD'},
+  {n:'Hyatt Regency Mission Bay',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'7',ud:'2 Elev',vda:'68304',type:'Non-core',budget:497420,addr:'1441 Quivira Road, San Diego, CA',comment:'Not moving forward until 2026-2027.',target:'TBD'},
+  {n:'Hilton Waikoloa Village',s:'HI',ec:'Otis',st:'Active',r:'On Track',v:'Jeff Sena',units:'20',ud:'2 Elev',vda:'73515',type:'Core',budget:1343900,addr:'69-425 Waikoloa Beach Drive, Waikoloa, HI',comment:'Invoices received, need updated schedule from Otis.',target:'TBD'},
+  {n:'New York Hilton Midtown',s:'NY',ec:'Schindler',st:'CIP',r:'Ahead',v:'John Frondi',units:'44',ud:'26 Elev / 10 Esc',vda:'69913',type:'Core',budget:18511335,addr:'1335 Avenue of the Americas, New York, NY',comment:'ACM found in doors. David onsite on Monday.',target:'Mar 2029'},
+  {n:'Casa Marina Key West',s:'FL',ec:'Elevated',st:'CIP',r:'Behind',v:'Nick Nikolai',units:'8',ud:'7 Elev / 1 Lift',vda:'58475',type:'Non-core',budget:1800000,addr:'1500 Reynolds Street, Key West, FL',comment:'PE1 & PE2 substantial completion. PE6 & PE7 commencing Q2-Q3 2025.',target:'Oct 2026'},
+  {n:'The Reach Curio',s:'FL',ec:'Elevated',st:'Active',r:'Behind',v:'Nick Nikolai',units:'4',ud:'4 Elev',vda:'58476',type:'Non-core',budget:885000,addr:'1435 Simonton Street, Key West, FL',comment:'Final punch list/Jack replacement delayed to next quiet time.',target:'TBD'},
+  {n:'Royal Palm South Beach',s:'FL',ec:'Elevated',st:'Awarded',r:'Behind',v:'Jim Himes',units:'8',ud:'8 Elev',vda:'70043',type:'Non-core',budget:4205280,addr:'1545 Collins Avenue, Miami Beach, FL',comment:'2 cars completed. 3 teams on site.',target:'Jun 2027'},
+  {n:'Hilton Boston Logan Airport',s:'MA',ec:'TBD',st:'Budgeting',r:'—',v:'Rob Campbell',units:'9',ud:'7 Elev / 2 Esc',vda:'—',type:'Core',budget:0,addr:'1 Hotel Drive, Boston, MA',comment:'Budgeted for 2026.',target:'TBD'},
+  {n:'JW Marriott San Francisco',s:'CA',ec:'Otis',st:'CIP',r:'On Track',v:'Ron Welts',units:'8',ud:'7 Elev',vda:'60433',type:'Core',budget:1943600,addr:'515 Mason Street, San Francisco, CA',comment:'4 pass starts Feb 2025. On schedule, slightly ahead.',target:'2026'},
+  {n:'Hyatt Regency Boston',s:'MA',ec:'TBD',st:'On Hold',r:'—',v:'Rob Campbell',units:'0',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'1 Ave de Lafayette, Boston, MA',comment:'',target:'NAC'},
+  {n:'Hilton Checkers',s:'CA',ec:'TBD',st:'Active',r:'—',v:'Jeff Sena',units:'5',ud:'2 Elev',vda:'65149',type:'Non-core',budget:0,addr:'535 S Grand Ave, Los Angeles, CA',comment:'In Progress 2025 / Need contract with Park.',target:'TBD'},
+  {n:'Doubletree Mission Valley San Diego',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'5',ud:'2 Elev',vda:'—',type:'Non-core',budget:0,addr:'7450 Hazard Center Dr, San Diego, CA',comment:'Not authorized to proceed.',target:'NAC'},
+  {n:'WA Bonnet Creek',s:'FL',ec:'TBD',st:'On Hold',r:'—',v:'Nick Nikolai',units:'0',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'14651 Chelonia Pkwy, Orlando, FL',comment:'Working with Hilton Corp for maintenance audit.',target:'TBD'},
+  {n:'Bonnet Creek Golf World',s:'FL',ec:'TBD',st:'Budgeting',r:'—',v:'Nick Nikolai',units:'37',ud:'21 Elev / 2 Esc',vda:'—',type:'Non-core',budget:0,addr:'14651 Chelonia Pkwy, Orlando, FL',comment:'Survey completed by ATIS.',target:'TBD'},
+  {n:'Marriott Newton',s:'MA',ec:'TBD',st:'On Hold',r:'—',v:'Rob Campbell',units:'5',ud:'5 Elev',vda:'—',type:'Non-core',budget:1800000,addr:'2345 Commonwealth Ave, Newton, MA',comment:'On Hold.',target:'TBD'},
+  {n:'Hilton Oakland Airport',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:'4',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'1 Hegenberger Rd, Oakland, CA',comment:'On Hold.',target:'NAC'},
+  {n:'Hilton Santa Barbara',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'5',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'633 East Cabrillo Blvd, Santa Barbara, CA',comment:'Requires survey.',target:'NAC'},
+  {n:'Doubletree San Jose',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:'8',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'2050 Gateway Pl, San Jose, CA',comment:'Not active.',target:'NAC'},
+  {n:'Hilton McLean Tysons Corner',s:'VA',ec:'Fujitec',st:'Complete',r:'—',v:'Robb Parks',units:'7',ud:'2 Serv Elev',vda:'58474',type:'Core',budget:0,addr:'7920 Jones Branch Drive, McLean, VA',comment:'Complete. Need reinspection due to failure.',target:'Complete'},
+  {n:'Doubletree Durango',s:'CO',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'3',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'501 Camino del Rio, Durango, CO',comment:'Not active.',target:'NAC'},
+  {n:'Doubletree Ontario',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'9',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'222 N Vineyard Ave, Ontario, CA',comment:'Not active.',target:'NAC'},
+  {n:'Hilton Short Hills',s:'NJ',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'7',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'41 John F Kennedy Pkwy, Short Hills, NJ',comment:'Not active.',target:'NAC'},
+  {n:'Embassy Suites Kansas City',s:'MO',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'4',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'7640 NW Tiffany Springs Pkwy, Kansas City, MO',comment:'Not active.',target:'NAC'},
+  {n:'Hilton Salt Lake City',s:'UT',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:'11',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'255 South West Temple, Salt Lake City, UT',comment:'Will send quote for survey.',target:'NAC'},
+  {n:'Hilton Seattle Airport',s:'WA',ec:'TBD',st:'On Hold',r:'—',v:'Dane Carollo',units:'8',ud:'TBD',vda:'—',type:'Non-core',budget:0,addr:'17620 International Blvd, Seattle, WA',comment:'On Hold.',target:'NAC'},
+  {n:'The Midland Chicago',s:'IL',ec:'TBD',st:'Survey',r:'—',v:'Jeff Hart',units:'2',ud:'2 Elev',vda:'—',type:'Non-core',budget:0,addr:'172 West Adams, Chicago, IL',comment:'Need survey.',target:'TBD'},
+  {n:'Wade',s:'FL',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Hart',units:'6',ud:'4 Elev / 1 Luggage',vda:'—',type:'Non-core',budget:0,addr:'Miami Beach, FL',comment:'On Hold, no cap planner.',target:'NAC'},
+  {n:'Hilton Lake Buena Vista',s:'FL',ec:'Otis',st:'On Hold',r:'—',v:'Nick Nikolai',units:'13',ud:'TBD',vda:'—',type:'Core',budget:0,addr:'1751 Hotel Plaza Blvd, Lake Buena Vista, FL',comment:'On Hold.',target:'Nov 2026'},
+  {n:'Caribe Hilton Puerto Rico',s:'PR',ec:'Otis',st:'Survey',r:'—',v:'Mike Loefler',units:'16',ud:'TBD',vda:'—',type:'Core',budget:0,addr:'1 C. San Geronimo, San Juan, PR',comment:'Proposed.',target:'TBD'},
+  {n:'Doubletree Crystal City',s:'VA',ec:'TBD',st:'On Hold',r:'—',v:'Chris Shields',units:'11',ud:'9 Elev / 2 Esc',vda:'—',type:'Non-core',budget:5488000,addr:'300 Army Navy Drive, Arlington, VA',comment:'On Hold.',target:'NAC'},
+  {n:'Doubletree Seattle Airport',s:'WA',ec:'TBD',st:'On Hold',r:'—',v:'Dane Carollo',units:'11',ud:'11 Elev',vda:'—',type:'Non-core',budget:0,addr:'18740 International Blvd, Seattle, WA',comment:'Surveyed by VDA. Spec not authorized to proceed.',target:'NAC'},
+  {n:'Embassy Suites Austin',s:'TX',ec:'TBD',st:'On Hold',r:'—',v:'Jake Seibert',units:'2',ud:'2 Elev',vda:'—',type:'Non-core',budget:0,addr:'300 S Congress Ave, Austin, TX',comment:'On Hold.',target:'NAC'},
+  {n:'Juniper Hotel Cupertino',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'3',ud:'3 Elev',vda:'—',type:'Non-core',budget:1536000,addr:'10050 S De Anza Blvd, Cupertino, CA',comment:'On Hold.',target:'NAC'},
+];
+</script>
 <div id="login-screen">
   <div class="login-logo"><div class="login-logo-mark"><i class="ti ti-activity"></i></div><div class="login-logo-name">PULSE<span>.</span></div></div>
   <div class="login-tagline">Project Updates · Lifecycle Status · Execution</div>
@@ -613,7 +930,11 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
         <div class="user-avatar" id="sb-avatar">AM</div>
         <div><div class="user-name" id="sb-username">Account Manager</div><div class="user-role-label" id="sb-userrole">IT Admin</div></div>
       </div>
-      <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
+      <div id="at-status" style="font-size:10px;color:rgba(255,255,255,0.3);font-family:'DM Mono',monospace;margin-bottom:8px;display:flex;align-items:center;gap:5px">
+  <span id="at-dot" style="width:6px;height:6px;border-radius:50%;background:var(--gray-light);flex-shrink:0;transition:background .3s"></span>
+  <span id="at-label">Demo mode</span>
+</div>
+<button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
     </div>
   </nav>
 
@@ -1121,13 +1442,30 @@ function selectRole(r,btn){role=r;document.querySelectorAll('.role-btn').forEach
 
 function doLogin(){
   client=document.getElementById('client-select').value;
+  // If consultant role, show name picker first
+  if(role==='consultant' && !currentConsultantName) {
+    showConsultantPicker(()=>_finishLogin());
+    return;
+  }
+  _finishLogin();
+}
+async function _finishLogin(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('portal-screen').classList.add('active');
-  setupPortal();populatePortfolio();populateMilestonesTable();
+  setupPortal();
+  // Update consultant name in sidebar if set
+  if(role==='consultant' && currentConsultantName) {
+    document.getElementById('sb-username').textContent=currentConsultantName;
+    document.getElementById('sb-avatar').textContent=currentConsultantName.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  }
+  // Load live data
+  if(client==='park') await loadAllData();
+  populatePortfolio();populateMilestonesTable();
   renderDocFolders();populateDocFolderFilter();populatePanelPropertyList();
   if(role==='consultant')gotoView('submit',null);
   else gotoView('dashboard',null);
   setFirstNavActive();updateQueueBadge();refreshDashActions();
+  if(AT_CONNECTED) showToast('Connected to live database ✓','success');
 }
 
 function doLogout(){document.getElementById('portal-screen').classList.remove('active');document.getElementById('login-screen').style.display='flex';}
@@ -1142,7 +1480,7 @@ function setupPortal(){
   const cfgs={
     admin:{tag:'tag-admin',label:'IT Admin',av:'IT',name:'System Admin',roleLabel:'IT Admin',commTitle:'Client comments & flags'},
     pm:{tag:'tag-pm',label:'Project Manager',av:'PM',name:'Misty Munoz',roleLabel:'VDA Project Manager',commTitle:'Client comments & flags'},
-    consultant:{tag:'tag-consultant',label:'Consultant',av:'NN',name:'Nick Nikolai',roleLabel:'Field Consultant',commTitle:'Comments'},
+    consultant:{tag:'tag-consultant',label:'Consultant',av:'VC',name:'VDA Consultant',roleLabel:'Field Consultant',commTitle:'Comments'},
     client:{tag:'tag-client',label:'Client',av:'DA',name:'David Abraham',roleLabel:'Park Hotels Capital Projects',commTitle:'Comments & flags'},
   };
   const c=cfgs[role];
@@ -1351,7 +1689,7 @@ function addActionRow(){
   document.getElementById('action-items-list').appendChild(row);
 }
 
-function saveMeeting(){
+async function saveMeeting(){
   const propName=document.getElementById('m-property').value;
   if(!propName){alert('Please select a property.');return;}
   const notes=document.getElementById('m-notes').value.trim();
@@ -1420,7 +1758,7 @@ function renderPropMeetings(p){
     </div>`).join('');
 }
 
-function closeAction(id){const a=actionItems.find(x=>x.id===id);if(a)a.status='Closed';if(currentProp)renderPropMeetings(currentProp);renderAllMeetings();refreshDashActions();}
+async function closeAction(id){const a=actionItems.find(x=>x.id===id);if(a)a.status='Closed';if(currentProp)renderPropMeetings(currentProp);renderAllMeetings();refreshDashActions();}
 
 function renderAllMeetings(){
   const openAI=actionItems.filter(a=>a.status==='Open');
@@ -1462,7 +1800,7 @@ function showVisitEntry(){if(currentProp)showVisitForm(currentProp.n);}
 function showGlobalVisitEntry(){
   const name=prompt('Property name:','');if(name)showVisitForm(name);
 }
-function showVisitForm(propName){
+async function showVisitForm(propName){
   const date=prompt('Visit date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);if(!date)return;
   const consultant=prompt('Consultant attending:','Paul Parios');if(!consultant)return;
   const purpose=prompt('Purpose:','Monthly site inspection');if(!purpose)return;
@@ -1637,29 +1975,33 @@ function refreshQueue(){
   }
   updateQueueBadge();
 }
-function approveSubmission(id){
+async function approveSubmission(id){
   const s=submissions.find(s=>s.id===id);if(!s)return;
   s.reviewStatus='approved';
   notifications.push({type:'approved',property:s.property,week:s.week,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
+  if(AT_TOKEN&&s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Approved'});
   updateQueueBadge();refreshQueue();refreshNotifications();
+  showToast(`Update approved — ${s.consultant} has been notified`,'success');
 }
-function kickSubmission(id){
+async function kickSubmission(id){
   const note=prompt('Return note for consultant:');if(note===null)return;
   const s=submissions.find(s=>s.id===id);if(!s)return;
   s.reviewStatus='returned';s.returnNote=note;
   notifications.push({type:'returned',property:s.property,week:s.week,note,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
+  if(AT_TOKEN&&s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Returned','Return Note':note});
   updateQueueBadge();refreshQueue();refreshNotifications();
+  showToast(`Update returned — ${s.consultant} has been notified`,'warn');
 }
 function updateQueueBadge(){
   const qc=submissions.filter(s=>s.reviewStatus==='pending').length;
   const qb=document.getElementById('queue-badge');if(qb){qb.textContent=qc;qb.classList.toggle('hidden',qc===0);}
   const nc=notifications.length;const nb=document.getElementById('notif-badge');if(nb){nb.textContent=nc;nb.classList.toggle('hidden',nc===0);}
 }
-function submitUpdate(){
+async function submitUpdate(){
   const property=document.getElementById('f-property').value;if(!property){alert('Please select a property.');return;}
   const notes=document.getElementById('f-notes').value.trim();if(!notes){alert('Please add weekly notes.');return;}
   const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  submissions.push({id:'sub_'+Date.now(),property,week:document.getElementById('f-week').value,units:document.getElementById('f-units').value||'All',phase:document.getElementById('f-phase').value,status:document.getElementById('f-status').value,notes,commentType:document.getElementById('f-comment-type').value,issueStatus:document.getElementById('f-issue-status').value,savings:document.getElementById('f-savings').value,submittedAt:dateStr,reviewStatus:'pending',consultant:'Nick Nikolai'});
+  submissions.push({id:'sub_'+Date.now(),property,week:document.getElementById('f-week').value,units:document.getElementById('f-units').value||'All',phase:document.getElementById('f-phase').value,status:document.getElementById('f-status').value,notes,commentType:document.getElementById('f-comment-type').value,issueStatus:document.getElementById('f-issue-status').value,savings:document.getElementById('f-savings').value,submittedAt:dateStr,reviewStatus:'pending',consultant:currentConsultantName||'VDA Consultant'});
   updateQueueBadge();
   const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
   se.classList.remove('hidden');['f-property','f-units','f-notes','f-savings'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
@@ -1803,6 +2145,25 @@ function sendChat(){
 }
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebar-overlay').classList.toggle('active');}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('sidebar-overlay').classList.remove('active');}
+</script>
+<script>
+// On page load — pre-fill token input if saved, show setup if never configured
+window.addEventListener('load', () => {
+  const saved = localStorage.getItem('pulse_at_token');
+  if (saved) {
+    AT_TOKEN = saved;
+    const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
+    if(dot)dot.style.background='#EF9F27';if(lbl)lbl.textContent='Token saved';
+  }
+  // Show token setup button in login card
+  const loginCard = document.querySelector('.login-card');
+  if (loginCard) {
+    const setupLink = document.createElement('div');
+    setupLink.style.cssText = 'text-align:center;margin-top:12px';
+    setupLink.innerHTML = `<button onclick="document.getElementById('token-screen').style.display='flex'" style="background:none;border:none;color:#B4B2A9;font-size:11px;cursor:pointer;font-family:'DM Mono',monospace">${saved?'✓ Database connected':'⚙ Connect database'}</button>`;
+    loginCard.appendChild(setupLink);
+  }
+});
 </script>
 </body>
 </html>
