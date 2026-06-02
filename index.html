@@ -772,7 +772,7 @@ window.PROPERTIES_SEED = [
     </div>
     <button class="login-btn" onclick="doLogin()"><i class="ti ti-login"></i>Enter portal</button>
   </div>
-  <div class="login-version">PULSE v0.5 · VDA · mmunoz-creator.github.io/pulse</div>
+  <div class="login-version">PULSE v9d · VDA · elevatorpulse.com</div>
 </div>
 
 <!-- MEETING SLIDE PANEL -->
@@ -2083,11 +2083,36 @@ async function submitUpdate(){
   const property=document.getElementById('f-property').value;if(!property){alert('Please select a property.');return;}
   const notes=document.getElementById('f-notes').value.trim();if(!notes){alert('Please add weekly notes.');return;}
   const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  submissions.push({id:'sub_'+Date.now(),property,week:document.getElementById('f-week').value,units:document.getElementById('f-units').value||'All',phase:document.getElementById('f-phase').value,status:document.getElementById('f-status').value,notes,commentType:document.getElementById('f-comment-type').value,issueStatus:document.getElementById('f-issue-status').value,savings:document.getElementById('f-savings').value,submittedAt:dateStr,reviewStatus:'pending',consultant:currentConsultantName||'VDA Consultant'});
+  const week=document.getElementById('f-week').value;
+  const units=document.getElementById('f-units').value||'All';
+  const phase=document.getElementById('f-phase').value;
+  const status=document.getElementById('f-status').value;
+  const commentType=document.getElementById('f-comment-type').value;
+  const issueStatus=document.getElementById('f-issue-status').value;
+  const savings=document.getElementById('f-savings').value;
+  const consultantName=currentConsultantName||'VDA Consultant';
+  // Write to Airtable first
+  const res=await atCreate('Field Updates',{
+    'Property Name':property,
+    'Report Week':week,
+    'Units Updated':units,
+    'Project Phase':phase,
+    'Progress Status':status,
+    'Weekly Notes':notes,
+    'Comment Type':commentType,
+    'Issue Status':issueStatus,
+    'Savings Identified':savings,
+    'Submitted Date':dateStr,
+    'Review Status':'Pending',
+    'Consultant Name':consultantName,
+  });
+  const atId=res?.records?.[0]?.id||null;
+  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,savings,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName});
   updateQueueBadge();
   const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
   se.classList.remove('hidden');['f-property','f-units','f-notes','f-savings'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   setTimeout(()=>se.classList.add('hidden'),5000);
+  if(!atId)showToast('Warning: submission saved locally but Airtable write failed','warn');
 }
 function refreshMyUpdates(){
   const c=document.getElementById('my-updates-container');if(!c)return;
