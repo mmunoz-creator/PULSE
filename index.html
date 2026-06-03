@@ -27,8 +27,8 @@ input,select,textarea,button{font-family:'DM Sans',sans-serif;font-size:13px}
 /* LOGIN */
 #login-screen{display:flex;min-height:100vh;background:white}
 .login-left{flex:1;display:flex;flex-direction:column;justify-content:center;padding:3rem 4rem;position:relative;z-index:2;max-width:560px}
-.login-right{flex:1;background:linear-gradient(160deg,#0a1628 0%,#142040 40%,#185FA5 100%);position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3rem 2.5rem}
-.login-right-overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,22,40,0.2) 0%,rgba(24,95,165,.1) 50%,rgba(10,22,40,0.4) 100%);z-index:1}
+.login-right{flex:1;background:linear-gradient(160deg,#0f1923 0%,#1a2535 50%,#0f1923 100%);position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3rem 2.5rem}
+.login-right-overlay{position:absolute;inset:0;background:radial-gradient(ellipse at 30% 50%,rgba(24,95,165,.12) 0%,transparent 60%),radial-gradient(ellipse at 70% 20%,rgba(55,138,221,.08) 0%,transparent 50%);z-index:1}
 .login-right-content{position:relative;z-index:2;color:white;text-align:center;max-width:420px;width:100%}
 .login-right-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:2rem;text-align:left}
 .login-right-card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:16px;backdrop-filter:blur(8px);transition:background .2s}
@@ -605,22 +605,22 @@ async function loadAllData() {
       atGet('Documents')
     ]);
     if (props.length > 0) {
-      window.PORTFOLIO = props.map(r => ({
-        id: r.id, n: r.fields['Property Name']||'',
-        s: r.fields['State']||'', addr: r.fields['Address']||'',
-        ec: r.fields['Elevator Company']||'TBD',
-        v: r.fields['VDA Consultant']||'',
-        vda: r.fields['VDA Project Number']||'—',
-        units: r.fields['Unit Count']||'0',
-        ud: r.fields['Unit Description']||'',
-        st: r.fields['Status']||'On Hold',
-        r: r.fields['Schedule']||'—',
-        type: r.fields['Asset Type']||'Non-core',
-        budget: r.fields['Forecasted Budget']||0,
-        comment: r.fields['Comments']||'',
-        target: r.fields['Target Completion']||'TBD',
-        ms: []
-      }));
+      // Merge Airtable data into local PORTFOLIO — preserve local status/schedule/milestone data
+      // Only update fields that Airtable is authoritative for: id, type, budget, comment, ec, consultant
+      const localPort=window.PORTFOLIO||PORTFOLIO;
+      props.forEach(r => {
+        const name=r.fields['Property Name']||'';
+        const local=localPort.find(p=>p.n===name);
+        if(local){
+          local.id=r.id; // store Airtable record ID for writes
+          if(r.fields['Asset Type'])local.type=r.fields['Asset Type'];
+          if(r.fields['Forecasted Budget'])local.budget=r.fields['Forecasted Budget'];
+          if(r.fields['Comments'])local.comment=r.fields['Comments'];
+          if(r.fields['Elevator Company']&&r.fields['Elevator Company']!=='TBD')local.ec=r.fields['Elevator Company'];
+          if(r.fields['VDA Consultant'])local.v=r.fields['VDA Consultant'];
+        }
+      });
+      window.PORTFOLIO=localPort;
     }
     submissions = subs.map(r => ({
       id: r.id, atId: r.id,
@@ -789,7 +789,17 @@ window.PROPERTIES_SEED = [
         <div class="role-grid">
           <button class="role-btn active" onclick="selectRole('admin',this)"><i class="ti ti-shield-lock"></i>IT Admin</button>
           <button class="role-btn" onclick="selectRole('pm',this)"><i class="ti ti-clipboard-list"></i>Project Mgr</button>
-          <button class="role-btn" onclick="selectRole('consultant',this)"><i class="ti ti-hard-hat"></i>Consultant</button>
+          <button class="role-btn" onclick="selectRole('consultant',this)">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="display:block;margin:0 auto 6px" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a4 4 0 0 1 4 4v1H8V6a4 4 0 0 1 4-4z" fill="currentColor" opacity=".15"/>
+              <path d="M8 7h8M6 7h-.5a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2H18.5a2 2 0 0 0 2-2v0a2 2 0 0 0-2-2H18"/>
+              <rect x="9" y="7" width="6" height="2" rx="1"/>
+              <path d="M5 11v2a7 7 0 0 0 14 0v-2"/>
+              <circle cx="12" cy="17" r="3" fill="currentColor" opacity=".2"/>
+              <path d="M9 21h6M12 20v1"/>
+            </svg>
+            Consultant
+          </button>
           <button class="role-btn" onclick="selectRole('client',this)"><i class="ti ti-building"></i>Client</button>
         </div>
       </div>
@@ -810,9 +820,9 @@ window.PROPERTIES_SEED = [
     </div>
     <div class="login-right-overlay"></div>
     <div class="login-right-content">
-      <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,.4);letter-spacing:2px;text-transform:uppercase;font-family:'DM Mono',monospace;margin-bottom:14px">Vertical Transportation Management</div>
-      <div style="font-size:36px;font-weight:700;color:white;letter-spacing:-.8px;line-height:1.15;margin-bottom:12px">Every elevator.<br>Every property.<br>Always in view.</div>
-      <div style="font-size:13px;color:rgba(255,255,255,.5);line-height:1.6">From lifecycle planning to real-time field execution — full portfolio visibility in one platform.</div>
+      <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,.35);letter-spacing:2px;text-transform:uppercase;font-family:'DM Mono',monospace;margin-bottom:20px">Vertical Transportation Management</div>
+      <div style="font-size:38px;font-weight:700;color:white;letter-spacing:-.5px;line-height:1.2;margin-bottom:14px;font-style:italic">Every elevator. Every property. Always in view.</div>
+      <div style="font-size:13px;color:rgba(255,255,255,.45);line-height:1.7;margin-bottom:2rem">From lifecycle planning to real-time field execution — full portfolio visibility in one platform.</div>
       <div class="login-right-grid">
         <div class="login-right-card">
           <div class="login-right-card-icon"><i class="ti ti-building-skyscraper" style="color:#85B7EB;font-size:17px"></i></div>
@@ -1526,9 +1536,10 @@ function setupDemoPortal(){
   document.getElementById('sb-client-name').textContent='Demo Retail';
   document.getElementById('dash-sub').textContent='Demo Retail Portfolio · Elevator Modernization Program';
   ['admin','pm','consultant','client'].forEach(r=>document.getElementById('nav-'+r).classList.add('hidden'));
+  // Demo PM gets full PM nav
   document.getElementById('nav-'+role).classList.remove('hidden');
   const cfgs={
-    pm:{tag:'tag-pm',label:'Project Manager',av:'PM',name:'PM User',roleLabel:'VDA Project Manager',commTitle:'Client comments & flags'},
+    pm:{tag:'tag-pm',label:'Project Manager',av:'PM',name:'PM User',roleLabel:'Project Manager',commTitle:'Client comments & flags'},
     client:{tag:'tag-client',label:'Client',av:'DR',name:'Demo Client',roleLabel:'Demo Retail Capital Projects',commTitle:'Comments & flags'},
   };
   const c=cfgs[role]||cfgs.pm;
@@ -1536,7 +1547,7 @@ function setupDemoPortal(){
   document.getElementById('sb-avatar').textContent=c.av;
   document.getElementById('sb-username').textContent=c.name;
   document.getElementById('sb-userrole').textContent=c.roleLabel;
-  // Add DEMO badge to sidebar logo
+  // Add DEMO badge
   const logoName=document.querySelector('.sidebar-logo-name');
   if(logoName&&!document.getElementById('demo-logo-badge')){
     const badge=document.createElement('span');badge.id='demo-logo-badge';badge.className='demo-badge';badge.textContent='DEMO';
@@ -1547,7 +1558,6 @@ function setupDemoPortal(){
   const sb=document.getElementById('prop-submit-btn');if(sb)sb.style.display='none';
   const plmb=document.getElementById('prop-log-meeting-btn');if(plmb)plmb.style.display=role==='pm'?'':'none';
   document.getElementById('prop-meeting-btn').style.display=role==='pm'?'':'none';
-  // Update dashboard stats for demo
   document.getElementById('at-label').textContent='Demo mode';
   document.getElementById('at-dot').style.background='var(--purple)';
 }
