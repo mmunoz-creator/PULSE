@@ -31,7 +31,7 @@ input,select,textarea,button{font-family:'DM Sans',sans-serif;font-size:13px}
 .cal-event{font-size:9px;border-radius:3px;padding:2px 4px;margin-bottom:2px;cursor:pointer;white-space:normal;word-break:break-word;line-height:1.4;color:white;font-weight:500}
 .cal-event.ev-meeting{background:var(--blue-dark)}
 .cal-event.ev-visit{background:var(--green)}
-.cal-event.ev-phase{background:var(--amber);color:var(--navy)}
+.cal-event.ev-phase{background:#7BB8E8;color:white}
 .cal-event.ev-action{background:var(--purple)}
 .cal-event.ev-draft{background:var(--gray-mid)}
 /* List view */
@@ -504,6 +504,7 @@ let AT_CONNECTED = false;
 let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
 window.UNIT_GROUPS = window.UNIT_GROUPS || [];
 window.BILLING_LOG = window.BILLING_LOG || [];
+window.MILESTONES = window.MILESTONES || [];
 
 // No token needed in browser - Worker holds it securely
 function saveToken() {
@@ -658,12 +659,12 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
-      atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log')
+      atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones')
     ]);
-    console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries`);
+    console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones`);
     if (props.length > 0) {
       // Merge Airtable data into local PORTFOLIO — preserve local status/schedule/milestone data
       // Only update fields that Airtable is authoritative for: id, type, budget, comment, ec, consultant
@@ -770,7 +771,20 @@ async function loadAllData() {
       entryDate: r.fields['Entry Date']||'',
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
-    })).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate)); // newest first
+    })).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate));
+
+    // Milestones — one record per milestone per property
+    window.MILESTONES = milestones.map(r=>({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      milestoneNumber: parseInt(r.fields['Milestone Number'])||0,
+      milestoneName: r.fields['Milestone Name']||'',
+      status: r.fields['Status']||'Not Started',
+      plannedDate: r.fields['Planned Date']||'',
+      actualDate: r.fields['Actual Date']||'',
+      variance: r.fields['Variance']||null,
+      notes: r.fields['Notes']||'',
+    })); // newest first
     AT_CONNECTED = true;
     console.log('AT_CONNECTED set to true - updating UI');
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
@@ -881,7 +895,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v10k · elevatorpulse.com</div>
+    <div class="login-version">PULSE v10n · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1083,11 +1097,12 @@ window.PROPERTIES_SEED = [
   <div class="form-group">
     <label class="form-label">Project Budget</label>
     <input class="form-input" type="number" id="bm-budget" placeholder="e.g. 1800000" step="1000">
-    <div style="font-size:10px;color:var(--gray-mid);margin-top:3px">Leave blank to keep existing budget unchanged</div>
+    <div style="font-size:10px;color:var(--gray-mid);margin-top:3px" id="bm-budget-preview"></div>
   </div>
   <div class="form-group">
     <label class="form-label">Billed YTD (running total)</label>
-    <input class="form-input" type="number" id="bm-ytd" placeholder="e.g. 360000" step="1000">
+    <input class="form-input" type="number" id="bm-ytd" placeholder="e.g. 50000" step="1000">
+    <div style="font-size:10px;color:var(--gray-mid);margin-top:3px" id="bm-ytd-preview"></div>
   </div>
   <div class="form-group">
     <label class="form-label">Entry date</label>
@@ -1297,7 +1312,6 @@ window.PROPERTIES_SEED = [
               <div>
                 <div class="card" id="budget-perf-card">
                   <div class="card-header"><div><div class="card-title">Budget performance</div><div class="card-sub" id="budget-perf-sub">Project Budget vs Billed YTD</div></div>
-                  ${`<button class="btn" id="budget-log-btn" onclick="openBillingLogForm()" style="display:none"><i class="ti ti-plus"></i>Log billing entry</button>`}
                   </div>
                   <div id="budget-perf-detail"></div>
                 </div>
@@ -1359,7 +1373,7 @@ window.PROPERTIES_SEED = [
             </div>
           </div>
           <div id="prop-tab-milestones" class="tab-content">
-            <div class="card"><div class="card-header"><div><div class="card-title">Modernization milestone tracker</div><div class="card-sub">Planned vs actual — PM managed</div></div><span id="ms-progress-badge" class="badge b-cip">0 / 18</span></div><div id="prop-milestones-list"></div></div>
+            <div class="card"><div class="card-header"><div><div class="card-title">Modernization Milestone Tracker</div><div class="card-sub">Planned vs actual — click to edit inline</div></div><span id="ms-progress-badge" class="badge b-cip">0%</span></div><div id="prop-milestones-list"></div></div>
           </div>
           <div id="prop-tab-meetings" class="tab-content">
             <div class="two-col">
@@ -1466,7 +1480,7 @@ window.PROPERTIES_SEED = [
           <div id="cal-legend" style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">
             <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--blue-dark);display:inline-block"></span>Meetings</span>
             <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--green);display:inline-block"></span>Site Visits</span>
-            <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--amber);display:inline-block"></span>Phase Start/End</span>
+            <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#7BB8E8;display:inline-block"></span>Phase Start/End</span>
             <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--purple);display:inline-block"></span>Action Due</span>
           </div>
           <div id="cal-grid-wrap"></div>
@@ -1642,7 +1656,7 @@ const CLIENTS={park:'Park Hotels & Resorts',diamond:'Diamond Rock Hospitality',w
 let demoMode=false;
 let demoRole='pm';
 
-const MILESTONES_DEF=['Modernization Survey','Technical Specification Complete','RFP Issued','Contract Awarded','Submittal Drawings Approved','Material Ordered','Material Delivered','First Unit Started','25% Complete','50% Complete','75% Complete','Last Unit Started','Punch List Issued','Punch List Complete','Final Inspection','DOB Test','Certificate of Occupancy','Project Complete'];
+const MILESTONES_DEF=['Modernization Survey','Technical Specification Complete','RFP Issued','Contract Awarded','Submittal Drawings Approved','Material Ordered','Material Delivered','First Phase Started','25% Complete','50% Complete','75% Complete','Last Phase Started','Punch List Issued','Punch List Complete','Final (AHJ) Inspection','Owner Acceptance','Closeout Documents Complete','Project Complete'];
 
 const DEMO_PORTFOLIO=[
   {n:'Store #101',s:'NY',city:'New York',ec:'Otis',st:'CIP',r:'On Track',v:'Sarah Chen',units:12,unitDesc:'8 Elev / 4 Esc',vda:'D-1001',type:'Core',budget:4200000,addr:'500 Fifth Avenue, New York, NY',comment:'Flagship store. High traffic — night-only installation windows.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-06-10'},{ms:1,status:'complete',planned:'2024-09-01',actual:'2024-09-15'},{ms:2,status:'complete',planned:'2024-11-01',actual:'2024-11-01'},{ms:3,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:4,status:'complete',planned:'2025-04-01',actual:'2025-05-01'},{ms:5,status:'inprog',planned:'2025-07-01',actual:''}]},
@@ -1705,7 +1719,7 @@ function enterDemo(){
   // Override PORTFOLIO with demo data
   window.PORTFOLIO=DEMO_PORTFOLIO.map(p=>({...p,id:'demo-'+p.n})).sort((a,b)=>a.n.localeCompare(b.n));
   submissions=[];meetings=[];actionItems=[];siteVisits=[];notifications=[];clientFlags=[];flagIdCounter=0;
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];
   setupDemoPortal();
   populatePortfolio();populateMilestonesTable();
   renderDocFolders();populateDocFolderFilter();populatePanelPropertyList();
@@ -1915,7 +1929,7 @@ function doLogout(){
   AT_CONNECTED=false;
   // Reset all live data so re-login gets a clean load
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];
   clientFlags=[];flagIdCounter=0;
   const badge=document.getElementById('demo-logo-badge');if(badge)badge.remove();
   window.PORTFOLIO=PARK_PORTFOLIO;
@@ -2025,7 +2039,8 @@ function renderPropertyView(p){
      <span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="margin-left:4px">${p.type}</span>`;
 
   const propUpdates=submissions.filter(s=>s.property===p.n);
-  const msComplete=(p.ms||[]).filter(m=>m.status==='complete').length;
+  const msCompleteCount=getMsComplete(p.n);
+  const msCompletePct=Math.round(msCompleteCount/MILESTONES_DEF.length*100);
   const propVisits=siteVisits.filter(v=>v.property===p.n);
   const openAIs=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
 
@@ -2045,9 +2060,9 @@ function renderPropertyView(p){
   document.getElementById('prop-mini-grid').innerHTML=`
     <div class="prop-mini-card"><div class="prop-mini-label">VT units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${p.unitDesc||'Total'}</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Units complete</div><div class="prop-mini-val" style="color:var(--green)">${unitsComplete}</div><div class="prop-mini-sub">of ${totalUnits}</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${Math.round(msComplete/MILESTONES_DEF.length*100)}%</div><div class="prop-mini-sub">${msComplete}/${MILESTONES_DEF.length} complete</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount}/${MILESTONES_DEF.length} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Open actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val" style="font-size:13px;letter-spacing:0">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>`;
+    <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val" style="font-size:13px;letter-spacing:0">${p.budget?fmtCurrency(p.budget):'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>`;
 
   // Budget summary on overview
 
@@ -2055,9 +2070,9 @@ function renderPropertyView(p){
   bEl.innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">Project Budget</div>
-        <div style="font-size:18px;font-weight:600;color:var(--navy);font-family:'DM Mono',monospace">${p.budget?'$'+(p.budget/1000000).toFixed(2)+'M':'TBD'}</div></div>
+        <div style="font-size:18px;font-weight:600;color:var(--navy);font-family:'DM Mono',monospace">${p.budget?fmtCurrency(p.budget):'TBD'}</div></div>
       <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">Billed YTD</div>
-        <div style="font-size:18px;font-weight:600;color:var(--blue-dark);font-family:'DM Mono',monospace">${billedYTD?'$'+(billedYTD/1000000).toFixed(2)+'M':'—'}</div></div>
+        <div style="font-size:18px;font-weight:600;color:var(--blue-dark);font-family:'DM Mono',monospace">${billedYTD?fmtCurrency(billedYTD):'—'}</div></div>
       <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">% Billed</div>
         <div style="font-size:18px;font-weight:600;color:${pctBilled>pctComplete+10?'var(--amber)':'var(--green)'};font-family:'DM Mono',monospace">${p.budget?pctBilled+'%':'—'}</div></div>
       <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">% Complete</div>
@@ -2098,31 +2113,127 @@ function renderPropertyView(p){
     upcomingVisits.map(v=>visitCardHtml(v)).join('');
 }
 
+// Get milestones for a property from live data (or seed p.ms as fallback)
+function getMilestonesForProp(propName){
+  const live=(window.MILESTONES||[]).filter(m=>m.property===propName);
+  if(live.length>0) return live.sort((a,b)=>a.milestoneNumber-b.milestoneNumber);
+  // Fallback to embedded p.ms seed data (demo or pre-Airtable)
+  const p=(window.PORTFOLIO||PORTFOLIO).find(x=>x.n===propName);
+  if(!p)return [];
+  return MILESTONES_DEF.map((name,i)=>{
+    const m=(p.ms||[]).find(x=>x.ms===i)||{ms:i,status:'notstart',planned:'',actual:''};
+    return {id:null,property:propName,milestoneNumber:i+1,milestoneName:name,
+      status:{complete:'Complete',inprog:'In Progress',atrisk:'At Risk',notstart:'Not Started'}[m.status]||'Not Started',
+      plannedDate:m.planned||'',actualDate:m.actual||'',variance:null,notes:''};
+  });
+}
+
+// Get ms % complete from live data
+function getMsComplete(propName){
+  const ms=getMilestonesForProp(propName);
+  return ms.filter(m=>m.status==='Complete').length;
+}
+
+async function autoPopulateMilestones(propName){
+  // Create all 18 milestones as Not Started if none exist for this property
+  const existing=(window.MILESTONES||[]).filter(m=>m.property===propName);
+  if(existing.length>0)return;
+  showToast('Setting up milestones for '+propName+'...','info');
+  const newMs=[];
+  for(let i=0;i<MILESTONES_DEF.length;i++){
+    const fields={'Property Name':propName,'Milestone Number':i+1,'Milestone Name':MILESTONES_DEF[i],'Status':'Not Started','Planned Date':'','Actual Date':'','Notes':''};
+    const res=await atCreate('Milestones',fields);
+    const newId=res?.records?.[0]?.id||'ms-'+Date.now()+'-'+i;
+    newMs.push({id:newId,property:propName,milestoneNumber:i+1,milestoneName:MILESTONES_DEF[i],status:'Not Started',plannedDate:'',actualDate:'',variance:null,notes:''});
+  }
+  window.MILESTONES=(window.MILESTONES||[]).concat(newMs);
+  showToast('Milestones initialized','success');
+}
+
+async function updateMilestone(msId,fields,propName){
+  if(msId&&!demoMode){
+    await atUpdate('Milestones',msId,fields);
+  }
+  // Update local cache
+  const ms=(window.MILESTONES||[]).find(m=>m.id===msId);
+  if(ms){
+    if(fields['Status'])ms.status=fields['Status'];
+    if(fields['Planned Date']!==undefined)ms.plannedDate=fields['Planned Date'];
+    if(fields['Actual Date']!==undefined)ms.actualDate=fields['Actual Date'];
+    if(fields['Notes']!==undefined)ms.notes=fields['Notes'];
+  }
+  // Refresh mini card % and milestone tab
+  if(currentProp&&currentProp.n===propName){
+    const msCompleteCount=getMsComplete(propName);
+    const msCard=document.querySelector('.prop-mini-card:nth-child(3) .prop-mini-val');
+    if(msCard)msCard.textContent=Math.round(msCompleteCount/MILESTONES_DEF.length*100)+'%';
+  }
+}
+
 function renderMilestones(p){
   const msList=document.getElementById('prop-milestones-list');
-  const ms=p.ms||[];
-  const complete=ms.filter(m=>m.status==='complete').length;
-  document.getElementById('ms-progress-badge').textContent=`${complete} / ${MILESTONES_DEF.length}`;
-  msList.innerHTML=MILESTONES_DEF.map((name,i)=>{
-    const m=ms.find(x=>x.ms===i)||{ms:i,status:'notstart',planned:'',actual:''};
-    const stCls={complete:'ms-complete',inprog:'ms-inprog',atrisk:'ms-atrisk',notstart:'ms-notstart'}[m.status]||'ms-notstart';
-    const stIcon={complete:'✓',inprog:'→',atrisk:'!',notstart:'○'}[m.status]||'○';
-    const bCls={complete:'b-ms-complete',inprog:'b-ms-inprog',atrisk:'b-ms-atrisk',notstart:'b-ms-notstart'}[m.status]||'b-ms-notstart';
-    const bLabel={complete:'Complete',inprog:'In Progress',atrisk:'At Risk',notstart:'Not Started'}[m.status]||'Not Started';
-    let varHtml='';
-    if(m.planned&&m.status!=='notstart'){
-      const planned=new Date(m.planned);const actual=m.actual?new Date(m.actual):new Date();
-      const diff=Math.round((actual-planned)/(1000*60*60*24));
-      varHtml=diff>0?`<span style="color:var(--red);font-size:10px;font-family:'DM Mono',monospace">+${diff}d</span>`:diff<0?`<span style="color:var(--green);font-size:10px;font-family:'DM Mono',monospace">${diff}d</span>`:`<span style="color:var(--gray-mid);font-size:10px;font-family:'DM Mono',monospace">on plan</span>`;
+  const canEdit=role==='pm'||role==='admin';
+  const canConsultant=role==='consultant';
+  const msData=getMilestonesForProp(p.n);
+  const complete=msData.filter(m=>m.status==='Complete').length;
+  const pct=Math.round(complete/MILESTONES_DEF.length*100);
+  document.getElementById('ms-progress-badge').textContent=`${pct}% · ${complete} / ${MILESTONES_DEF.length}`;
+
+  // Auto-populate if empty and PM/Admin
+  if(msData.length===0||(window.MILESTONES||[]).filter(m=>m.property===p.n).length===0){
+    if((canEdit)&&!demoMode){
+      autoPopulateMilestones(p.n).then(()=>renderMilestones(p));
+      msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:12px"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Initializing milestones...</div>`;
+      return;
     }
-    return `<div class="milestone-row">
-      <div class="milestone-num ${stCls}">${stIcon}</div>
-      <div class="milestone-name">${name}</div>
-      <span class="badge ${bCls}" style="font-size:9px">${bLabel}</span>
-      <div class="milestone-dates">${m.planned?`Plan: ${m.planned}`:'—'}<br>${m.actual?`Actual: ${m.actual}`:''}</div>
-      <div style="min-width:50px;text-align:right">${varHtml}</div>
+  }
+
+  const statusColors={Complete:'var(--green)','In Progress':'var(--blue-dark)','At Risk':'var(--amber)','Not Started':'var(--gray-light)'};
+  const statusIcons={Complete:'ti-circle-check','In Progress':'ti-circle-dot','At Risk':'ti-alert-triangle','Not Started':'ti-circle'};
+  const badgeClass={Complete:'b-ms-complete','In Progress':'b-ms-inprog','At Risk':'b-ms-atrisk','Not Started':'b-ms-notstart'};
+
+  msList.innerHTML=msData.map((m,idx)=>{
+    const varDisplay=m.variance!==null&&m.variance!==''?
+      (m.variance>0?`<span style="color:var(--red);font-size:10px;font-family:'DM Mono',monospace">+${m.variance}d</span>`:
+      m.variance<0?`<span style="color:var(--green);font-size:10px;font-family:'DM Mono',monospace">${m.variance}d</span>`:
+      `<span style="color:var(--gray-mid);font-size:10px">on plan</span>`):'';
+
+    return `<div class="milestone-row" id="ms-row-${m.id||idx}">
+      <div class="milestone-num" style="background:${statusColors[m.status]||'var(--gray-light)'};color:${m.status==='Not Started'?'var(--gray-mid)':'white'};border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ${statusIcons[m.status]||'ti-circle'}" style="font-size:12px"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:500;color:var(--navy)">${m.milestoneNumber}. ${m.milestoneName}</div>
+        ${canEdit||canConsultant?`
+        <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center">
+          <select class="form-select" style="font-size:11px;padding:3px 6px;height:auto;width:auto" onchange="updateMilestoneField('${m.id}','Status',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}')">
+            ${['Not Started','In Progress','At Risk','Complete'].map(s=>`<option${m.status===s?' selected':''}>${s}</option>`).join('')}
+          </select>
+          ${canEdit?`
+          <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:140px" value="${m.plannedDate||''}" title="Planned date" onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}')">
+          `:''}
+          <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:140px" value="${m.actualDate||''}" title="Actual date" onchange="updateMilestoneField('${m.id}','Actual Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}')">
+          ${canEdit?`<input type="text" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;flex:1;min-width:120px" value="${(m.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes..." onblur="updateMilestoneField('${m.id}','Notes',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}')">`:''}
+        </div>`:
+        `<div style="font-size:11px;color:var(--gray-mid);margin-top:3px">${m.plannedDate?'Plan: '+m.plannedDate:'—'}${m.actualDate?' · Actual: '+m.actualDate:''}</div>`}
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+        <span class="badge ${badgeClass[m.status]||'b-ms-notstart'}" style="font-size:9px">${m.status}</span>
+        ${varDisplay}
+      </div>
     </div>`;
   }).join('');
+}
+
+async function updateMilestoneField(msId,fieldName,value,propName){
+  const fields={[fieldName]:value};
+  await updateMilestone(msId,fields,propName);
+  // Refresh progress badge
+  const msData=getMilestonesForProp(propName);
+  const complete=msData.filter(m=>m.status==='Complete').length;
+  const pct=Math.round(complete/MILESTONES_DEF.length*100);
+  const badge=document.getElementById('ms-progress-badge');
+  if(badge)badge.textContent=`${pct}% · ${complete} / ${MILESTONES_DEF.length}`;
 }
 
 function populateMilestonesTable(){
@@ -2130,17 +2241,13 @@ function populateMilestonesTable(){
   const port=window.PORTFOLIO||PORTFOLIO;
   const active=port.filter(p=>['Awarded','CIP','Active'].includes(p.st));
   tbody.innerHTML=active.map(p=>{
-    const ms=p.ms||[];
-    const complete=ms.filter(m=>m.status==='complete').length;
-    const inprog=ms.find(m=>m.status==='inprog'||m.status==='atrisk');
-    const currentMs=inprog?MILESTONES_DEF[inprog.ms]:(complete>0?MILESTONES_DEF[Math.min(complete,MILESTONES_DEF.length-1)]:'Not started');
-    const hasRisk=ms.some(m=>m.status==='atrisk');
+    const msData=getMilestonesForProp(p.n);
+    const complete=msData.filter(m=>m.status==='Complete').length;
+    const inprog=msData.find(m=>m.status==='In Progress'||m.status==='At Risk');
+    const currentMs=inprog?inprog.milestoneName:(complete>0&&complete<MILESTONES_DEF.length?MILESTONES_DEF[complete]:'Not started');
+    const hasRisk=msData.some(m=>m.status==='At Risk');
     const pct=Math.round((complete/MILESTONES_DEF.length)*100);
     const rClass={Behind:'b-behind','On Track':'b-track',Ahead:'b-ahead'}[p.r]||'';
-    const units=parseInt(p.units)||parseInt(p.unitDesc)||0;
-    // Determine unit status from schedule and milestone progress
-    const unitsComplete=p.r==='On Track'||p.r==='Ahead'?Math.round(units*pct/100):Math.max(0,Math.round(units*pct/100)-1);
-    const unitsActive=p.r==='Behind'?Math.min(2,units):Math.min(3,units-unitsComplete);
     return `<tr onclick="openPropertyTab('${p.n.replace(/'/g,"\\'")}','milestones')" style="cursor:pointer">
       <td style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.n}</td>
       <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
@@ -2583,7 +2690,18 @@ function renderAllMeetings(){
     </div>`).join('');
 }
 
-// ── BUDGET & UNIT PROGRESS ────────────────────────────────────────────
+// ── CURRENCY HELPERS ──────────────────────────────────────────────────
+function fmtCurrency(val){
+  if(!val||isNaN(val))return '—';
+  const n=Number(val);
+  if(n>=1000000)return '$'+(n/1000000).toFixed(2)+'M';
+  if(n>=1000)return '$'+(n/1000).toFixed(0)+'K';
+  return '$'+n.toLocaleString();
+}
+function fmtCurrencyFull(val){
+  if(!val||isNaN(val))return '';
+  return Number(val).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0});
+}
 function renderBudgetTab(p){
   const canPM=role==='pm'||role==='admin';
   const canConsultant=role==='consultant';
@@ -2614,9 +2732,9 @@ function renderBudgetTab(p){
   document.getElementById('budget-perf-detail').innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
       <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:4px">Project Budget</div>
-        <div style="font-size:20px;font-weight:700;color:var(--navy);font-family:'DM Mono',monospace">${budget?'$'+(budget/1000000).toFixed(2)+'M':'TBD'}</div></div>
+        <div style="font-size:20px;font-weight:700;color:var(--navy);font-family:'DM Mono',monospace">${budget?fmtCurrency(budget):'TBD'}</div></div>
       <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:4px">Billed YTD</div>
-        <div style="font-size:20px;font-weight:700;color:var(--blue-dark);font-family:'DM Mono',monospace">${billedYTD?'$'+(billedYTD/1000000).toFixed(2)+'M':'—'}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--blue-dark);font-family:'DM Mono',monospace">${billedYTD?fmtCurrency(billedYTD):'—'}</div>
         ${latest?`<div style="font-size:10px;color:var(--gray-light);margin-top:2px">as of ${latest.entryDate}</div>`:''}</div>
     </div>
     ${budget&&billedYTD?`
@@ -2639,7 +2757,7 @@ function renderBudgetTab(p){
       <thead><tr><th>Date</th><th>Billed YTD</th><th>% of Budget</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
       <tbody>${propBilling.map((b,i)=>`<tr>
         <td style="font-family:'DM Mono',monospace;font-size:11px">${b.entryDate}</td>
-        <td style="font-family:'DM Mono',monospace;font-size:11px;font-weight:600">$${Number(b.billedYTD).toLocaleString()}</td>
+        <td style="font-family:'DM Mono',monospace;font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
         <td style="font-family:'DM Mono',monospace;font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
         <td style="font-size:11px;color:var(--gray-mid)">${b.notes||'—'}</td>
         ${canPM?`<td><button class="btn" style="font-size:10px;padding:2px 8px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button></td>`:''}
@@ -2798,10 +2916,17 @@ function openBillingModal(){
   if(!currentProp)return;
   document.getElementById('billing-modal-prop').textContent=currentProp.n;
   document.getElementById('billing-modal-title').textContent='Log Billing Entry';
-  document.getElementById('bm-budget').value=currentProp.budget||'';
+  const budgetInput=document.getElementById('bm-budget');
+  budgetInput.value=currentProp.budget||'';
+  document.getElementById('bm-budget-preview').textContent=currentProp.budget?fmtCurrencyFull(currentProp.budget)+' — leave blank to keep unchanged':'Leave blank to keep existing budget unchanged';
   document.getElementById('bm-ytd').value='';
+  document.getElementById('bm-ytd-preview').textContent='';
   document.getElementById('bm-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('bm-notes').value='';
+  // Live preview on input
+  budgetInput.oninput=()=>{const v=parseFloat(budgetInput.value);document.getElementById('bm-budget-preview').textContent=v?fmtCurrencyFull(v):'';};
+  const ytdInput=document.getElementById('bm-ytd');
+  ytdInput.oninput=()=>{const v=parseFloat(ytdInput.value);document.getElementById('bm-ytd-preview').textContent=v?fmtCurrencyFull(v):'';};
   document.getElementById('billing-modal-overlay').style.display='block';
   document.getElementById('billing-modal').style.display='block';
 }
@@ -2819,20 +2944,31 @@ async function saveBillingModal(){
   // Update project budget if changed
   if(budget&&budget!==currentProp.budget){
     currentProp.budget=budget;
-    if(!demoMode)await atUpdate('Properties',currentProp.id,{'Project Budget':budget});
+    if(!demoMode){
+      const budRes=await atUpdate('Properties',currentProp.id,{'Project Budget':budget});
+      console.log('Budget update result:',budRes);
+    }
   }
   // Save billing entry
-  const res=await atCreate('Billing Log',{
-    'Property Name':currentProp.n,
-    'Billed YTD':ytd,
-    'Entry Date':date,
-    'Notes':notes||'',
-    'Logged By':'PM User',
-  });
-  const newEntry={id:res?.records?.[0]?.id||'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,notes,loggedBy:'PM User'};
-  window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
+  if(!demoMode){
+    const res=await atCreate('Billing Log',{
+      'Property Name':currentProp.n,
+      'Billed YTD':ytd,
+      'Entry Date':date,
+      'Notes':notes||'',
+      'Logged By':'PM User',
+    });
+    console.log('Billing Log create result:',JSON.stringify(res)?.slice(0,200));
+    const newId=res?.records?.[0]?.id||'bl-'+Date.now();
+    const newEntry={id:newId,property:currentProp.n,billedYTD:ytd,entryDate:date,notes,loggedBy:'PM User'};
+    window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
+  } else {
+    const newEntry={id:'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,notes,loggedBy:'PM User'};
+    window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
+  }
   closeBillingModal();
   renderPropertyView(currentProp);
+  switchPropTab('budget',document.querySelectorAll('.tab-btn')[1]);
   showToast('Billing entry saved','success');
 }
 
@@ -2862,7 +2998,7 @@ function renderCharts(){
 
   // Milestone progress for active properties
   const msData=active.map(p=>{
-    const complete=(p.ms||[]).filter(m=>m.status==='complete').length;
+    const complete=getMsComplete(p.n);
     return {name:p.n.length>20?p.n.slice(0,18)+'…':p.n,pct:Math.round(complete/MILESTONES_DEF.length*100),r:p.r};
   }).sort((a,b)=>b.pct-a.pct).slice(0,12);
 
@@ -2998,10 +3134,10 @@ function getCalEvents(){
   (window.UNIT_GROUPS||[]).forEach(u=>{
     if(role==='client')return;
     if(u.plannedStart){
-      events.push({date:u.plannedStart,type:'phase',title:'Start: '+u.phase,sub:u.property,color:'ev-phase',dot:'var(--amber)',propName:u.property});
+      events.push({date:u.plannedStart,type:'phase',title:'Start: '+u.phase,sub:u.property,color:'ev-phase',dot:'#7BB8E8',propName:u.property});
     }
     if(u.plannedCompletion){
-      events.push({date:u.plannedCompletion,type:'phase',title:'End: '+u.phase,sub:u.property,color:'ev-phase',dot:'var(--amber)',propName:u.property});
+      events.push({date:u.plannedCompletion,type:'phase',title:'End: '+u.phase,sub:u.property,color:'ev-phase',dot:'#7BB8E8',propName:u.property});
     }
   });
 
@@ -3072,7 +3208,7 @@ function renderCalMonth(){
     const dayEvents=byDate[dateStr]||[];
     html+=`<div class="cal-day${isToday?' today':''}">
       <div class="cal-day-num">${d}</div>
-      ${dayEvents.slice(0,3).map(e=>`<div class="cal-event ${e.color}${e.isDraft?' ev-draft':''}" title="${e.title}" onclick="calEventClick('${e.propName?.replace(/'/g,"\\'")||''}')">${e.isDraft?'[Draft] ':''}${e.title}</div>`).join('')}
+      ${dayEvents.slice(0,3).map(e=>`<div class="cal-event ${e.color}${e.isDraft?' ev-draft':''}" title="${e.title}${e.sub?' · '+e.sub:''}" onclick="calEventClick('${e.propName?.replace(/'/g,"\\'")||''}')">${e.isDraft?'[Draft] ':''}${e.title}${e.type==='phase'&&e.sub?'<div style="font-size:8px;opacity:0.85;margin-top:1px">'+e.sub+'</div>':''}</div>`).join('')}
       ${dayEvents.length>3?`<div style="font-size:9px;color:var(--gray-mid);padding-left:4px">+${dayEvents.length-3} more</div>`:''}
     </div>`;
   }
@@ -3114,7 +3250,7 @@ function renderCalList(){
     return;
   }
 
-  const typeColors={meeting:'var(--blue-dark)',visit:'var(--green)',phase:'var(--amber)',action:'var(--purple)'};
+  const typeColors={meeting:'var(--blue-dark)',visit:'var(--green)',phase:'#7BB8E8',action:'var(--purple)'};
 
   wrap.innerHTML=sortedDates.map(dateStr=>{
     const d=new Date(dateStr+'T12:00:00');
@@ -3211,7 +3347,7 @@ function renderDashboard(){
   const maxStatus=Math.max(awarded,onHold,budgeting,survey,complete)||1;
   // Schedule risk — dynamic from portfolio
   const behindAlerts=behind.map(p=>`<div class="alert alert-danger"><i class="ti ti-alert-triangle"></i><span><strong>${p.n}</strong>${p.comment?' — '+p.comment.slice(0,60)+(p.comment.length>60?'...':''):''}</span></div>`).join('');
-  const atRiskProps=active.filter(p=>p.r!=='Behind'&&(p.ms||[]).some(m=>m.status==='atrisk'));
+  const atRiskProps=active.filter(p=>p.r!=='Behind'&&getMilestonesForProp(p.n).some(m=>m.status==='At Risk'));
   const warnAlerts=atRiskProps.map(p=>`<div class="alert alert-warn"><i class="ti ti-alert-triangle"></i><span><strong>${p.n}</strong>${p.comment?' — '+p.comment.slice(0,60)+(p.comment.length>60?'...':''):''}</span></div>`).join('');
   const noRisk=behind.length===0&&atRiskProps.length===0;
   // Active properties table — top 6
@@ -3235,7 +3371,7 @@ function renderDashboard(){
       <div class="stat-card stat-blue"><div class="stat-label">Active / Awarded</div><div class="stat-value">${active.length}</div><div class="stat-sub">CIP + In progress</div></div>
       <div class="stat-card stat-green"><div class="stat-label">Complete</div><div class="stat-value">${complete}</div><div class="stat-sub">Projects finished</div></div>
       <div class="stat-card stat-amber"><div class="stat-label">Total VT units</div><div class="stat-value">${totalUnits.toLocaleString()}</div><div class="stat-sub">Elev. &amp; escalators</div></div>
-      <div class="stat-card stat-green"><div class="stat-label">Project budget</div><div class="stat-value">${totalBudget>0?'$'+(totalBudget/1000000).toFixed(0)+'M':'—'}</div><div class="stat-sub">Across portfolio</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Project budget</div><div class="stat-value">${totalBudget>0?fmtCurrency(totalBudget):'—'}</div><div class="stat-sub">Across portfolio</div></div>
     </div>
     <div class="two-col">
       <div class="card">
@@ -3723,7 +3859,7 @@ function renderReport(){
   const onTrack=activeProps.filter(p=>p.r==='On Track');
   const ahead=activeProps.filter(p=>p.r==='Ahead');
   const totalBudget=props.reduce((a,p)=>a+(p.budget||0),0);
-  const msAtRisk=activeProps.reduce((acc,p)=>acc+(p.ms||[]).filter(m=>m.status==='atrisk').length,0);
+  const msAtRisk=activeProps.reduce((acc,p)=>acc+getMilestonesForProp(p.n).filter(m=>m.status==='At Risk').length,0);
   const openAI=actionItems.filter(a=>a.status==='Open');
   const filterLabel=filter==='all'?'All properties':filter==='Active'?'Active properties only':filter+' assets only';
   const today=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
@@ -3773,8 +3909,8 @@ function renderReport(){
             <tbody>
               ${activeProps.map(p=>{
                 const rc={Behind:'b-behind','On Track':'b-track',Ahead:'b-ahead'}[p.r]||'';
-                const msC=(p.ms||[]).filter(m=>m.status==='complete').length;
-                const msR=(p.ms||[]).filter(m=>m.status==='atrisk').length;
+                const msC=getMsComplete(p.n);
+                const msR=getMilestonesForProp(p.n).filter(m=>m.status==='At Risk').length;
                 return `<tr>
                   <td style="font-weight:500">${p.n}</td>
                   <td><span class="geo">${p.s}</span></td>
