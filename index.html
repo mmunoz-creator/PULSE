@@ -398,11 +398,38 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   .form-row{grid-template-columns:1fr}
   .prop-mini-grid{grid-template-columns:1fr 1fr}
   .report-scorecard{grid-template-columns:1fr 1fr}
-  .page-body{padding:1rem}
+  .page-body{padding:.75rem}
   .chat-wrap{height:380px}
   .role-grid{grid-template-columns:1fr 1fr}
   .slide-panel{width:100vw}
   .action-row{grid-template-columns:1fr 1fr;grid-template-rows:auto auto}
+
+  /* Table mobile fixes */
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:var(--radius)}
+  .data-table{font-size:11px;min-width:480px}
+  .data-table th{padding:6px 8px;font-size:9px;white-space:normal;word-break:break-word;line-height:1.3}
+  .data-table td{padding:7px 8px;font-size:11px}
+  .report-table{font-size:10px;min-width:540px}
+  .report-table th{padding:5px 7px;font-size:9px;white-space:normal;word-break:break-word}
+  .report-table td{padding:6px 7px}
+
+  /* Portfolio table — hide less critical columns on small screens */
+  .data-table th:nth-child(2),.data-table td:nth-child(2), /* State */
+  .data-table th:nth-child(7),.data-table td:nth-child(7)  /* Budget */
+  {display:none}
+
+  /* Page header stacks on mobile */
+  .page-header{flex-direction:column;align-items:flex-start;gap:8px}
+  .header-actions{flex-wrap:wrap;gap:6px}
+  .header-actions .btn{font-size:11px;padding:5px 10px}
+
+  /* Tab row scrolls horizontally */
+  .tab-row{gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tab-btn{white-space:nowrap;font-size:11px;padding:7px 10px}
+
+  /* Prop mini grid tighter */
+  .prop-mini-card{padding:8px 10px}
+  .prop-mini-val{font-size:16px}
 }
 </style>
 </head>
@@ -455,6 +482,8 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 const WORKER_URL = 'https://pulse-api.misty-munoz.workers.dev';
 let AT_CONNECTED = false;
 let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
+window.UNIT_GROUPS = window.UNIT_GROUPS || [];
+window.BILLING_LOG = window.BILLING_LOG || [];
 
 // No token needed in browser - Worker holds it securely
 function saveToken() {
@@ -578,6 +607,7 @@ async function seedIfEmpty() {
         'Comments': p.comment||'',
         'Target Completion': p.target||'TBD',
         'Forecasted Budget': p.budget||0,
+        'Project Budget': p.budget||0,
       }
     }));
     try {
@@ -603,10 +633,10 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
-      atGet('Documents')
+      atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log')
     ]);
     if (props.length > 0) {
       // Merge Airtable data into local PORTFOLIO — preserve local status/schedule/milestone data
@@ -618,7 +648,8 @@ async function loadAllData() {
         if(local){
           local.id=r.id; // store Airtable record ID for writes
           if(r.fields['Asset Type'])local.type=r.fields['Asset Type'];
-          if(r.fields['Forecasted Budget'])local.budget=r.fields['Forecasted Budget'];
+          if(r.fields['Project Budget'])local.budget=r.fields['Project Budget'];
+          else if(r.fields['Forecasted Budget'])local.budget=r.fields['Forecasted Budget']; // fallback
           if(r.fields['Comments'])local.comment=r.fields['Comments'];
           if(r.fields['Elevator Company']&&r.fields['Elevator Company']!=='TBD')local.ec=r.fields['Elevator Company'];
           if(r.fields['VDA Consultant'])local.v=r.fields['VDA Consultant'];
@@ -692,6 +723,28 @@ async function loadAllData() {
     } else {
       window.DOCUMENTS_LIVE = [];
     }
+    // Unit Groups — physical construction phases per property
+    window.UNIT_GROUPS = unitGroups.map(r=>({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      phase: r.fields['Phase Name']||'',
+      units: parseInt(r.fields['Units in Phase'])||0,
+      status: r.fields['Status']||'Not Started',
+      plannedStart: r.fields['Planned Start']||'',
+      actualStart: r.fields['Actual Start']||'',
+      plannedCompletion: r.fields['Planned Completion']||'',
+      actualCompletion: r.fields['Actual Completion']||'',
+      notes: r.fields['Notes']||'',
+    }));
+    // Billing Log — YTD snapshots per property
+    window.BILLING_LOG = billingLog.map(r=>({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      billedYTD: r.fields['Billed YTD']||0,
+      entryDate: r.fields['Entry Date']||'',
+      notes: r.fields['Notes']||'',
+      loggedBy: r.fields['Logged By']||'',
+    })).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate)); // newest first
     AT_CONNECTED = true;
     console.log('AT_CONNECTED set to true - updating UI');
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
@@ -802,7 +855,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v10c · elevatorpulse.com</div>
+    <div class="login-version">PULSE v10f · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -998,7 +1051,7 @@ window.PROPERTIES_SEED = [
   <div id="sidebar-overlay" onclick="closeSidebar()"></div>
   <nav class="sidebar" id="sidebar">
     <div class="sidebar-head">
-      <div class="sidebar-logo"><div class="sidebar-logo-mark"><i class="ti ti-activity"></i></div><div class="sidebar-logo-name">PULSE</div></div>
+      <div class="sidebar-logo" onclick="gotoView('dashboard',null)" style="cursor:pointer" title="Go to Dashboard"><div class="sidebar-logo-mark"><i class="ti ti-activity"></i></div><div class="sidebar-logo-name">PULSE</div></div>
       <div class="sidebar-client-pill"><i class="ti ti-building"></i><span id="sb-client-name">Park Hotels</span></div>
       <div id="sb-role-tag" class="sidebar-role-tag tag-admin">IT Admin</div>
     </div>
@@ -1138,6 +1191,7 @@ window.PROPERTIES_SEED = [
           <div class="header-actions">
             <button class="btn" id="prop-meeting-btn" onclick="openMeetingPanel()" style="display:none"><i class="ti ti-notes"></i>Log meeting</button>
             <button class="btn" id="prop-visit-btn" onclick="showVisitEntry()" style="display:none"><i class="ti ti-calendar-plus"></i>Schedule visit</button>
+            <button class="btn" id="prop-budget-btn" onclick="switchPropTab('budget',document.querySelector('.tab-btn[onclick*=budget]'))" style="display:none"><i class="ti ti-currency-dollar"></i>Log billing</button>
             <button class="btn btn-primary" id="prop-submit-btn" onclick="gotoView('submit',null)" style="display:none"><i class="ti ti-upload"></i>Submit update</button>
           </div>
         </div>
@@ -1146,10 +1200,65 @@ window.PROPERTIES_SEED = [
           <div class="prop-mini-grid" id="prop-mini-grid"></div>
           <div class="tab-row">
             <button class="tab-btn active" onclick="switchPropTab('overview',this)">Overview</button>
+            <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget &amp; Units</button>
             <button class="tab-btn" onclick="switchPropTab('milestones',this)">Milestones</button>
             <button class="tab-btn" onclick="switchPropTab('meetings',this)">Meetings &amp; Actions</button>
             <button class="tab-btn" onclick="switchPropTab('updates',this)">Field Updates</button>
             <button class="tab-btn" onclick="switchPropTab('docs',this)">Documents</button>
+          </div>
+          <div id="prop-tab-budget" class="tab-content">
+            <div class="two-col">
+              <div>
+                <div class="card" id="budget-perf-card">
+                  <div class="card-header"><div><div class="card-title">Budget performance</div><div class="card-sub" id="budget-perf-sub">Project Budget vs Billed YTD</div></div>
+                  ${`<button class="btn" id="budget-log-btn" onclick="openBillingLogForm()" style="display:none"><i class="ti ti-plus"></i>Log billing entry</button>`}
+                  </div>
+                  <div id="budget-perf-detail"></div>
+                </div>
+                <div class="card">
+                  <div class="card-header"><div class="card-title">Billing history</div></div>
+                  <div id="billing-history-list"></div>
+                </div>
+              </div>
+              <div>
+                <div class="card">
+                  <div class="card-header">
+                    <div><div class="card-title">Unit progress</div><div class="card-sub">Physical construction phases</div></div>
+                    <button class="btn" id="unit-add-phase-btn" onclick="openAddPhaseForm()" style="display:none"><i class="ti ti-plus"></i>Add phase</button>
+                  </div>
+                  <div id="unit-progress-detail"></div>
+                </div>
+              </div>
+            </div>
+            <!-- Billing entry form -->
+            <div class="card" id="billing-entry-form" style="display:none;margin-top:1rem">
+              <div class="card-header"><div class="card-title">Log billing entry</div></div>
+              <div class="two-col" style="gap:12px">
+                <div class="form-group"><label class="form-label">Billed YTD (running total)</label><input class="form-input" type="number" id="billing-ytd-input" placeholder="e.g. 360000" step="1000"></div>
+                <div class="form-group"><label class="form-label">Entry date</label><input class="form-input" type="date" id="billing-date-input"></div>
+              </div>
+              <div class="form-group"><label class="form-label">Notes (optional)</label><input class="form-input" type="text" id="billing-notes-input" placeholder="e.g. Invoice #003, billing cycle 3"></div>
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <button class="btn btn-primary" onclick="saveBillingEntry()"><i class="ti ti-check"></i>Save entry</button>
+                <button class="btn" onclick="document.getElementById('billing-entry-form').style.display='none'">Cancel</button>
+              </div>
+            </div>
+            <!-- Add phase form -->
+            <div class="card" id="add-phase-form" style="display:none;margin-top:1rem">
+              <div class="card-header"><div class="card-title">Add unit phase</div></div>
+              <div class="two-col" style="gap:12px">
+                <div class="form-group"><label class="form-label">Phase name</label><input class="form-input" type="text" id="phase-name-input" placeholder="e.g. PE1 &amp; PE2, Cars 1-2"></div>
+                <div class="form-group"><label class="form-label">Units in phase</label><input class="form-input" type="number" id="phase-units-input" placeholder="e.g. 2" min="1"></div>
+              </div>
+              <div class="two-col" style="gap:12px">
+                <div class="form-group"><label class="form-label">Planned start</label><input class="form-input" type="date" id="phase-planned-start"></div>
+                <div class="form-group"><label class="form-label">Planned completion</label><input class="form-input" type="date" id="phase-planned-end"></div>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <button class="btn btn-primary" onclick="saveNewPhase()"><i class="ti ti-check"></i>Save phase</button>
+                <button class="btn" onclick="document.getElementById('add-phase-form').style.display='none'">Cancel</button>
+              </div>
+            </div>
           </div>
           <div id="prop-tab-overview" class="tab-content active">
             <div class="two-col">
@@ -1765,6 +1874,7 @@ function switchPropTab(tab,btn){
   if(tab==='meetings'&&currentProp)renderPropMeetings(currentProp);
   if(tab==='updates'&&currentProp)renderPropUpdates(currentProp);
   if(tab==='docs'&&currentProp)renderPropDocFolder(currentProp);
+  if(tab==='budget'&&currentProp)renderBudgetTab(currentProp);
 }
 
 function renderPropertyView(p){
@@ -1787,20 +1897,39 @@ function renderPropertyView(p){
   const openAIs=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
 
   document.getElementById('prop-mini-grid').innerHTML=`
-    <div class="prop-mini-card"><div class="prop-mini-label">VT units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${p.unitDesc||''}</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msComplete}<span style="font-size:12px;font-weight:400;color:var(--gray-light)">/${MILESTONES_DEF.length}</span></div><div class="prop-mini-sub">Complete</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">VT units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${p.unitDesc||'Total'}</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">Units complete</div><div class="prop-mini-val" style="color:var(--green)">${unitsComplete}</div><div class="prop-mini-sub">of ${totalUnits}</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">VDA milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msComplete}<span style="font-size:12px;font-weight:400;color:var(--gray-light)">/${MILESTONES_DEF.length}</span></div><div class="prop-mini-sub">Complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Open actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Site visits</div><div class="prop-mini-val">${propVisits.length}</div><div class="prop-mini-sub">Logged</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Budget</div><div class="prop-mini-val" style="font-size:13px;letter-spacing:0">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'}</div><div class="prop-mini-sub">Forecasted</div></div>`;
+    <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val" style="font-size:13px;letter-spacing:0">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>`;
 
-  // Budget placeholder
+  // Budget summary on overview
+  const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate));
+  const latestBilling=propBilling[0]||null;
+  const billedYTD=latestBilling?latestBilling.billedYTD:0;
+  const propUnits=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
+  const unitsComplete=propUnits.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
+  const unitsInProgress=propUnits.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
+  const totalUnits=parseInt(p.units)||0;
+  const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProgress);
+  const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
+  const pctBilled=p.budget&&p.budget>0?Math.round((billedYTD/p.budget)*100):0;
+  const variance=pctBilled-pctComplete;
+
   const bEl=document.getElementById('prop-budget-detail');
-  bEl.innerHTML=p.budget?
-    `<div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap">
-      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">Forecasted budget</div><div style="font-size:18px;font-weight:600;color:var(--navy);font-family:'DM Mono',monospace">$${(p.budget/1000000).toFixed(2)}M</div></div>
-      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">Billed to date</div><div style="font-size:18px;font-weight:600;color:var(--blue-dark);font-family:'DM Mono',monospace">—</div></div>
-    </div><div style="font-size:11px;color:var(--gray-mid)">Enter contract value and billing data to track budget performance.</div>`:
-    `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:.5rem">No budget data${role==='pm'?' — click Budget above to enter':''}.</div>`;
+  bEl.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">Project Budget</div>
+        <div style="font-size:18px;font-weight:600;color:var(--navy);font-family:'DM Mono',monospace">${p.budget?'$'+(p.budget/1000000).toFixed(2)+'M':'TBD'}</div></div>
+      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">Billed YTD</div>
+        <div style="font-size:18px;font-weight:600;color:var(--blue-dark);font-family:'DM Mono',monospace">${billedYTD?'$'+(billedYTD/1000000).toFixed(2)+'M':'—'}</div></div>
+      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">% Billed</div>
+        <div style="font-size:18px;font-weight:600;color:${pctBilled>pctComplete+10?'var(--amber)':'var(--green)'};font-family:'DM Mono',monospace">${p.budget?pctBilled+'%':'—'}</div></div>
+      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:3px">% Complete</div>
+        <div style="font-size:18px;font-weight:600;color:var(--navy);font-family:'DM Mono',monospace">${totalUnits>0?pctComplete+'%':'—'}</div></div>
+    </div>
+    ${p.budget&&billedYTD?`<div class="alert alert-${variance>10?'warn':variance<-10?'info':'success'}" style="margin-bottom:8px"><i class="ti ti-${variance>10?'alert-triangle':variance<-10?'trending-up':'circle-check'}"></i><span>${variance>10?'Billing ahead of work by '+variance+'%':variance<-10?'Work ahead of billing by '+Math.abs(variance)+'%':'Billing and work are in sync'}</span></div>`:''}
+    <button class="btn" style="font-size:11px;width:100%" onclick="switchPropTab('budget',document.querySelectorAll('.tab-btn')[1])"><i class="ti ti-arrow-right"></i>View full budget &amp; unit detail</button>`;
 
   // Details
   document.getElementById('prop-details-list').innerHTML=`
@@ -2189,8 +2318,9 @@ async function closeAction(id){
   const a=actionItems.find(x=>x.id===id);
   if(!a)return;
   a.status='Closed';
+  a.closedDate=new Date().toISOString().split('T')[0];
   if(a.id&&!demoMode){
-    try{await atUpdate('Action Items',a.id,{'Status':'Closed'});}catch(e){console.warn('closeAction Airtable write failed:',e);}
+    try{await atUpdate('Action Items',a.id,{'Status':'Closed','Closed Date':a.closedDate});}catch(e){console.warn('closeAction Airtable write failed:',e);}
   }
   if(currentProp)renderPropMeetings(currentProp);
   renderAllMeetings();
@@ -2316,6 +2446,188 @@ function renderAllMeetings(){
     </div>`).join('');
 }
 
+// ── BUDGET & UNIT PROGRESS ────────────────────────────────────────────
+function renderBudgetTab(p){
+  const canPM=role==='pm'||role==='admin';
+  const canConsultant=role==='consultant';
+
+  // Show/hide PM-only buttons
+  const logBtn=document.getElementById('budget-log-btn');
+  if(logBtn)logBtn.style.display=canPM?'':'none';
+  const addPhaseBtn=document.getElementById('unit-add-phase-btn');
+  if(addPhaseBtn)addPhaseBtn.style.display=canPM?'':'none';
+
+  // Billing data
+  const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate));
+  const latest=propBilling[0]||null;
+  const billedYTD=latest?Number(latest.billedYTD):0;
+  const budget=p.budget||0;
+  const pctBilled=budget>0?Math.round((billedYTD/budget)*100):0;
+
+  // Unit groups
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
+  const totalUnits=parseInt(p.units)||0;
+  const unitsComplete=phases.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
+  const unitsInProg=phases.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
+  const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProg);
+  const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
+  const variance=pctBilled-pctComplete;
+
+  // Budget performance card
+  document.getElementById('budget-perf-detail').innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
+      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:4px">Project Budget</div>
+        <div style="font-size:20px;font-weight:700;color:var(--navy);font-family:'DM Mono',monospace">${budget?'$'+(budget/1000000).toFixed(2)+'M':'TBD'}</div></div>
+      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:4px">Billed YTD</div>
+        <div style="font-size:20px;font-weight:700;color:var(--blue-dark);font-family:'DM Mono',monospace">${billedYTD?'$'+(billedYTD/1000000).toFixed(2)+'M':'—'}</div>
+        ${latest?`<div style="font-size:10px;color:var(--gray-light);margin-top:2px">as of ${latest.entryDate}</div>`:''}</div>
+    </div>
+    ${budget&&billedYTD?`
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-mid);margin-bottom:4px"><span>% Billed</span><span style="font-weight:600;color:${pctBilled>pctComplete+10?'var(--amber)':'var(--navy)'}">${pctBilled}%</span></div>
+      <div class="prog-bar" style="height:8px;margin-bottom:8px"><div class="prog-fill ${pctBilled>pctComplete+10?'amber':''}" style="width:${Math.min(pctBilled,100)}%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-mid);margin-bottom:4px"><span>% Complete (units)</span><span style="font-weight:600;color:var(--navy)">${pctComplete}%</span></div>
+      <div class="prog-bar" style="height:8px"><div class="prog-fill" style="width:${Math.min(pctComplete,100)}%"></div></div>
+    </div>
+    <div class="alert alert-${variance>10?'warn':variance<-10?'info':'success'}" style="margin-bottom:0">
+      <i class="ti ti-${variance>10?'alert-triangle':variance<-10?'trending-up':'circle-check'}"></i>
+      <span>${variance>10?`Billing is ${variance}% ahead of physical progress`:variance<-10?`Work is ${Math.abs(variance)}% ahead of billing`:'Billing and physical progress are in sync'}</span>
+    </div>`:'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Log a billing entry to see performance tracking.</div>'}`;
+
+  // Billing history
+  const histEl=document.getElementById('billing-history-list');
+  histEl.innerHTML=propBilling.length===0?
+    `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No billing entries yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
+    `<table class="data-table" style="margin-top:0">
+      <thead><tr><th>Date</th><th>Billed YTD</th><th>% of Budget</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
+      <tbody>${propBilling.map((b,i)=>`<tr>
+        <td style="font-family:'DM Mono',monospace;font-size:11px">${b.entryDate}</td>
+        <td style="font-family:'DM Mono',monospace;font-size:11px;font-weight:600">$${Number(b.billedYTD).toLocaleString()}</td>
+        <td style="font-family:'DM Mono',monospace;font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
+        <td style="font-size:11px;color:var(--gray-mid)">${b.notes||'—'}</td>
+        ${canPM?`<td><button class="btn" style="font-size:10px;padding:2px 8px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button></td>`:''}
+      </tr>`).join('')}</tbody>
+    </table>`;
+
+  // Unit progress
+  const unitEl=document.getElementById('unit-progress-detail');
+  const statusColors={'Complete':'var(--green)','In Progress':'var(--blue-dark)','Not Started':'var(--gray-light)'};
+  const statusIcons={'Complete':'ti-circle-check','In Progress':'ti-loader','Not Started':'ti-circle'};
+  unitEl.innerHTML=`
+    <div style="display:flex;gap:16px;margin:12px 0;flex-wrap:wrap">
+      <div style="text-align:center"><div style="font-size:22px;font-weight:700;color:var(--green)">${unitsComplete}</div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">Complete</div></div>
+      <div style="text-align:center"><div style="font-size:22px;font-weight:700;color:var(--blue-dark)">${unitsInProg}</div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">In Progress</div></div>
+      <div style="text-align:center"><div style="font-size:22px;font-weight:700;color:var(--gray-mid)">${unitsRemaining}</div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">Remaining</div></div>
+      <div style="text-align:center"><div style="font-size:22px;font-weight:700;color:var(--navy)">${totalUnits}</div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">Total</div></div>
+    </div>
+    ${phases.length===0?`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No phases defined yet. Click "Add phase" to set up the modernization sequence.':'No unit phases defined yet.'}</div>`:
+    phases.map(ph=>`
+      <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px;color:var(--navy)">${ph.phase}</div>
+            <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${ph.units} unit${ph.units!==1?'s':''} · ${ph.plannedStart||'—'} → ${ph.plannedCompletion||'—'}</div>
+            ${ph.actualStart?`<div style="font-size:11px;color:var(--gray-mid)">Started: ${ph.actualStart}${ph.actualCompletion?' · Completed: '+ph.actualCompletion:''}</div>`:''}
+            ${ph.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;font-style:italic">${ph.notes}</div>`:''}
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+            <span style="font-size:11px;font-weight:600;color:${statusColors[ph.status]||'var(--gray-mid)'}"><i class="ti ${statusIcons[ph.status]||'ti-circle'}" style="font-size:12px;margin-right:3px"></i>${ph.status}</span>
+            ${canPM||canConsultant?`<select class="form-select" style="font-size:10px;padding:2px 6px;height:auto" onchange="updatePhaseStatus('${ph.id}',this.value,'${p.n.replace(/'/g,"\\'")}')">
+              <option${ph.status==='Not Started'?' selected':''}>Not Started</option>
+              <option${ph.status==='In Progress'?' selected':''}>In Progress</option>
+              <option${ph.status==='Complete'?' selected':''}>Complete</option>
+            </select>`:''}
+          </div>
+        </div>
+      </div>`).join('')}`;
+}
+
+function openBillingLogForm(){
+  const form=document.getElementById('billing-entry-form');
+  form.style.display='block';
+  document.getElementById('billing-date-input').value=new Date().toISOString().split('T')[0];
+  form.scrollIntoView({behavior:'smooth'});
+}
+
+async function saveBillingEntry(){
+  if(!currentProp)return;
+  const ytd=parseFloat(document.getElementById('billing-ytd-input').value);
+  const date=document.getElementById('billing-date-input').value;
+  const notes=document.getElementById('billing-notes-input').value.trim();
+  if(!ytd||!date){showToast('Please enter a Billed YTD amount and date','warn');return;}
+  const loggedBy=role==='pm'?'PM User':role==='admin'?'Admin':'PM User';
+  const res=await atCreate('Billing Log',{
+    'Property Name':currentProp.n,
+    'Billed YTD':ytd,
+    'Entry Date':date,
+    'Notes':notes||'',
+    'Logged By':loggedBy,
+  });
+  const newEntry={id:res?.records?.[0]?.id||'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,notes,loggedBy};
+  window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
+  document.getElementById('billing-entry-form').style.display='none';
+  document.getElementById('billing-ytd-input').value='';
+  document.getElementById('billing-notes-input').value='';
+  renderBudgetTab(currentProp);
+  renderPropertyView(currentProp); // refresh overview mini grid
+  showToast('Billing entry saved','success');
+}
+
+async function deleteBillingEntry(id,propName){
+  if(!confirm('Remove this billing entry?'))return;
+  window.BILLING_LOG=(window.BILLING_LOG||[]).filter(b=>b.id!==id);
+  if(!demoMode)await atDelete('Billing Log',id);
+  renderBudgetTab(currentProp);
+  renderPropertyView(currentProp);
+  showToast('Billing entry removed','success');
+}
+
+function openAddPhaseForm(){
+  const form=document.getElementById('add-phase-form');
+  form.style.display='block';
+  form.scrollIntoView({behavior:'smooth'});
+}
+
+async function saveNewPhase(){
+  if(!currentProp)return;
+  const name=document.getElementById('phase-name-input').value.trim();
+  const units=parseInt(document.getElementById('phase-units-input').value)||0;
+  const plannedStart=document.getElementById('phase-planned-start').value;
+  const plannedEnd=document.getElementById('phase-planned-end').value;
+  if(!name||!units){showToast('Please enter a phase name and unit count','warn');return;}
+  const res=await atCreate('Unit Groups',{
+    'Property Name':currentProp.n,
+    'Phase Name':name,
+    'Units in Phase':units,
+    'Status':'Not Started',
+    'Planned Start':plannedStart||'',
+    'Planned Completion':plannedEnd||'',
+  });
+  const newPhase={id:res?.records?.[0]?.id||'ug-'+Date.now(),property:currentProp.n,phase:name,units,status:'Not Started',plannedStart,plannedCompletion:plannedEnd,actualStart:'',actualCompletion:'',notes:''};
+  window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([newPhase]);
+  document.getElementById('add-phase-form').style.display='none';
+  document.getElementById('phase-name-input').value='';
+  document.getElementById('phase-units-input').value='';
+  document.getElementById('phase-planned-start').value='';
+  document.getElementById('phase-planned-end').value='';
+  renderBudgetTab(currentProp);
+  showToast('Phase added','success');
+}
+
+async function updatePhaseStatus(id,newStatus,propName){
+  const phase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
+  if(!phase)return;
+  phase.status=newStatus;
+  const today=new Date().toISOString().split('T')[0];
+  const fields={'Status':newStatus};
+  if(newStatus==='In Progress'&&!phase.actualStart){phase.actualStart=today;fields['Actual Start']=today;}
+  if(newStatus==='Complete'&&!phase.actualCompletion){phase.actualCompletion=today;fields['Actual Completion']=today;}
+  if(!demoMode)await atUpdate('Unit Groups',id,fields);
+  renderBudgetTab(currentProp);
+  renderPropertyView(currentProp);
+  showToast(`Phase updated to ${newStatus}`,'success');
+}
+
 function renderAnalytics(){
   const port=window.PORTFOLIO||PORTFOLIO;
   const isDemo=demoMode;
@@ -2414,7 +2726,7 @@ function renderDashboard(){
       <div class="stat-card stat-blue"><div class="stat-label">Active / Awarded</div><div class="stat-value">${active.length}</div><div class="stat-sub">CIP + In progress</div></div>
       <div class="stat-card stat-green"><div class="stat-label">Complete</div><div class="stat-value">${complete}</div><div class="stat-sub">Projects finished</div></div>
       <div class="stat-card stat-amber"><div class="stat-label">Total VT units</div><div class="stat-value">${totalUnits.toLocaleString()}</div><div class="stat-sub">Elev. &amp; escalators</div></div>
-      <div class="stat-card stat-green"><div class="stat-label">Forecasted budget</div><div class="stat-value">${totalBudget>0?'$'+(totalBudget/1000000).toFixed(0)+'M':'—'}</div><div class="stat-sub">Across portfolio</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Project budget</div><div class="stat-value">${totalBudget>0?'$'+(totalBudget/1000000).toFixed(0)+'M':'—'}</div><div class="stat-sub">Across portfolio</div></div>
     </div>
     <div class="two-col">
       <div class="card">
