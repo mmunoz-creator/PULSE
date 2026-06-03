@@ -549,6 +549,11 @@ async function atCreate(table, fields) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ records: [{ fields }] })
     });
+    if(!r.ok){
+      const errText=await r.text();
+      console.error(`atCreate ${table} failed (${r.status}):`, errText);
+      return null;
+    }
     return await r.json();
   } catch(e) { console.error('atCreate error:', e); return null; }
 }
@@ -638,6 +643,7 @@ async function loadAllData() {
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log')
     ]);
+    console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries`);
     if (props.length > 0) {
       // Merge Airtable data into local PORTFOLIO — preserve local status/schedule/milestone data
       // Only update fields that Airtable is authoritative for: id, type, budget, comment, ec, consultant
@@ -855,7 +861,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v10f · elevatorpulse.com</div>
+    <div class="login-version">PULSE v10h · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1587,10 +1593,11 @@ function enterDemo(){
   // Override PORTFOLIO with demo data
   window.PORTFOLIO=DEMO_PORTFOLIO.map(p=>({...p,id:'demo-'+p.n})).sort((a,b)=>a.n.localeCompare(b.n));
   submissions=[];meetings=[];actionItems=[];siteVisits=[];notifications=[];clientFlags=[];flagIdCounter=0;
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];
   setupDemoPortal();
   populatePortfolio();populateMilestonesTable();
   renderDocFolders();populateDocFolderFilter();populatePanelPropertyList();
-  renderDashboard();
+  renderDashboard();renderAllMeetings();populatePanelPropertyList();
   if(role==='pm')gotoView('dashboard',null);
   else gotoView('dashboard',null);
   setFirstNavActive();
@@ -1785,9 +1792,13 @@ async function _finishLogin(){
 
 function doLogout(){
   demoMode=false;
+  AT_CONNECTED=false;
+  // Reset all live data so re-login gets a clean load
+  meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];
+  clientFlags=[];flagIdCounter=0;
   const badge=document.getElementById('demo-logo-badge');if(badge)badge.remove();
   window.PORTFOLIO=PARK_PORTFOLIO;
-  clientFlags=[];flagIdCounter=0;
   // Reset chatbot to Park Hotels context
   const chatMsgs=document.getElementById('chat-messages');
   if(chatMsgs)chatMsgs.innerHTML=`<div class="chat-msg"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — I have full visibility into the 44-property Park Hotels &amp; Resorts portfolio. Ask me about any property, schedule risk, budget, milestones, or elevator company performance.</div></div>`;
@@ -1896,6 +1907,19 @@ function renderPropertyView(p){
   const propVisits=siteVisits.filter(v=>v.property===p.n);
   const openAIs=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
 
+  // Budget & unit variables — needed for both mini grid and budget card
+  const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate));
+  const latestBilling=propBilling[0]||null;
+  const billedYTD=latestBilling?Number(latestBilling.billedYTD):0;
+  const propUnits=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
+  const totalUnits=parseInt(p.units)||0;
+  const unitsComplete=propUnits.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
+  const unitsInProgress=propUnits.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
+  const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProgress);
+  const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
+  const pctBilled=p.budget&&p.budget>0?Math.round((billedYTD/p.budget)*100):0;
+  const variance=pctBilled-pctComplete;
+
   document.getElementById('prop-mini-grid').innerHTML=`
     <div class="prop-mini-card"><div class="prop-mini-label">VT units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${p.unitDesc||'Total'}</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Units complete</div><div class="prop-mini-val" style="color:var(--green)">${unitsComplete}</div><div class="prop-mini-sub">of ${totalUnits}</div></div>
@@ -1904,17 +1928,6 @@ function renderPropertyView(p){
     <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val" style="font-size:13px;letter-spacing:0">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>`;
 
   // Budget summary on overview
-  const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate));
-  const latestBilling=propBilling[0]||null;
-  const billedYTD=latestBilling?latestBilling.billedYTD:0;
-  const propUnits=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
-  const unitsComplete=propUnits.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
-  const unitsInProgress=propUnits.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
-  const totalUnits=parseInt(p.units)||0;
-  const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProgress);
-  const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
-  const pctBilled=p.budget&&p.budget>0?Math.round((billedYTD/p.budget)*100):0;
-  const variance=pctBilled-pctComplete;
 
   const bEl=document.getElementById('prop-budget-detail');
   bEl.innerHTML=`
@@ -2127,7 +2140,7 @@ async function saveMeetingDraft(){
     'Agenda':agenda,
     'Discussion Notes':notes,
     'Visibility':'Draft',
-    'Logged by':'PM User',
+    'Logged By':'PM User',
   };
   let atId=existingDraftId;
   if(existingDraftId){
@@ -2225,7 +2238,7 @@ async function saveMeeting(){
     'Agenda':agenda,
     'Discussion Notes':notes,
     'Visibility':published?'Published':'Internal',
-    'Logged by':'PM User',
+    'Logged By':'PM User',
   };
   let atId=existingDraftId||null;
   if(existingDraftId){
