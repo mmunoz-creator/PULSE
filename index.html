@@ -23,6 +23,7 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;font-size:14px;color:var(
 input,select,textarea,button{font-family:'DM Sans',sans-serif;font-size:13px}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-thumb{background:var(--gray-light);border-radius:3px}
+@keyframes spin{to{transform:rotate(360deg)}}
 #app{display:flex;flex-direction:column;min-height:100vh}
 /* LOGIN */
 #login-screen{display:flex;min-height:100vh;background:white}
@@ -801,7 +802,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v10b · elevatorpulse.com</div>
+    <div class="login-version">PULSE v10c · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1194,6 +1195,7 @@ window.PROPERTIES_SEED = [
       <div id="view-meetings" class="hidden">
         <div class="page-header"><div class="page-header-left"><h1>Meeting log</h1><p>Contractor performance meetings and action items</p></div><div class="header-actions"><button class="btn btn-primary" onclick="openMeetingPanelGlobal()"><i class="ti ti-plus"></i>Log meeting</button></div></div>
         <div class="page-body">
+          <div id="meetings-loading" class="alert alert-info" style="margin-bottom:1rem;display:none"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i>Loading meetings from database...</div>
           <div class="two-col">
             <div class="card"><div class="card-title" style="margin-bottom:1rem">Open action items — all properties</div><div id="all-actions-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No open actions</div></div></div></div>
             <div class="card"><div class="card-title" style="margin-bottom:1rem">Recent meetings</div><div id="all-meetings-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged yet</div><div class="empty-state-sub">Log meetings from a property page or the button above</div></div></div></div>
@@ -1731,7 +1733,11 @@ function gotoView(viewId,btn){
   if(viewId==='notifications')refreshNotifications();
   if(viewId==='report')renderReport();
   if(viewId==='documents'){renderDocFolders();}
-  if(viewId==='meetings'){renderAllMeetings();}
+  if(viewId==='meetings'){
+    const loadingEl=document.getElementById('meetings-loading');
+    if(loadingEl)loadingEl.style.display=AT_CONNECTED?'none':'flex';
+    renderAllMeetings();
+  }
   if(viewId==='sitevisits')renderAllSiteVisits();
   if(viewId==='comments')renderCommentsView();
   if(viewId==='reports')renderAnalytics();
@@ -1983,6 +1989,7 @@ async function saveMeetingDraft(){
     'Property Name':propName,
     'Meeting Date':meetingDate,
     'Meeting Type':meetingType,
+    'Meeting Format':meetingFormat,
     'Elevator Company':elevco,
     'Location':location,
     'VDA Attendees':attVDA,
@@ -2294,14 +2301,16 @@ function renderAllMeetings(){
       <div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${a.owner} · Due: ${a.due}</span></div>
       <button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>
     </div>`).join('');
+  const loadingEl=document.getElementById('meetings-loading');
+  if(loadingEl)loadingEl.style.display='none'; // hide loading indicator once render runs
   const mList=document.getElementById('all-meetings-list');
   if(mList)mList.innerHTML=meetings.length===0?
-    `<div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged yet</div></div>`:
-    meetings.slice().reverse().slice(0,5).map(m=>`<div class="meeting-card">
-      <div class="meeting-card-header"><div><div class="meeting-card-title">${m.type} — ${m.property}</div><div class="meeting-card-meta">${m.date} · ${m.elevco}</div></div>
+    `<div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">${AT_CONNECTED?'No meetings logged yet':'Loading from database...'}</div><div class="empty-state-sub">${AT_CONNECTED?'Log meetings from a property page or the button above':'Live meetings will appear here shortly'}</div></div>`:
+    meetings.slice().reverse().slice(0,10).map(m=>`<div class="meeting-card">
+      <div class="meeting-card-header"><div><div class="meeting-card-title">${m.type} — ${m.property}</div><div class="meeting-card-meta">${m.date}${m.elevco?' · '+m.elevco:''}</div></div>
       <div style="display:flex;align-items:center;gap:6px">
-        <span class="badge ${m.published?'b-public':m.isDraft?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft?'Draft':'Internal'}</span>
-        ${m.isDraft?`<button class="btn btn-icon" onclick="openDraft('${m.id}')" title="Continue draft"><i class="ti ti-pencil" style="font-size:14px"></i></button>`:`<button class="btn btn-icon" onclick="downloadMeetingMinutes('${m.id}')" title="Download minutes"><i class="ti ti-download" style="font-size:14px"></i></button>`}
+        <span class="badge ${m.published?'b-public':m.isDraft||m.visibility==='Draft'?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft||m.visibility==='Draft'?'Draft':'Internal'}</span>
+        ${m.isDraft||m.visibility==='Draft'?`<button class="btn btn-icon" onclick="openDraft('${m.id}')" title="Continue draft"><i class="ti ti-pencil" style="font-size:14px"></i></button>`:`<button class="btn btn-icon" onclick="downloadMeetingMinutes('${m.id}')" title="Download minutes"><i class="ti ti-download" style="font-size:14px"></i></button>`}
       </div></div>
       ${m.notes?`<div class="meeting-card-body" style="font-size:11px;color:var(--gray-mid);margin-top:6px">${m.notes.slice(0,120)}${m.notes.length>120?'...':''}</div>`:''}
     </div>`).join('');
@@ -2523,14 +2532,14 @@ function folderHtml(propName,docs,isOpen){
     <div class="doc-folder-header" onclick="toggleFolder('${id}')">
       <div class="doc-folder-icon"><i class="ti ti-folder" style="font-size:17px"></i></div>
       <div class="doc-folder-name">${propName}</div>
-      <div class="doc-folder-meta">${docs.length} document${docs.length!==1?'s':''} · ${prop?.unitDesc||prop?.units+' units'||''}</div>
+      <div class="doc-folder-meta">${docs.length} document${docs.length!==1?'s':''} · ${prop?.vda&&prop.vda!=='—'?'VDA Project '+prop.vda:prop?.units?prop.units+' units':''}</div>
       <i class="ti ti-chevron-right doc-folder-chevron${isOpen?' open':''}" id="${id}-chevron"></i>
     </div>
     <div class="doc-folder-body${isOpen?' open':''}" id="${id}-body">
       ${canUpload?`<div class="doc-folder-actions" style="display:flex;gap:8px;align-items:center">
       <button class="btn" style="font-size:11px" onclick="showDocUpload('${propName}')"><i class="ti ti-upload"></i>Upload document</button>
     </div>`:''}
-      ${docs.length===0?`<div class="doc-folder-empty">No documents uploaded yet${canUpload?' — click Upload above to add':''}</div>`:docs.map(d=>docItemHtml(d)).join('')}
+      ${docs.length===0?`<div class="doc-folder-empty">No documents uploaded yet. ${canUpload?'Click Upload above to add.':'Contact your PM to upload documents.'}</div>`:docs.map(d=>docItemHtml(d)).join('')}
     </div>
   </div>`;
 }
