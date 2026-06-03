@@ -801,7 +801,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v10a · elevatorpulse.com</div>
+    <div class="login-version">PULSE v10b · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1662,7 +1662,7 @@ async function _finishLogin(){
     loadAllData().then(() => {
       if(AT_CONNECTED) {
         populatePortfolio();populateMilestonesTable();
-        renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();
+        renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();populatePanelPropertyList();populateDocFolderFilter();
         showToast('Live database connected ✓','success');
       }
     }).catch(e => {
@@ -1896,6 +1896,7 @@ function populateMilestonesTable(){
 
 // MEETING PANEL
 function openMeetingPanel(){
+  populatePanelPropertyList(); // always refresh before opening
   if(currentProp){
     document.getElementById('m-property').value=currentProp.n;
     document.getElementById('m-elevco').value=currentProp.ec;
@@ -1910,6 +1911,7 @@ function openMeetingPanel(){
   document.getElementById('meeting-panel').classList.add('open');
 }
 function openMeetingPanelGlobal(){
+  populatePanelPropertyList(); // always refresh before opening
   document.getElementById('m-property').value='';
   document.getElementById('m-elevco').value='';
   document.getElementById('panel-prop-sub').textContent='Select a property below';
@@ -1924,8 +1926,14 @@ function openMeetingPanelGlobal(){
 
 async function openDraft(meetingId){
   const m=meetings.find(x=>x.id===meetingId);if(!m)return;
-  // Populate form with draft data
-  document.getElementById('m-property').value=m.property;
+  // Ensure panel property list is current before populating
+  populatePanelPropertyList();
+  const sel=document.getElementById('m-property');
+  // If property option doesn't exist yet, add it temporarily
+  if(m.property&&![...sel.options].some(o=>o.value===m.property)){
+    const opt=document.createElement('option');opt.value=m.property;opt.textContent=m.property;sel.appendChild(opt);
+  }
+  sel.value=m.property;
   document.getElementById('m-date').value=m.date;
   document.getElementById('m-type').value=m.type;
   document.getElementById('m-format').value=m.format||'In-person';
@@ -1940,7 +1948,7 @@ async function openDraft(meetingId){
   document.getElementById('action-items-list').innerHTML='';
   document.getElementById('editing-draft-id').value=m.id;
   document.getElementById('panel-head-title').textContent='Finish meeting';
-  document.getElementById('panel-prop-sub').textContent=m.property;
+  document.getElementById('panel-prop-sub').textContent=m.property||'Select a property below';
   // Reload saved action items for this draft
   const draftActions=actionItems.filter(a=>a.meetingId===meetingId);
   draftActions.forEach(a=>{
@@ -2022,11 +2030,20 @@ function closePanel(clearDraft=true){
 }
 function populatePanelPropertyList(){
   const sel=document.getElementById('m-property');
-  PORTFOLIO.forEach(p=>{
+  // Always clear and repopulate from current live portfolio
+  const port=window.PORTFOLIO||PORTFOLIO;
+  const currentVal=sel.value; // preserve current selection if any
+  sel.innerHTML='<option value="">Select...</option>';
+  port.slice().sort((a,b)=>a.n.localeCompare(b.n)).forEach(p=>{
     const opt=document.createElement('option');opt.value=p.n;opt.textContent=p.n;sel.appendChild(opt);
   });
-  sel.addEventListener('change',()=>{
-    const p=PORTFOLIO.find(x=>x.n===sel.value);
+  if(currentVal)sel.value=currentVal; // restore selection after repopulate
+  // Remove old listener before adding new one to prevent duplicates
+  const newSel=sel.cloneNode(true);
+  sel.parentNode.replaceChild(newSel,sel);
+  newSel.value=currentVal;
+  newSel.addEventListener('change',()=>{
+    const p=port.find(x=>x.n===newSel.value);
     if(p){document.getElementById('m-elevco').value=p.ec;document.getElementById('panel-prop-sub').textContent=p.n;}
   });
 }
