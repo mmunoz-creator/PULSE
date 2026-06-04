@@ -782,7 +782,7 @@ async function loadAllData() {
     window.BILLING_LOG = billingLog.map(r=>({
       id: r.id,
       property: r.fields['Property Name']||'',
-      billedYTD: r.fields['$ Amount']||0,
+      billedYTD: r.fields['Billed YTD']||r.fields['$ Amount']||0,
       entryDate: r.fields['Entry Date']||r.fields['Billing date']||'',
       invoiceMonth: r.fields['Invoice Month']||'',
       notes: r.fields['Notes']||'',
@@ -924,7 +924,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v11d · elevatorpulse.com</div>
+    <div class="login-version">PULSE v11e · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1447,9 +1447,8 @@ window.PROPERTIES_SEED = [
             <div class="card">
               <div class="card-header">
                 <div><div class="card-title">Modernization Construction Project</div><div class="card-sub" id="phases-duration-sub">—</div></div>
+                <div id="phases-date-summary" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap"></div>
                 <button class="btn" id="unit-add-phase-btn" onclick="openAddPhaseForm()" style="display:none"><i class="ti ti-plus"></i>Add phase</button>
-              </div>
-              <div id="phases-date-summary" style="display:flex;gap:24px;padding:10px 0 4px;flex-wrap:wrap"></div>
               <div id="unit-progress-detail"></div>
             </div>
             <!-- Add phase form -->
@@ -2172,17 +2171,27 @@ function switchPropTab(tab,btn){
   if(tab==='updates'&&currentProp)renderPropUpdates(currentProp);
   if(tab==='docs'&&currentProp)renderPropDocFolder(currentProp);
   if(tab==='budget'&&currentProp)renderBudgetTab(currentProp);
-  if(tab==='phases'&&currentProp)renderBudgetTab(currentProp);
+  if(tab==='phases'&&currentProp)renderPhasesTab(currentProp);
 }
 
 function renderPropertyView(p){
+  const elevCount=parseInt(p.elevatorCount)||0;
+  const escCount=parseInt(p.escalatorCount)||0;
+  const liftCount=parseInt(p.liftCount)||0;
+  const otherCount=parseInt(p.otherCount)||0;
   document.getElementById('prop-title').textContent=p.n;
   document.getElementById('prop-subtitle').textContent=p.addr;
   document.getElementById('prop-hero-name').textContent=p.n;
   document.getElementById('prop-hero-meta').innerHTML=
     `<div class="prop-hero-pill"><i class="ti ti-map-pin"></i>${p.addr}</div>
      <div class="prop-hero-pill"><i class="ti ti-elevator"></i>${p.ec}</div>
-     <div class="prop-hero-pill"><i class="ti ti-user"></i>Consultant: ${p.v}</div>`;
+     <div class="prop-hero-pill"><i class="ti ti-user"></i>Consultant: ${p.v}</div>
+     <div class="prop-hero-pill" style="margin-left:8px;gap:12px;border-left:1px solid rgba(255,255,255,.15);padding-left:12px">
+       <span style="display:inline-flex;align-items:center;gap:4px"><i class="ti ti-elevator" style="font-size:13px"></i>${elevCount}</span>
+       <span style="display:inline-flex;align-items:center;gap:4px"><i class="ti ti-stairs-up" style="font-size:13px"></i>${escCount}</span>
+       <span style="display:inline-flex;align-items:center;gap:4px"><i class="ti ti-wheelchair" style="font-size:13px"></i>${liftCount}</span>
+       ${otherCount>0?`<span style="display:inline-flex;align-items:center;gap:4px"><i class="ti ti-tool" style="font-size:13px"></i>${otherCount}</span>`:''}
+     </div>`;
 
   const propUpdates=submissions.filter(s=>s.property===p.n);
   const msCompleteCount=getMsComplete(p.n);
@@ -2204,10 +2213,6 @@ function renderPropertyView(p){
   const variance=pctBilled-pctComplete;
 
   // Product mix
-  const elevCount=p.elevatorCount||0;
-  const escCount=p.escalatorCount||0;
-  const liftCount=p.liftCount||0;
-  const otherCount=p.otherCount||0;
   const hasMix=elevCount||escCount||liftCount||otherCount;
 
   document.getElementById('prop-mini-grid').innerHTML=`
@@ -2236,7 +2241,7 @@ function renderPropertyView(p){
 
   // Details
   document.getElementById('prop-details-list').innerHTML=`
-    <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">VDA Project #</span><span style="font-family:'DM Mono',monospace">${p.vda||'—'}</span></div>
+    <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">VDA Project Number</span><span style="font-family:'DM Mono',monospace">${p.vda||'—'}</span></div>
     <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px">
       <div>
         <div style="color:var(--gray-mid)">Core Asset</div>
@@ -2250,7 +2255,16 @@ function renderPropertyView(p){
       `:`<span class="badge ${p.type==='Core'?'b-core':'b-noncore'}">${p.type}</span>`}
     </div>
     <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">Elevator company</span><span>${p.ec}</span></div>
-    <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:var(--gray-mid)">VDA consultant</span><span>${p.v}</span></div>`;
+    <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">VDA consultant</span><span>${p.v}</span></div>
+    <div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:0">
+      <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;font-family:'DM Mono',monospace;margin-bottom:8px">Unit Breakdown</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
+        <div><i class="ti ti-elevator" style="font-size:16px;color:var(--blue-dark);display:block;margin-bottom:3px"></i><div style="font-size:14px;font-weight:600;color:var(--navy)">${elevCount}</div><div style="font-size:10px;color:var(--gray-mid)">Elevators</div></div>
+        <div><i class="ti ti-stairs-up" style="font-size:16px;color:var(--blue-dark);display:block;margin-bottom:3px"></i><div style="font-size:14px;font-weight:600;color:var(--navy)">${escCount}</div><div style="font-size:10px;color:var(--gray-mid)">Escalators</div></div>
+        <div><i class="ti ti-wheelchair" style="font-size:16px;color:var(--blue-dark);display:block;margin-bottom:3px"></i><div style="font-size:14px;font-weight:600;color:var(--navy)">${liftCount}</div><div style="font-size:10px;color:var(--gray-mid)">WC Lifts</div></div>
+        <div><i class="ti ti-tool" style="font-size:16px;color:var(--blue-dark);display:block;margin-bottom:3px"></i><div style="font-size:14px;font-weight:600;color:var(--navy)">${otherCount}</div><div style="font-size:10px;color:var(--gray-mid)">Other</div></div>
+      </div>
+    </div>`;
 
   // Issues from submissions
   const openIssues=submissions.filter(s=>s.property===p.n&&s.issueStatus==='Open'&&s.commentType!=='General');
@@ -2941,30 +2955,7 @@ function renderBudgetTab(p){
   const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
   const variance=pctBilled-pctComplete;
 
-  // Project duration calculation from phase dates
-  const phasesWithDates=phases.filter(u=>u.plannedStart||u.actualStart);
-  const startDates=phases.map(u=>u.actualStart||u.plannedStart).filter(Boolean).map(d=>new Date(d));
-  const endDates=phases.map(u=>u.actualCompletion||u.plannedCompletion).filter(Boolean).map(d=>new Date(d));
-  const earliestStart=startDates.length>0?new Date(Math.min(...startDates)):null;
-  const latestEnd=endDates.length>0?new Date(Math.max(...endDates)):null;
-  let durationText='—';
-  if(earliestStart&&latestEnd){
-    const diffMs=latestEnd-earliestStart;
-    const diffWeeks=Math.round(diffMs/(1000*60*60*24*7));
-    const diffMonths=Math.round(diffMs/(1000*60*60*24*30.44));
-    durationText=diffMonths>=3?`${diffMonths} months`:diffWeeks===1?`1 week`:`${diffWeeks} weeks`;
-  }
-  const fmtDate=d=>d?d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
-  // Update phase summary UI
-  const durSub=document.getElementById('phases-duration-sub');
-  if(durSub)durSub.textContent=durationText!=='—'?`Total Project Duration: ${durationText}`:'No phase dates logged yet';
-  const dateSummary=document.getElementById('phases-date-summary');
-  if(dateSummary){
-    dateSummary.innerHTML=phases.length>0?`
-      <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'DM Mono',monospace;display:block;margin-bottom:2px">Project Start</span><span style="font-weight:600;color:var(--navy)">${fmtDate(earliestStart)}</span></div>
-      <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'DM Mono',monospace;display:block;margin-bottom:2px">Project End</span><span style="font-weight:600;color:var(--navy)">${fmtDate(latestEnd)}</span></div>
-      <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'DM Mono',monospace;display:block;margin-bottom:2px">Total Duration</span><span style="font-weight:600;color:var(--blue-dark)">${durationText}</span></div>`:'';
-  }
+  // Phase duration + unit progress handled by renderPhasesTab
 
   // Budget performance card
   document.getElementById('budget-perf-detail').innerHTML=`
@@ -3003,6 +2994,48 @@ function renderBudgetTab(p){
       </tr>`).join('')}</tbody>
     </table>`;
 
+}
+
+
+function renderPhasesTab(p){
+  if(!p)return;
+  const canPM=role==='pm'||role==='admin';
+  const canConsultant=role==='consultant';
+  const addPhaseBtn=document.getElementById('unit-add-phase-btn');
+  if(addPhaseBtn)addPhaseBtn.style.display=canPM?'':' none';
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
+  const totalUnits=parseInt(p.units)||0;
+  const unitsComplete=phases.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
+  const unitsInProg=phases.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
+  const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProg);
+  const startDates=phases.map(u=>u.actualStart||u.plannedStart).filter(Boolean).map(d=>new Date(d));
+  const endDates=phases.map(u=>u.actualCompletion||u.plannedCompletion).filter(Boolean).map(d=>new Date(d));
+  const earliestStart=startDates.length>0?new Date(Math.min(...startDates)):null;
+  const latestEnd=endDates.length>0?new Date(Math.max(...endDates)):null;
+  let durationText='—';
+  if(earliestStart&&latestEnd){
+    const diffMs=latestEnd-earliestStart;
+    const diffWeeks=Math.round(diffMs/(1000*60*60*24*7));
+    const diffMonths=Math.round(diffMs/(1000*60*60*24*30.44));
+    durationText=diffMonths>=3?`${diffMonths} months`:diffWeeks===1?`1 week`:`${diffWeeks} weeks`;
+  }
+  const fmtDate=d=>d?d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):' —';
+  const durSub=document.getElementById('phases-duration-sub');
+  if(durSub)durSub.textContent=durationText!=='—'?`Total Duration: ${durationText}`:' No phase dates logged yet';
+  const dateSummary=document.getElementById('phases-date-summary');
+  if(dateSummary){
+    dateSummary.innerHTML=phases.length>0&&earliestStart?`
+      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
+        <span style="color:var(--gray-mid);font-family:'DM Mono',monospace;font-size:10px;text-transform:uppercase">Start</span>
+        <span style="font-weight:600;color:var(--navy)">${fmtDate(earliestStart)}</span>
+      </div>
+      <span style="color:var(--gray-light)">→</span>
+      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
+        <span style="color:var(--gray-mid);font-family:'DM Mono',monospace;font-size:10px;text-transform:uppercase">End</span>
+        <span style="font-weight:600;color:var(--navy)">${fmtDate(latestEnd)}</span>
+      </div>
+      <div style="background:var(--blue-pale);color:var(--blue-dark);font-size:11px;font-weight:600;padding:2px 10px;border-radius:20px;font-family:'DM Mono',monospace">${durationText}</div>`:'';
+  }
   // Unit progress
   const unitEl=document.getElementById('unit-progress-detail');
   const statusColors={'Complete':'var(--green)','In Progress':'var(--blue-dark)','Not Started':'var(--gray-light)'};
@@ -3104,7 +3137,7 @@ async function saveNewPhase(){
   document.getElementById('phase-units-input').value='';
   document.getElementById('phase-planned-start').value='';
   document.getElementById('phase-planned-end').value='';
-  renderBudgetTab(currentProp);
+  renderPhasesTab(currentProp);
   showToast('Phase added','success');
 }
 
@@ -3117,7 +3150,7 @@ async function updatePhaseStatus(id,newStatus,propName){
   if(newStatus==='In Progress'&&!phase.actualStart){phase.actualStart=today;fields['Actual Start']=today;}
   if(newStatus==='Complete'&&!phase.actualCompletion){phase.actualCompletion=today;fields['Actual Completion']=today;}
   if(!demoMode)await atUpdate('Unit Groups',id,fields);
-  renderBudgetTab(currentProp);
+  renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
   showToast(`Phase updated to ${newStatus}`,'success');
 }
@@ -3201,7 +3234,7 @@ async function saveBillingModal(){
     if(!demoMode){
       const res=await atCreate('Billing Log',{
         'Property Name':currentProp.n,
-        '$ Amount':ytd,
+        'Billed YTD':ytd,
         'Billing date':date,
         'Invoice Month':invoiceMonth||'',
         'Notes':notes||'',
