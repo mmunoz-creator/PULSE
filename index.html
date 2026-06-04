@@ -147,7 +147,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1rem;gap:8px;flex-wrap:wrap}
 /* STATS */
 .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem}
-.stat-card{background:white;border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.25rem}
+.stat-card{background:white;border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.25rem;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .stat-label{font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;font-family:'DM Mono',monospace}
 .stat-value{font-size:24px;font-weight:600;color:var(--navy);letter-spacing:-1px;font-family:'DM Mono',monospace}
 .stat-sub{font-size:11px;color:var(--gray-light);margin-top:3px}
@@ -309,8 +309,9 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .meeting-card-meta{font-size:11px;color:var(--gray-mid);font-family:'DM Mono',monospace;margin-top:2px}
 .meeting-card-body{font-size:12px;color:var(--gray-dark);line-height:1.6;margin-top:6px}
 /* ACTION ITEMS DISPLAY */
-.action-item-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}
+.action-item-row{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:12px;border-radius:var(--radius-sm);transition:background .12s}
 .action-item-row:last-child{border-bottom:none}
+.action-item-row:hover{background:var(--gray-xpale)}
 .action-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:3px}
 .dot-open{background:var(--red)}.dot-inprog{background:#BA7517}.dot-closed{background:var(--green)}
 .action-desc{flex:1;color:var(--gray-dark);line-height:1.5}
@@ -3510,11 +3511,18 @@ function renderDashboard(){
   }
   const total=port.length;
   const active=port.filter(p=>['Awarded','CIP','Active'].includes(p.st));
+  // Active Projects = properties with at least one milestone In Progress or At Risk (VDA milestone-based)
+  const activeProjects=port.filter(p=>{
+    const ms=getMilestonesForProp(p.n);
+    return ms.some(m=>m.status==='In Progress'||m.status==='inprog'||m.status==='At Risk'||m.status==='atrisk');
+  });
   const behind=active.filter(p=>p.r==='Behind');
   const onTrack=active.filter(p=>p.r==='On Track');
   const ahead=active.filter(p=>p.r==='Ahead');
   const totalUnits=port.reduce((a,p)=>a+(parseInt(p.units)||0),0);
-  const totalBudget=port.reduce((a,p)=>a+(p.budget||0),0);
+  // Only sum budgets from Airtable-sourced properties (have an airtableId); avoid stale seed totals
+  const budgetProps=port.filter(p=>p.budget&&p.budget>0);
+  const totalBudget=budgetProps.length>0?budgetProps.reduce((a,p)=>a+(p.budget||0),0):0;
   const awarded=port.filter(p=>['Awarded','CIP'].includes(p.st)).length;
   const onHold=port.filter(p=>p.st==='On Hold').length;
   const budgeting=port.filter(p=>p.st==='Budgeting').length;
@@ -3543,11 +3551,11 @@ function renderDashboard(){
   const openAI=actionItems.filter(a=>a.status==='Open');
   document.getElementById('dashboard-body').innerHTML=`
     <div class="stat-grid" style="grid-template-columns:repeat(5,1fr)">
-      <div class="stat-card"><div class="stat-label">Total properties</div><div class="stat-value">${total}</div><div class="stat-sub">Portfolio</div></div>
-      <div class="stat-card stat-blue"><div class="stat-label">Active / Awarded</div><div class="stat-value">${active.length}</div><div class="stat-sub">CIP + In progress</div></div>
+      <div class="stat-card"><div class="stat-label">Total Properties</div><div class="stat-value">${total}</div><div class="stat-sub">Portfolio</div></div>
+      <div class="stat-card stat-blue"><div class="stat-label">Active Projects</div><div class="stat-value">${activeProjects.length}</div><div class="stat-sub">VDA milestones in progress</div></div>
       <div class="stat-card stat-green"><div class="stat-label">Complete</div><div class="stat-value">${complete}</div><div class="stat-sub">Projects finished</div></div>
-      <div class="stat-card stat-amber"><div class="stat-label">Total VT units</div><div class="stat-value">${totalUnits.toLocaleString()}</div><div class="stat-sub">Elev. &amp; escalators</div></div>
-      <div class="stat-card stat-green"><div class="stat-label">Project budget</div><div class="stat-value">${totalBudget>0?fmtCurrency(totalBudget):'—'}</div><div class="stat-sub">Across portfolio</div></div>
+      <div class="stat-card stat-amber"><div class="stat-label">Total VT Units</div><div class="stat-value">${totalUnits.toLocaleString()}</div><div class="stat-sub">Elev. &amp; escalators</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Project Budget</div><div class="stat-value">${totalBudget>0?fmtCurrency(totalBudget):'—'}</div><div class="stat-sub">Across portfolio</div></div>
     </div>
     <div class="two-col">
       <div class="card">
@@ -3580,7 +3588,7 @@ function renderDashboard(){
     </div>
     <div class="card" id="dash-open-actions-card">
       <div class="card-header"><div class="card-title">Open action items</div><span class="badge b-behind" id="dash-action-count">${openAI.length} open</span></div>
-      <div id="dash-action-list">${openAI.length===0?`<div style="font-size:12px;color:var(--gray-mid)">No open action items. Log a meeting to create action items.</div>`:openAI.slice(0,4).map(a=>`<div class="action-item-row"><div class="action-dot dot-open"></div><div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${a.owner} · Due: ${a.due}</span></div></div>`).join('')}</div>
+      <div id="dash-action-list">${openAI.length===0?`<div style="font-size:12px;color:var(--gray-mid)">No open action items. Log a meeting to create action items.</div>`:openAI.slice(0,4).map(a=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(a.property||'').replace(/'/g,"\\'")}')"><div class="action-dot dot-open"></div><div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${a.owner} · Due: ${a.due}</span></div><i class="ti ti-chevron-right" style="color:var(--gray-light);font-size:14px;flex-shrink:0;margin-left:auto"></i></div>`).join('')}</div>
     </div>`;
 }
 
