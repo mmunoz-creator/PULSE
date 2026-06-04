@@ -668,23 +668,30 @@ async function loadAllData() {
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones`);
     if (props.length > 0) {
-      // Merge Airtable data into local PORTFOLIO — preserve local status/schedule/milestone data
-      // Only update fields that Airtable is authoritative for: id, type, budget, comment, ec, consultant
-      const localPort=window.PORTFOLIO||PORTFOLIO;
-      props.forEach(r => {
-        const name=r.fields['Property Name']||'';
-        const local=localPort.find(p=>p.n===name);
-        if(local){
-          local.id=r.id; // store Airtable record ID for writes
-          if(r.fields['Asset Type'])local.type=r.fields['Asset Type'];
-          if(r.fields['Project Budget'])local.budget=r.fields['Project Budget'];
-          else if(r.fields['Forecasted Budget'])local.budget=r.fields['Forecasted Budget']; // fallback
-          if(r.fields['Comments'])local.comment=r.fields['Comments'];
-          if(r.fields['Elevator Company']&&r.fields['Elevator Company']!=='TBD')local.ec=r.fields['Elevator Company'];
-          if(r.fields['VDA Consultant'])local.v=r.fields['VDA Consultant'];
-        }
-      });
-      window.PORTFOLIO=localPort;
+      // Build PORTFOLIO entirely from Airtable — Airtable is sole source of truth for Park Hotels
+      const livePortfolio = props.map(r => ({
+        id: r.id,
+        n: r.fields['Property Name']||'',
+        s: r.fields['State']||'',
+        ec: r.fields['Elevator Company']||'TBD',
+        st: r.fields['Status']||'Survey',
+        r: r.fields['Schedule']||'—',
+        v: r.fields['VDA Consultant']||'TBD',
+        units: parseInt(r.fields['Total Units'])||0,
+        unitDesc: r.fields['Unit Description']||'',
+        elevatorCount: parseInt(r.fields['Elevator Count'])||0,
+        escalatorCount: parseInt(r.fields['Escalator Count'])||0,
+        liftCount: parseInt(r.fields['Wheelchair Lift Count'])||0,
+        otherCount: parseInt(r.fields['Other Count'])||0,
+        vda: r.fields['VDA Project #']||'—',
+        type: r.fields['Asset Type']||'Non-core',
+        budget: r.fields['Project Budget']||0,
+        comment: r.fields['Comments']||'',
+        addr: r.fields['Address']||'',
+        ms: [], // milestones now from MILESTONES table
+      })).filter(p=>p.n).sort((a,b)=>a.n.localeCompare(b.n));
+      window.PORTFOLIO = livePortfolio;
+      window.PARK_PORTFOLIO = livePortfolio;
     }
     submissions = subs.map(r => ({
       id: r.id, atId: r.id,
@@ -911,7 +918,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v10p · elevatorpulse.com</div>
+    <div class="login-version">PULSE v10q · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1076,7 +1083,7 @@ window.PROPERTIES_SEED = [
         </div>
         <div id="action-items-list"></div>
       </div>
-      <button class="btn" style="margin-top:8px;font-size:11px" onclick="addActionRow()"><i class="ti ti-plus"></i>Add action item</button>
+      <button class="btn" style="margin-top:8px;font-size:11px" onclick="addActionRow()"><i class="ti ti-plus"></i>Add Action Item</button>
     </div>
     <!-- Visibility -->
     <div class="panel-section">
@@ -1138,8 +1145,36 @@ window.PROPERTIES_SEED = [
   </div>
 </div>
 
-<!-- PORTAL -->
-<div id="portal-screen">
+<!-- ADD PROPERTY MODAL -->
+<div id="add-prop-overlay" onclick="closeAddPropertyModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
+<div id="add-prop-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:560px;max-width:92vw;max-height:90vh;overflow-y:auto;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <div style="font-size:16px;font-weight:700;color:var(--navy)">Add Property</div>
+    <button onclick="closeAddPropertyModal()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="two-col" style="gap:12px">
+    <div class="form-group" style="grid-column:1/-1"><label class="form-label">Property Name *</label><input class="form-input" type="text" id="ap-name" placeholder="e.g. Hilton Denver City Center"></div>
+    <div class="form-group" style="grid-column:1/-1"><label class="form-label">Address</label><input class="form-input" type="text" id="ap-addr" placeholder="e.g. 1701 California Street, Denver, CO"></div>
+    <div class="form-group"><label class="form-label">State</label><input class="form-input" type="text" id="ap-state" placeholder="e.g. CO" maxlength="2"></div>
+    <div class="form-group"><label class="form-label">Asset Type</label><select class="form-select" id="ap-type"><option value="Core">Core</option><option value="Non-core">Non-core</option></select></div>
+    <div class="form-group"><label class="form-label">Status</label><select class="form-select" id="ap-status"><option>Survey</option><option>Budgeting</option><option>On Hold</option><option>Awarded</option><option>Active</option><option>CIP</option><option>Complete</option></select></div>
+    <div class="form-group"><label class="form-label">Schedule</label><select class="form-select" id="ap-schedule"><option value="—">—</option><option>On Track</option><option>Behind</option><option>Ahead</option></select></div>
+    <div class="form-group"><label class="form-label">Elevator Company</label><input class="form-input" type="text" id="ap-ec" placeholder="e.g. Otis, Schindler, TBD"></div>
+    <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input" type="text" id="ap-consultant" placeholder="e.g. Jeff Sena"></div>
+    <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input" type="text" id="ap-vda" placeholder="e.g. 65153"></div>
+    <div class="form-group"><label class="form-label">Project Budget</label><input class="form-input" type="number" id="ap-budget" placeholder="e.g. 1800000" step="1000"></div>
+    <div class="form-group"><label class="form-label">Total Units</label><input class="form-input" type="number" id="ap-units" placeholder="e.g. 8" min="0"></div>
+    <div class="form-group"><label class="form-label">Elevator Count</label><input class="form-input" type="number" id="ap-elevators" placeholder="0" min="0"></div>
+    <div class="form-group"><label class="form-label">Escalator Count</label><input class="form-input" type="number" id="ap-escalators" placeholder="0" min="0"></div>
+    <div class="form-group"><label class="form-label">Wheelchair Lift Count</label><input class="form-input" type="number" id="ap-lifts" placeholder="0" min="0"></div>
+    <div class="form-group"><label class="form-label">Other Count</label><input class="form-input" type="number" id="ap-other" placeholder="0" min="0"></div>
+    <div class="form-group" style="grid-column:1/-1"><label class="form-label">Notes</label><textarea class="form-textarea" id="ap-notes" placeholder="Any initial notes about this property..." rows="2"></textarea></div>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:16px">
+    <button class="btn btn-primary" style="flex:1" onclick="saveNewProperty()"><i class="ti ti-check"></i>Save Property</button>
+    <button class="btn" onclick="closeAddPropertyModal()">Cancel</button>
+  </div>
+</div>
   <div id="sidebar-overlay" onclick="closeSidebar()"></div>
   <nav class="sidebar" id="sidebar">
     <div class="sidebar-head">
@@ -1274,10 +1309,10 @@ window.PROPERTIES_SEED = [
       <!-- PORTFOLIO -->
       <div id="view-portfolio" class="hidden">
         <div class="page-header">
-          <div class="page-header-left"><h1>Portfolio</h1><p>All 44 properties — click any row to view details</p></div>
+          <div class="page-header-left"><h1>Portfolio</h1><p id="portfolio-sub">Loading properties...</p></div>
           <div class="header-actions">
             <select class="styled" id="status-filter" onchange="filterTable()" style="width:140px">
-              <option value="all">All statuses</option>
+              <option value="all">All Statuses</option>
               <option value="Awarded">Awarded/CIP</option>
               <option value="On Hold">On Hold</option>
               <option value="Budgeting">Budgeting</option>
@@ -1286,9 +1321,10 @@ window.PROPERTIES_SEED = [
             </select>
             <select class="styled" id="type-filter" onchange="filterTable()" style="width:130px">
               <option value="all">Core &amp; Non-core</option>
-              <option value="Core">Core only</option>
-              <option value="Non-core">Non-core only</option>
+              <option value="Core">Core Only</option>
+              <option value="Non-core">Non-core Only</option>
             </select>
+            <button class="btn btn-primary" id="add-property-btn" onclick="openAddPropertyModal()" style="display:none"><i class="ti ti-plus"></i>Add Property</button>
           </div>
         </div>
         <div class="page-body">
@@ -1310,15 +1346,16 @@ window.PROPERTIES_SEED = [
             <p id="prop-subtitle">Property details</p>
           </div>
           <div class="header-actions">
-            <button class="btn" id="prop-meeting-btn" onclick="openMeetingPanel()" style="display:none"><i class="ti ti-notes"></i>Log meeting</button>
-            <button class="btn" id="prop-visit-btn" onclick="showVisitEntry()" style="display:none"><i class="ti ti-calendar-plus"></i>Schedule visit</button>
-            <button class="btn" id="prop-budget-btn" onclick="openBillingModal()" style="display:none"><i class="ti ti-currency-dollar"></i>Log billing</button>
-            <button class="btn btn-primary" id="prop-submit-btn" onclick="gotoView('submit',null)" style="display:none"><i class="ti ti-upload"></i>Submit update</button>
+            <button class="btn" id="prop-meeting-btn" onclick="openMeetingPanel()" style="display:none"><i class="ti ti-notes"></i>Log Meeting</button>
+            <button class="btn" id="prop-visit-btn" onclick="showVisitEntry()" style="display:none"><i class="ti ti-calendar-plus"></i>Schedule Visit</button>
+            <button class="btn" id="prop-budget-btn" onclick="openBillingModal()" style="display:none"><i class="ti ti-currency-dollar"></i>Log Billing</button>
+            <button class="btn btn-primary" id="prop-submit-btn" onclick="gotoView('submit',null)" style="display:none"><i class="ti ti-upload"></i>Submit Update</button>
           </div>
         </div>
         <div class="page-body">
           <div class="prop-hero" id="prop-hero"><div class="prop-hero-name" id="prop-hero-name">Property</div><div class="prop-hero-meta" id="prop-hero-meta"></div></div>
           <div class="prop-mini-grid" id="prop-mini-grid"></div>
+          <div id="prop-product-mix" style="border-top:1px solid var(--border);margin-bottom:1rem"></div>
           <div class="tab-row">
             <button class="tab-btn active" onclick="switchPropTab('overview',this)">Overview</button>
             <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget &amp; Units</button>
@@ -1331,19 +1368,19 @@ window.PROPERTIES_SEED = [
             <div class="two-col">
               <div>
                 <div class="card" id="budget-perf-card">
-                  <div class="card-header"><div><div class="card-title">Budget performance</div><div class="card-sub" id="budget-perf-sub">Project Budget vs Billed YTD</div></div>
+                  <div class="card-header"><div><div class="card-title">Budget Performance</div><div class="card-sub" id="budget-perf-sub">Project Budget vs Billed YTD</div></div>
                   </div>
                   <div id="budget-perf-detail"></div>
                 </div>
                 <div class="card">
-                  <div class="card-header"><div class="card-title">Billing history</div></div>
+                  <div class="card-header"><div class="card-title">Billing History</div></div>
                   <div id="billing-history-list"></div>
                 </div>
               </div>
               <div>
                 <div class="card">
                   <div class="card-header">
-                    <div><div class="card-title">Unit progress</div><div class="card-sub">Physical construction phases</div></div>
+                    <div><div class="card-title">Unit Progress</div><div class="card-sub">Physical Construction Phases</div></div>
                     <button class="btn" id="unit-add-phase-btn" onclick="openAddPhaseForm()" style="display:none"><i class="ti ti-plus"></i>Add phase</button>
                   </div>
                   <div id="unit-progress-detail"></div>
@@ -1383,22 +1420,22 @@ window.PROPERTIES_SEED = [
           <div id="prop-tab-overview" class="tab-content active">
             <div class="two-col">
               <div>
-                <div class="card"><div class="card-header"><div><div class="card-title">Budget performance</div></div></div><div id="prop-budget-detail"></div></div>
-                <div class="card"><div class="card-header"><div class="card-title">Open issues</div></div><div id="prop-issues-list"></div></div>
+                <div class="card"><div class="card-header"><div><div class="card-title">Budget Performance</div></div></div><div id="prop-budget-detail"></div></div>
+                <div class="card"><div class="card-header"><div class="card-title">Open Issues</div></div><div id="prop-issues-list"></div></div>
               </div>
               <div>
-                <div class="card"><div class="card-header"><div class="card-title">Property details</div></div><div id="prop-details-list"></div></div>
-                <div class="card"><div class="card-header"><div class="card-title">Upcoming site visits</div></div><div id="prop-visits-preview"></div></div>
+                <div class="card"><div class="card-header"><div class="card-title">Property Details</div></div><div id="prop-details-list"></div></div>
+                <div class="card"><div class="card-header"><div class="card-title">Upcoming Site Visits</div></div><div id="prop-visits-preview"></div></div>
               </div>
             </div>
           </div>
           <div id="prop-tab-milestones" class="tab-content">
-            <div class="card"><div class="card-header"><div><div class="card-title">Modernization Milestone Tracker</div><div class="card-sub">Planned vs actual — click to edit inline</div></div><span id="ms-progress-badge" class="badge b-cip">0%</span></div><div id="prop-milestones-list"></div></div>
+            <div class="card"><div class="card-header"><div><div class="card-title">Modernization Milestone Tracker</div><div class="card-sub">Planned vs Actual — Click to Edit Inline</div></div><span id="ms-progress-badge" class="badge b-cip">0%</span></div><div id="prop-milestones-list"></div></div>
           </div>
           <div id="prop-tab-meetings" class="tab-content">
             <div class="two-col">
-              <div><div class="card"><div class="card-header"><div class="card-title">Meeting log</div><button class="btn" id="prop-log-meeting-btn" onclick="openMeetingPanel()" style="display:none"><i class="ti ti-plus"></i>Log meeting</button></div><div id="prop-meetings-list"><div class="empty-state" style="padding:1.5rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged</div><div class="empty-state-sub">Click "Log meeting" above to add</div></div></div></div></div>
-              <div><div class="card"><div class="card-header"><div class="card-title">Open action items</div><span id="prop-action-count" class="badge b-behind">0 open</span></div><div id="prop-actions-list"><div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No open actions</div></div></div></div></div>
+              <div><div class="card"><div class="card-header"><div class="card-title">Meeting log</div><button class="btn" id="prop-log-meeting-btn" onclick="openMeetingPanel()" style="display:none"><i class="ti ti-plus"></i>Log Meeting</button></div><div id="prop-meetings-list"><div class="empty-state" style="padding:1.5rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged</div><div class="empty-state-sub">Click "Log meeting" above to add</div></div></div></div></div>
+              <div><div class="card"><div class="card-header"><div class="card-title">Open action items</div><span id="prop-action-count" class="badge b-behind">0 open</span></div><div id="prop-actions-list"><div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No Open Actions</div></div></div></div></div>
             </div>
           </div>
           <div id="prop-tab-updates" class="tab-content">
@@ -1412,9 +1449,9 @@ window.PROPERTIES_SEED = [
 
       <!-- MILESTONES VIEW -->
       <div id="view-milestones" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Milestone tracker</h1><p>All active properties — schedule health and unit progress</p></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>Milestone Tracker</h1><p>All Active Properties — Schedule Health and Unit Progress</p></div></div>
         <div class="page-body">
-          <div class="card"><div class="card-header"><div class="card-title">Active properties milestone health</div></div>
+          <div class="card"><div class="card-header"><div class="card-title">Active Properties Milestone Health</div></div>
             <div class="table-wrap"><table class="data-table" style="table-layout:fixed"><thead><tr><th style="width:22%">Property</th><th style="width:7%">Type</th><th style="width:12%">Elev. Company</th><th style="width:7%">Units</th><th style="width:10%">Schedule</th><th style="width:17%">Current milestone</th><th style="width:13%">Progress</th><th style="width:12%">Status</th></tr></thead><tbody id="milestones-tbody"></tbody></table></div>
           </div>
         </div>
@@ -1422,44 +1459,45 @@ window.PROPERTIES_SEED = [
 
       <!-- MEETINGS VIEW -->
       <div id="view-meetings" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Meeting log</h1><p>Contractor performance meetings and action items</p></div><div class="header-actions"><button class="btn btn-primary" onclick="openMeetingPanelGlobal()"><i class="ti ti-plus"></i>Log meeting</button></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>Meeting Log</h1><p>Contractor Performance Meetings and Action Items</p></div><div class="header-actions"><button class="btn btn-primary" onclick="openMeetingPanelGlobal()"><i class="ti ti-plus"></i>Log Meeting</button></div></div>
         <div class="page-body">
           <div id="meetings-loading" class="alert alert-info" style="margin-bottom:1rem;display:none"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i>Loading meetings from database...</div>
           <div class="two-col">
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Open action items — all properties</div><div id="all-actions-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No open actions</div></div></div></div>
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Recent meetings</div><div id="all-meetings-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged yet</div><div class="empty-state-sub">Log meetings from a property page or the button above</div></div></div></div>
+            <div class="card"><div class="card-title" style="margin-bottom:1rem">Open action items — all properties</div><div id="all-actions-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No Open Actions</div></div></div></div>
+            <div class="card"><div class="card-title" style="margin-bottom:1rem">Recent meetings</div><div id="all-meetings-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No Meetings Logged Yet</div><div class="empty-state-sub">Log meetings from a property page or the button above</div></div></div></div>
           </div>
         </div>
       </div>
 
       <!-- SITE VISITS -->
       <div id="view-sitevisits" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Site visits</h1><p>Scheduled and past property visits</p></div><div class="header-actions"><button class="btn btn-primary" onclick="showGlobalVisitEntry()"><i class="ti ti-calendar-plus"></i>Schedule visit</button></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>Site Visits</h1><p>Scheduled and Past Property Visits</p></div><div class="header-actions"><button class="btn btn-primary" onclick="showGlobalVisitEntry()"><i class="ti ti-calendar-plus"></i>Schedule Visit</button></div></div>
         <div class="page-body">
           <div class="two-col">
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Upcoming visits</div><div id="upcoming-visits-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-off"></i><div class="empty-state-title">No visits scheduled</div></div></div></div>
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Past visits</div><div id="past-visits-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-x"></i><div class="empty-state-title">No past visits</div></div></div></div>
+            <div class="card"><div class="card-title" style="margin-bottom:1rem">Upcoming Visits</div><div id="upcoming-visits-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-off"></i><div class="empty-state-title">No Visits Scheduled</div></div></div></div>
+            <div class="card"><div class="card-title" style="margin-bottom:1rem">Past Visits</div><div id="past-visits-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-x"></i><div class="empty-state-title">No Past Visits</div></div></div></div>
           </div>
         </div>
       </div>
 
       <!-- ANALYTICS -->
       <div id="view-reports" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Analytics</h1><p>Portfolio performance and breakdown</p></div><div class="header-actions"><button class="btn btn-primary" onclick="gotoView('report',null)"><i class="ti ti-file-analytics"></i><span>Performance Report</span></button></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>Analytics</h1><p>Portfolio Performance and Breakdown</p></div><div class="header-actions"><button class="btn btn-primary" onclick="gotoView('report',null)"><i class="ti ti-file-analytics"></i><span>Performance Report</span></button></div></div>
         <div class="page-body" id="analytics-body"></div>
       </div>
 
       <!-- PERFORMANCE REPORT -->
       <div id="view-report" class="hidden">
         <div class="page-header no-print">
-          <div class="page-header-left"><h1>Performance report</h1><p>Schedule, budget, milestones and risks — printable</p></div>
+          <div class="page-header-left"><h1>Performance Report</h1><p>Schedule, Budget, Milestones and Risks — Printable</p></div>
           <div class="header-actions">
             <select class="styled" id="report-filter" onchange="renderReport()" style="width:150px;padding:5px 10px">
-              <option value="all">All properties</option>
-              <option value="Core">Core only</option>
-              <option value="Non-core">Non-core only</option>
-              <option value="Active">Active only</option>
+              <option value="all">All Properties</option>
+              <option value="Core">Core Only</option>
+              <option value="Non-core">Non-core Only</option>
+              <option value="Active">Active Only</option>
             </select>
+            <button class="btn" onclick="refreshReport()" id="refresh-report-btn"><i class="ti ti-refresh"></i><span>Refresh</span></button>
             <button class="btn btn-primary" onclick="window.print()"><i class="ti ti-printer"></i><span>Print / PDF</span></button>
           </div>
         </div>
@@ -1477,14 +1515,14 @@ window.PROPERTIES_SEED = [
 
       <!-- CHARTS -->
       <div id="view-charts" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Charts</h1><p>Visual portfolio performance</p></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>Charts</h1><p>Visual Portfolio Performance</p></div></div>
         <div class="page-body" id="charts-body"></div>
       </div>
 
       <!-- CALENDAR -->
       <div id="view-calendar" class="hidden">
         <div class="page-header">
-          <div class="page-header-left"><h1>Calendar</h1><p>Scheduled meetings, site visits, and phase milestones</p></div>
+          <div class="page-header-left"><h1>Calendar</h1><p>Scheduled Meetings, Site Visits, and Phase Milestones</p></div>
           <div class="header-actions">
             <button class="btn" onclick="calPrev()"><i class="ti ti-chevron-left"></i></button>
             <span id="cal-month-label" style="font-size:14px;font-weight:600;color:var(--navy);min-width:140px;text-align:center"></span>
@@ -1516,7 +1554,7 @@ window.PROPERTIES_SEED = [
         <div class="page-body">
           <div id="comments-flags-alert" class="alert alert-warn" style="margin-bottom:1rem;display:none"><i class="ti ti-flag"></i><span id="comments-flags-text"></span></div>
           <div id="comments-threads-container">
-            <div class="empty-state" style="padding:3rem"><i class="ti ti-message-circle-off"></i><div class="empty-state-title">No comments yet</div><div class="empty-state-sub">Client flags and replies will appear here</div></div>
+            <div class="empty-state" style="padding:3rem"><i class="ti ti-message-circle-off"></i><div class="empty-state-title">No Comments Yet</div><div class="empty-state-sub">Client flags and replies will appear here</div></div>
           </div>
           <div id="new-flag-form" class="card" style="display:none;margin-top:1rem">
             <div class="card-header"><div class="card-title">Raise a flag</div></div>
@@ -1532,7 +1570,7 @@ window.PROPERTIES_SEED = [
       <!-- DOCUMENTS — FOLDER VIEW -->
       <div id="view-documents" class="hidden">
         <div class="page-header">
-          <div class="page-header-left"><h1>Documents</h1><p>Project folders — RFPs, contracts, surveys, fixture drawings, schedules of values</p></div>
+          <div class="page-header-left"><h1>Documents</h1><p>Project Folders — RFPs, Contracts, Surveys, Fixture Drawings, Schedules of Values</p></div>
           <div class="header-actions" id="doc-upload-area">
             <select class="styled" id="doc-folder-filter" onchange="renderDocFolders()" style="width:200px"><option value="all">All properties</option></select>
             <select class="styled" id="doc-type-filter" onchange="renderDocFolders()" style="width:150px"><option value="all">All types</option><option>Contract</option><option>RFP</option><option>Survey</option><option>Fixture Drawing</option><option>Schedule of Values</option><option>Other</option></select>
@@ -1609,7 +1647,7 @@ window.PROPERTIES_SEED = [
 
       <!-- CHATBOT -->
       <div id="view-chatbot" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>AI assistant</h1><p>Portfolio, schedule, budget, milestones, and documents</p></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>AI Assistant</h1><p>Portfolio, Schedule, Budget, Milestones, and Documents</p></div></div>
         <div class="page-body">
           <div class="chat-wrap">
             <div class="chat-head"><div class="chat-head-icon"><i class="ti ti-robot"></i></div><div><div class="chat-head-title">Pulse AI — Portfolio Assistant</div><div class="chat-head-sub" id="chat-head-sub">44 properties · Live data · Smart responses</div></div><div class="chat-status"></div></div>
@@ -1663,7 +1701,7 @@ window.PROPERTIES_SEED = [
       <!-- MY UPDATES -->
       <div id="view-my-updates" class="hidden">
         <div class="page-header"><div class="page-header-left"><h1>My updates</h1><p>Submission history</p></div></div>
-        <div class="page-body"><div id="my-updates-container"><div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates submitted yet</div></div></div></div>
+        <div class="page-body"><div id="my-updates-container"><div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No Updates Submitted Yet</div></div></div></div>
       </div>
 
     </div>
@@ -1912,31 +1950,42 @@ async function _finishLogin(){
   try{
   document.getElementById('portal-screen').classList.add('active');
   setupPortal();
-  // Update consultant name in sidebar if set
   if(role==='consultant' && currentConsultantName) {
     document.getElementById('sb-username').textContent=currentConsultantName;
     document.getElementById('sb-avatar').textContent=currentConsultantName.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   }
-  // Show portal immediately with static data, then load live data in background
-  populatePortfolio();populateMilestonesTable();
-  renderDocFolders();populateDocFolderFilter();populatePanelPropertyList();
+  // For Park Hotels — clear seed data so Airtable is sole source of truth
+  if(client==='park'){
+    // Try sessionStorage cache for instant load
+    const cached=sessionStorage.getItem('pulse_portfolio');
+    if(cached){
+      try{
+        window.PORTFOLIO=JSON.parse(cached);
+        window.PARK_PORTFOLIO=window.PORTFOLIO;
+      }catch(e){window.PORTFOLIO=[];}
+    } else {
+      window.PORTFOLIO=[]; // empty until Airtable loads
+    }
+  }
+  populatePortfolio();
+  renderDashboard(); // will show loading state if no data
   if(role==='consultant')gotoView('submit',null);
   else gotoView('dashboard',null);
   setFirstNavActive();updateQueueBadge();refreshDashActions();
-  // Hide login AFTER portal is set up
   document.getElementById('login-screen').style.display='none';
-  // Load live data in background
   if(client==='park') {
     loadAllData().then(() => {
       if(AT_CONNECTED) {
+        // Cache portfolio for next login
+        try{sessionStorage.setItem('pulse_portfolio',JSON.stringify(window.PORTFOLIO));}catch(e){}
         populatePortfolio();populateMilestonesTable();
         renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();populatePanelPropertyList();populateDocFolderFilter();
-        if(document.getElementById('view-comments')&&!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
-        showToast('Live database connected ✓','success');
+        if(!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
+        showToast('Live data connected ✓','success');
       }
     }).catch(e => {
       console.error('Background load failed:', e);
-      showToast('Running with local data — live data loading...','warn');
+      showToast('Using cached data — check connection','warn');
     });
   }
   }catch(err){
@@ -1949,12 +1998,11 @@ async function _finishLogin(){
 function doLogout(){
   demoMode=false;
   AT_CONNECTED=false;
-  // Reset all live data so re-login gets a clean load
+  sessionStorage.removeItem('pulse_portfolio');
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
   window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];
   clientFlags=[];flagIdCounter=0;
-  const badge=document.getElementById('demo-logo-badge');if(badge)badge.remove();
-  window.PORTFOLIO=PARK_PORTFOLIO;
+  window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
   // Reset chatbot to Park Hotels context
   const chatMsgs=document.getElementById('chat-messages');
   if(chatMsgs)chatMsgs.innerHTML=`<div class="chat-msg"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — I have full visibility into the 44-property Park Hotels &amp; Resorts portfolio. Ask me about any property, schedule risk, budget, milestones, or elevator company performance.</div></div>`;
@@ -2079,12 +2127,34 @@ function renderPropertyView(p){
   const pctBilled=p.budget&&p.budget>0?Math.round((billedYTD/p.budget)*100):0;
   const variance=pctBilled-pctComplete;
 
+  // Product mix
+  const elevCount=p.elevatorCount||0;
+  const escCount=p.escalatorCount||0;
+  const liftCount=p.liftCount||0;
+  const otherCount=p.otherCount||0;
+  const hasMix=elevCount||escCount||liftCount||otherCount;
+
   document.getElementById('prop-mini-grid').innerHTML=`
-    <div class="prop-mini-card"><div class="prop-mini-label">VT units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${p.unitDesc||'Total'}</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Units complete</div><div class="prop-mini-val" style="color:var(--green)">${unitsComplete}</div><div class="prop-mini-sub">of ${totalUnits}</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">VT Units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${hasMix?elevCount+'E'+(escCount?' '+escCount+'Esc':'')+(liftCount?' '+liftCount+'L':'')+(otherCount?' '+otherCount+'O':''):'Total'}</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">Units Complete</div><div class="prop-mini-val" style="color:var(--green)">${unitsComplete}</div><div class="prop-mini-sub">of ${totalUnits}</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount}/${MILESTONES_DEF.length} complete</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Open actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">Open Actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val" style="font-size:13px;letter-spacing:0">${p.budget?fmtCurrency(p.budget):'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>`;
+
+  // Product mix display
+  const mixEl=document.getElementById('prop-product-mix');
+  if(mixEl){
+    if(hasMix){
+      const items=[];
+      if(elevCount)items.push(`<span style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--navy)"><i class="ti ti-elevator" style="font-size:16px;color:var(--blue-dark)"></i><span><strong>${elevCount}</strong> Elevator${elevCount!==1?'s':''}</span></span>`);
+      if(escCount)items.push(`<span style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--navy)"><i class="ti ti-stairs-up" style="font-size:16px;color:var(--blue-dark)"></i><span><strong>${escCount}</strong> Escalator${escCount!==1?'s':''}</span></span>`);
+      if(liftCount)items.push(`<span style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--navy)"><i class="ti ti-wheelchair" style="font-size:16px;color:var(--blue-dark)"></i><span><strong>${liftCount}</strong> Wheelchair Lift${liftCount!==1?'s':''}</span></span>`);
+      if(otherCount)items.push(`<span style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--navy)"><i class="ti ti-tool" style="font-size:16px;color:var(--blue-dark)"></i><span><strong>${otherCount}</strong> Other</span></span>`);
+      mixEl.innerHTML=`<div style="display:flex;gap:20px;flex-wrap:wrap;padding:10px 0">${items.join('')}</div>`;
+    } else {
+      mixEl.innerHTML='';
+    }
+  }
 
   // Budget summary on overview
 
@@ -2108,7 +2178,7 @@ function renderPropertyView(p){
     <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px"><span style="color:var(--gray-mid)">VDA Project #</span><span style="font-family:'DM Mono',monospace">${p.vda||'—'}</span></div>
     <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12px">
       <div>
-        <div style="color:var(--gray-mid)">Core asset</div>
+        <div style="color:var(--gray-mid)">Core Asset</div>
         <div style="font-size:10px;color:var(--gray-light);margin-top:1px">Toggle on for Core, off for Non-core</div>
       </div>
       ${(role==='pm'||role==='admin')?`
@@ -2141,7 +2211,7 @@ function getMilestonesForProp(propName){
   if(live.length>0) return live.sort((a,b)=>a.milestoneNumber-b.milestoneNumber);
   // In demo mode only — fall back to embedded p.ms seed data
   if(demoMode){
-    const p=(window.PORTFOLIO||PORTFOLIO).find(x=>x.n===propName);
+    const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
     if(!p)return [];
     return MILESTONES_DEF.map((name,i)=>{
       const m=(p.ms||[]).find(x=>x.ms===i)||{ms:i,status:'notstart',planned:'',actual:''};
@@ -2303,7 +2373,7 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
 
 function populateMilestonesTable(){
   const tbody=document.getElementById('milestones-tbody');if(!tbody)return;
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const active=port.filter(p=>['Awarded','CIP','Active'].includes(p.st));
   tbody.innerHTML=active.map(p=>{
     const msData=getMilestonesForProp(p.n);
@@ -2476,7 +2546,7 @@ function closePanel(clearDraft=true){
 function populatePanelPropertyList(){
   const sel=document.getElementById('m-property');
   // Always clear and repopulate from current live portfolio
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const currentVal=sel.value; // preserve current selection if any
   sel.innerHTML='<option value="">Select...</option>';
   port.slice().sort((a,b)=>a.n.localeCompare(b.n)).forEach(p=>{
@@ -2615,7 +2685,7 @@ function renderPropMeetings(p){
     </div>`).join('');
   const aList=document.getElementById('prop-actions-list');
   if(aList)aList.innerHTML=propActions.length===0?
-    `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No open actions</div></div>`:
+    `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No Open Actions</div></div>`:
     propActions.map(a=>`<div class="action-item-row">
       <div class="action-dot dot-open"></div>
       <div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">Owner: ${a.owner} · Due: ${a.due} · <span class="badge b-${a.priority.toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
@@ -2734,7 +2804,7 @@ function renderAllMeetings(){
   const openAI=actionItems.filter(a=>a.status==='Open');
   const aList=document.getElementById('all-actions-list');
   if(aList)aList.innerHTML=openAI.length===0?
-    `<div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No open actions</div></div>`:
+    `<div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No Open Actions</div></div>`:
     openAI.map(a=>`<div class="action-item-row">
       <div class="action-dot dot-open"></div>
       <div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${a.owner} · Due: ${a.due}</span></div>
@@ -2817,7 +2887,7 @@ function renderBudgetTab(p){
   // Billing history
   const histEl=document.getElementById('billing-history-list');
   histEl.innerHTML=propBilling.length===0?
-    `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No billing entries yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
+    `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Billing Entries Yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
     `<table class="data-table" style="margin-top:0">
       <thead><tr><th>Date</th><th>Current Through</th><th>Billed YTD</th><th>% of Budget</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
       <tbody>${propBilling.map((b,i)=>`<tr>
@@ -2841,7 +2911,7 @@ function renderBudgetTab(p){
       <div style="text-align:center"><div style="font-size:22px;font-weight:700;color:var(--gray-mid)">${unitsRemaining}</div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">Remaining</div></div>
       <div style="text-align:center"><div style="font-size:22px;font-weight:700;color:var(--navy)">${totalUnits}</div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">Total</div></div>
     </div>
-    ${phases.length===0?`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No phases defined yet. Click "Add phase" to set up the modernization sequence.':'No unit phases defined yet.'}</div>`:
+    ${phases.length===0?`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Phases Defined Yet. Click "Add phase" to set up the modernization sequence.':'No unit phases defined yet.'}</div>`:
     phases.map(ph=>`
       <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
@@ -3040,7 +3110,7 @@ async function saveBillingModal(){
 
 // ── CHARTS ────────────────────────────────────────────────────────────
 function renderCharts(){
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const active=port.filter(p=>['Awarded','CIP','Active'].includes(p.st));
   const container=document.getElementById('charts-body');
   if(!container)return;
@@ -3059,13 +3129,13 @@ function renderCharts(){
     const unitsComplete=phases.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
     const pctBilled=Math.round((billedYTD/p.budget)*100);
     const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
-    return {name:p.n.length>20?p.n.slice(0,18)+'…':p.n,budget:p.budget,billedYTD,pctBilled,pctComplete};
+    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:p.budget,billedYTD,pctBilled,pctComplete};
   }).slice(0,12);
 
   // Milestone progress for active properties
   const msData=active.map(p=>{
     const complete=getMsComplete(p.n);
-    return {name:p.n.length>20?p.n.slice(0,18)+'…':p.n,pct:Math.round(complete/MILESTONES_DEF.length*100),r:p.r};
+    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,pct:Math.round(complete/MILESTONES_DEF.length*100),r:p.r};
   }).sort((a,b)=>b.pct-a.pct).slice(0,12);
 
   const statusEntries=Object.entries(statusCounts);
@@ -3075,7 +3145,7 @@ function renderCharts(){
   <div class="two-col" style="gap:20px;margin-bottom:20px">
     <!-- Status Donut -->
     <div class="card">
-      <div class="card-header"><div class="card-title">Portfolio status mix</div><div class="card-sub">${totalProps} total properties</div></div>
+      <div class="card-header"><div class="card-title">Portfolio Status Mix</div><div class="card-sub">${totalProps} total properties</div></div>
       <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-top:8px">
         <svg viewBox="0 0 120 120" style="width:120px;height:120px;flex-shrink:0" id="donut-svg"></svg>
         <div id="donut-legend" style="flex:1;min-width:120px"></div>
@@ -3083,13 +3153,13 @@ function renderCharts(){
     </div>
     <!-- Milestone Progress -->
     <div class="card">
-      <div class="card-header"><div class="card-title">Milestone progress</div><div class="card-sub">Active properties — VDA scope</div></div>
+      <div class="card-header"><div class="card-title">Milestone Progress</div><div class="card-sub">Active Properties — VDA Scope</div></div>
       <div id="ms-bars" style="margin-top:8px"></div>
     </div>
   </div>
   <!-- Budget utilization -->
   <div class="card" style="margin-bottom:20px">
-    <div class="card-header"><div class="card-title">Budget utilization</div><div class="card-sub">% Billed vs % Complete (units) — active properties with budget data</div></div>
+    <div class="card-header"><div class="card-title">Budget Utilization</div><div class="card-sub">% Billed vs % Complete (units) — active properties with budget data</div></div>
     <div id="budget-bars" style="margin-top:12px"></div>
     ${billingData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries on property pages to see budget utilization charts.</div>':''}
   </div>`;
@@ -3131,7 +3201,7 @@ function renderCharts(){
       const barColor=d.r==='Behind'?'var(--amber)':d.r==='Ahead'?'var(--green)':'var(--blue-dark)';
       return `<div style="margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-          <div style="font-size:11px;color:var(--navy);font-weight:500">${d.name}</div>
+          <div style="font-size:11px;color:var(--blue-dark);font-weight:500;cursor:pointer" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}')">${d.name}</div>
           <div style="font-size:11px;font-family:'DM Mono',monospace;color:var(--gray-mid)">${d.pct}%</div>
         </div>
         <div class="prog-bar" style="height:6px"><div class="prog-fill" style="width:${d.pct}%;background:${barColor}"></div></div>
@@ -3142,8 +3212,8 @@ function renderCharts(){
   if(budgetBars&&billingData.length>0)budgetBars.innerHTML=billingData.map(d=>`
     <div style="margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-        <div style="font-size:11px;color:var(--navy);font-weight:500">${d.name}</div>
-        <div style="font-size:10px;color:var(--gray-mid)">$${(d.billedYTD/1000000).toFixed(2)}M of $${(d.budget/1000000).toFixed(2)}M</div>
+        <div style="font-size:11px;color:var(--blue-dark);font-weight:500;cursor:pointer" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}')">${d.name}</div>
+        <div style="font-size:10px;color:var(--gray-mid)">${fmtCurrency(d.billedYTD)} of ${fmtCurrency(d.budget)}</div>
       </div>
       <div style="display:flex;gap:4px;align-items:center;margin-bottom:2px">
         <div style="font-size:9px;color:var(--blue-dark);width:70px">% Billed</div>
@@ -3162,7 +3232,7 @@ let calMonth=new Date().getMonth();
 let calViewMode='month'; // 'month' or 'list'
 
 function getCalEvents(){
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const events=[];
   const today=new Date();
 
@@ -3210,7 +3280,7 @@ function getCalEvents(){
   // Action item due dates (open only)
   if(role==='pm'||role==='admin'){
     actionItems.filter(a=>a.status==='Open'&&a.due&&a.due!=='TBD').forEach(a=>{
-      events.push({date:a.due,type:'action',title:a.description,sub:a.property+' · '+a.owner,color:'ev-action',dot:'var(--purple)',propName:a.property});
+      events.push({date:a.due,type:'action',title:a.description,sub:a.property,color:'ev-action',dot:'var(--purple)',propName:a.property});
     });
   }
 
@@ -3235,7 +3305,12 @@ function updateCalLabel(){
 
 function calPrev(){calMonth--;if(calMonth<0){calMonth=11;calYear--;}renderCalendar();}
 function calNext(){calMonth++;if(calMonth>11){calMonth=0;calYear++;}renderCalendar();}
-function calGoToday(){calYear=new Date().getFullYear();calMonth=new Date().getMonth();renderCalendar();}
+function calGoToday(){
+  calYear=new Date().getFullYear();
+  calMonth=new Date().getMonth();
+  updateCalLabel();
+  renderCalendar();
+}
 function setCalView(mode,btn){calViewMode=mode;renderCalendar();}
 
 function renderCalMonth(){
@@ -3274,7 +3349,10 @@ function renderCalMonth(){
     const dayEvents=byDate[dateStr]||[];
     html+=`<div class="cal-day${isToday?' today':''}">
       <div class="cal-day-num">${d}</div>
-      ${dayEvents.slice(0,3).map(e=>`<div class="cal-event ${e.color}${e.isDraft?' ev-draft':''}" title="${e.title}${e.sub?' · '+e.sub:''}" onclick="calEventClick('${e.propName?.replace(/'/g,"\\'")||''}')">${e.isDraft?'[Draft] ':''}${e.title}${e.type==='phase'&&e.sub?'<div style="font-size:8px;opacity:0.85;margin-top:1px">'+e.sub+'</div>':''}</div>`).join('')}
+      ${dayEvents.slice(0,3).map(e=>{
+        const subText=e.type==='phase'?e.sub:(e.propName&&e.propName!==e.title?e.propName:'');
+        return `<div class="cal-event ${e.color}${e.isDraft?' ev-draft':''}" title="${e.title}${subText?' · '+subText:''}" onclick="calEventClick('${e.propName?.replace(/'/g,"\\'")||''}')">${e.isDraft?'[Draft] ':''}${e.title}${subText?`<div style="font-size:8px;opacity:0.8;margin-top:1px;font-weight:400">${subText}</div>`:''}</div>`;
+      }).join('')}
       ${dayEvents.length>3?`<div style="font-size:9px;color:var(--gray-mid);padding-left:4px">+${dayEvents.length-3} more</div>`:''}
     </div>`;
   }
@@ -3334,13 +3412,13 @@ function renderCalList(){
 
 function calEventClick(propName){
   if(propName&&propName!==''){
-    const p=(window.PORTFOLIO||PORTFOLIO).find(x=>x.n===propName);
+    const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
     if(p)openProperty(propName);
   }
 }
 
 function renderAnalytics(){
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const isDemo=demoMode;
   const geoLabel=isDemo?'State':'State';
   // Geographic distribution
@@ -3397,7 +3475,16 @@ function renderAnalytics(){
 }
 
 function renderDashboard(){
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||[];
+  if(port.length===0&&!demoMode){
+    document.getElementById('dashboard-body').innerHTML=`
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem;gap:12px">
+        <i class="ti ti-loader" style="font-size:32px;color:var(--gray-light);animation:spin 1s linear infinite"></i>
+        <div style="font-size:14px;font-weight:500;color:var(--gray-mid)">Loading portfolio data...</div>
+        <div style="font-size:12px;color:var(--gray-light)">Connecting to live database</div>
+      </div>`;
+    return;
+  }
   const total=port.length;
   const active=port.filter(p=>['Awarded','CIP','Active'].includes(p.st));
   const behind=active.filter(p=>p.r==='Behind');
@@ -3530,8 +3617,8 @@ function renderAllSiteVisits(){
   const past=siteVisits.filter(v=>new Date(v.date)<today).sort((a,b)=>new Date(b.date)-new Date(a.date));
   const uEl=document.getElementById('upcoming-visits-list');
   const pEl=document.getElementById('past-visits-list');
-  if(uEl)uEl.innerHTML=upcoming.length===0?`<div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-off"></i><div class="empty-state-title">No visits scheduled</div></div>`:upcoming.map(v=>visitCardHtml(v)).join('');
-  if(pEl)pEl.innerHTML=past.length===0?`<div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-x"></i><div class="empty-state-title">No past visits</div></div>`:past.map(v=>visitCardHtml(v)).join('');
+  if(uEl)uEl.innerHTML=upcoming.length===0?`<div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-off"></i><div class="empty-state-title">No Visits Scheduled</div></div>`:upcoming.map(v=>visitCardHtml(v)).join('');
+  if(pEl)pEl.innerHTML=past.length===0?`<div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-x"></i><div class="empty-state-title">No Past Visits</div></div>`:past.map(v=>visitCardHtml(v)).join('');
 }
 
 // DOCUMENTS — FOLDER VIEW
@@ -3663,24 +3750,91 @@ function renderPropDocFolder(p){
 
 // PORTFOLIO TABLE
 function populatePortfolio(){
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const tbody=document.getElementById('portfolio-tbody');if(!tbody)return;
+  // Update subtitle
+  const sub=document.getElementById('portfolio-sub');
+  if(sub)sub.textContent=port.length>0?`${port.length} ${demoMode?'stores':'properties'} — click any row to view details`:'Loading properties...';
+  // Show Add Property button for PM/Admin in live mode
+  const addBtn=document.getElementById('add-property-btn');
+  if(addBtn)addBtn.style.display=(role==='pm'||role==='admin')&&!demoMode?'':'none';
   tbody.innerHTML='';
-  PORTFOLIO.forEach(p=>{
+  if(port.length===0&&!demoMode){
+    tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Loading from database...</td></tr>`;
+    return;
+  }
+  port.forEach(p=>{
     const stClass={Awarded:'b-cip',CIP:'b-cip',Active:'b-nip',Survey:'b-vda',Budgeting:'b-nip','On Hold':'b-hold',Complete:'b-done'}[p.st]||'b-nac';
     const rClass={Behind:'b-behind','On Track':'b-track',Ahead:'b-ahead'}[p.r]||'';
     const rh=rClass?`<span class="badge ${rClass}">${p.r}</span>`:`<span style="color:var(--gray-light);font-size:11px">—</span>`;
     tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${p.type}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
-      <td style="font-size:12px;font-weight:500">${p.n}</td>
-      <td><span class="geo">${p.s}</span></td>
-      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
-      <td style="font-size:11px">${p.ec}</td>
+      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${p.n}</td>
+      <td><span class="geo">${p.s||'—'}</span></td>
+      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type||'—'}</span></td>
+      <td style="font-size:11px">${p.ec||'TBD'}</td>
       <td style="font-family:'DM Mono',monospace;font-size:11px">${p.units||'—'}</td>
-      <td><span class="badge ${stClass}">${p.st}</span></td>
+      <td><span class="badge ${stClass}">${p.st||'—'}</span></td>
       <td>${rh}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${p.v}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'—'}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${p.v||'TBD'}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${p.budget?fmtCurrency(p.budget):'—'}</td>
     </tr>`;
   });
+}
+
+function openAddPropertyModal(){
+  // Clear form
+  ['ap-name','ap-addr','ap-state','ap-ec','ap-consultant','ap-vda','ap-notes'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['ap-budget','ap-units','ap-elevators','ap-escalators','ap-lifts','ap-other'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('ap-type').value='Core';
+  document.getElementById('ap-status').value='Survey';
+  document.getElementById('ap-schedule').value='—';
+  document.getElementById('add-prop-overlay').style.display='block';
+  document.getElementById('add-prop-modal').style.display='block';
+}
+function closeAddPropertyModal(){
+  document.getElementById('add-prop-overlay').style.display='none';
+  document.getElementById('add-prop-modal').style.display='none';
+}
+async function saveNewProperty(){
+  const name=document.getElementById('ap-name').value.trim();
+  if(!name){showToast('Property name is required','warn');return;}
+  const fields={
+    'Property Name':name,
+    'Address':document.getElementById('ap-addr').value.trim(),
+    'State':document.getElementById('ap-state').value.trim().toUpperCase(),
+    'Asset Type':document.getElementById('ap-type').value,
+    'Status':document.getElementById('ap-status').value,
+    'Schedule':document.getElementById('ap-schedule').value,
+    'Elevator Company':document.getElementById('ap-ec').value.trim()||'TBD',
+    'VDA Consultant':document.getElementById('ap-consultant').value.trim()||'TBD',
+    'VDA Project #':document.getElementById('ap-vda').value.trim(),
+    'Project Budget':parseFloat(document.getElementById('ap-budget').value)||0,
+    'Total Units':parseInt(document.getElementById('ap-units').value)||0,
+    'Elevator Count':parseInt(document.getElementById('ap-elevators').value)||0,
+    'Escalator Count':parseInt(document.getElementById('ap-escalators').value)||0,
+    'Wheelchair Lift Count':parseInt(document.getElementById('ap-lifts').value)||0,
+    'Other Count':parseInt(document.getElementById('ap-other').value)||0,
+    'Comments':document.getElementById('ap-notes').value.trim(),
+  };
+  showToast('Saving property...','info');
+  const res=await atCreate('Properties',fields);
+  const newId=res?.records?.[0]?.id||'prop-'+Date.now();
+  const newProp={
+    id:newId,n:name,s:fields['State'],ec:fields['Elevator Company'],
+    st:fields['Status'],r:fields['Schedule'],v:fields['VDA Consultant'],
+    units:fields['Total Units'],unitDesc:'',
+    elevatorCount:fields['Elevator Count'],escalatorCount:fields['Escalator Count'],
+    liftCount:fields['Wheelchair Lift Count'],otherCount:fields['Other Count'],
+    vda:fields['VDA Project #'],type:fields['Asset Type'],
+    budget:fields['Project Budget'],comment:fields['Comments'],
+    addr:fields['Address'],ms:[]
+  };
+  window.PORTFOLIO=(window.PORTFOLIO||[]).concat([newProp]).sort((a,b)=>a.n.localeCompare(b.n));
+  // Auto-populate 18 milestones for new property
+  autoPopulateMilestones(name);
+  closeAddPropertyModal();
+  populatePortfolio();
+  showToast(`${name} added to portfolio`,'success');
 }
 
 function filterTable(){
@@ -3800,7 +3954,7 @@ async function submitUpdate(){
 }
 function refreshMyUpdates(){
   const c=document.getElementById('my-updates-container');if(!c)return;
-  if(submissions.length===0){c.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates submitted yet</div></div>`;return;}
+  if(submissions.length===0){c.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No Updates Submitted Yet</div></div>`;return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
   c.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Property</th><th>Week</th><th>Submitted</th><th>Status</th><th>Return note</th><th></th></tr></thead><tbody>`+
     submissions.slice().reverse().map(s=>`<tr><td>${s.property}</td><td style="font-family:'DM Mono',monospace;font-size:11px">${s.week}</td><td style="font-family:'DM Mono',monospace;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td><button class="btn btn-icon" onclick="downloadFieldUpdate('${s.id}')" title="Download"><i class="ti ti-download" style="font-size:13px"></i></button></td></tr>`).join('')+
@@ -3829,7 +3983,7 @@ function openNewFlag(){
   const form=document.getElementById('new-flag-form');
   form.style.display='block';
   const sel=document.getElementById('flag-property');
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   sel.innerHTML='<option value="">Select property...</option>'+port.map(p=>`<option>${p.n}</option>`).join('');
   form.scrollIntoView({behavior:'smooth'});
 }
@@ -3903,7 +4057,7 @@ function renderCommentsView(){
   }
   const container=document.getElementById('comments-threads-container');if(!container)return;
   if(threadList.length===0){
-    container.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-message-circle-off"></i><div class="empty-state-title">No comments yet</div><div class="empty-state-sub">${isClient?'Use &#34;Raise a flag&#34; above to start a thread':'No client flags submitted yet'}</div></div>`;
+    container.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-message-circle-off"></i><div class="empty-state-title">No Comments Yet</div><div class="empty-state-sub">${isClient?'Use &#34;Raise a flag&#34; above to start a thread':'No client flags submitted yet'}</div></div>`;
     return;
   }
   const clientInitials=demoMode?'DR':'PH';
@@ -3933,13 +4087,23 @@ function renderCommentsView(){
 function addComment(){const input=document.getElementById('comment-input');if(input)input.value='';}
 
 
+function refreshReport(){
+  const btn=document.getElementById('refresh-report-btn');
+  if(btn){btn.innerHTML='<i class="ti ti-loader" style="animation:spin 1s linear infinite"></i><span>Refreshing...</span>';btn.disabled=true;}
+  setTimeout(()=>{
+    renderReport();
+    if(btn){btn.innerHTML='<i class="ti ti-refresh"></i><span>Refresh</span>';btn.disabled=false;}
+    showToast('Report refreshed','success');
+  },300);
+}
+
 // REPORT
 function renderReport(){
   const filter=document.getElementById('report-filter')?.value||'all';
   const isDemo=demoMode;
   const clientName=isDemo?'Demo Retail Portfolio':'Park Hotels & Resorts';
   const programName=isDemo?'Retail Elevator Modernization Program':'Elevator Modernization Program';
-  let props=window.PORTFOLIO||PORTFOLIO;
+  let props=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   if(filter==='Core')props=props.filter(p=>p.type==='Core');
   else if(filter==='Non-core')props=props.filter(p=>p.type==='Non-core');
   else if(filter==='Active')props=props.filter(p=>['Awarded','CIP','Active'].includes(p.st));
@@ -4001,7 +4165,7 @@ function renderReport(){
                 const msC=getMsComplete(p.n);
                 const msR=getMilestonesForProp(p.n).filter(m=>m.status==='At Risk').length;
                 return `<tr>
-                  <td style="font-weight:500">${p.n}</td>
+                  <td style="font-weight:500;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)">${p.n}</td>
                   <td><span class="geo">${p.s}</span></td>
                   <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
                   <td style="font-size:10px">${p.ec}</td>
@@ -4045,7 +4209,7 @@ function sendChat(){
 }
 
 function buildParkContext(){
-  const port=window.PORTFOLIO||PORTFOLIO;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const active=port.filter(p=>['Awarded','CIP','Active'].includes(p.st));
   const behind=active.filter(p=>p.r==='Behind');
   const totalBudget=port.reduce((a,p)=>a+(p.budget||0),0);
