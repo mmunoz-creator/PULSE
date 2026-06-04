@@ -240,7 +240,8 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--blue-mid);box-shadow:0 0 0 3px rgba(55,138,221,.1);background:white}
 .form-textarea{resize:vertical;height:80px;line-height:1.5}
 /* MILESTONES */
-.milestone-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}
+.milestone-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;font-size:12px;position:relative}
+.milestone-row:not(:last-child)::before{content:'';position:absolute;left:13px;top:36px;bottom:-8px;width:2px;background:#E2E8F0;z-index:0}
 .milestone-row:last-child{border-bottom:none}
 .milestone-num{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0;font-family:'DM Mono',monospace}
 .ms-complete{background:var(--green-pale);color:var(--green)}
@@ -505,6 +506,7 @@ let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
 window.UNIT_GROUPS = window.UNIT_GROUPS || [];
 window.BILLING_LOG = window.BILLING_LOG || [];
 window.MILESTONES = window.MILESTONES || [];
+window.CLIENT_COMMENTS = window.CLIENT_COMMENTS || [];
 
 // No token needed in browser - Worker holds it securely
 function saveToken() {
@@ -659,10 +661,10 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
-      atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones')
+      atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones`);
     if (props.length > 0) {
@@ -767,8 +769,9 @@ async function loadAllData() {
     window.BILLING_LOG = billingLog.map(r=>({
       id: r.id,
       property: r.fields['Property Name']||'',
-      billedYTD: r.fields['Billed YTD']||0,
-      entryDate: r.fields['Entry Date']||'',
+      billedYTD: r.fields['$ Amount']||0,
+      entryDate: r.fields['Entry Date']||r.fields['Billing date']||'',
+      invoiceMonth: r.fields['Invoice Month']||'',
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
     })).sort((a,b)=>new Date(b.entryDate)-new Date(a.entryDate));
@@ -785,6 +788,19 @@ async function loadAllData() {
       variance: r.fields['Variance']||null,
       notes: r.fields['Notes']||'',
     })); // newest first
+    // Client Comments — flags and replies
+    window.CLIENT_COMMENTS = clientComments.map(r=>({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      threadId: r.fields['Thread ID']||'',
+      authorRole: r.fields['Author Role']||'',
+      authorName: r.fields['Author Name']||'',
+      message: r.fields['Message']||'',
+      flagType: r.fields['Flag Type']||'General',
+      status: r.fields['Status']||'Open',
+      visibility: r.fields['Visibility']||'PM Only',
+      created: r.fields['Created']||'',
+    })).sort((a,b)=>new Date(a.created)-new Date(b.created));
     AT_CONNECTED = true;
     console.log('AT_CONNECTED set to true - updating UI');
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
@@ -895,7 +911,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v10o · elevatorpulse.com</div>
+    <div class="login-version">PULSE v10p · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1098,6 +1114,10 @@ window.PROPERTIES_SEED = [
     <label class="form-label">Project Budget</label>
     <input class="form-input" type="number" id="bm-budget" placeholder="e.g. 1800000" step="1000">
     <div style="font-size:10px;color:var(--gray-mid);margin-top:3px" id="bm-budget-preview"></div>
+  </div>
+  <div class="form-group">
+    <label class="form-label">Billing current through</label>
+    <input class="form-input" type="text" id="bm-invoice-month" placeholder="e.g. Through May 2026, Q1 2026">
   </div>
   <div class="form-group">
     <label class="form-label">Billed YTD (running total)</label>
@@ -1502,6 +1522,7 @@ window.PROPERTIES_SEED = [
             <div class="card-header"><div class="card-title">Raise a flag</div></div>
             <div class="form-group"><label class="form-label">Property</label><select class="form-select" id="flag-property"><option value="">Select property...</option></select></div>
             <div class="form-group"><label class="form-label">Concern type</label><select class="form-select" id="flag-type"><option>Schedule</option><option>Scope</option><option>Budget</option><option>Safety</option><option>Quality</option><option>General</option></select></div>
+            <div class="form-group"><label class="form-label">Send to</label><select class="form-select" id="flag-visibility"><option value="PM Only">PM Only</option><option value="VDA Team">VDA Team (includes consultants)</option></select></div>
             <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="flag-message" placeholder="Describe your concern..."></textarea></div>
             <div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="submitFlag()"><i class="ti ti-send"></i>Submit flag</button><button class="btn" onclick="document.getElementById('new-flag-form').style.display='none'">Cancel</button></div>
           </div>
@@ -1719,7 +1740,7 @@ function enterDemo(){
   // Override PORTFOLIO with demo data
   window.PORTFOLIO=DEMO_PORTFOLIO.map(p=>({...p,id:'demo-'+p.n})).sort((a,b)=>a.n.localeCompare(b.n));
   submissions=[];meetings=[];actionItems=[];siteVisits=[];notifications=[];clientFlags=[];flagIdCounter=0;
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];
   setupDemoPortal();
   populatePortfolio();populateMilestonesTable();
   renderDocFolders();populateDocFolderFilter();populatePanelPropertyList();
@@ -1910,6 +1931,7 @@ async function _finishLogin(){
       if(AT_CONNECTED) {
         populatePortfolio();populateMilestonesTable();
         renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();populatePanelPropertyList();populateDocFolderFilter();
+        if(document.getElementById('view-comments')&&!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
         showToast('Live database connected ✓','success');
       }
     }).catch(e => {
@@ -1929,7 +1951,7 @@ function doLogout(){
   AT_CONNECTED=false;
   // Reset all live data so re-login gets a clean load
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];
   clientFlags=[];flagIdCounter=0;
   const badge=document.getElementById('demo-logo-badge');if(badge)badge.remove();
   window.PORTFOLIO=PARK_PORTFOLIO;
@@ -2117,15 +2139,22 @@ function renderPropertyView(p){
 function getMilestonesForProp(propName){
   const live=(window.MILESTONES||[]).filter(m=>m.property===propName);
   if(live.length>0) return live.sort((a,b)=>a.milestoneNumber-b.milestoneNumber);
-  // Fallback to embedded p.ms seed data (demo or pre-Airtable)
-  const p=(window.PORTFOLIO||PORTFOLIO).find(x=>x.n===propName);
-  if(!p)return [];
-  return MILESTONES_DEF.map((name,i)=>{
-    const m=(p.ms||[]).find(x=>x.ms===i)||{ms:i,status:'notstart',planned:'',actual:''};
-    return {id:null,property:propName,milestoneNumber:i+1,milestoneName:name,
-      status:{complete:'Complete',inprog:'In Progress',atrisk:'At Risk',notstart:'Not Started'}[m.status]||'Not Started',
-      plannedDate:m.planned||'',actualDate:m.actual||'',variance:null,notes:''};
-  });
+  // In demo mode only — fall back to embedded p.ms seed data
+  if(demoMode){
+    const p=(window.PORTFOLIO||PORTFOLIO).find(x=>x.n===propName);
+    if(!p)return [];
+    return MILESTONES_DEF.map((name,i)=>{
+      const m=(p.ms||[]).find(x=>x.ms===i)||{ms:i,status:'notstart',planned:'',actual:''};
+      return {id:null,property:propName,milestoneNumber:i+1,milestoneName:name,
+        status:{complete:'Complete',inprog:'In Progress',atrisk:'At Risk',notstart:'Not Started'}[m.status]||'Not Started',
+        plannedDate:m.planned||'',actualDate:m.actual||'',variance:null,notes:''};
+    });
+  }
+  // Live mode — no Airtable records yet, return empty (shows 0%)
+  return MILESTONES_DEF.map((name,i)=>({
+    id:null,property:propName,milestoneNumber:i+1,milestoneName:name,
+    status:'Not Started',plannedDate:'',actualDate:'',variance:null,notes:''
+  }));
 }
 
 // Get ms % complete from live data
@@ -2207,7 +2236,7 @@ function renderMilestones(p){
       `<span style="color:var(--gray-mid);font-size:10px;margin-left:4px">on plan</span>`):'';
 
     return `<div class="milestone-row" id="ms-row-${m.id||idx}">
-      <div id="${circleId}" style="background:${circleColor};color:${textColor};border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .2s">
+      <div id="${circleId}" style="background:${circleColor};color:${textColor};border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .2s;position:relative;z-index:1">
         <i class="ti ${statusIcons[m.status]||'ti-circle'}" style="font-size:13px"></i>
       </div>
       <div style="flex:1;min-width:0">
@@ -2790,9 +2819,10 @@ function renderBudgetTab(p){
   histEl.innerHTML=propBilling.length===0?
     `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No billing entries yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
     `<table class="data-table" style="margin-top:0">
-      <thead><tr><th>Date</th><th>Billed YTD</th><th>% of Budget</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
+      <thead><tr><th>Date</th><th>Current Through</th><th>Billed YTD</th><th>% of Budget</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
       <tbody>${propBilling.map((b,i)=>`<tr>
         <td style="font-family:'DM Mono',monospace;font-size:11px">${b.entryDate}</td>
+        <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
         <td style="font-family:'DM Mono',monospace;font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
         <td style="font-family:'DM Mono',monospace;font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
         <td style="font-size:11px;color:var(--gray-mid)">${b.notes||'—'}</td>
@@ -2957,6 +2987,7 @@ function openBillingModal(){
   document.getElementById('bm-budget-preview').textContent=currentProp.budget?fmtCurrencyFull(currentProp.budget)+' — leave blank to keep unchanged':'Leave blank to keep existing budget unchanged';
   document.getElementById('bm-ytd').value='';
   document.getElementById('bm-ytd-preview').textContent='';
+  document.getElementById('bm-invoice-month').value='';
   document.getElementById('bm-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('bm-notes').value='';
   // Live preview on input
@@ -2975,6 +3006,7 @@ async function saveBillingModal(){
   const budget=parseFloat(document.getElementById('bm-budget').value)||0;
   const ytd=parseFloat(document.getElementById('bm-ytd').value);
   const date=document.getElementById('bm-date').value;
+  const invoiceMonth=document.getElementById('bm-invoice-month').value.trim();
   const notes=document.getElementById('bm-notes').value.trim();
   if(!ytd||!date){showToast('Please enter a Billed YTD amount and date','warn');return;}
   // Update project budget if changed
@@ -2985,23 +3017,21 @@ async function saveBillingModal(){
       console.log('Budget update result:',budRes);
     }
   }
-  // Save billing entry
+  // Save billing entry with correct Airtable field names
+  const newEntry={id:'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,invoiceMonth,notes,loggedBy:'PM User'};
   if(!demoMode){
     const res=await atCreate('Billing Log',{
       'Property Name':currentProp.n,
-      'Billed YTD':ytd,
-      'Entry Date':date,
+      '$ Amount':ytd,
+      'Billing date':date,
+      'Invoice Month':invoiceMonth||'',
       'Notes':notes||'',
       'Logged By':'PM User',
     });
     console.log('Billing Log create result:',JSON.stringify(res)?.slice(0,200));
-    const newId=res?.records?.[0]?.id||'bl-'+Date.now();
-    const newEntry={id:newId,property:currentProp.n,billedYTD:ytd,entryDate:date,notes,loggedBy:'PM User'};
-    window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
-  } else {
-    const newEntry={id:'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,notes,loggedBy:'PM User'};
-    window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
+    newEntry.id=res?.records?.[0]?.id||newEntry.id;
   }
+  window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
   closeBillingModal();
   renderPropertyView(currentProp);
   switchPropTab('budget',document.querySelectorAll('.tab-btn')[1]);
@@ -3785,9 +3815,15 @@ function refreshNotifications(){
   </div>`).join('');
   updateQueueBadge();
 }
-// ── COMMENTS / FLAGS SYSTEM ──────────────────────────────────────────
+// ── CLIENT COMMENTS / FLAGS SYSTEM ───────────────────────────────────
+// Backed by Airtable Client Comments table
+// clientFlags kept for backward compat with resets
 let clientFlags=[];
 let flagIdCounter=0;
+
+function generateThreadId(propName){
+  return 'thread-'+propName.toLowerCase().replace(/[^a-z0-9]/g,'-').slice(0,20)+'-'+Date.now();
+}
 
 function openNewFlag(){
   const form=document.getElementById('new-flag-form');
@@ -3798,87 +3834,104 @@ function openNewFlag(){
   form.scrollIntoView({behavior:'smooth'});
 }
 
-function submitFlag(){
+async function submitFlag(){
   const prop=document.getElementById('flag-property').value;
   const type=document.getElementById('flag-type').value;
   const msg=document.getElementById('flag-message').value.trim();
+  const visibility=document.getElementById('flag-visibility')?.value||'PM Only';
   if(!prop||!msg){alert('Please select a property and enter a message.');return;}
-  const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const now=new Date();
+  const dateStr=now.toISOString();
+  const threadId=generateThreadId(prop);
   const clientLabel=demoMode?'Demo Retail — Capital Projects':'Park Hotels — Capital Projects';
-  const clientInitials=demoMode?'DR':'PH';
-  clientFlags.push({
-    id:'flag-'+(++flagIdCounter),property:prop,type,status:'Open',created:dateStr,
-    threads:[{author:clientLabel,initials:clientInitials,isClient:true,text:msg,time:dateStr}]
-  });
+  const record={id:'cc-'+Date.now(),property:prop,threadId,authorRole:'client',authorName:clientLabel,message:msg,flagType:type,status:'Open',visibility,created:dateStr};
+  if(!demoMode){
+    const res=await atCreate('Client Comments',{'Property Name':prop,'Thread ID':threadId,'Author Role':'client','Author Name':clientLabel,'Message':msg,'Flag Type':type,'Status':'Open','Visibility':visibility,'Created':dateStr});
+    record.id=res?.records?.[0]?.id||record.id;
+  }
+  window.CLIENT_COMMENTS=(window.CLIENT_COMMENTS||[]).concat([record]);
   document.getElementById('flag-message').value='';
   document.getElementById('new-flag-form').style.display='none';
   renderCommentsView();
   showToast('Flag submitted — PM has been notified','success');
 }
 
-function renderCommentsView(){
-  const isClient=role==='client';
-  const flagArea=document.getElementById('comments-new-flag-area');
-  if(flagArea)flagArea.style.display=isClient?'':'none';
-  const openFlags=clientFlags.filter(f=>f.status==='Open');
-  const alertEl=document.getElementById('comments-flags-alert');
-  if(alertEl){
-    if(openFlags.length>0){
-      alertEl.style.display='flex';
-      document.getElementById('comments-flags-text').innerHTML=`<strong>${openFlags.length} open flag${openFlags.length>1?'s':''}</strong> — ${openFlags.map(f=>`${f.property} (${f.type})`).join(' · ')}`;
-    }else{alertEl.style.display='none';}
-  }
-  const container=document.getElementById('comments-threads-container');if(!container)return;
-  if(clientFlags.length===0){
-    container.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-message-circle-off"></i><div class="empty-state-title">No comments yet</div><div class="empty-state-sub">${isClient?'Use "Raise a flag" above to start a thread':'No client flags have been submitted yet'}</div></div>`;
-    return;
-  }
-  container.innerHTML=clientFlags.slice().reverse().map(flag=>`
-    <div class="card" style="margin-bottom:1rem">
-      <div class="card-header">
-        <div><div class="card-title">${flag.property}</div><div class="card-sub">${flag.type} concern · ${flag.created}</div></div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span class="badge ${flag.status==='Open'?'b-hold':'b-approved'}">${flag.status==='Open'?'Open flag':'Resolved'}</span>
-          ${flag.status==='Open'&&(role==='pm'||role==='admin')?`<button class="btn" style="font-size:11px" onclick="resolveFlag('${flag.id}')"><i class="ti ti-check"></i>Resolve</button>`:''}
-        </div>
-      </div>
-      ${flag.threads.map(t=>`<div class="comment-item">
-        <div class="comment-av ${t.isClient?'c-av-client':'c-av-team'}">${t.initials}</div>
-        <div><div><span class="comment-author">${t.author}</span><span class="comment-time">${t.time}</span></div><div class="comment-text">${t.text}</div></div>
-      </div>`).join('')}
-      <div class="comment-input-row">
-        <textarea class="comment-textarea" id="reply-input-${flag.id}" placeholder="Add a reply..."></textarea>
-        <button class="btn btn-primary" onclick="addReply('${flag.id}')"><i class="ti ti-send"></i>Send</button>
-      </div>
-    </div>`).join('');
-}
-
-function addReply(flagId){
-  const input=document.getElementById('reply-input-'+flagId);
+async function addReply(threadId){
+  const input=document.getElementById('reply-input-'+threadId);
   const text=input.value.trim();if(!text)return;
-  const flag=clientFlags.find(f=>f.id===flagId);if(!flag)return;
-  const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
   const isClient=role==='client';
   const clientLabel=demoMode?'Demo Retail — Capital Projects':'Park Hotels — Capital Projects';
-  const clientInitials=demoMode?'DR':'PH';
-  flag.threads.push({
-    author:isClient?clientLabel:'Pulse — Project Manager',
-    initials:isClient?clientInitials:'PM',
-    isClient,text,time:dateStr
-  });
+  const now=new Date().toISOString();
+  const thread=(window.CLIENT_COMMENTS||[]).filter(c=>c.threadId===threadId);
+  const flagRecord=thread[0];
+  const record={id:'cc-'+Date.now(),property:flagRecord?.property||'',threadId,authorRole:isClient?'client':'pm',authorName:isClient?clientLabel:'Pulse — Project Manager',message:text,flagType:flagRecord?.flagType||'General',status:flagRecord?.status||'Open',visibility:flagRecord?.visibility||'PM Only',created:now};
+  if(!demoMode){
+    const res=await atCreate('Client Comments',{'Property Name':record.property,'Thread ID':threadId,'Author Role':record.authorRole,'Author Name':record.authorName,'Message':text,'Flag Type':record.flagType,'Status':record.status,'Visibility':record.visibility,'Created':now});
+    record.id=res?.records?.[0]?.id||record.id;
+  }
+  window.CLIENT_COMMENTS=(window.CLIENT_COMMENTS||[]).concat([record]);
   input.value='';
   renderCommentsView();
 }
 
-function resolveFlag(flagId){
-  const flag=clientFlags.find(f=>f.id===flagId);
-  if(flag)flag.status='Resolved';
+async function resolveFlag(threadId){
+  const thread=(window.CLIENT_COMMENTS||[]).filter(c=>c.threadId===threadId);
+  thread.forEach(c=>c.status='Resolved');
+  if(!demoMode){for(const c of thread){await atUpdate('Client Comments',c.id,{'Status':'Resolved'});}}
   renderCommentsView();
   showToast('Flag marked as resolved','success');
 }
 
-// Legacy stub
+function renderCommentsView(){
+  const isClient=role==='client';
+  const isPM=role==='pm'||role==='admin';
+  const flagArea=document.getElementById('comments-new-flag-area');
+  if(flagArea)flagArea.style.display=isClient?'':'none';
+  const allComments=window.CLIENT_COMMENTS||[];
+  const threads={};
+  allComments.forEach(c=>{
+    if(role==='consultant'&&c.visibility!=='VDA Team')return;
+    if(!threads[c.threadId])threads[c.threadId]=[];
+    threads[c.threadId].push(c);
+  });
+  const threadList=Object.values(threads).sort((a,b)=>new Date(b[0].created)-new Date(a[0].created));
+  const openFlags=threadList.filter(t=>t[0]?.status==='Open');
+  const alertEl=document.getElementById('comments-flags-alert');
+  if(alertEl){
+    if(openFlags.length>0){alertEl.style.display='flex';document.getElementById('comments-flags-text').innerHTML=`<strong>${openFlags.length} open flag${openFlags.length>1?'s':''}</strong> — ${openFlags.map(t=>`${t[0].property} (${t[0].flagType})`).join(' · ')}`;
+    }else{alertEl.style.display='none';}
+  }
+  const container=document.getElementById('comments-threads-container');if(!container)return;
+  if(threadList.length===0){
+    container.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-message-circle-off"></i><div class="empty-state-title">No comments yet</div><div class="empty-state-sub">${isClient?'Use &#34;Raise a flag&#34; above to start a thread':'No client flags submitted yet'}</div></div>`;
+    return;
+  }
+  const clientInitials=demoMode?'DR':'PH';
+  container.innerHTML=threadList.map(thread=>{
+    const flag=thread[0];const threadId=flag.threadId;const isOpen=flag.status==='Open';
+    return `<div class="card" style="margin-bottom:1rem">
+      <div class="card-header">
+        <div><div class="card-title">${flag.property}</div><div class="card-sub">${flag.flagType} concern · ${new Date(flag.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:10px;color:var(--gray-mid)">${flag.visibility}</span>
+          <span class="badge ${isOpen?'b-hold':'b-approved'}">${isOpen?'Open':'Resolved'}</span>
+          ${isOpen&&isPM?`<button class="btn" style="font-size:11px" onclick="resolveFlag('${threadId}')"><i class="ti ti-check"></i>Resolve</button>`:''}
+        </div>
+      </div>
+      ${thread.map(c=>`<div class="comment-item">
+        <div class="comment-av ${c.authorRole==='client'?'c-av-client':'c-av-team'}">${c.authorRole==='client'?clientInitials:'PM'}</div>
+        <div><div><span class="comment-author">${c.authorName}</span><span class="comment-time">${new Date(c.created).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span></div><div class="comment-text">${c.message}</div></div>
+      </div>`).join('')}
+      <div class="comment-input-row">
+        <textarea class="comment-textarea" id="reply-input-${threadId}" placeholder="Add a reply..."></textarea>
+        <button class="btn btn-primary" onclick="addReply('${threadId}')"><i class="ti ti-send"></i>Send</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function addComment(){const input=document.getElementById('comment-input');if(input)input.value='';}
+
 
 // REPORT
 function renderReport(){
