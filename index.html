@@ -689,7 +689,7 @@ async function loadAllData() {
         escalatorCount: parseInt(r.fields['Escalator Count'])||0,
         liftCount: parseInt(r.fields['Wheelchair Lift Count'])||0,
         otherCount: parseInt(r.fields['Other Count'])||0,
-        vda: r.fields['VDA Project #']||'—',
+        vda: r.fields['VDA Project Number']||'—',
         type: r.fields['Asset Type']||'Non-core',
         budget: r.fields['Project Budget']||0,
         comment: r.fields['Comments']||'',
@@ -924,7 +924,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v11c.1 · elevatorpulse.com</div>
+    <div class="login-version">PULSE v11d · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1209,7 +1209,7 @@ window.PROPERTIES_SEED = [
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Comments / Status Notes</label><textarea class="form-textarea" id="ep-notes" placeholder="Any notes about this property..." rows="3"></textarea></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
-      <button class="btn btn-primary" style="flex:1" onclick="saveEditProperty()"><i class="ti ti-check"></i>Save Changes</button>
+      <button class="btn btn-primary" onclick="saveEditProperty()"><i class="ti ti-check"></i>Save Changes</button>
       <button class="btn" onclick="closeEditPropertyPanel()">Cancel</button>
     </div>
   </div>
@@ -1420,6 +1420,8 @@ window.PROPERTIES_SEED = [
                   <div class="card-header"><div><div class="card-title">Budget Performance</div><div class="card-sub" id="budget-perf-sub">Project Budget vs Billed YTD</div></div></div>
                   <div id="budget-perf-detail"></div>
                 </div>
+              </div>
+              <div>
                 <div class="card">
                   <div class="card-header"><div class="card-title">Billing History</div></div>
                   <div id="billing-history-list"></div>
@@ -1434,8 +1436,8 @@ window.PROPERTIES_SEED = [
                 <div class="form-group"><label class="form-label">Entry date</label><input class="form-input" type="date" id="billing-date-input"></div>
               </div>
               <div class="form-group"><label class="form-label">Notes (optional)</label><input class="form-input" type="text" id="billing-notes-input" placeholder="e.g. Invoice #003, billing cycle 3"></div>
-              <div style="display:flex;gap:8px;margin-top:8px">
-                <button class="btn btn-primary" onclick="saveBillingEntry()"><i class="ti ti-check"></i>Save entry</button>
+              <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
+                <button class="btn btn-primary" onclick="saveBillingEntry()"><i class="ti ti-check"></i>Save</button>
                 <button class="btn" onclick="document.getElementById('billing-entry-form').style.display='none'">Cancel</button>
               </div>
             </div>
@@ -1444,9 +1446,10 @@ window.PROPERTIES_SEED = [
           <div id="prop-tab-phases" class="tab-content">
             <div class="card">
               <div class="card-header">
-                <div><div class="card-title">Unit Phases</div><div class="card-sub">Physical Construction Phases</div></div>
+                <div><div class="card-title">Modernization Construction Project</div><div class="card-sub" id="phases-duration-sub">—</div></div>
                 <button class="btn" id="unit-add-phase-btn" onclick="openAddPhaseForm()" style="display:none"><i class="ti ti-plus"></i>Add phase</button>
               </div>
+              <div id="phases-date-summary" style="display:flex;gap:24px;padding:10px 0 4px;flex-wrap:wrap"></div>
               <div id="unit-progress-detail"></div>
             </div>
             <!-- Add phase form -->
@@ -2938,6 +2941,31 @@ function renderBudgetTab(p){
   const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
   const variance=pctBilled-pctComplete;
 
+  // Project duration calculation from phase dates
+  const phasesWithDates=phases.filter(u=>u.plannedStart||u.actualStart);
+  const startDates=phases.map(u=>u.actualStart||u.plannedStart).filter(Boolean).map(d=>new Date(d));
+  const endDates=phases.map(u=>u.actualCompletion||u.plannedCompletion).filter(Boolean).map(d=>new Date(d));
+  const earliestStart=startDates.length>0?new Date(Math.min(...startDates)):null;
+  const latestEnd=endDates.length>0?new Date(Math.max(...endDates)):null;
+  let durationText='—';
+  if(earliestStart&&latestEnd){
+    const diffMs=latestEnd-earliestStart;
+    const diffWeeks=Math.round(diffMs/(1000*60*60*24*7));
+    const diffMonths=Math.round(diffMs/(1000*60*60*24*30.44));
+    durationText=diffMonths>=3?`${diffMonths} months`:diffWeeks===1?`1 week`:`${diffWeeks} weeks`;
+  }
+  const fmtDate=d=>d?d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+  // Update phase summary UI
+  const durSub=document.getElementById('phases-duration-sub');
+  if(durSub)durSub.textContent=durationText!=='—'?`Total Project Duration: ${durationText}`:'No phase dates logged yet';
+  const dateSummary=document.getElementById('phases-date-summary');
+  if(dateSummary){
+    dateSummary.innerHTML=phases.length>0?`
+      <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'DM Mono',monospace;display:block;margin-bottom:2px">Project Start</span><span style="font-weight:600;color:var(--navy)">${fmtDate(earliestStart)}</span></div>
+      <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'DM Mono',monospace;display:block;margin-bottom:2px">Project End</span><span style="font-weight:600;color:var(--navy)">${fmtDate(latestEnd)}</span></div>
+      <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'DM Mono',monospace;display:block;margin-bottom:2px">Total Duration</span><span style="font-weight:600;color:var(--blue-dark)">${durationText}</span></div>`:'';
+  }
+
   // Budget performance card
   document.getElementById('budget-perf-detail').innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
@@ -3155,7 +3183,9 @@ async function saveBillingModal(){
   const date=document.getElementById('bm-date').value;
   const invoiceMonth=document.getElementById('bm-invoice-month').value.trim();
   const notes=document.getElementById('bm-notes').value.trim();
-  if(ytd===null||!date){showToast('Please enter a Billed YTD amount and date','warn');return;}
+  // Allow budget update without a billing entry
+  if(budget===null&&ytd===null){showToast('Please enter a Project Budget or Billed YTD amount','warn');return;}
+  if(ytd!==null&&!date){showToast('Please enter an entry date for the billing entry','warn');return;}
   // Update project budget if a value was entered (including 0)
   if(budget!==null&&budget!==currentProp.budget){
     currentProp.budget=budget;
@@ -3164,25 +3194,30 @@ async function saveBillingModal(){
       console.log('Budget update result:',budRes);
     }
   }
-  // Save billing entry with correct Airtable field names
-  const newEntry={id:'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,invoiceMonth,notes,loggedBy:'PM User'};
-  if(!demoMode){
-    const res=await atCreate('Billing Log',{
-      'Property Name':currentProp.n,
-      '$ Amount':ytd,
-      'Billing date':date,
-      'Invoice Month':invoiceMonth||'',
-      'Notes':notes||'',
-      'Logged By':'PM User',
-    });
-    console.log('Billing Log create result:',JSON.stringify(res)?.slice(0,200));
-    newEntry.id=res?.records?.[0]?.id||newEntry.id;
+  // Only log a billing entry if YTD was provided
+  if(ytd!==null){
+    // Save billing entry with correct Airtable field names
+    const newEntry={id:'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,invoiceMonth,notes,loggedBy:'PM User'};
+    if(!demoMode){
+      const res=await atCreate('Billing Log',{
+        'Property Name':currentProp.n,
+        '$ Amount':ytd,
+        'Billing date':date,
+        'Invoice Month':invoiceMonth||'',
+        'Notes':notes||'',
+        'Logged By':'PM User',
+      });
+      console.log('Billing Log create result:',JSON.stringify(res)?.slice(0,200));
+      newEntry.id=res?.records?.[0]?.id||newEntry.id;
+    }
+    window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
+    showToast('Billing entry saved','success');
+  } else {
+    showToast('Project budget updated','success');
   }
-  window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
   closeBillingModal();
   renderPropertyView(currentProp);
   switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));
-  showToast('Billing entry saved','success');
 }
 
 // ── CHARTS ────────────────────────────────────────────────────────────
@@ -3919,6 +3954,7 @@ async function saveEditProperty(){
   const p=currentProp;if(!p)return;
   const name=document.getElementById('ep-name').value.trim();
   if(!name){showToast('Property name is required','warn');return;}
+  const vdaNum=document.getElementById('ep-vda').value.trim();
   const fields={
     'Property Name':name,
     'Address':document.getElementById('ep-addr').value.trim(),
@@ -3928,7 +3964,7 @@ async function saveEditProperty(){
     'Schedule':document.getElementById('ep-schedule').value,
     'Elevator Company':document.getElementById('ep-ec').value.trim(),
     'VDA Consultant':document.getElementById('ep-consultant').value.trim(),
-    'VDA Project #':document.getElementById('ep-vda').value.trim(),
+    'VDA Project Number':vdaNum,
     'Comments':document.getElementById('ep-notes').value.trim(),
   };
   const budget=parseFloat(document.getElementById('ep-budget').value);
@@ -3946,7 +3982,7 @@ async function saveEditProperty(){
   // Update local prop object
   p.n=name;p.addr=fields['Address'];p.s=fields['State'];p.type=fields['Asset Type'];
   p.st=fields['Status'];p.r=fields['Schedule'];p.ec=fields['Elevator Company'];
-  p.v=fields['VDA Consultant'];p.vda=fields['VDA Project #'];p.comment=fields['Comments'];
+  p.v=fields['VDA Consultant'];p.vda=vdaNum||p.vda;p.comment=fields['Comments'];
   if(!isNaN(budget)&&budget>0)p.budget=budget;
   if(!isNaN(units))p.units=units;
   if(!isNaN(elevators))p.elevatorCount=elevators;
@@ -3974,7 +4010,7 @@ async function saveNewProperty(){
     'Schedule':document.getElementById('ap-schedule').value,
     'Elevator Company':document.getElementById('ap-ec').value.trim()||'TBD',
     'VDA Consultant':document.getElementById('ap-consultant').value.trim()||'TBD',
-    'VDA Project #':document.getElementById('ap-vda').value.trim(),
+    'VDA Project Number':document.getElementById('ap-vda').value.trim(),
     'Project Budget':parseFloat(document.getElementById('ap-budget').value)||0,
     'Total Units':parseInt(document.getElementById('ap-units').value)||0,
     'Elevator Count':parseInt(document.getElementById('ap-elevators').value)||0,
@@ -3992,7 +4028,7 @@ async function saveNewProperty(){
     units:fields['Total Units'],unitDesc:'',
     elevatorCount:fields['Elevator Count'],escalatorCount:fields['Escalator Count'],
     liftCount:fields['Wheelchair Lift Count'],otherCount:fields['Other Count'],
-    vda:fields['VDA Project #'],type:fields['Asset Type'],
+    vda:fields['VDA Project Number'],type:fields['Asset Type'],
     budget:fields['Project Budget'],comment:fields['Comments'],
     addr:fields['Address'],ms:[]
   };
