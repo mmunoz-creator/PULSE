@@ -589,6 +589,11 @@ async function atUpdate(table, id, fields) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields })
     });
+    if(!r.ok){
+      const errText=await r.text();
+      console.error(`atUpdate ${table} ${id} failed (${r.status}):`, errText);
+      return null;
+    }
     return await r.json();
   } catch(e) { console.error('atUpdate error:', e); return null; }
 }
@@ -1175,6 +1180,9 @@ window.PROPERTIES_SEED = [
     <button class="btn" onclick="closeAddPropertyModal()">Cancel</button>
   </div>
 </div>
+
+<!-- PORTAL -->
+<div id="portal-screen">
   <div id="sidebar-overlay" onclick="closeSidebar()"></div>
   <nav class="sidebar" id="sidebar">
     <div class="sidebar-head">
@@ -2234,14 +2242,20 @@ function getMsComplete(propName){
 }
 
 async function autoPopulateMilestones(propName){
-  // Create all 18 milestones as Not Started if none exist for this property
   const existing=(window.MILESTONES||[]).filter(m=>m.property===propName);
   if(existing.length>0)return;
   showToast('Setting up milestones for '+propName+'...','info');
   const newMs=[];
   for(let i=0;i<MILESTONES_DEF.length;i++){
-    const fields={'Property Name':propName,'Milestone Number':i+1,'Milestone Name':MILESTONES_DEF[i],'Status':'Not Started','Planned Date':'','Actual Date':'','Notes':''};
+    // Only send fields with actual values — omit empty dates to avoid 422
+    const fields={
+      'Property Name':propName,
+      'Milestone Number':i+1,
+      'Milestone Name':MILESTONES_DEF[i],
+      'Status':'Not Started',
+    };
     const res=await atCreate('Milestones',fields);
+    console.log(`Milestone ${i+1} create:`,res?.records?.[0]?.id||'failed');
     const newId=res?.records?.[0]?.id||'ms-'+Date.now()+'-'+i;
     newMs.push({id:newId,property:propName,milestoneNumber:i+1,milestoneName:MILESTONES_DEF[i],status:'Not Started',plannedDate:'',actualDate:'',variance:null,notes:''});
   }
@@ -2251,17 +2265,26 @@ async function autoPopulateMilestones(propName){
 
 async function updateMilestone(msId,fields,propName){
   if(msId&&!demoMode){
-    await atUpdate('Milestones',msId,fields);
+    // Remove empty date strings — Airtable date fields reject empty strings
+    const cleanFields={};
+    Object.entries(fields).forEach(([k,v])=>{
+      if((k==='Planned Date'||k==='Actual Date')&&(v===''||v===null)){
+        cleanFields[k]=null; // explicitly null clears the date
+      } else if(v!==''||k==='Status'||k==='Notes'){
+        cleanFields[k]=v;
+      }
+    });
+    const result=await atUpdate('Milestones',msId,cleanFields);
+    console.log('Milestone update:',msId,'fields:',Object.keys(cleanFields).join(','),'result:',result?.id||JSON.stringify(result)?.slice(0,80));
   }
   // Update local cache
   const ms=(window.MILESTONES||[]).find(m=>m.id===msId);
   if(ms){
     if(fields['Status'])ms.status=fields['Status'];
-    if(fields['Planned Date']!==undefined)ms.plannedDate=fields['Planned Date'];
-    if(fields['Actual Date']!==undefined)ms.actualDate=fields['Actual Date'];
+    if(fields['Planned Date']!==undefined)ms.plannedDate=fields['Planned Date']||'';
+    if(fields['Actual Date']!==undefined)ms.actualDate=fields['Actual Date']||'';
     if(fields['Notes']!==undefined)ms.notes=fields['Notes'];
   }
-  // Refresh mini card % and milestone tab
   if(currentProp&&currentProp.n===propName){
     const msCompleteCount=getMsComplete(propName);
     const msCard=document.querySelector('.prop-mini-card:nth-child(3) .prop-mini-val');
