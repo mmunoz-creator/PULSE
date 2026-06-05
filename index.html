@@ -982,7 +982,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v12h · elevatorpulse.com</div>
+    <div class="login-version">PULSE v12i · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -3458,6 +3458,80 @@ function renderBudgetTab(p){
 }
 
 
+// ── PHASE STATUS DERIVATION ────────────────────────────────────────────
+function derivePhaseStatus(phaseId, propName, phaseName){
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName);
+  if(steps.length===0)return null; // no steps — use manual status
+  const activeSteps=steps.filter(s=>s.checked!==false); // respect checkbox selection
+  if(activeSteps.length===0)return null;
+  if(activeSteps.every(s=>s.status==='Complete'))return'Complete';
+  if(activeSteps.some(s=>s.status==='At Risk'))return'At Risk';
+  if(activeSteps.some(s=>s.status==='In Progress'))return'In Progress';
+  return'Not Started';
+}
+
+function getPhaseScheduleStatus(propName, phaseName){
+  const today=new Date();today.setHours(0,0,0,0);
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName&&s.checked!==false);
+  if(steps.length===0)return null;
+  // Check if any incomplete step is past its planned end date
+  const overdue=steps.some(s=>s.status!=='Complete'&&s.plannedEnd&&new Date(s.plannedEnd)<today);
+  if(overdue)return'Behind';
+  // Check if ahead: completed steps finished before planned end, or In Progress started before planned start
+  const inProgStep=steps.find(s=>s.status==='In Progress');
+  if(inProgStep&&inProgStep.actualStart&&inProgStep.plannedStart){
+    if(new Date(inProgStep.actualStart)<new Date(inProgStep.plannedStart))return'Ahead';
+  }
+  const completedEarly=steps.filter(s=>s.status==='Complete'&&s.actualEnd&&s.plannedEnd&&new Date(s.actualEnd)<new Date(s.plannedEnd));
+  if(completedEarly.length>0&&!overdue)return'Ahead';
+  return'On Track';
+}
+
+function getCurrentStep(propName, phaseName){
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName&&s.checked!==false).sort((a,b)=>a.stepOrder-b.stepOrder);
+  return steps.find(s=>s.status==='In Progress')||steps.find(s=>s.status==='At Risk')||null;
+}
+
+function renderPhaseStatusBadge(derivedStatus, scheduleStatus){
+  const status=derivedStatus||'Not Started';
+  if(status==='Complete')return`<span class="badge" style="background:var(--green-pale);color:var(--green)"><i class="ti ti-circle-check" style="font-size:11px;margin-right:2px"></i>Complete</span>`;
+  if(scheduleStatus==='Ahead')return`<span class="badge" style="background:var(--green-pale);color:var(--green)">Ahead</span>`;
+  if(scheduleStatus==='Behind'||status==='At Risk')return`<span class="badge b-behind">${status==='At Risk'?'At Risk':'Behind'}</span>`;
+  if(status==='In Progress')return`<span class="badge b-nip">In Progress</span>`;
+  return`<span class="badge b-nac">Not Started</span>`;
+}
+
+function renderStepLegend(propName, phaseName, isExpanded, phaseId){
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName&&s.checked!==false).sort((a,b)=>a.stepOrder-b.stepOrder);
+  if(steps.length===0)return'';
+  const statusDot={'Complete':'var(--green)','In Progress':'var(--blue-dark)','At Risk':'var(--red)','Not Started':'var(--gray-light)'};
+  const fmtD=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',year:'2-digit'}):'—';
+  const canPM=role==='pm'||role==='admin'||role==='consultant';
+  if(!isExpanded){
+    // Collapsed — show only current active step
+    const current=steps.find(s=>s.status==='In Progress')||steps.find(s=>s.status==='At Risk');
+    if(!current)return'';
+    return`<div style="margin-top:6px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid)">
+      <span style="width:8px;height:8px;border-radius:50%;background:${statusDot[current.status]};flex-shrink:0;display:inline-block"></span>
+      <span>Current: <strong style="color:var(--navy)">${current.stepName}</strong></span>
+      ${current.plannedEnd?`<span style="color:var(--gray-light)">· due ${fmtD(current.plannedEnd)}</span>`:''}
+    </div>`;
+  }
+  // Expanded — full list
+  return`<div style="margin-top:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em">Construction Steps</div>
+      ${canPM?`<button class="btn" style="font-size:9px;padding:2px 10px" onclick="openStepDatesForm('${phaseId}','${propName.replace(/'/g,"\\'")}','${phaseName.replace(/'/g,"\\'")}')"><i class="ti ti-edit" style="font-size:10px"></i> Edit Steps</button>`:''}
+    </div>
+    ${steps.map(s=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--gray-pale)">
+      <span style="width:9px;height:9px;border-radius:50%;background:${statusDot[s.status]||'var(--gray-light)'};flex-shrink:0;display:inline-block"></span>
+      <span style="font-size:11px;color:var(--navy);flex:1;font-weight:${s.status==='In Progress'?600:400}">${s.stepName}</span>
+      <span style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;white-space:nowrap">${fmtD(s.plannedStart)} – ${fmtD(s.plannedEnd)}</span>
+      ${s.actualEnd?`<span style="font-size:9px;color:var(--green)">✓ ${fmtD(s.actualEnd)}</span>`:''}
+    </div>`).join('')}
+  </div>`;
+}
+
 function renderPhasesTab(p){
   if(!p)return;
   const canPM=role==='pm'||role==='admin';
@@ -3499,40 +3573,52 @@ function renderPhasesTab(p){
       <div style="text-align:center;padding:0 10px"><div style="font-size:16px;font-weight:700;color:var(--gray-mid)">${unitsRemaining}</div><div style="font-size:9px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">Remaining</div></div>
       <div style="text-align:center;padding:0 10px"><div style="font-size:16px;font-weight:700;color:var(--navy)">${totalUnits}</div><div style="font-size:9px;color:var(--gray-mid);text-transform:uppercase;font-family:'DM Mono',monospace">Total</div></div>`;
   }
-  // Unit progress — phases only, no stats row
+  // Unit progress — collapsed/expanded phase cards
   const unitEl=document.getElementById('unit-progress-detail');
-  const statusColors={'Complete':'var(--green)','In Progress':'var(--blue-dark)','Not Started':'var(--gray-light)'};
-  const statusIcons={'Complete':'ti-circle-check','In Progress':'ti-loader','Not Started':'ti-circle'};
-  unitEl.innerHTML=`
-    ${phases.length===0?`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Phases Defined Yet. Click "Add phase" to set up the modernization sequence.':'No unit phases defined yet.'}</div>`:
-    phases.map(ph=>`
-      <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-          <div style="flex:1">
+  const fmtShort=d=>{try{return d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';}catch(e){return d||'—';}};
+  if(!unitEl)return;
+  if(phases.length===0){unitEl.innerHTML=`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Phases Defined. Click \"Add phase\" to set up the modernization sequence.':'No unit phases defined yet.'}</div>`;return;}
+  unitEl.innerHTML=phases.map(ph=>{
+    const derivedStatus=derivePhaseStatus(ph.id,p.n,ph.phase)||ph.status;
+    const schedStatus=getPhaseScheduleStatus(p.n,ph.phase);
+    const statusBadge=renderPhaseStatusBadge(derivedStatus,schedStatus);
+    const phCardId='ph-card-'+ph.id.replace(/[^a-zA-Z0-9]/g,'_');
+    return `<div id="${phCardId}" style="border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;overflow:hidden">
+      <div style="padding:12px 14px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;cursor:pointer;background:white" onclick="togglePhaseCard('${phCardId}')">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px">
             <div style="font-weight:600;font-size:13px;color:var(--navy)">${ph.phase}</div>
-            <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">
-              ${ph.productType?`<span style="background:var(--blue-pale);color:var(--blue-dark);font-size:9px;font-weight:600;padding:1px 6px;border-radius:10px;margin-right:4px">${ph.productType}</span>`:''}
-              ${ph.unitNames?`<span style="font-style:italic">${ph.unitNames}</span> · `:''}
-              ${ph.units} unit${ph.units!==1?'s':''} · ${ph.plannedStart||'—'} → ${ph.plannedCompletion||'—'}
-            </div>
-            ${ph.actualStart?`<div style="font-size:11px;color:var(--gray-mid)">Started: ${ph.actualStart}${ph.actualCompletion?' · Completed: '+ph.actualCompletion:''}</div>`:''}
-            ${ph.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;font-style:italic">${ph.notes}</div>`:''}
-            ${renderStepTimeline(ph,p.n)}
+            ${ph.productType?`<span style="background:var(--blue-pale);color:var(--blue-dark);font-size:9px;font-weight:600;padding:1px 6px;border-radius:10px">${ph.productType}</span>`:''}
+            ${statusBadge}
           </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-            <span style="font-size:11px;font-weight:600;color:${statusColors[ph.status]||'var(--gray-mid)'}"><i class="ti ${statusIcons[ph.status]||'ti-circle'}" style="font-size:12px;margin-right:3px"></i>${ph.status}</span>
-            ${canPM||canConsultant?`<select class="form-select" style="font-size:10px;padding:2px 6px;height:auto" onchange="updatePhaseStatus('${ph.id}',this.value,'${p.n.replace(/'/g,"\\'")}')">
-              <option${ph.status==='Not Started'?' selected':''}>Not Started</option>
-              <option${ph.status==='In Progress'?' selected':''}>In Progress</option>
-              <option${ph.status==='Complete'?' selected':''}>Complete</option>
-            </select>`:''}
-            ${canPM?`<div style="display:flex;gap:4px;margin-top:2px">
-              <button class="btn" style="font-size:10px;padding:2px 8px" onclick="openEditPhaseForm('${ph.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button>
-              <button class="btn" style="font-size:10px;padding:2px 8px;color:var(--red)" onclick="deletePhase('${ph.id}','${p.n.replace(/'/g,"\\'")}')">Delete</button>
-            </div>`:''}
+          <div style="font-size:11px;color:var(--gray-mid)">
+            ${ph.unitNames?`<span style="font-style:italic">${ph.unitNames}</span> · `:''}
+            ${fmtShort(ph.plannedStart)} → ${fmtShort(ph.plannedCompletion)}
           </div>
+          ${renderStepLegend(p.n,ph.phase,false,ph.id)}
         </div>
-      </div>`).join('')}`;
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
+          <i class="ti ti-chevron-down ph-chevron" style="font-size:16px;color:var(--gray-mid);transition:transform .2s"></i>
+          ${canPM?`<div style="display:flex;gap:4px">
+            <button class="btn" style="font-size:10px;padding:2px 8px" onclick="event.stopPropagation();openEditPhaseForm('${ph.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button>
+            <button class="btn" style="font-size:10px;padding:2px 8px;color:var(--red)" onclick="event.stopPropagation();deletePhase('${ph.id}','${p.n.replace(/'/g,"\\'")}')">Delete</button>
+          </div>`:''}
+        </div>
+      </div>
+      <div class="ph-body" style="display:none;padding:0 14px 12px;border-top:1px solid var(--border);background:var(--gray-xpale)">
+        ${ph.actualStart?`<div style="font-size:11px;color:var(--gray-mid);margin-top:8px">Started: ${ph.actualStart}${ph.actualCompletion?' · Completed: '+ph.actualCompletion:''}</div>`:''}
+        ${renderStepLegend(p.n,ph.phase,true,ph.id)}
+        ${canPM||canConsultant?`<div style="margin-top:10px;display:flex;gap:6px;align-items:center">
+          <span style="font-size:10px;color:var(--gray-light)">Override:</span>
+          <select class="form-select" style="font-size:10px;padding:2px 6px;height:auto;width:auto" onchange="updatePhaseStatus('${ph.id}',this.value,'${p.n.replace(/'/g,"\\'")}')">
+            <option${ph.status==='Not Started'?' selected':''}>Not Started</option>
+            <option${ph.status==='In Progress'?' selected':''}>In Progress</option>
+            <option${ph.status==='Complete'?' selected':''}>Complete</option>
+          </select>
+        </div>`:''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 
@@ -3595,31 +3681,35 @@ function openStepDatesForm(phaseId, propName, phaseName){
   const template=PHASE_MILESTONE_TEMPLATES[ph.productType]||ph.phaseMilestones||[];
   const merged=template.map((name,i)=>{
     const ex=existingSteps.find(s=>s.stepName===name);
-    return ex||{id:'',stepName:name,stepOrder:i+1,plannedStart:'',plannedEnd:'',actualStart:'',status:'Not Started'};
+    return ex||{id:'',stepName:name,stepOrder:i+1,plannedStart:'',plannedEnd:'',actualStart:'',actualEnd:'',status:'Not Started',checked:true};
   });
-  const rows=merged.map((s,i)=>`<div style="display:grid;grid-template-columns:1fr 105px 105px 105px 88px;gap:5px;align-items:center;padding:5px 0;border-bottom:1px solid var(--gray-pale)" data-step-idx="${i}" data-step-id="${s.id}" data-step-name="${s.stepName.replace(/"/g,'&quot;')}">
+  const rows=merged.map((s,i)=>`<div style="display:grid;grid-template-columns:28px 1fr 95px 95px 95px 95px 82px;gap:4px;align-items:center;padding:5px 0;border-bottom:1px solid var(--gray-pale)" data-step-idx="${i}" data-step-id="${s.id||''}" data-step-name="${s.stepName.replace(/"/g,'&quot;')}">
+    <input type="checkbox" class="step-apply-check" ${s.checked===false?'':'checked'} style="width:14px;height:14px;cursor:pointer" title="Include this step">
     <div style="font-size:11px;font-weight:500;color:var(--navy)">${s.stepName}</div>
-    <input type="date" class="form-input step-planned-start" style="font-size:10px;padding:3px 4px;height:26px" value="${s.plannedStart}">
-    <input type="date" class="form-input step-planned-end" style="font-size:10px;padding:3px 4px;height:26px" value="${s.plannedEnd}">
-    <input type="date" class="form-input step-actual-start" style="font-size:10px;padding:3px 4px;height:26px" value="${s.actualStart}">
-    <select class="form-select step-status" style="font-size:10px;padding:2px 4px;height:26px">
+    <input type="date" class="form-input step-planned-start" style="font-size:10px;padding:2px 3px;height:24px" value="${s.plannedStart||''}">
+    <input type="date" class="form-input step-planned-end" style="font-size:10px;padding:2px 3px;height:24px" value="${s.plannedEnd||''}">
+    <input type="date" class="form-input step-actual-start" style="font-size:10px;padding:2px 3px;height:24px" value="${s.actualStart||''}">
+    <input type="date" class="form-input step-actual-end" style="font-size:10px;padding:2px 3px;height:24px" value="${s.actualEnd||''}">
+    <select class="form-select step-status" style="font-size:10px;padding:2px 3px;height:24px">
       ${['Not Started','In Progress','Complete','At Risk'].map(st=>`<option${s.status===st?' selected':''}>${st}</option>`).join('')}
     </select>
   </div>`).join('');
   const overlay=document.createElement('div');
   overlay.id='step-dates-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
-  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:720px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:860px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
     <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div><div style="font-size:14px;font-weight:700;color:var(--navy)">Step Dates — ${phaseName}</div><div style="font-size:11px;color:var(--gray-mid)">${propName} · ${ph.productType||''}</div></div>
+      <div><div style="font-size:14px;font-weight:700;color:var(--navy)">Edit Steps — ${phaseName}</div><div style="font-size:11px;color:var(--gray-mid)">${propName} · ${ph.productType||''} · Check steps that apply to this scope</div></div>
       <button onclick="document.getElementById('step-dates-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
     </div>
     <div style="overflow-y:auto;padding:14px 20px;flex:1">
-      <div style="display:grid;grid-template-columns:1fr 105px 105px 105px 88px;gap:5px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:28px 1fr 95px 95px 95px 95px 82px;gap:4px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+        <div></div>
         <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Step</div>
         <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Plan Start</div>
         <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Plan End</div>
-        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Actual Start</div>
+        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Act. Start</div>
+        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Act. End</div>
         <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Status</div>
       </div>
       ${rows}
@@ -3639,25 +3729,37 @@ async function saveStepDates(phaseId, propName, phaseName){
     const stepName=row.dataset.stepName;
     const existingId=row.dataset.stepId||'';
     const stepOrder=parseInt(row.dataset.stepIdx)+1;
+    const checked=row.querySelector('.step-apply-check')?.checked!==false;
     const plannedStart=row.querySelector('.step-planned-start').value||null;
     const plannedEnd=row.querySelector('.step-planned-end').value||null;
     const actualStart=row.querySelector('.step-actual-start').value||null;
+    const actualEnd=row.querySelector('.step-actual-end').value||null;
     const status=row.querySelector('.step-status').value;
-    const fields={'Property Name':propName,'Phase Name':phaseName,'Step Name':stepName,'Step Order':stepOrder,'Planned Start':plannedStart,'Planned End':plannedEnd,'Actual Start':actualStart,'Status':status};
+    const fields={'Property Name':propName,'Phase Name':phaseName,'Step Name':stepName,'Step Order':stepOrder,'Planned Start':plannedStart,'Planned End':plannedEnd,'Actual Start':actualStart,'Actual End':actualEnd,'Status':status};
     if(existingId){
       if(!demoMode)await atUpdate('Phase Steps',existingId,fields);
       const ex=window.PHASE_STEPS.find(x=>x.id===existingId);
-      if(ex)Object.assign(ex,{plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',status,stepOrder});
+      if(ex)Object.assign(ex,{plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',actualEnd:actualEnd||'',status,stepOrder,checked});
     } else {
       const res=demoMode?null:await atCreate('Phase Steps',fields);
       const newId=res?.records?.[0]?.id||'step_'+Date.now()+'_'+stepOrder;
-      window.PHASE_STEPS.push({id:newId,property:propName,phaseName,stepName,stepOrder,plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',actualEnd:'',status,notes:''});
+      window.PHASE_STEPS.push({id:newId,property:propName,phaseName,stepName,stepOrder,plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',actualEnd:actualEnd||'',status,notes:'',checked});
     }
   }
   document.getElementById('step-dates-overlay')?.remove();
   if(currentProp)renderPhasesTab(currentProp);
   showToast('Step dates saved','success');
 }
+function togglePhaseCard(cardId){
+  const card=document.getElementById(cardId);if(!card)return;
+  const body=card.querySelector('.ph-body');
+  const chevron=card.querySelector('.ph-chevron');
+  if(!body)return;
+  const isOpen=body.style.display!=='none';
+  body.style.display=isOpen?'none':'block';
+  if(chevron)chevron.style.transform=isOpen?'':'rotate(180deg)';
+}
+
 function openBillingLogForm(){
   const form=document.getElementById('billing-entry-form');
   form.style.display='block';
@@ -4882,6 +4984,7 @@ function docItemHtml(d){
   const isClosedAction=d.subfolder==='Closed Actions';
   const isMeetingMinutes=d.subfolder==='Meeting Minutes';
   const isFieldUpdate=d.subfolder==='Field Updates';
+  const canPreview=isFieldUpdate||isMeetingMinutes;
   return `<div class="doc-item" ${isClosedAction?`data-action-id="${d._actionId||''}" data-doc-id="${d.id}"`:''}>
     ${isClosedAction?`<input type="checkbox" class="closed-action-check" data-doc-id="${d.id}" style="margin-right:8px;flex-shrink:0" onchange="updateClosedActionSelection()">`:''}
     <div class="doc-item-icon" style="background:${st.bg}"><i class="ti ${st.icon}" style="font-size:18px;color:${st.color}"></i></div>
@@ -4890,6 +4993,7 @@ function docItemHtml(d){
       <div class="doc-meta">${d.type} · ${d.uploaded}${d.uploadedBy?' · '+d.uploadedBy:''}${d.notes?' · '+d.notes:''}</div>
     </div>
     ${role!=='client'?`<span class="badge ${vc}" style="flex-shrink:0">${d.visibility}</span>`:''}
+    ${canPreview?`<button class="btn btn-icon" style="flex-shrink:0" onclick="previewDoc('${d.id}')" title="Preview"><i class="ti ti-eye"></i></button>`:''}
     ${(isFieldUpdate||isMeetingMinutes)?`<button class="btn btn-icon" style="flex-shrink:0" onclick="downloadDocRTF('${d.id}')" title="Download RTF"><i class="ti ti-download"></i></button>`:''}
     ${(role==='pm'||role==='admin')?`<button class="btn btn-icon" style="flex-shrink:0;background:var(--red-pale);border-color:#f7c1c1" onclick="deleteDoc('${d.id}','${d.name}')"><i class="ti ti-trash" style="color:var(--red)"></i></button>`:''}
   </div>`;
@@ -5117,6 +5221,64 @@ function downloadDocRTF(docId){
   }
   showToast('Source document not available for download','warn');
 }
+function previewDoc(docId){
+  const d=(window.DOCUMENTS_LIVE||[]).find(x=>x.id===docId);
+  if(!d)return;
+  let html='';
+  if(d.subfolder==='Field Updates'&&d._submissionId){
+    const s=submissions.find(x=>x.id===d._submissionId);
+    if(!s){showToast('Source record not found','warn');return;}
+    html=`<div style="font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px">PULSE</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:12px">Modernization Project Assurance · Weekly Field Update</div>
+      <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${s.property}</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">Week of ${s.week} · Submitted ${s.submittedAt}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
+        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant}</strong></div>
+        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${s.units||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${s.phase}</strong></div>
+        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status}</strong></div>
+        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType}</strong></div>
+        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus}</strong></div>
+        <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:${s.reviewStatus==='approved'?'var(--green)':'var(--amber)'}">${s.reviewStatus}</strong></div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
+      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${s.notes||'—'}</div>
+      ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Return Note:</strong> ${s.returnNote}</div>`:''}`;
+  } else if(d.subfolder==='Meeting Minutes'&&d._meetingId){
+    const m=meetings.find(x=>x.id===d._meetingId);
+    if(!m){showToast('Source record not found','warn');return;}
+    const propActions=actionItems.filter(a=>a.meetingId===d._meetingId);
+    html=`<div style="font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px">PULSE</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:12px">Modernization Project Assurance · Meeting Minutes</div>
+      <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${m.property}</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">${m.type} · ${m.date} · ${m.format||''}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
+        ${m.elevco?`<div><span style="color:var(--gray-mid)">Elevator Co:</span> <strong>${m.elevco}</strong></div>`:''}
+        ${m.attVDA?`<div><span style="color:var(--gray-mid)">VDA Team:</span> <strong>${m.attVDA}</strong></div>`:''}
+        ${m.attElev?`<div><span style="color:var(--gray-mid)">Elev. Co:</span> <strong>${m.attElev}</strong></div>`:''}
+        ${m.attClient?`<div><span style="color:var(--gray-mid)">Client:</span> <strong>${m.attClient}</strong></div>`:''}
+      </div>
+      ${m.agenda?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Agenda</div><div style="font-size:13px;line-height:1.7;background:var(--gray-xpale);padding:12px;border-radius:6px">${m.agenda}</div></div>`:''}
+      ${m.notes?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Discussion Notes</div><div style="font-size:13px;line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${m.notes}</div></div>`:''}
+      ${propActions.length>0?`<div><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Action Items</div>${propActions.map(a=>`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-top:4px;flex-shrink:0"></div><div><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">Owner: ${a.owner} · Due: ${a.due} · ${a.priority}</span></div></div>`).join('')}</div>`:''}`;
+  } else {showToast('Preview not available','warn');return;}
+  const overlay=document.createElement('div');
+  overlay.id='doc-preview-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:640px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:13px;font-weight:600;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${d.name}</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn" style="font-size:11px" onclick="downloadDocRTF('${docId}')"><i class="ti ti-download"></i>Download</button>
+        <button onclick="document.getElementById('doc-preview-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;padding:20px;flex:1">${html}</div>
+    <div style="padding:10px 20px;border-top:1px solid var(--border);font-size:10px;color:var(--gray-light)">PULSE · ${d.uploadedBy||''} · ${d.uploaded||''} · Confidential</div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
 
 function renderPropDocFolder(p){
   const el=document.getElementById('prop-single-folder');if(!el)return;
