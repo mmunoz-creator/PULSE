@@ -431,10 +431,13 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   .sidebar,.mobile-topbar,.page-header,.no-print{display:none!important}
   .main{margin-left:0!important}
   #view-report{display:block!important}
-  [id^="view-"]:not(#view-report){display:none!important}
+  #view-dashboard.print-active{display:block!important}
+  [id^="view-"]:not(#view-report):not(#view-dashboard.print-active){display:none!important}
   body{background:white}
   .report-page{max-width:100%;box-shadow:none}
   .report-header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .stat-card,.card{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid}
+  .two-col{display:grid!important;grid-template-columns:1fr 1fr!important}
 }
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%)}
@@ -807,6 +810,9 @@ async function loadAllData() {
       plannedCompletion: r.fields['Planned Completion']||'',
       actualCompletion: r.fields['Actual Completion']||'',
       notes: r.fields['Notes']||'',
+      productType: r.fields['Product Type']||'',
+      unitNames: r.fields['Unit Names']||'',
+      phaseMilestones: r.fields['Phase Milestones']?r.fields['Phase Milestones'].split(',').map(s=>s.trim()).filter(Boolean):[],
     }));
     // Billing Log — YTD snapshots per property
     window.BILLING_LOG = billingLog.map(r=>({
@@ -954,7 +960,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v12f · elevatorpulse.com</div>
+    <div class="login-version">PULSE v12g · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1273,10 +1279,9 @@ window.PROPERTIES_SEED = [
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Intelligence</div>
-        <button class="nav-item" onclick="gotoView('reports',this)"><i class="ti ti-chart-bar"></i>Analytics</button>
+        <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Charts</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Report</button>
-        <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
       </div>
     </div>
@@ -1298,10 +1303,9 @@ window.PROPERTIES_SEED = [
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Intelligence</div>
-        <button class="nav-item" onclick="gotoView('reports',this)"><i class="ti ti-chart-bar"></i>Analytics</button>
+        <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Charts</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Report</button>
-        <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
       </div>
     </div>
@@ -1323,8 +1327,8 @@ window.PROPERTIES_SEED = [
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Intelligence</div>
-        <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Report</button>
         <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
+        <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Report</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
       </div>
     </div>
@@ -1342,10 +1346,9 @@ window.PROPERTIES_SEED = [
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Intelligence</div>
-        <button class="nav-item" onclick="gotoView('reports',this)"><i class="ti ti-chart-bar"></i>Analytics</button>
+        <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Charts</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Report</button>
-        <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
       </div>
     </div>
@@ -1372,10 +1375,10 @@ window.PROPERTIES_SEED = [
       <!-- DASHBOARD -->
       <div id="view-dashboard">
         <div class="page-header">
-          <div class="page-header-left"><h1>Portfolio dashboard</h1><p id="dash-sub">Park Hotels &amp; Resorts · Elevator Modernization Program</p></div>
-          <div class="header-actions">
+          <div class="page-header-left"><h1>Portfolio Dashboard</h1><p id="dash-sub">Park Hotels &amp; Resorts · Elevator Modernization Program</p></div>
+          <div class="header-actions no-print">
             <button class="btn" onclick="gotoView('report',null)"><i class="ti ti-file-analytics"></i><span>Report</span></button>
-            <button class="btn btn-primary"><i class="ti ti-download"></i><span>Export</span></button>
+            <button class="btn btn-primary" onclick="printDashboard()"><i class="ti ti-printer"></i><span>Print / PDF</span></button>
           </div>
         </div>
         <div class="page-body" id="dashboard-body">
@@ -1489,17 +1492,39 @@ window.PROPERTIES_SEED = [
             </div>
             <!-- Add phase form -->
             <div class="card" id="add-phase-form" style="display:none;margin-top:1rem">
-              <div class="card-header"><div class="card-title">Add unit phase</div></div>
+              <div class="card-header"><div class="card-title">Add Unit Phase</div></div>
               <div class="two-col" style="gap:12px">
-                <div class="form-group"><label class="form-label">Phase name</label><input class="form-input" type="text" id="phase-name-input" placeholder="e.g. PE1 &amp; PE2, Cars 1-2"></div>
-                <div class="form-group"><label class="form-label">Units in phase</label><input class="form-input" type="number" id="phase-units-input" placeholder="e.g. 2" min="1"></div>
+                <div class="form-group"><label class="form-label">Phase Name</label><input class="form-input" type="text" id="phase-name-input" placeholder="e.g. Phase 1, Phase 2"></div>
+                <div class="form-group"><label class="form-label">Product Type</label>
+                  <select class="form-input" id="phase-product-type" onchange="renderPhaseMilestoneSelector()">
+                    <option value="">Select product type…</option>
+                    <option>MRL Elevator</option>
+                    <option>Geared Elevator</option>
+                    <option>Hydraulic Elevator</option>
+                    <option>Escalator</option>
+                    <option>Wheelchair Lift</option>
+                  </select>
+                </div>
               </div>
               <div class="two-col" style="gap:12px">
-                <div class="form-group"><label class="form-label">Planned start</label><input class="form-input" type="date" id="phase-planned-start"></div>
-                <div class="form-group"><label class="form-label">Planned completion</label><input class="form-input" type="date" id="phase-planned-end"></div>
+                <div class="form-group"><label class="form-label">Unit Names <span style="font-size:10px;color:var(--gray-mid)">(must be concurrent)</span></label><input class="form-input" type="text" id="phase-unit-names" placeholder="e.g. PE1, PE2"></div>
+                <div class="form-group"><label class="form-label">Units in Phase</label><input class="form-input" type="number" id="phase-units-input" placeholder="e.g. 2" min="1"></div>
               </div>
-              <div style="display:flex;gap:8px;margin-top:8px">
-                <button class="btn btn-primary" onclick="saveNewPhase()"><i class="ti ti-check"></i>Save phase</button>
+              <div class="two-col" style="gap:12px">
+                <div class="form-group"><label class="form-label">Planned Start</label><input class="form-input" type="date" id="phase-planned-start"></div>
+                <div class="form-group"><label class="form-label">Planned Completion</label><input class="form-input" type="date" id="phase-planned-end"></div>
+              </div>
+              <!-- Milestone selector — shown after product type selected -->
+              <div id="phase-milestone-selector" style="display:none;margin-top:8px">
+                <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Select Applicable Milestones <span style="font-size:10px;font-weight:400;color:var(--gray-mid);text-transform:none">(all optional — check what applies to this scope)</span></div>
+                <div id="phase-milestone-checks" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px"></div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn" style="font-size:10px;padding:3px 8px" onclick="selectAllPhaseMilestones(true)">Select All</button>
+                  <button class="btn" style="font-size:10px;padding:3px 8px" onclick="selectAllPhaseMilestones(false)">Clear All</button>
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <button class="btn btn-primary" onclick="saveNewPhase()"><i class="ti ti-check"></i>Save Phase</button>
                 <button class="btn" onclick="document.getElementById('add-phase-form').style.display='none'">Cancel</button>
               </div>
             </div>
@@ -1952,17 +1977,77 @@ function enterDemo(){
   client='demo';
   document.getElementById('demo-screen').style.display='none';
   document.getElementById('portal-screen').classList.add('active');
-  // Override PORTFOLIO with demo data
-  window.PORTFOLIO=DEMO_PORTFOLIO.map(p=>({...p,id:'demo-'+p.n})).sort((a,b)=>a.n.localeCompare(b.n));
-  submissions=[];meetings=[];actionItems=[];siteVisits=[];notifications=[];clientFlags=[];flagIdCounter=0;
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];
+  // Override PORTFOLIO with demo data — map statuses to PULSE schema
+  window.PORTFOLIO=DEMO_PORTFOLIO.map(p=>({
+    ...p,
+    id:'demo-'+p.n,
+    st:({'CIP':'In Progress','Active':'In Progress','Awarded':'In Progress','Complete':'Complete','Survey':'Planned','Budgeting':'Planned','On Hold':'Planned'}[p.st])||'Planned',
+  })).sort((a,b)=>a.n.localeCompare(b.n));
+
+  // Seed demo meetings
+  meetings=[
+    {id:'dm1',property:'Store #101',date:'2026-06-10',type:'Monthly Performance Review',elevco:'Otis',format:'In-person',attVDA:'Sarah Chen',attElev:'John Smith (Otis PM)',attClient:'Karen Lee',agenda:'Review PE1-PE4 progress, discuss schedule variance',notes:'PE1 and PE2 substantially complete. PE3 starts next week. No major issues.',published:true,visibility:'Published',isDraft:false},
+    {id:'dm2',property:'Store #142',date:'2026-06-03',type:'Progress Review',elevco:'Schindler',format:'Zoom',attVDA:'Marcus Webb',attElev:'Tom Brady (Schindler)',attClient:'',agenda:'Schedule recovery discussion',notes:'Permit delays resolved. Recovery plan approved. 3-week buffer added to schedule.',published:true,visibility:'Published',isDraft:false},
+    {id:'dm3',property:'Store #055',date:'2026-05-28',type:'Kickoff',elevco:'Kone',format:'In-person',attVDA:'Marcus Webb',attElev:'Steve Martin (Kone)',attClient:'VP Facilities',agenda:'Project kickoff and introductions',notes:'Kickoff successful. All parties aligned on schedule. Contractor performing ahead of expectations.',published:true,visibility:'Published',isDraft:false},
+    {id:'dm4',property:'Store #101',date:'2026-05-15',type:'Progress Review',elevco:'Otis',format:'Zoom',attVDA:'Sarah Chen',attElev:'John Smith',attClient:'Karen Lee',agenda:'Mid-construction check',notes:'On track. Minor punch list items addressed.',published:true,visibility:'Published',isDraft:false},
+    {id:'dm5',property:'Store #101',date:'2026-04-10',type:'Pre-Construction',elevco:'Otis',format:'In-person',attVDA:'Sarah Chen',attElev:'John Smith',attClient:'',agenda:'Pre-construction coordination',notes:'Staging areas confirmed. Night-only installation windows agreed.',published:false,visibility:'Internal',isDraft:false},
+  ];
+
+  // Seed demo action items
+  actionItems=[
+    {id:'da1',property:'Store #142',meetingId:'dm2',description:'Submit revised schedule to PM by June 15',owner:'Tom Brady',due:'2026-06-15',priority:'High',status:'Open'},
+    {id:'da2',property:'Store #101',meetingId:'dm1',description:'Confirm PE3 staging area with mall management',owner:'Sarah Chen',due:'2026-06-12',priority:'Medium',status:'Open'},
+    {id:'da3',property:'Store #531',meetingId:'',description:'Submit labor recovery plan',owner:'Marcus Webb',due:'2026-06-08',priority:'High',status:'Open'},
+    {id:'da4',property:'Store #055',meetingId:'dm3',description:'Order long-lead materials for Phase 2',owner:'Steve Martin',due:'2026-07-01',priority:'Low',status:'Open'},
+    {id:'da5',property:'Store #712',meetingId:'',description:'Confirm AHJ inspection date',owner:'Sarah Chen',due:'2026-06-20',priority:'Medium',status:'Closed',closedDate:'2026-06-01'},
+  ];
+
+  // Seed demo submissions (field updates)
+  submissions=[
+    {id:'ds1',atId:null,property:'Store #101',week:'2026-06-01',units:'PE1, PE2',phase:'Construction',status:'In Progress',notes:'PE1 and PE2 punch list complete. Inspector approved both units. PE3 mobilizing next Monday.',commentType:'General',issueStatus:'None',savings:'',submittedAt:'June 2, 2026',reviewStatus:'approved',consultant:'Sarah Chen'},
+    {id:'ds2',atId:null,property:'Store #142',week:'2026-06-01',units:'All',phase:'Construction',status:'In Progress',notes:'Permit delay resolved as of June 1. Crew returning Monday. Recovery schedule submitted to PM.',commentType:'Issue',issueStatus:'Open',savings:'',submittedAt:'June 2, 2026',reviewStatus:'pending',consultant:'Marcus Webb'},
+    {id:'ds3',atId:null,property:'Store #055',week:'2026-05-25',units:'PE1-PE4',phase:'Adjusting',status:'Ahead',notes:'All four units in adjusting. Two units completed final inspection. Ahead of schedule by 2 weeks.',commentType:'General',issueStatus:'None',savings:'Negotiated $8,500 reduction on cab interiors with Kone.',submittedAt:'May 26, 2026',reviewStatus:'approved',consultant:'Marcus Webb'},
+  ];
+
+  // Seed demo unit phases with product types and milestones
+  window.UNIT_GROUPS=[
+    {id:'dug1',property:'Store #101',phase:'Phase 1 — Passenger Elevators',units:8,status:'In Progress',plannedStart:'2025-06-01',plannedCompletion:'2026-08-01',actualStart:'2025-06-10',actualCompletion:'',notes:'Night-only installation windows.',productType:'MRL Elevator',unitNames:'PE1, PE2, PE3, PE4, PE5, PE6, PE7, PE8',phaseMilestones:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation: Hoistway Equipment','Installation: Electrical & System Upgrades','Installation: Fixtures & Finishes','Adjusting & Testing','Final Inspection','Owner Acceptance']},
+    {id:'dug2',property:'Store #101',phase:'Phase 2 — Escalators',units:4,status:'Not Started',plannedStart:'2026-09-01',plannedCompletion:'2027-03-01',actualStart:'',actualCompletion:'',notes:'Concurrent with Phase 1 closeout.',productType:'Escalator',unitNames:'E1, E2, E3, E4',phaseMilestones:['Engineering Site Survey','Submittal & Shop Drawing Review','Procurement & Manufacturing','Installation','Adjusting & Test','Final Inspection','Owner Acceptance']},
+    {id:'dug3',property:'Store #142',phase:'Phase 1 — All Units',units:8,status:'In Progress',plannedStart:'2025-08-01',plannedCompletion:'2026-10-01',actualStart:'2025-08-20',actualCompletion:'',notes:'Recovery plan active.',productType:'Geared Elevator',unitNames:'EL1, EL2, EL3, EL4, EL5, EL6, ESC1, ESC2',phaseMilestones:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation: Machine Room & Hoistway','Installation: Electrical & System Upgrades','Adjusting & Testing','Final Inspection','Owner Acceptance']},
+    {id:'dug4',property:'Store #055',phase:'Phase 1 — Elevators',units:4,status:'In Progress',plannedStart:'2025-09-01',plannedCompletion:'2026-06-01',actualStart:'2025-08-20',actualCompletion:'',notes:'Ahead of schedule.',productType:'Hydraulic Elevator',unitNames:'PE1, PE2, PE3, PE4',phaseMilestones:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation','Adjusting & Test','Pre-Test Fire Life Safety','Final Inspection','Owner Acceptance']},
+    {id:'dug5',property:'Store #531',phase:'Phase 1 — All Units',units:5,status:'In Progress',plannedStart:'2025-10-01',plannedCompletion:'2026-09-01',actualStart:'2025-10-10',actualCompletion:'',notes:'Labor shortage — recovery plan submitted.',productType:'MRL Elevator',unitNames:'EL1, EL2, EL3, EL4, EL5',phaseMilestones:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation: Hoistway Equipment','Installation: Electrical & System Upgrades','Adjusting & Testing','Final Inspection','Owner Acceptance']},
+  ];
+
+  // Seed demo documents
+  window.DOCUMENTS_LIVE=[
+    {id:'ddoc1',name:'Store #101 — Field Update 2026-06-01',property:'Store #101',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-06-02',uploadedBy:'Sarah Chen',notes:'Week of June 1',_submissionId:'ds1'},
+    {id:'ddoc2',name:'Store #055 — Field Update 2026-05-25',property:'Store #055',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-05-26',uploadedBy:'Marcus Webb',notes:'Week of May 25',_submissionId:'ds3'},
+    {id:'ddoc3',name:'Store #101 — Progress Review 2026-04-10',property:'Store #101',type:'Meeting Minutes',subfolder:'Meeting Minutes',visibility:'Internal',uploaded:'2026-04-10',uploadedBy:'System',notes:'Pre-Construction · 2026-04-10',_meetingId:'dm5'},
+    {id:'ddoc4',name:'Store #712 — Closed Action: Confirm AHJ inspection date',property:'Store #712',type:'Closed Actions Report',subfolder:'Closed Actions',visibility:'Public',uploaded:'2026-06-01',uploadedBy:'Sarah Chen',notes:'Owner: Sarah Chen · Priority: Medium · Due: 2026-06-20',_actionId:'da5',_action:{description:'Confirm AHJ inspection date',owner:'Sarah Chen',priority:'Medium',due:'2026-06-20',closedDate:'2026-06-01',property:'Store #712'}},
+  ];
+
+  // Seed demo billing log
+  window.BILLING_LOG=[
+    {id:'dbl1',property:'Store #101',billedYTD:1250000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Progress billing through PE2 completion',loggedBy:'PM User'},
+    {id:'dbl2',property:'Store #142',billedYTD:680000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Partial billing — schedule delay',loggedBy:'PM User'},
+    {id:'dbl3',property:'Store #055',billedYTD:920000,entryDate:'2026-05-15',invoiceMonth:'April 2026',notes:'Ahead of schedule billing',loggedBy:'PM User'},
+  ];
+
+  notifications=[
+    {type:'approved',property:'Store #101',week:'2026-06-01',time:'June 2, 2026'},
+    {type:'approved',property:'Store #055',week:'2026-05-25',time:'May 26, 2026'},
+  ];
+  window.MILESTONES=[];
+  window.CLIENT_COMMENTS=[];
+  clientFlags=[];flagIdCounter=0;
+
   setupDemoPortal();
   populatePortfolio();populateMilestonesTable();
   renderDocFolders();populateDocFolderFilter();populatePanelPropertyList();
   renderDashboard();renderAllMeetings();populatePanelPropertyList();
   if(role==='pm')gotoView('dashboard',null);
   else gotoView('dashboard',null);
-  setFirstNavActive();
+  setFirstNavActive();updateQueueBadge();refreshNotifications();
   document.getElementById('dash-sub').textContent='Demo Retail Portfolio · Elevator Modernization Program';
   showToast('Demo mode — fictional data only','info');
   // Update chatbot for demo
@@ -2098,6 +2183,71 @@ const DOC_STYLES={
 };
 
 const SUBFOLDERS=['Field Updates','Meeting Minutes','Closed Actions'];
+
+// Phase construction milestone templates by equipment type
+// All steps are optional — PM selects which apply per job
+const PHASE_MILESTONE_TEMPLATES={
+  'MRL Elevator':[
+    'Submittal & Shop Drawing Review',
+    'Procurement & Manufacturing',
+    'Mobilization & Demolition',
+    'Installation: Hoistway Equipment',
+    'Installation: Fronts & Entrances',
+    'Installation: Electrical & System Upgrades',
+    'Installation: Fixtures & Finishes',
+    'Adjusting & Testing',
+    'Pre-Test Fire Life Safety',
+    'Final Inspection',
+    'Owner Acceptance',
+  ],
+  'Geared Elevator':[
+    'Submittal & Shop Drawing Review',
+    'Procurement & Manufacturing',
+    'Mobilization & Demolition',
+    'Installation: Machine Room & Hoistway',
+    'Installation: Electrical & System Upgrades',
+    'Installation: Cab Upgrade & Hall Fixtures',
+    'Adjusting & Testing',
+    'Pre-Test Fire Life Safety',
+    'Final Inspection',
+    'Owner Acceptance',
+  ],
+  'Hydraulic Elevator':[
+    'Submittal & Shop Drawing Review',
+    'Procurement & Manufacturing',
+    'Mobilization & Demolition',
+    'Installation',
+    'Adjusting & Test',
+    'Pre-Test Fire Life Safety',
+    'Final Inspection',
+    'Owner Acceptance',
+  ],
+  'Escalator':[
+    'Engineering Site Survey',
+    'Submittal & Shop Drawing Review',
+    'Procurement & Manufacturing',
+    'Mobilization & Demolition',
+    'Installation',
+    'Adjusting & Test',
+    'Final Inspection',
+    'Owner Acceptance',
+  ],
+  'Wheelchair Lift':[
+    'Engineering Site Survey',
+    'Submittal & Shop Drawing Review',
+    'Procurement & Manufacturing',
+    'Mobilization & Demolition',
+    'Installation',
+    'Adjusting & Test',
+    'Final Inspection',
+    'Owner Acceptance',
+  ],
+};
+const PRODUCT_TYPES=Object.keys(PHASE_MILESTONE_TEMPLATES);
+// Optional steps by product type
+const OPTIONAL_STEPS={
+  'MRL Elevator':['Installation: Fronts & Entrances'],
+};
 
 const AI_RESPONSES={
   behind:'3 properties are currently behind schedule:\n\n• Casa Marina Key West (FL) — Elevated — PE6 & PE7 delayed. Pit sealing delayed to July 6. Over budget on COs.\n\n• Royal Palm South Beach (FL) — Elevated — 2 cars complete, 3 teams on site. Recovery in progress.\n\n• HHV Tapa Low Rise (HI) — Otis — Waiting on designers and cab interiors to finalize before construction can begin.',
@@ -3324,8 +3474,13 @@ function renderPhasesTab(p){
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
           <div style="flex:1">
             <div style="font-weight:600;font-size:13px;color:var(--navy)">${ph.phase}</div>
-            <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${ph.units} unit${ph.units!==1?'s':''} · ${ph.plannedStart||'—'} → ${ph.plannedCompletion||'—'}</div>
+            <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">
+              ${ph.productType?`<span style="background:var(--blue-pale);color:var(--blue-dark);font-size:9px;font-weight:600;padding:1px 6px;border-radius:10px;margin-right:4px">${ph.productType}</span>`:''}
+              ${ph.unitNames?`<span style="font-style:italic">${ph.unitNames}</span> · `:''}
+              ${ph.units} unit${ph.units!==1?'s':''} · ${ph.plannedStart||'—'} → ${ph.plannedCompletion||'—'}
+            </div>
             ${ph.actualStart?`<div style="font-size:11px;color:var(--gray-mid)">Started: ${ph.actualStart}${ph.actualCompletion?' · Completed: '+ph.actualCompletion:''}</div>`:''}
+            ${ph.phaseMilestones&&ph.phaseMilestones.length>0?`<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:3px">${ph.phaseMilestones.map(ms=>`<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:var(--gray-pale);color:var(--gray-mid)">${ms}</span>`).join('')}</div>`:''}
             ${ph.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;font-style:italic">${ph.notes}</div>`:''}
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -3406,31 +3561,67 @@ function editBillingEntry(id,propName){
 function openAddPhaseForm(){
   const form=document.getElementById('add-phase-form');
   form.style.display='block';
+  document.getElementById('phase-product-type').value='';
+  document.getElementById('phase-milestone-selector').style.display='none';
   form.scrollIntoView({behavior:'smooth'});
+}
+
+function renderPhaseMilestoneSelector(){
+  const type=document.getElementById('phase-product-type').value;
+  const sel=document.getElementById('phase-milestone-selector');
+  const checks=document.getElementById('phase-milestone-checks');
+  if(!type){sel.style.display='none';return;}
+  const steps=PHASE_MILESTONE_TEMPLATES[type]||[];
+  const optional=(OPTIONAL_STEPS[type]||[]);
+  checks.innerHTML=steps.map((s,i)=>`<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:3px 0">
+    <input type="checkbox" class="phase-ms-check" value="${s}" checked style="width:14px;height:14px;flex-shrink:0">
+    <span>${s}${optional.includes(s)?` <span style="font-size:9px;color:var(--gray-mid)">(optional)</span>`:''}</span>
+  </label>`).join('');
+  sel.style.display='block';
+}
+
+function selectAllPhaseMilestones(checked){
+  document.querySelectorAll('.phase-ms-check').forEach(c=>c.checked=checked);
 }
 
 async function saveNewPhase(){
   if(!currentProp)return;
   const name=document.getElementById('phase-name-input').value.trim();
+  const productType=document.getElementById('phase-product-type').value;
+  const unitNames=document.getElementById('phase-unit-names').value.trim();
   const units=parseInt(document.getElementById('phase-units-input').value)||0;
   const plannedStart=document.getElementById('phase-planned-start').value;
   const plannedEnd=document.getElementById('phase-planned-end').value;
-  if(!name||!units){showToast('Please enter a phase name and unit count','warn');return;}
+  if(!name){showToast('Please enter a phase name','warn');return;}
+  if(!productType){showToast('Please select a product type','warn');return;}
+  if(!units){showToast('Please enter units in phase','warn');return;}
+  // Collect selected milestones
+  const selectedMs=[...document.querySelectorAll('.phase-ms-check:checked')].map(c=>c.value);
   const res=await atCreate('Unit Groups',{
     'Property Name':currentProp.n,
     'Phase Name':name,
     'Units in Phase':units,
     'Status':'Not Started',
-    'Planned Start':plannedStart||'',
-    'Planned Completion':plannedEnd||'',
+    'Planned Start':plannedStart||null,
+    'Planned Completion':plannedEnd||null,
+    'Product Type':productType,
+    'Unit Names':unitNames,
+    'Phase Milestones':selectedMs.join(', '),
   });
-  const newPhase={id:res?.records?.[0]?.id||'ug-'+Date.now(),property:currentProp.n,phase:name,units,status:'Not Started',plannedStart,plannedCompletion:plannedEnd,actualStart:'',actualCompletion:'',notes:''};
+  const newPhase={
+    id:res?.records?.[0]?.id||'ug-'+Date.now(),
+    property:currentProp.n,phase:name,units,
+    status:'Not Started',
+    plannedStart,plannedCompletion:plannedEnd,
+    actualStart:'',actualCompletion:'',notes:'',
+    productType,unitNames,
+    phaseMilestones:selectedMs,
+  };
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([newPhase]);
   document.getElementById('add-phase-form').style.display='none';
-  document.getElementById('phase-name-input').value='';
-  document.getElementById('phase-units-input').value='';
-  document.getElementById('phase-planned-start').value='';
-  document.getElementById('phase-planned-end').value='';
+  ['phase-name-input','phase-units-input','phase-planned-start','phase-planned-end','phase-unit-names'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('phase-product-type').value='';
+  document.getElementById('phase-milestone-selector').style.display='none';
   renderPhasesTab(currentProp);
   showToast('Phase added','success');
 }
@@ -4426,14 +4617,13 @@ function renderDashboard(){
     </div>
     <div class="two-col">
       <div class="card">
-        <div class="card-header"><div><div class="card-title">Status mix</div><div class="card-sub">All ${total} properties</div></div></div>
-        <div class="rep-row"><div class="rep-label">In Progress</div><div class="prog-bar"><div class="prog-fill" style="width:${Math.round(inProgress/total*100)}%"></div></div><div class="rep-count">${inProgress}</div></div>
-        <div class="rep-row"><div class="rep-label">Planned</div><div class="prog-bar"><div class="prog-fill" style="width:${Math.round(planned/total*100)}%;background:#7F77DD"></div></div><div class="rep-count">${planned}</div></div>
-        <div class="rep-row"><div class="rep-label">Complete</div><div class="prog-bar"><div class="prog-fill green" style="width:${Math.round(complete/total*100)}%"></div></div><div class="rep-count">${complete}</div></div>
-        <div class="rep-row"><div class="rep-label">Complete</div><div class="prog-bar"><div class="prog-fill green" style="width:${Math.round(complete/total*100)}%"></div></div><div class="rep-count">${complete}</div></div>
+        <div class="card-header"><div><div class="card-title">Status Mix</div><div class="card-sub">All ${total} properties</div></div></div>
+        <div class="rep-row"><div class="rep-label">Planned</div><div class="prog-bar"><div class="prog-fill" style="width:${Math.round(planned/Math.max(total,1)*100)}%;background:#7F77DD"></div></div><div class="rep-count">${planned}</div></div>
+        <div class="rep-row"><div class="rep-label">In Progress</div><div class="prog-bar"><div class="prog-fill" style="width:${Math.round(inProgress/Math.max(total,1)*100)}%"></div></div><div class="rep-count">${inProgress}</div></div>
+        <div class="rep-row"><div class="rep-label">Complete</div><div class="prog-bar"><div class="prog-fill green" style="width:${Math.round(complete/Math.max(total,1)*100)}%"></div></div><div class="rep-count">${complete}</div></div>
       </div>
       <div class="card">
-        <div class="card-header"><div><div class="card-title">Schedule risk</div><div class="card-sub">Active construction properties</div></div></div>
+        <div class="card-header"><div><div class="card-title">Schedule Risk</div><div class="card-sub">Active construction properties</div></div></div>
         ${noRisk?`<div class="alert alert-success"><i class="ti ti-circle-check"></i><span>All active properties on or ahead of schedule</span></div>`:''}
         ${behindAlerts}${warnAlerts}
         <div style="font-size:12px;color:var(--gray-mid);margin-top:8px;display:flex;gap:16px;flex-wrap:wrap">
@@ -4444,7 +4634,7 @@ function renderDashboard(){
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><div class="card-title">Active properties</div><button class="btn" onclick="gotoView('portfolio',null)">View all ${total}</button></div>
+      <div class="card-header"><div class="card-title">Active Properties</div><button class="btn" onclick="gotoView('portfolio',null)">View all ${total}</button></div>
       <div class="table-wrap">
         <table class="data-table">
           <thead><tr><th style="width:28%">Property</th><th style="width:6%">State</th><th style="width:14%">Elev. Company</th><th style="width:10%">Units</th><th style="width:11%">Status</th><th style="width:11%">Schedule</th><th>Consultant</th></tr></thead>
@@ -4453,14 +4643,20 @@ function renderDashboard(){
       </div>
     </div>
     <div class="card" id="dash-open-actions-card">
-      <div class="card-header"><div class="card-title">Open action items</div><span class="badge b-behind" id="dash-action-count">${openAI.length} open</span></div>
+      <div class="card-header"><div class="card-title">Open Action Items</div><span class="badge b-behind" id="dash-action-count">${openAI.length} open</span></div>
       <div id="dash-action-list">${openAI.length===0?`<div style="font-size:12px;color:var(--gray-mid)">No open action items. Log a meeting to create action items.</div>`:openAI.slice(0,4).map(a=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(a.property||'').replace(/'/g,"\\'")}')"><div class="action-dot dot-open"></div><div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${a.owner} · Due: ${a.due}</span></div><i class="ti ti-chevron-right" style="color:var(--gray-light);font-size:14px;flex-shrink:0;margin-left:auto"></i></div>`).join('')}</div>
     </div>`;
 }
 
 function refreshDashActions(){
-  // Re-render full dashboard to pick up action item changes
   if(document.getElementById('dashboard-body')?.innerHTML)renderDashboard();
+}
+
+function printDashboard(){
+  const el=document.getElementById('view-dashboard');
+  if(el)el.classList.add('print-active');
+  window.print();
+  setTimeout(()=>el?.classList.remove('print-active'),1000);
 }
 
 async function updateAssetType(propId, propName, isCore){
