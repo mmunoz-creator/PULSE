@@ -784,10 +784,13 @@ async function loadAllData() {
         name: r.fields['Document Name'] || '',
         property: r.fields['Property Name'] || '',
         type: r.fields['Document Type'] || 'Other',
-        uploaded: r.fields['Upload Date'] || '',
+        subfolder: r.fields['Subfolder'] || '',
+        uploaded: r.fields['Upload Date'] || r.fields['Uploaded Date'] || '',
         visibility: r.fields['Visibility'] || 'Internal',
         size: r.fields['File Size'] || '',
         uploadedBy: r.fields['Uploaded By'] || '',
+        notes: r.fields['Notes'] || '',
+        rtfContent: r.fields['RTF Content'] || '',
       }));
     } else {
       window.DOCUMENTS_LIVE = [];
@@ -951,7 +954,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v12c · elevatorpulse.com</div>
+    <div class="login-version">PULSE v12f · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -968,7 +971,7 @@ window.PROPERTIES_SEED = [
     </div>
     <div class="login-right-content">
       <div style="font-size:10px;font-weight:600;color:rgba(255,255,255,.35);letter-spacing:2.5px;text-transform:uppercase;font-family:'DM Mono',monospace;margin-bottom:16px">Vertical Transportation Management</div>
-      <div style="font-size:26px;font-weight:700;color:white;letter-spacing:-.3px;line-height:1.3;margin-bottom:12px;font-style:italic">Portfolio visibility. Project assurance.</div>
+      <div style="font-size:20px;font-weight:700;color:white;letter-spacing:-.3px;line-height:1.3;margin-bottom:12px;font-style:italic;white-space:nowrap">Portfolio visibility. Project assurance.</div>
       <div style="font-size:12px;color:rgba(255,255,255,.4);line-height:1.7;margin-bottom:2rem">From lifecycle planning to real-time field execution. Full portfolio visibility in one platform.</div>
       <div class="login-right-grid">
         <div class="login-right-card">
@@ -1686,7 +1689,6 @@ window.PROPERTIES_SEED = [
         </div>
         <div class="page-body">
           <div id="cal-legend" style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">
-            <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--blue-dark);display:inline-block"></span>Meetings</span>
             <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:var(--green);display:inline-block"></span>Site Visits</span>
             <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#7BB8E8;display:inline-block"></span>Phase Start/End</span>
             <span style="font-size:11px;display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#F4A0B0;display:inline-block"></span>Action Due</span>
@@ -1720,10 +1722,15 @@ window.PROPERTIES_SEED = [
       <!-- DOCUMENTS — FOLDER VIEW -->
       <div id="view-documents" class="hidden">
         <div class="page-header">
-          <div class="page-header-left"><h1>Documents</h1><p>Project Folders — RFPs, Contracts, Surveys, Fixture Drawings, Schedules of Values</p></div>
+          <div class="page-header-left"><h1>Documents</h1><p>Field Updates, Meeting Minutes, and Closed Actions</p></div>
           <div class="header-actions" id="doc-upload-area">
             <select class="styled" id="doc-folder-filter" onchange="renderDocFolders()" style="width:200px"><option value="all">All properties</option></select>
-            <select class="styled" id="doc-type-filter" onchange="renderDocFolders()" style="width:150px"><option value="all">All types</option><option>Contract</option><option>RFP</option><option>Survey</option><option>Fixture Drawing</option><option>Schedule of Values</option><option>Other</option></select>
+            <select class="styled" id="doc-subfolder-filter" onchange="renderDocFolders()" style="width:160px">
+              <option value="all">All subfolders</option>
+              <option value="Field Updates">Field Updates</option>
+              <option value="Meeting Minutes">Meeting Minutes</option>
+              <option value="Closed Actions">Closed Actions</option>
+            </select>
           </div>
         </div>
         <div class="page-body"><div id="doc-folders-container"></div></div>
@@ -2079,6 +2086,9 @@ const PORTFOLIO=[
 const DOCUMENTS=[];  // Documents loaded from Airtable
 
 const DOC_STYLES={
+  'Field Update':{bg:'var(--teal-pale)',color:'var(--teal)',icon:'ti-file-text'},
+  'Meeting Minutes':{bg:'var(--blue-pale)',color:'var(--blue-dark)',icon:'ti-notes'},
+  'Closed Actions Report':{bg:'var(--green-pale)',color:'var(--green)',icon:'ti-circle-check'},
   'Contract':{bg:'#E6F1FB',color:'#185FA5',icon:'ti-file-certificate'},
   'RFP':{bg:'#FAEEDA',color:'#854F0B',icon:'ti-file-search'},
   'Survey':{bg:'#EEEDFE',color:'#534AB7',icon:'ti-map-search'},
@@ -2086,6 +2096,8 @@ const DOC_STYLES={
   'Schedule of Values':{bg:'#FCEBEB',color:'#A32D2D',icon:'ti-list-numbers'},
   'Other':{bg:'#F1EFE8',color:'#5F5E5A',icon:'ti-file'},
 };
+
+const SUBFOLDERS=['Field Updates','Meeting Minutes','Closed Actions'];
 
 const AI_RESPONSES={
   behind:'3 properties are currently behind schedule:\n\n• Casa Marina Key West (FL) — Elevated — PE6 & PE7 delayed. Pit sealing delayed to July 6. Over budget on COs.\n\n• Royal Palm South Beach (FL) — Elevated — 2 cars complete, 3 teams on site. Recovery in progress.\n\n• HHV Tapa Low Rise (HI) — Otis — Waiting on designers and cab interiors to finalize before construction can begin.',
@@ -2950,10 +2962,16 @@ function renderPropMeetings(p){
   const propActions=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
   const aCount=document.getElementById('prop-action-count');if(aCount)aCount.textContent=propActions.length+' open';
   const visible=role==='client'?propMeetings.filter(m=>m.published):propMeetings;
+  // Sort newest first — show only 3 most recent
+  const sorted=visible.slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const recent=sorted.slice(0,3);
+  const older=sorted.slice(3);
+  // Auto-archive older meetings to Documents → Meeting Minutes
+  older.forEach(m=>archiveMeetingToDocuments(m));
   const mList=document.getElementById('prop-meetings-list');
-  if(mList)mList.innerHTML=visible.length===0?
+  if(mList)mList.innerHTML=recent.length===0?
     `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged</div><div class="empty-state-sub">${role==='pm'?'Click Log meeting above to add':role==='client'?'No published meetings yet':''}</div></div>`:
-    visible.slice().reverse().map(m=>`<div class="meeting-card">
+    recent.map(m=>`<div class="meeting-card">
       <div class="meeting-card-header">
         <div><div class="meeting-card-title">${m.type}</div><div class="meeting-card-meta">${m.date} · ${m.elevco} · ${m.format}</div></div>
         <div style="display:flex;align-items:center;gap:6px">
@@ -2964,7 +2982,8 @@ function renderPropMeetings(p){
       ${m.attVDA||m.attElev||m.attClient?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6">${m.attVDA?`Team: ${m.attVDA} `:''}${m.attElev?`· Elev: ${m.attElev} `:''}${m.attClient?`· Client: ${m.attClient}`:''}</div>`:''}
       ${m.agenda?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px"><strong>Agenda:</strong> ${m.agenda}</div>`:''}
       <div class="meeting-card-body">${m.notes||''}</div>
-    </div>`).join('');
+    </div>`).join('')+
+    (older.length>0?`<div style="padding:8px 0 4px;font-size:11px;color:var(--blue-dark);display:flex;align-items:center;gap:5px;cursor:pointer" onclick="gotoView('documents',null)"><i class="ti ti-folder" style="font-size:13px"></i>${older.length} older meeting${older.length!==1?'s':''} archived to Documents → Meeting Minutes</div>`:'');
   const aList=document.getElementById('prop-actions-list');
   if(aList)aList.innerHTML=propActions.length===0?
     `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No Open Actions</div></div>`:
@@ -2975,6 +2994,36 @@ function renderPropMeetings(p){
     </div>`).join('');
 }
 
+// Archive a meeting to Documents → Meeting Minutes (idempotent — checks for existing record)
+async function archiveMeetingToDocuments(m){
+  if(!m||!m.id||demoMode)return;
+  if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
+  // Already archived?
+  if(window.DOCUMENTS_LIVE.some(d=>d._meetingId===m.id))return;
+  const docName=`${m.property} — ${m.type} ${m.date}`;
+  const today=new Date().toISOString().split('T')[0];
+  const vis=m.published?'Public':'Internal';
+  const res=await atCreate('Documents',{
+    'Document Name':docName,
+    'Property Name':m.property,
+    'Document Type':'Meeting Minutes',
+    'Subfolder':'Meeting Minutes',
+    'Visibility':vis,
+    'Uploaded By':'System',
+    'Uploaded Date':today,
+    'Notes':`Auto-archived from Meeting Log · ${m.type} · ${m.date}`,
+  });
+  const newDoc={
+    id:res?.records?.[0]?.id||'doc_mm_'+m.id,
+    name:docName,property:m.property,
+    type:'Meeting Minutes',subfolder:'Meeting Minutes',
+    visibility:vis,uploaded:today,
+    uploadedBy:'System',notes:m.type,
+    _meetingId:m.id,
+  };
+  window.DOCUMENTS_LIVE.push(newDoc);
+}
+
 async function closeAction(id){
   const a=actionItems.find(x=>x.id===id);
   if(!a)return;
@@ -2983,9 +3032,37 @@ async function closeAction(id){
   if(a.id&&!demoMode){
     try{await atUpdate('Action Items',a.id,{'Status':'Closed','Closed Date':a.closedDate});}catch(e){console.warn('closeAction Airtable write failed:',e);}
   }
+  // Archive to Documents → Closed Actions
+  if(!demoMode){
+    const docName=`${a.property} — Closed Action: ${a.description.slice(0,50)}`;
+    const res=await atCreate('Documents',{
+      'Document Name':docName,
+      'Property Name':a.property,
+      'Document Type':'Closed Actions Report',
+      'Subfolder':'Closed Actions',
+      'Visibility':'Public',
+      'Uploaded By':a.owner||'PM',
+      'Uploaded Date':a.closedDate,
+      'Notes':`Owner: ${a.owner} · Priority: ${a.priority} · Due: ${a.due}`,
+    });
+    if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
+    window.DOCUMENTS_LIVE.push({
+      id:res?.records?.[0]?.id||'doc_ca_'+a.id,
+      name:docName,property:a.property,
+      type:'Closed Actions Report',subfolder:'Closed Actions',
+      visibility:'Public',uploaded:a.closedDate,
+      uploadedBy:a.owner||'PM',
+      notes:`Owner: ${a.owner} · Priority: ${a.priority} · Due: ${a.due}`,
+      _actionId:a.id,
+      // Store action data for report generation
+      _action:{description:a.description,owner:a.owner,priority:a.priority,due:a.due,closedDate:a.closedDate,property:a.property},
+    });
+  }
   if(currentProp)renderPropMeetings(currentProp);
   renderAllMeetings();
   refreshDashActions();
+  renderDocFolders();
+  showToast('Action closed — archived to Documents · Closed Actions','success');
 }
 
 // DOWNLOAD HELPERS
@@ -3900,39 +3977,32 @@ const CAL_SLOT_H=48;    // px per hour
 
 function getCalEvents(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  // Build a set of live property names for ghost-property filtering
+  const liveProps=new Set(port.map(p=>p.n));
   const events=[];
 
-  // Meetings
-  meetings.forEach(m=>{
-    if(!m.date)return;
-    if(role==='client'&&!m.published)return;
-    if(role==='consultant'){
-      const isVisible=m.elevco&&port.some(p=>p.n===m.property&&p.v===currentConsultantName);
-      if(!isVisible&&!m.published)return;
-    }
-    events.push({date:m.date,type:'meeting',title:m.type+' — '+m.property,sub:m.elevco||'',
-      color:'ev-meeting',dot:CAL_COLORS.meeting,isDraft:m.isDraft||m.visibility==='Draft',propName:m.property,hour:9,duration:60});
-  });
-
-  // Site visits
+  // Site visits — filter out deleted properties
   siteVisits.forEach(v=>{
     if(!v.date||role==='client')return;
+    if(!liveProps.has(v.property))return;
     events.push({date:v.date,type:'visit',title:'Site Visit — '+v.property,sub:v.inspector||'',
       color:'ev-visit',dot:CAL_COLORS.visit,propName:v.property,hour:10,duration:60});
   });
 
-  // Unit group planned dates
+  // Unit group planned dates — filter out deleted properties
   (window.UNIT_GROUPS||[]).forEach(u=>{
     if(role==='client')return;
+    if(!liveProps.has(u.property))return;
     if(u.plannedStart)events.push({date:u.plannedStart,type:'phase',title:'Start: '+u.phase,sub:u.property,
       color:'ev-phase',dot:CAL_COLORS.phase,propName:u.property,hour:8,duration:30});
     if(u.plannedCompletion)events.push({date:u.plannedCompletion,type:'phase',title:'End: '+u.phase,sub:u.property,
       color:'ev-phase',dot:CAL_COLORS.phase,propName:u.property,hour:8,duration:30});
   });
 
-  // Action items
+  // Action items — filter out deleted properties
   if(role==='pm'||role==='admin'){
     actionItems.filter(a=>a.status==='Open'&&a.due&&a.due!=='TBD').forEach(a=>{
+      if(!liveProps.has(a.property))return;
       events.push({date:a.due,type:'action',title:a.description,sub:a.property,
         color:'ev-action',dot:CAL_COLORS.action,propName:a.property,hour:12,duration:30});
     });
@@ -4448,131 +4518,218 @@ function renderAllSiteVisits(){
   if(pEl)pEl.innerHTML=past.length===0?`<div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-x"></i><div class="empty-state-title">No Past Visits</div></div>`:past.map(v=>visitCardHtml(v)).join('');
 }
 
-// DOCUMENTS — FOLDER VIEW
+// DOCUMENTS — SUBFOLDER VIEW
 function docItemHtml(d){
   const st=DOC_STYLES[d.type]||DOC_STYLES.Other;
   const vc={Public:'b-public',Restricted:'b-restricted',Internal:'b-internal'}[d.visibility]||'b-nac';
-  return `<div class="doc-item">
+  const isClosedAction=d.subfolder==='Closed Actions';
+  const isMeetingMinutes=d.subfolder==='Meeting Minutes';
+  const isFieldUpdate=d.subfolder==='Field Updates';
+  return `<div class="doc-item" ${isClosedAction?`data-action-id="${d._actionId||''}" data-doc-id="${d.id}"`:''}>
+    ${isClosedAction?`<input type="checkbox" class="closed-action-check" data-doc-id="${d.id}" style="margin-right:8px;flex-shrink:0" onchange="updateClosedActionSelection()">`:''}
     <div class="doc-item-icon" style="background:${st.bg}"><i class="ti ${st.icon}" style="font-size:18px;color:${st.color}"></i></div>
-    <div style="flex:1;min-width:0"><div class="doc-name">${d.name}</div><div class="doc-meta">${d.type} · ${d.size} · ${d.uploaded}</div></div>
+    <div style="flex:1;min-width:0">
+      <div class="doc-name">${d.name}</div>
+      <div class="doc-meta">${d.type} · ${d.uploaded}${d.uploadedBy?' · '+d.uploadedBy:''}${d.notes?' · '+d.notes:''}</div>
+    </div>
     ${role!=='client'?`<span class="badge ${vc}" style="flex-shrink:0">${d.visibility}</span>`:''}
+    ${(isFieldUpdate||isMeetingMinutes)?`<button class="btn btn-icon" style="flex-shrink:0" onclick="downloadDocRTF('${d.id}')" title="Download RTF"><i class="ti ti-download"></i></button>`:''}
     ${(role==='pm'||role==='admin')?`<button class="btn btn-icon" style="flex-shrink:0;background:var(--red-pale);border-color:#f7c1c1" onclick="deleteDoc('${d.id}','${d.name}')"><i class="ti ti-trash" style="color:var(--red)"></i></button>`:''}
-    <button class="btn btn-icon" style="flex-shrink:0"><i class="ti ti-download"></i></button>
   </div>`;
 }
 
-function folderHtml(propName,docs,isOpen){
-  const prop=PORTFOLIO.find(p=>p.n===propName);
+function subfolderHtml(propName,subfolder,docs,isOpen){
+  const sfId='sf-'+propName.replace(/[^a-zA-Z0-9]/g,'-')+'-'+subfolder.replace(/\s/g,'-');
+  const st={
+    'Field Updates':{icon:'ti-file-text',color:'var(--teal)',bg:'var(--teal-pale)'},
+    'Meeting Minutes':{icon:'ti-notes',color:'var(--blue-dark)',bg:'var(--blue-pale)'},
+    'Closed Actions':{icon:'ti-circle-check',color:'var(--green)',bg:'var(--green-pale)'},
+  }[subfolder]||{icon:'ti-folder',color:'var(--gray-mid)',bg:'var(--gray-pale)'};
+  const isClosedActions=subfolder==='Closed Actions';
+  return `<div class="doc-folder" style="margin-bottom:6px;margin-left:12px" id="${sfId}">
+    <div class="doc-folder-header" onclick="toggleFolder('${sfId}')" style="padding:8px 12px">
+      <div class="doc-folder-icon" style="width:26px;height:26px;background:${st.bg};border-radius:5px"><i class="ti ${st.icon}" style="font-size:14px;color:${st.color}"></i></div>
+      <div class="doc-folder-name" style="font-size:12px">${subfolder}</div>
+      <div class="doc-folder-meta">${docs.length} record${docs.length!==1?'s':''}</div>
+      <i class="ti ti-chevron-right doc-folder-chevron${isOpen?' open':''}" id="${sfId}-chevron"></i>
+    </div>
+    <div class="doc-folder-body${isOpen?' open':''}" id="${sfId}-body">
+      ${isClosedActions&&(role==='pm'||role==='admin')&&docs.length>0?`
+      <div class="doc-folder-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn" style="font-size:11px" id="gen-report-btn-${sfId}" onclick="generateClosedActionsReport('${propName}')" disabled><i class="ti ti-file-analytics"></i>Generate Report</button>
+        <button class="btn" style="font-size:11px" onclick="generateClosedActionsReport('all')" title="Cross-portfolio report"><i class="ti ti-world"></i>Portfolio Report</button>
+        <span style="font-size:11px;color:var(--gray-mid)" id="sel-count-${sfId}">Select items to generate report</span>
+      </div>`:''}
+      ${docs.length===0?`<div class="doc-folder-empty">No ${subfolder.toLowerCase()} yet.</div>`:docs.map(d=>docItemHtml(d)).join('')}
+    </div>
+  </div>`;
+}
+
+function folderHtml(propName,allDocs,isOpen){
+  const prop=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(p=>p.n===propName);
   const id='folder-'+propName.replace(/\s/g,'-').replace(/[^a-zA-Z0-9-]/g,'');
-  const canUpload=role==='pm'||role==='admin';
+  const totalDocs=allDocs.length;
   return `<div class="doc-folder" id="${id}">
     <div class="doc-folder-header" onclick="toggleFolder('${id}')">
       <div class="doc-folder-icon"><i class="ti ti-folder" style="font-size:17px"></i></div>
       <div class="doc-folder-name">${propName}</div>
-      <div class="doc-folder-meta">${docs.length} document${docs.length!==1?'s':''} · ${prop?.vda&&prop.vda!=='—'?'VDA Project '+prop.vda:prop?.units?prop.units+' units':''}</div>
+      <div class="doc-folder-meta">${totalDocs} record${totalDocs!==1?'s':''} · ${prop?.vda&&prop.vda!=='—'?'VDA '+prop.vda:prop?.units?prop.units+' units':''}</div>
       <i class="ti ti-chevron-right doc-folder-chevron${isOpen?' open':''}" id="${id}-chevron"></i>
     </div>
-    <div class="doc-folder-body${isOpen?' open':''}" id="${id}-body">
-      ${canUpload?`<div class="doc-folder-actions" style="display:flex;gap:8px;align-items:center">
-      <button class="btn" style="font-size:11px" onclick="showDocUpload('${propName}')"><i class="ti ti-upload"></i>Upload document</button>
-    </div>`:''}
-      ${docs.length===0?`<div class="doc-folder-empty">No documents uploaded yet. ${canUpload?'Click Upload above to add.':'Contact your PM to upload documents.'}</div>`:docs.map(d=>docItemHtml(d)).join('')}
+    <div class="doc-folder-body${isOpen?' open':''}" id="${id}-body" style="padding:8px 0">
+      ${SUBFOLDERS.map(sf=>{
+        const sfDocs=allDocs.filter(d=>d.subfolder===sf);
+        return subfolderHtml(propName,sf,sfDocs,sfDocs.length>0);
+      }).join('')}
     </div>
   </div>`;
 }
 
-async function showDocUpload(propName) {
-  const docName = prompt('Document name:', '');
-  if (!docName) return;
-  const docType = prompt('Document type:\n1. Contract\n2. RFP\n3. Survey\n4. Fixture Drawing\n5. Schedule of Values\n6. Other\nEnter number:', '1');
-  const typeMap = {'1':'Contract','2':'RFP','3':'Survey','4':'Fixture Drawing','5':'Schedule of Values','6':'Other'};
-  const type = typeMap[docType] || 'Other';
-  const visibility = role==='client' ? 'Public' : 
-    prompt('Visibility:\n1. Public (client can see)\n2. Restricted (PM & Admin only)\n3. Internal (Admin only)\nEnter number:', '1');
-  const visMap = {'1':'Public','2':'Restricted','3':'Internal'};
-  const vis = typeof visibility === 'string' && visibility.length > 1 ? visibility : (visMap[visibility]||'Restricted');
-  const today = new Date().toISOString().split('T')[0];
-  const newDoc = {
-    id: 'doc_'+Date.now(),
-    name: docName, property: propName,
-    type, visibility: vis,
-    uploaded: today, size: 'Pending upload',
-    uploadedBy: role==='pm'?'VDA PM':role==='admin'?'Admin':'Consultant'
-  };
-  // Write to Airtable
-  const res = await atCreate('Documents', {
-    'Document Name': docName,
-    'Property Name': propName,
-    'Document Type': type,
-    'Visibility': vis,
-    'Upload Date': today,
-    'Uploaded By': newDoc.uploadedBy,
-    'File Size': 'See attachment'
-  });
-  if (res?.records?.[0]) newDoc.id = res.records[0].id;
-  // Add to local cache
-  if (!window.DOCUMENTS_LIVE) window.DOCUMENTS_LIVE = [];
-  window.DOCUMENTS_LIVE.push(newDoc);
-  showToast(`Document "${docName}" logged. Attach the file in Airtable.`, 'success');
-  renderDocFolders();
-  if (currentProp && currentProp.n === propName) renderPropDocFolder(currentProp);
-}
-
-async function deleteDoc(docId, docName) {
-  if (!confirm(`Delete "${docName}"?`)) return;
-  await atDelete('Documents', docId);
-  if (window.DOCUMENTS_LIVE) {
-    window.DOCUMENTS_LIVE = window.DOCUMENTS_LIVE.filter(d => d.id !== docId);
-  }
-  showToast(`"${docName}" deleted`, 'warn');
-  renderDocFolders();
-  if (currentProp) renderPropDocFolder(currentProp);
-}
-
-function toggleFolder(id){
-  const body=document.getElementById(id+'-body');const chevron=document.getElementById(id+'-chevron');
-  body.classList.toggle('open');chevron.classList.toggle('open');
-}
-
-function populateDocFolderFilter(){
-  const sel=document.getElementById('doc-folder-filter');if(!sel)return;
-  const props=['all',...new Set(PORTFOLIO.map(p=>p.n))];
-  sel.innerHTML=props.map(p=>`<option value="${p}">${p==='all'?'All properties':p}</option>`).join('');
-}
-
 function renderDocFolders(){
   const pf=document.getElementById('doc-folder-filter')?.value||'all';
-  const tf=document.getElementById('doc-type-filter')?.value||'all';
+  const sf=document.getElementById('doc-subfolder-filter')?.value||'all';
   const container=document.getElementById('doc-folders-container');if(!container)return;
-
-  let docs=window.DOCUMENTS_LIVE||DOCUMENTS;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  let docs=window.DOCUMENTS_LIVE||[];
+  // Role visibility
   if(role==='client')docs=docs.filter(d=>d.visibility==='Public');
-  if(tf!=='all')docs=docs.filter(d=>d.type===tf);
-
-  // Group by property
-  const propNames=pf==='all'?[...new Set(PORTFOLIO.map(p=>p.n))]:[pf];
-  let html='';
-  let shown=0;
+  if(role==='consultant'){
+    const myProps=port.filter(p=>p.v===currentConsultantName).map(p=>p.n);
+    docs=docs.filter(d=>myProps.includes(d.property));
+  }
+  // Subfolder filter
+  if(sf!=='all')docs=docs.filter(d=>d.subfolder===sf);
+  // Property filter
+  const propNames=pf==='all'?[...new Set(port.map(p=>p.n))]:[pf];
+  let html='';let shown=0;
   propNames.forEach(name=>{
-    let propDocs=docs.filter(d=>d.property===name||d.property==='All');
-    if(propDocs.length===0&&pf==='all'&&tf==='all'&&(role!=='pm'&&role!=='admin'))return;
+    const propDocs=docs.filter(d=>d.property===name);
+    if(propDocs.length===0&&pf==='all'&&(role!=='pm'&&role!=='admin'))return;
+    if(propDocs.length===0&&pf==='all')return; // hide empty folders in all-view
     html+=folderHtml(name,propDocs,pf!=='all'||shown<2);
     shown++;
   });
-  if(!html)html=`<div class="empty-state" style="padding:3rem"><i class="ti ti-files-off"></i><div class="empty-state-title">No documents found</div><div class="empty-state-sub">Try adjusting your filters or upload documents to a property folder</div></div>`;
+  if(!html)html=`<div class="empty-state" style="padding:3rem"><i class="ti ti-files-off"></i><div class="empty-state-title">No documents yet</div><div class="empty-state-sub">Field updates, meeting minutes, and closed actions will appear here automatically</div></div>`;
   container.innerHTML=html;
+}
+
+function updateClosedActionSelection(){
+  const checked=document.querySelectorAll('.closed-action-check:checked');
+  document.querySelectorAll('[id^="gen-report-btn-"]').forEach(btn=>{
+    btn.disabled=checked.length===0;
+  });
+  document.querySelectorAll('[id^="sel-count-"]').forEach(el=>{
+    el.textContent=checked.length>0?`${checked.length} selected`:'Select items to generate report';
+  });
+}
+
+function generateClosedActionsReport(propName){
+  const isPortfolio=propName==='all';
+  let actions=[];
+  if(isPortfolio){
+    // All closed action docs across portfolio
+    actions=(window.DOCUMENTS_LIVE||[]).filter(d=>d.subfolder==='Closed Actions'&&d._action);
+  } else {
+    // Selected checkboxes only
+    const checked=[...document.querySelectorAll('.closed-action-check:checked')];
+    const docIds=checked.map(c=>c.dataset.docId);
+    actions=(window.DOCUMENTS_LIVE||[]).filter(d=>docIds.includes(d.id)&&d._action);
+    if(actions.length===0){
+      // Fallback: all closed actions for this property
+      actions=(window.DOCUMENTS_LIVE||[]).filter(d=>d.subfolder==='Closed Actions'&&d.property===propName&&d._action);
+    }
+  }
+  if(actions.length===0){showToast('No closed actions to report','warn');return;}
+  const generated=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  const rtfEsc=s=>(s||'').replace(/\\/g,'\\\\').replace(/\{/g,'\\{').replace(/\}/g,'\\}').replace(/[^\x00-\x7F]/g,c=>`\\u${c.charCodeAt(0)}?`);
+  const prioColor={'High':'\\red163\\green45\\blue45','Medium':'\\red133\\green79\\blue11','Low':'\\red59\\green109\\blue17'};
+  // Group by property for portfolio report
+  const grouped={};
+  actions.forEach(d=>{
+    const a=d._action;
+    const prop=a.property||d.property;
+    if(!grouped[prop])grouped[prop]=[];
+    grouped[prop].push(a);
+  });
+  const propBlocks=Object.entries(grouped).map(([prop,acts])=>{
+    const rows=acts.map(a=>`{\\trowd\\trgaph108\\trleft-108
+\\cellx3500\\cellx5500\\cellx7000\\cellx8200\\cellx9360
+{\\pard\\intbl\\fs20\\b ${rtfEsc(a.property||prop)}\\cell}
+{\\pard\\intbl\\fs20 ${rtfEsc(a.description)}\\cell}
+{\\pard\\intbl\\fs20 ${rtfEsc(a.owner)}\\cell}
+{\\pard\\intbl\\fs20 ${rtfEsc(a.closedDate||'—')}\\cell}
+{\\pard\\intbl\\fs20 ${rtfEsc(a.priority)}\\cell}
+\\row}`).join('\n');
+    return `{\\pard\\sb200\\sa60\\brdrb\\brdrs\\brdrw10\\brsp20 {\\b\\fs24\\cf2 ${rtfEsc(prop)}}\\par}
+{\\trowd\\trgaph108\\trleft-108
+\\clshdng500\\clcbpat3\\cellx3500\\clshdng500\\clcbpat3\\cellx5500\\clshdng500\\clcbpat3\\cellx7000\\clshdng500\\clcbpat3\\cellx8200\\clshdng500\\clcbpat3\\cellx9360
+{\\pard\\intbl\\fs18\\b\\cf2 Property\\cell}{\\pard\\intbl\\fs18\\b\\cf2 Description\\cell}{\\pard\\intbl\\fs18\\b\\cf2 Owner\\cell}{\\pard\\intbl\\fs18\\b\\cf2 Closed Date\\cell}{\\pard\\intbl\\fs18\\b\\cf2 Priority\\cell}\\row}
+${rows}`;
+  }).join('\n');
+  const title=isPortfolio?'Portfolio Closed Actions Report':`${propName} — Closed Actions Report`;
+  const rtf=`{\\rtf1\\ansi\\deff0
+{\\fonttbl{\\f0 Arial;}}
+{\\colortbl;\\red10\\green22\\blue40;\\red24\\green95\\blue165;\\red241\\green239\\blue232;}
+\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440\\f0\\fs22
+{\\pard\\sb0\\sa0 {\\b\\fs40 PULSE}\\par}
+{\\pard\\sb0\\sa40 {\\fs18\\cf2 Closed Actions Report \\emdash  Park Hotels & Resorts}\\par}
+{\\pard\\sb80\\sa0\\brdrb\\brdrs\\brdrw20\\brdrcf2\\brsp60 {\\b\\fs32 ${rtfEsc(title)}}\\par}
+{\\pard\\sb60\\sa240 {\\fs18 Generated ${rtfEsc(generated)} \\emdash  ${actions.length} closed action${actions.length!==1?'s':''}}\\par}
+${propBlocks}
+{\\pard\\sb480\\sa0\\brdt\\brdrs\\brdrw10\\brsp20 {\\fs16 PULSE \\emdash  Park Hotels & Resorts \\emdash  Modernization Project Assurance \\emdash  Confidential}\\par}
+{\\pard\\sb0\\sa0 {\\fs16 Generated ${rtfEsc(generated)}}\\par}
+}`;
+  const blob=new Blob([rtf],{type:'application/rtf'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`Closed-Actions-Report-${isPortfolio?'Portfolio':propName.replace(/\s+/g,'-')}-${new Date().toISOString().slice(0,10)}.rtf`;
+  a.click();URL.revokeObjectURL(url);
+  showToast('Closed Actions Report downloaded','success');
+}
+
+function downloadDocRTF(docId){
+  const d=(window.DOCUMENTS_LIVE||[]).find(x=>x.id===docId);
+  if(!d)return;
+  if(d.subfolder==='Meeting Minutes'&&d._meetingId){
+    downloadMeetingMinutes(d._meetingId);return;
+  }
+  if(d.subfolder==='Field Updates'&&d._submissionId){
+    downloadFieldUpdate(d._submissionId);return;
+  }
+  showToast('Source document not available for download','warn');
 }
 
 function renderPropDocFolder(p){
   const el=document.getElementById('prop-single-folder');if(!el)return;
-  let docs=(window.DOCUMENTS_LIVE||DOCUMENTS).filter(d=>d.property===p.n||d.property==='All');
+  let docs=(window.DOCUMENTS_LIVE||[]).filter(d=>d.property===p.n);
   if(role==='client')docs=docs.filter(d=>d.visibility==='Public');
-  const canUpload=role==='pm'||role==='admin';
-  el.innerHTML=`<div style="margin-bottom:.75rem">
-    ${canUpload?`<button class="btn" style="font-size:11px" onclick="showDocUpload('${p.n}')"><i class="ti ti-upload"></i>Upload document</button>`:''}
-  </div>
-  ${docs.length===0?`<div class="empty-state" style="padding:2rem"><i class="ti ti-files-off"></i><div class="empty-state-title">No documents for this property</div><div class="empty-state-sub">${canUpload?'Click Upload above to add documents':''}</div></div>`:
-  `<div class="card" style="padding:0;overflow:hidden">${docs.map(d=>docItemHtml(d)).join('')}</div>`}`;
+  el.innerHTML=SUBFOLDERS.map(sf=>{
+    const sfDocs=docs.filter(d=>d.subfolder===sf);
+    return subfolderHtml(p.n,sf,sfDocs,sfDocs.length>0);
+  }).join('');
+}
+
+function populateDocFolderFilter(){
+  const sel=document.getElementById('doc-folder-filter');if(!sel)return;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const props=['all',...new Set(port.map(p=>p.n))];
+  sel.innerHTML=props.map(p=>`<option value="${p}">${p==='all'?'All properties':p}</option>`).join('');
+}
+
+function toggleFolder(id){
+  const body=document.getElementById(id+'-body');const chevron=document.getElementById(id+'-chevron');
+  if(!body||!chevron)return;
+  body.classList.toggle('open');chevron.classList.toggle('open');
+}
+
+async function deleteDoc(docId,docName){
+  if(!confirm(`Delete "${docName}"?`))return;
+  await atDelete('Documents',docId);
+  if(window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=window.DOCUMENTS_LIVE.filter(d=>d.id!==docId);
+  showToast(`"${docName}" deleted`,'warn');
+  renderDocFolders();
+  if(currentProp)renderPropDocFolder(currentProp);
 }
 
 // PORTFOLIO TABLE
@@ -4832,10 +4989,39 @@ function refreshQueue(){
 async function approveSubmission(id){
   const s=submissions.find(s=>s.id===id);if(!s)return;
   s.reviewStatus='approved';
+  const today=new Date().toISOString().split('T')[0];
+  const docName=`${s.property} — Field Update ${s.week}`;
   notifications.push({type:'approved',property:s.property,week:s.week,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
+  // Update Field Updates table
   if(s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Approved'});
-  updateQueueBadge();refreshQueue();refreshNotifications();
-  showToast(`Update approved — ${s.consultant} has been notified`,'success');
+  // Archive to Documents table → Field Updates subfolder
+  const docRes=await atCreate('Documents',{
+    'Document Name':docName,
+    'Property Name':s.property,
+    'Document Type':'Field Update',
+    'Subfolder':'Field Updates',
+    'Visibility':'Public',
+    'Uploaded By':s.consultant,
+    'Uploaded Date':today,
+    'Notes':`Week of ${s.week} · Approved by PM`,
+  });
+  // Add to local DOCUMENTS_LIVE
+  const newDoc={
+    id:docRes?.records?.[0]?.id||'doc_'+Date.now(),
+    name:docName,property:s.property,
+    type:'Field Update',subfolder:'Field Updates',
+    visibility:'Public',uploaded:today,
+    uploadedBy:s.consultant,notes:`Week of ${s.week}`,
+    _submissionId:s.id,
+  };
+  if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
+  window.DOCUMENTS_LIVE.push(newDoc);
+  // Client notification
+  notifications.push({type:'client-field-update',property:s.property,week:s.week,
+    message:'New Field Updates have been Posted',
+    time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
+  updateQueueBadge();refreshQueue();refreshNotifications();renderDocFolders();
+  showToast(`Update approved — archived to Documents · Field Updates`,'success');
 }
 async function kickSubmission(id){
   const note=prompt('Return note for consultant:');if(note===null)return;
