@@ -436,8 +436,14 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   body{background:white}
   .report-page{max-width:100%;box-shadow:none}
   .report-header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .stat-card,.card{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid}
-  .two-col{display:grid!important;grid-template-columns:1fr 1fr!important}
+  .stat-card,.card{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .page-body{padding:8px 16px!important}
+  .stat-grid{gap:6px!important;margin-bottom:10px!important}
+  .stat-card{padding:8px 10px!important}
+  .two-col{display:grid!important;grid-template-columns:1fr 1fr!important;gap:10px!important;margin-bottom:10px!important}
+  .card{padding:10px 12px!important;margin-bottom:8px!important}
+  .card-header{margin-bottom:6px!important}
+  .rep-row{margin-bottom:3px!important}
 }
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%)}
@@ -697,12 +703,13 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
-      atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments')
+      atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
+      atGet('Phase Steps')
     ]);
-    console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones`);
+    console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     if (props.length > 0) {
       // Build PORTFOLIO entirely from Airtable — Airtable is sole source of truth for Park Hotels
       const livePortfolio = props.map(r => ({
@@ -814,6 +821,20 @@ async function loadAllData() {
       unitNames: r.fields['Unit Names']||'',
       phaseMilestones: r.fields['Phase Milestones']?r.fields['Phase Milestones'].split(',').map(s=>s.trim()).filter(Boolean):[],
     }));
+    // Phase Steps
+    window.PHASE_STEPS = phaseSteps.map(r=>({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      phaseName: r.fields['Phase Name']||'',
+      stepName: r.fields['Step Name']||'',
+      stepOrder: parseInt(r.fields['Step Order'])||0,
+      plannedStart: r.fields['Planned Start']||'',
+      plannedEnd: r.fields['Planned End']||'',
+      actualStart: r.fields['Actual Start']||'',
+      actualEnd: r.fields['Actual End']||'',
+      status: r.fields['Status']||'Not Started',
+      notes: r.fields['Notes']||'',
+    })).sort((a,b)=>a.stepOrder-b.stepOrder);
     // Billing Log — YTD snapshots per property
     window.BILLING_LOG = billingLog.map(r=>({
       id: r.id,
@@ -960,7 +981,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v12g · elevatorpulse.com</div>
+    <div class="login-version">PULSE v12h · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1561,7 +1582,7 @@ window.PROPERTIES_SEED = [
                 </div>
               </div>
               <div>
-                <div class="card"><div class="card-header"><div class="card-title">Open Issues</div></div><div id="prop-issues-list"></div></div>
+                <div class="card"><div class="card-header"><div class="card-title">Open Action Items</div></div><div id="prop-issues-list"></div></div>
                 <div class="card"><div class="card-header"><div class="card-title">Upcoming Site Visits</div></div><div id="prop-visits-preview"></div></div>
               </div>
             </div>
@@ -1747,15 +1768,13 @@ window.PROPERTIES_SEED = [
       <!-- DOCUMENTS — FOLDER VIEW -->
       <div id="view-documents" class="hidden">
         <div class="page-header">
-          <div class="page-header-left"><h1>Documents</h1><p>Field Updates, Meeting Minutes, and Closed Actions</p></div>
-          <div class="header-actions" id="doc-upload-area">
-            <select class="styled" id="doc-folder-filter" onchange="renderDocFolders()" style="width:200px"><option value="all">All properties</option></select>
-            <select class="styled" id="doc-subfolder-filter" onchange="renderDocFolders()" style="width:160px">
-              <option value="all">All subfolders</option>
-              <option value="Field Updates">Field Updates</option>
-              <option value="Meeting Minutes">Meeting Minutes</option>
-              <option value="Closed Actions">Closed Actions</option>
-            </select>
+          <div class="page-header-left">
+            <div id="doc-breadcrumb" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gray-mid);margin-bottom:4px"></div>
+            <h1 id="doc-page-title">Documents</h1>
+            <p>Field Updates, Meeting Minutes, and Closed Actions</p>
+          </div>
+          <div class="header-actions">
+            <input type="text" id="doc-search" placeholder="Search documents…" style="font-size:12px;padding:6px 12px;border:1px solid var(--border);border-radius:6px;width:220px;outline:none;color:var(--navy)" oninput="docSearchFilter(this.value)">
           </div>
         </div>
         <div class="page-body"><div id="doc-folders-container"></div></div>
@@ -1868,7 +1887,6 @@ window.PROPERTIES_SEED = [
               <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="f-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
               <div class="form-group"><label class="form-label">Issue status</label><select class="form-select" id="f-issue-status"><option>Open</option><option>Resolved</option><option>N/A</option></select></div>
             </div>
-            <div class="form-group"><label class="form-label">Savings identified (optional)</label><input class="form-input" type="text" id="f-savings" placeholder="e.g. Negotiated $5,000 reduction on PE7 buffer"></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="submitUpdate()"><i class="ti ti-upload"></i>Submit for review</button><button class="btn"><i class="ti ti-device-floppy"></i>Save draft</button></div>
           </div>
         </div>
@@ -2037,8 +2055,24 @@ function enterDemo(){
     {type:'approved',property:'Store #101',week:'2026-06-01',time:'June 2, 2026'},
     {type:'approved',property:'Store #055',week:'2026-05-25',time:'May 26, 2026'},
   ];
-  window.MILESTONES=[];
-  window.CLIENT_COMMENTS=[];
+  // Seed demo phase steps
+  window.PHASE_STEPS=[
+    {id:'dps1',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Submittal & Shop Drawing Review',stepOrder:1,plannedStart:'2025-06-01',plannedEnd:'2025-07-15',actualStart:'2025-06-10',actualEnd:'2025-07-20',status:'Complete',notes:''},
+    {id:'dps2',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Procurement & Manufacturing',stepOrder:2,plannedStart:'2025-07-15',plannedEnd:'2025-10-01',actualStart:'2025-07-20',actualEnd:'2025-10-10',status:'Complete',notes:'Long lead items ordered'},
+    {id:'dps3',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Mobilization & Demolition',stepOrder:3,plannedStart:'2025-10-01',plannedEnd:'2025-11-01',actualStart:'2025-10-10',actualEnd:'2025-11-15',status:'Complete',notes:''},
+    {id:'dps4',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Installation: Hoistway Equipment',stepOrder:4,plannedStart:'2025-11-01',plannedEnd:'2026-03-01',actualStart:'2025-11-15',actualEnd:'',status:'In Progress',notes:'Night-only windows'},
+    {id:'dps5',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Installation: Electrical & System Upgrades',stepOrder:5,plannedStart:'2026-03-01',plannedEnd:'2026-05-01',actualStart:'',actualEnd:'',status:'Not Started',notes:''},
+    {id:'dps6',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Adjusting & Testing',stepOrder:6,plannedStart:'2026-05-01',plannedEnd:'2026-06-15',actualStart:'',actualEnd:'',status:'Not Started',notes:''},
+    {id:'dps7',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Final Inspection',stepOrder:7,plannedStart:'2026-06-15',plannedEnd:'2026-07-01',actualStart:'',actualEnd:'',status:'Not Started',notes:''},
+    {id:'dps8',property:'Store #101',phaseName:'Phase 1 — Passenger Elevators',stepName:'Owner Acceptance',stepOrder:8,plannedStart:'2026-07-01',plannedEnd:'2026-08-01',actualStart:'',actualEnd:'',status:'Not Started',notes:''},
+    {id:'dps9',property:'Store #055',phaseName:'Phase 1 — Elevators',stepName:'Submittal & Shop Drawing Review',stepOrder:1,plannedStart:'2025-09-01',plannedEnd:'2025-10-01',actualStart:'2025-08-20',actualEnd:'2025-09-25',status:'Complete',notes:''},
+    {id:'dps10',property:'Store #055',phaseName:'Phase 1 — Elevators',stepName:'Procurement & Manufacturing',stepOrder:2,plannedStart:'2025-10-01',plannedEnd:'2025-12-01',actualStart:'2025-09-25',actualEnd:'2025-11-20',status:'Complete',notes:'Ahead of schedule'},
+    {id:'dps11',property:'Store #055',phaseName:'Phase 1 — Elevators',stepName:'Mobilization & Demolition',stepOrder:3,plannedStart:'2025-12-01',plannedEnd:'2026-01-01',actualStart:'2025-11-20',actualEnd:'2025-12-28',status:'Complete',notes:''},
+    {id:'dps12',property:'Store #055',phaseName:'Phase 1 — Elevators',stepName:'Installation',stepOrder:4,plannedStart:'2026-01-01',plannedEnd:'2026-04-01',actualStart:'2025-12-28',actualEnd:'',status:'In Progress',notes:'Ahead of schedule'},
+    {id:'dps13',property:'Store #055',phaseName:'Phase 1 — Elevators',stepName:'Adjusting & Test',stepOrder:5,plannedStart:'2026-04-01',plannedEnd:'2026-05-15',actualStart:'',actualEnd:'',status:'Not Started',notes:''},
+    {id:'dps14',property:'Store #055',phaseName:'Phase 1 — Elevators',stepName:'Final Inspection',stepOrder:6,plannedStart:'2026-05-15',plannedEnd:'2026-06-01',actualStart:'',actualEnd:'',status:'Not Started',notes:''},
+  ];
+  window.CO_SAVINGS=[];
   clientFlags=[];flagIdCounter=0;
 
   setupDemoPortal();
@@ -2334,7 +2368,7 @@ function doLogout(){
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];
   clientFlags=[];flagIdCounter=0;
   window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
   // Reset chatbot to Park Hotels context
@@ -2392,7 +2426,7 @@ function gotoView(viewId,btn){
   if(viewId==='my-updates')refreshMyUpdates();
   if(viewId==='notifications')refreshNotifications();
   if(viewId==='report')renderReport();
-  if(viewId==='documents'){renderDocFolders();}
+  if(viewId==='documents'){docNavLevel=0;docNavProperty='';docNavSubfolder='';docSearchQuery='';renderDocFolders();}
   if(viewId==='meetings'){
     const loadingEl=document.getElementById('meetings-loading');
     if(loadingEl)loadingEl.style.display=AT_CONNECTED?'none':'flex';
@@ -2526,11 +2560,11 @@ function renderPropertyView(p){
       </div>
     </div>`;
 
-  // Issues from submissions
-  const openIssues=submissions.filter(s=>s.property===p.n&&s.issueStatus==='Open'&&s.commentType!=='General');
-  document.getElementById('prop-issues-list').innerHTML=openIssues.length===0?
-    `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:.5rem">No open issues logged</div>`:
-    openIssues.map(s=>`<div class="alert alert-warn" style="margin-bottom:6px"><i class="ti ti-alert-triangle"></i><span><strong>${s.commentType}</strong> — ${(s.notes||'').slice(0,80)}${(s.notes||'').length>80?'...':''}</span></div>`).join('');
+  // Open Action Items from actionItems
+  const propOpenActions=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
+  document.getElementById('prop-issues-list').innerHTML=propOpenActions.length===0?
+    `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:.5rem">No open action items</div>`:
+    propOpenActions.map(a=>`<div class="action-item-row"><div class="action-dot dot-open"></div><div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">Owner: ${a.owner} · Due: ${a.due} · <span class="badge b-${(a.priority||'low').toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div></div>`).join('');
 
   // Site visits preview
   const upcomingVisits=siteVisits.filter(v=>v.property===p.n).slice(0,2);
@@ -3480,8 +3514,8 @@ function renderPhasesTab(p){
               ${ph.units} unit${ph.units!==1?'s':''} · ${ph.plannedStart||'—'} → ${ph.plannedCompletion||'—'}
             </div>
             ${ph.actualStart?`<div style="font-size:11px;color:var(--gray-mid)">Started: ${ph.actualStart}${ph.actualCompletion?' · Completed: '+ph.actualCompletion:''}</div>`:''}
-            ${ph.phaseMilestones&&ph.phaseMilestones.length>0?`<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:3px">${ph.phaseMilestones.map(ms=>`<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:var(--gray-pale);color:var(--gray-mid)">${ms}</span>`).join('')}</div>`:''}
             ${ph.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;font-style:italic">${ph.notes}</div>`:''}
+            ${renderStepTimeline(ph,p.n)}
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
             <span style="font-size:11px;font-weight:600;color:${statusColors[ph.status]||'var(--gray-mid)'}"><i class="ti ${statusIcons[ph.status]||'ti-circle'}" style="font-size:12px;margin-right:3px"></i>${ph.status}</span>
@@ -3499,6 +3533,129 @@ function renderPhasesTab(p){
       </div>`).join('')}`;
 }
 
+
+// ── PHASE STEP TIMELINE ────────────────────────────────────────────────
+function renderStepTimeline(ph, propName){
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===ph.phase).sort((a,b)=>a.stepOrder-b.stepOrder);
+  const canPM=role==='pm'||role==='admin'||role==='consultant';
+  if(steps.length===0){
+    if(ph.phaseMilestones&&ph.phaseMilestones.length>0){
+      return `<div style="margin-top:8px"><div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px">${ph.phaseMilestones.map(ms=>`<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:var(--gray-pale);color:var(--gray-mid)">${ms}</span>`).join('')}</div>${canPM?`<button class="btn" style="font-size:10px;padding:2px 8px" onclick="openStepDatesForm('${ph.id}','${propName.replace(/'/g,"\\'")}','${ph.phase.replace(/'/g,"\\'")}')"><i class="ti ti-calendar-plus" style="font-size:11px"></i> Add Step Dates</button>`:''}</div>`;
+    }
+    return '';
+  }
+  const allDates=[...steps.map(s=>s.plannedStart),...steps.map(s=>s.plannedEnd)].filter(Boolean).map(d=>new Date(d));
+  if(allDates.length<2)return '';
+  const minD=new Date(Math.min(...allDates));
+  const maxD=new Date(Math.max(...allDates));
+  const totalMs=maxD-minD||1;
+  const today=new Date();today.setHours(0,0,0,0);
+  const statusColors={'Complete':'var(--green)','In Progress':'var(--blue-dark)','At Risk':'var(--red)','Not Started':'var(--gray-light)'};
+  const todayPct=Math.max(0,Math.min(100,((today-minD)/totalMs)*100));
+  const showToday=today>=minD&&today<=maxD;
+  const bars=steps.map(s=>{
+    const sD=s.plannedStart?new Date(s.plannedStart):null;
+    const eD=s.plannedEnd?new Date(s.plannedEnd):null;
+    if(!sD||!eD)return '';
+    const left=((sD-minD)/totalMs)*100;
+    const width=Math.max(1,((eD-sD)/totalMs)*100);
+    const color=statusColors[s.status]||'var(--gray-light)';
+    const h=s.status==='In Progress'?10:6;
+    return `<div style="position:relative;height:20px;margin-bottom:2px;display:flex;align-items:center">
+      <div style="position:absolute;left:0;right:0;height:4px;background:var(--gray-pale);border-radius:2px;top:50%;transform:translateY(-50%)"></div>
+      <div style="position:absolute;left:${left}%;width:${width}%;height:${h}px;background:${color};border-radius:3px;opacity:${s.status==='Not Started'?0.35:0.85};top:50%;transform:translateY(-50%)" title="${s.stepName}: ${s.plannedStart||'—'} → ${s.plannedEnd||'—'} · ${s.status}"></div>
+      <div style="position:absolute;left:${Math.min(left,85)}%;font-size:8px;color:var(--gray-mid);white-space:nowrap;top:1px;pointer-events:none">${s.stepName.length>18?s.stepName.slice(0,16)+'…':s.stepName}</div>
+    </div>`;
+  }).join('');
+  const legend=['Complete','In Progress','At Risk','Not Started'].map(st=>{
+    const count=steps.filter(s=>s.status===st).length;
+    if(!count)return '';
+    return `<span style="font-size:9px;color:${statusColors[st]};display:flex;align-items:center;gap:3px"><span style="width:7px;height:7px;border-radius:2px;background:${statusColors[st]};display:inline-block"></span>${st}: ${count}</span>`;
+  }).join('');
+  return `<div style="margin-top:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+      <div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em">Construction Steps</div>
+      ${canPM?`<button class="btn" style="font-size:9px;padding:1px 8px" onclick="openStepDatesForm('${ph.id}','${propName.replace(/'/g,"\\'")}','${ph.phase.replace(/'/g,"\\'")}')"><i class="ti ti-edit" style="font-size:10px"></i> Edit Steps</button>`:''}
+    </div>
+    <div style="position:relative">${showToday?`<div style="position:absolute;top:0;bottom:0;left:${todayPct}%;width:1px;background:var(--red);z-index:2;opacity:.6" title="Today"></div>`:''} ${bars}</div>
+    <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--gray-light);font-family:'DM Mono',monospace;margin-top:2px">
+      <span>${minD.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</span>
+      <span>${maxD.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</span>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:5px;flex-wrap:wrap">${legend}</div>
+  </div>`;
+}
+
+function openStepDatesForm(phaseId, propName, phaseName){
+  const ph=(window.UNIT_GROUPS||[]).find(u=>u.id===phaseId);
+  if(!ph)return;
+  const existingSteps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName).sort((a,b)=>a.stepOrder-b.stepOrder);
+  const template=PHASE_MILESTONE_TEMPLATES[ph.productType]||ph.phaseMilestones||[];
+  const merged=template.map((name,i)=>{
+    const ex=existingSteps.find(s=>s.stepName===name);
+    return ex||{id:'',stepName:name,stepOrder:i+1,plannedStart:'',plannedEnd:'',actualStart:'',status:'Not Started'};
+  });
+  const rows=merged.map((s,i)=>`<div style="display:grid;grid-template-columns:1fr 105px 105px 105px 88px;gap:5px;align-items:center;padding:5px 0;border-bottom:1px solid var(--gray-pale)" data-step-idx="${i}" data-step-id="${s.id}" data-step-name="${s.stepName.replace(/"/g,'&quot;')}">
+    <div style="font-size:11px;font-weight:500;color:var(--navy)">${s.stepName}</div>
+    <input type="date" class="form-input step-planned-start" style="font-size:10px;padding:3px 4px;height:26px" value="${s.plannedStart}">
+    <input type="date" class="form-input step-planned-end" style="font-size:10px;padding:3px 4px;height:26px" value="${s.plannedEnd}">
+    <input type="date" class="form-input step-actual-start" style="font-size:10px;padding:3px 4px;height:26px" value="${s.actualStart}">
+    <select class="form-select step-status" style="font-size:10px;padding:2px 4px;height:26px">
+      ${['Not Started','In Progress','Complete','At Risk'].map(st=>`<option${s.status===st?' selected':''}>${st}</option>`).join('')}
+    </select>
+  </div>`).join('');
+  const overlay=document.createElement('div');
+  overlay.id='step-dates-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:720px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div><div style="font-size:14px;font-weight:700;color:var(--navy)">Step Dates — ${phaseName}</div><div style="font-size:11px;color:var(--gray-mid)">${propName} · ${ph.productType||''}</div></div>
+      <button onclick="document.getElementById('step-dates-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
+    </div>
+    <div style="overflow-y:auto;padding:14px 20px;flex:1">
+      <div style="display:grid;grid-template-columns:1fr 105px 105px 105px 88px;gap:5px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Step</div>
+        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Plan Start</div>
+        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Plan End</div>
+        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Actual Start</div>
+        <div style="font-size:9px;font-weight:600;color:var(--gray-mid);text-transform:uppercase">Status</div>
+      </div>
+      ${rows}
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px">
+      <button class="btn btn-primary" onclick="saveStepDates('${phaseId}','${propName.replace(/'/g,"\\'")}','${phaseName.replace(/'/g,"\\'")}')"><i class="ti ti-check"></i>Save Steps</button>
+      <button class="btn" onclick="document.getElementById('step-dates-overlay').remove()">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveStepDates(phaseId, propName, phaseName){
+  const rows=document.querySelectorAll('[data-step-idx]');
+  if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
+  for(const row of rows){
+    const stepName=row.dataset.stepName;
+    const existingId=row.dataset.stepId||'';
+    const stepOrder=parseInt(row.dataset.stepIdx)+1;
+    const plannedStart=row.querySelector('.step-planned-start').value||null;
+    const plannedEnd=row.querySelector('.step-planned-end').value||null;
+    const actualStart=row.querySelector('.step-actual-start').value||null;
+    const status=row.querySelector('.step-status').value;
+    const fields={'Property Name':propName,'Phase Name':phaseName,'Step Name':stepName,'Step Order':stepOrder,'Planned Start':plannedStart,'Planned End':plannedEnd,'Actual Start':actualStart,'Status':status};
+    if(existingId){
+      if(!demoMode)await atUpdate('Phase Steps',existingId,fields);
+      const ex=window.PHASE_STEPS.find(x=>x.id===existingId);
+      if(ex)Object.assign(ex,{plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',status,stepOrder});
+    } else {
+      const res=demoMode?null:await atCreate('Phase Steps',fields);
+      const newId=res?.records?.[0]?.id||'step_'+Date.now()+'_'+stepOrder;
+      window.PHASE_STEPS.push({id:newId,property:propName,phaseName,stepName,stepOrder,plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',actualEnd:'',status,notes:''});
+    }
+  }
+  document.getElementById('step-dates-overlay')?.remove();
+  if(currentProp)renderPhasesTab(currentProp);
+  showToast('Step dates saved','success');
+}
 function openBillingLogForm(){
   const form=document.getElementById('billing-entry-form');
   form.style.display='block';
@@ -4584,6 +4741,7 @@ function renderDashboard(){
   // Only sum budgets from Airtable-sourced properties (have an airtableId); avoid stale seed totals
   const budgetProps=port.filter(p=>p.budget&&p.budget>0);
   const totalBudget=budgetProps.length>0?budgetProps.reduce((a,p)=>a+(p.budget||0),0):0;
+  const totalSavings=(window.CO_SAVINGS||[]).reduce((a,s)=>a+(parseFloat(s.savings)||0),0);
   const inProgress=port.filter(p=>p.st==='In Progress').length;
   const planned=port.filter(p=>p.st==='Planned').length;
   const complete=port.filter(p=>p.st==='Complete').length;
@@ -4608,12 +4766,13 @@ function renderDashboard(){
   }).join('');
   const openAI=actionItems.filter(a=>a.status==='Open');
   document.getElementById('dashboard-body').innerHTML=`
-    <div class="stat-grid" style="grid-template-columns:repeat(5,1fr)">
-      <div class="stat-card"><div class="stat-label">Total Properties</div><div class="stat-value">${total}</div><div class="stat-sub">Portfolio</div></div>
-      <div class="stat-card stat-blue"><div class="stat-label">Active Projects</div><div class="stat-value">${activeProjects.length}</div><div class="stat-sub">VDA milestones in progress</div></div>
-      <div class="stat-card stat-green"><div class="stat-label">Complete</div><div class="stat-value">${complete}</div><div class="stat-sub">Projects finished</div></div>
-      <div class="stat-card stat-amber"><div class="stat-label">Total VT Units</div><div class="stat-value">${totalUnits.toLocaleString()}</div><div class="stat-sub">Elev. &amp; escalators</div></div>
-      <div class="stat-card stat-green"><div class="stat-label">Project Budget</div><div class="stat-value">${totalBudget>0?fmtCurrency(totalBudget):'—'}</div><div class="stat-sub">Across portfolio</div></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(6,1fr)">
+      <div class="stat-card"><div class="stat-label">Total Properties</div><div class="stat-value">${total}</div></div>
+      <div class="stat-card stat-blue"><div class="stat-label">Active Projects</div><div class="stat-value">${activeProjects.length}</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Projects Complete</div><div class="stat-value">${complete}</div></div>
+      <div class="stat-card" style="--stat-accent:var(--blue-mid)"><div class="stat-label">Total VT Units</div><div class="stat-value" style="color:var(--blue-mid)">${totalUnits.toLocaleString()}</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Portfolio Budget</div><div class="stat-value">${totalBudget>0?'$'+(totalBudget/1000000).toFixed(1)+'M':'—'}</div></div>
+      <div class="stat-card stat-teal"><div class="stat-label">Total Savings</div><div class="stat-value" style="color:var(--teal)">${totalSavings>0?'$'+(totalSavings/1000000).toFixed(1)+'M':'—'}</div></div>
     </div>
     <div class="two-col">
       <div class="card">
@@ -4781,32 +4940,93 @@ function folderHtml(propName,allDocs,isOpen){
   </div>`;
 }
 
+// ── DOCUMENTS DRILL-DOWN NAVIGATION ──────────────────────────────────
+let docNavLevel=0;
+let docNavProperty='';
+let docNavSubfolder='';
+let docSearchQuery='';
+
+function gotoDocLevel(level,property,subfolder){
+  docNavLevel=level||0;
+  docNavProperty=property||'';
+  docNavSubfolder=subfolder||'';
+  renderDocFolders();
+}
+
+function docSearchFilter(val){
+  docSearchQuery=(val||'').toLowerCase();
+  if(docSearchQuery)docNavLevel=0;
+  renderDocFolders();
+}
+
+function renderDocBreadcrumb(){
+  const bc=document.getElementById('doc-breadcrumb');
+  const title=document.getElementById('doc-page-title');
+  if(!bc)return;
+  if(docNavLevel===0){
+    bc.innerHTML='';
+    if(title)title.textContent='Documents';
+  } else if(docNavLevel===1){
+    bc.innerHTML=`<span style="cursor:pointer;color:var(--blue-dark);font-weight:500" onclick="gotoDocLevel(0)">Documents</span><span style="margin:0 6px;color:var(--gray-light)">›</span><span style="color:var(--navy)">${docNavProperty}</span>`;
+    if(title)title.textContent=docNavProperty;
+  } else {
+    bc.innerHTML=`<span style="cursor:pointer;color:var(--blue-dark);font-weight:500" onclick="gotoDocLevel(0)">Documents</span><span style="margin:0 6px;color:var(--gray-light)">›</span><span style="cursor:pointer;color:var(--blue-dark)" onclick="gotoDocLevel(1,docNavProperty)">${docNavProperty}</span><span style="margin:0 6px;color:var(--gray-light)">›</span><span style="color:var(--navy)">${docNavSubfolder}</span>`;
+    if(title)title.textContent=docNavSubfolder;
+  }
+}
+
 function renderDocFolders(){
-  const pf=document.getElementById('doc-folder-filter')?.value||'all';
-  const sf=document.getElementById('doc-subfolder-filter')?.value||'all';
+  renderDocBreadcrumb();
   const container=document.getElementById('doc-folders-container');if(!container)return;
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   let docs=window.DOCUMENTS_LIVE||[];
-  // Role visibility
   if(role==='client')docs=docs.filter(d=>d.visibility==='Public');
   if(role==='consultant'){
     const myProps=port.filter(p=>p.v===currentConsultantName).map(p=>p.n);
     docs=docs.filter(d=>myProps.includes(d.property));
   }
-  // Subfolder filter
-  if(sf!=='all')docs=docs.filter(d=>d.subfolder===sf);
-  // Property filter
-  const propNames=pf==='all'?[...new Set(port.map(p=>p.n))]:[pf];
-  let html='';let shown=0;
-  propNames.forEach(name=>{
-    const propDocs=docs.filter(d=>d.property===name);
-    if(propDocs.length===0&&pf==='all'&&(role!=='pm'&&role!=='admin'))return;
-    if(propDocs.length===0&&pf==='all')return; // hide empty folders in all-view
-    html+=folderHtml(name,propDocs,pf!=='all'||shown<2);
-    shown++;
-  });
-  if(!html)html=`<div class="empty-state" style="padding:3rem"><i class="ti ti-files-off"></i><div class="empty-state-title">No documents yet</div><div class="empty-state-sub">Field updates, meeting minutes, and closed actions will appear here automatically</div></div>`;
-  container.innerHTML=html;
+  if(docSearchQuery){
+    docs=docs.filter(d=>d.name.toLowerCase().includes(docSearchQuery)||d.property.toLowerCase().includes(docSearchQuery)||(d.notes||'').toLowerCase().includes(docSearchQuery));
+  }
+  const sfConfig={
+    'Field Updates':{icon:'ti-folder-filled',color:'var(--teal)',bg:'var(--teal-pale)'},
+    'Meeting Minutes':{icon:'ti-folder-filled',color:'var(--blue-dark)',bg:'var(--blue-pale)'},
+    'Closed Actions':{icon:'ti-folder-filled',color:'var(--green)',bg:'var(--green-pale)'},
+  };
+  if(docNavLevel===0||docSearchQuery){
+    // Root — show property folders
+    const propNames=[...new Set(port.map(p=>p.n))];
+    let html='';
+    propNames.forEach(name=>{
+      const propDocs=docs.filter(d=>d.property===name);
+      if(propDocs.length===0)return;
+      const prop=port.find(p=>p.n===name);
+      const sfSummary=SUBFOLDERS.map(sf=>{const c=propDocs.filter(d=>d.subfolder===sf).length;return c>0?`<span style="font-size:10px;color:var(--gray-mid)"><i class="ti ${sfConfig[sf].icon}" style="margin-right:2px;font-size:10px;color:${sfConfig[sf].color}"></i>${sf}: ${c}</span>`:null;}).filter(Boolean).join('<span style="margin:0 6px;color:var(--gray-pale)">·</span>');
+      if(docSearchQuery){
+        html+=`<div class="doc-folder" style="margin-bottom:8px"><div class="doc-folder-header" style="cursor:pointer" onclick="gotoDocLevel(1,'${name.replace(/'/g,"\'")}')"><div class="doc-folder-icon"><i class="ti ti-folder" style="font-size:17px"></i></div><div class="doc-folder-name">${name}</div><div class="doc-folder-meta">${propDocs.length} record${propDocs.length!==1?'s':''}</div></div><div style="padding:6px 14px;border-top:1px solid var(--border)">${propDocs.map(d=>docItemHtml(d)).join('')}</div></div>`;
+      } else {
+        html+=`<div class="doc-folder" style="margin-bottom:8px;cursor:pointer" onclick="gotoDocLevel(1,'${name.replace(/'/g,"\'")}')"><div class="doc-folder-header"><div class="doc-folder-icon"><i class="ti ti-folder" style="font-size:17px"></i></div><div class="doc-folder-name">${name}</div><div class="doc-folder-meta">${propDocs.length} record${propDocs.length!==1?'s':''} · ${prop?.vda&&prop.vda!=='—'?'VDA '+prop.vda:prop?.units?prop.units+' units':''}</div><i class="ti ti-chevron-right" style="color:var(--gray-mid);font-size:18px"></i></div><div style="padding:6px 14px 8px;border-top:1px solid var(--border);display:flex;gap:12px;flex-wrap:wrap">${sfSummary||'<span style="font-size:10px;color:var(--gray-light)">No documents</span>'}</div></div>`;
+      }
+    });
+    if(!html)html=`<div class="empty-state" style="padding:3rem"><i class="ti ti-files-off"></i><div class="empty-state-title">${docSearchQuery?'No documents match your search':'No documents yet'}</div></div>`;
+    container.innerHTML=html;
+  } else if(docNavLevel===1){
+    const propDocs=docs.filter(d=>d.property===docNavProperty);
+    container.innerHTML=SUBFOLDERS.map(sf=>{
+      const sfDocs=propDocs.filter(d=>d.subfolder===sf);
+      const cfg=sfConfig[sf];
+      return `<div class="doc-folder" style="margin-bottom:10px;cursor:pointer" onclick="gotoDocLevel(2,'${docNavProperty.replace(/'/g,"\'")}','${sf}')"><div class="doc-folder-header"><div class="doc-folder-icon" style="background:${cfg.bg}"><i class="ti ${cfg.icon}" style="font-size:17px;color:${cfg.color}"></i></div><div class="doc-folder-name">${sf}</div><div class="doc-folder-meta">${sfDocs.length} record${sfDocs.length!==1?'s':''}</div><i class="ti ti-chevron-right" style="color:var(--gray-mid);font-size:18px"></i></div></div>`;
+    }).join('');
+  } else {
+    const sfDocs=docs.filter(d=>d.property===docNavProperty&&d.subfolder===docNavSubfolder);
+    const isCA=docNavSubfolder==='Closed Actions';
+    let html='';
+    if(isCA&&(role==='pm'||role==='admin')&&sfDocs.length>0){
+      html+=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><button class="btn" style="font-size:11px" onclick="generateClosedActionsReport('${docNavProperty.replace(/'/g,"\'")}')"><i class="ti ti-file-analytics"></i>Property Report</button><button class="btn" style="font-size:11px" onclick="generateClosedActionsReport('all')"><i class="ti ti-world"></i>Portfolio Report</button></div>`;
+    }
+    html+=sfDocs.length===0?`<div class="empty-state" style="padding:3rem"><i class="ti ti-files-off"></i><div class="empty-state-title">No ${docNavSubfolder.toLowerCase()} yet</div></div>`:sfDocs.map(d=>docItemHtml(d)).join('');
+    container.innerHTML=html;
+  }
 }
 
 function updateClosedActionSelection(){
@@ -4904,28 +5124,6 @@ function renderPropDocFolder(p){
     const sfDocs=docs.filter(d=>d.subfolder===sf);
     return subfolderHtml(p.n,sf,sfDocs,sfDocs.length>0);
   }).join('');
-}
-
-function populateDocFolderFilter(){
-  const sel=document.getElementById('doc-folder-filter');if(!sel)return;
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
-  const props=['all',...new Set(port.map(p=>p.n))];
-  sel.innerHTML=props.map(p=>`<option value="${p}">${p==='all'?'All properties':p}</option>`).join('');
-}
-
-function toggleFolder(id){
-  const body=document.getElementById(id+'-body');const chevron=document.getElementById(id+'-chevron');
-  if(!body||!chevron)return;
-  body.classList.toggle('open');chevron.classList.toggle('open');
-}
-
-async function deleteDoc(docId,docName){
-  if(!confirm(`Delete "${docName}"?`))return;
-  await atDelete('Documents',docId);
-  if(window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=window.DOCUMENTS_LIVE.filter(d=>d.id!==docId);
-  showToast(`"${docName}" deleted`,'warn');
-  renderDocFolders();
-  if(currentProp)renderPropDocFolder(currentProp);
 }
 
 // PORTFOLIO TABLE
@@ -5243,7 +5441,6 @@ async function submitUpdate(){
   const status=document.getElementById('f-status').value;
   const commentType=document.getElementById('f-comment-type').value;
   const issueStatus=document.getElementById('f-issue-status').value;
-  const savings=document.getElementById('f-savings').value;
   const consultantName=currentConsultantName||'VDA Consultant';
   // Write to Airtable first
   const res=await atCreate('Field Updates',{
@@ -5255,16 +5452,15 @@ async function submitUpdate(){
     'Weekly Notes':notes,
     'Comment Type':commentType,
     'Issue Status':issueStatus,
-    'Savings Identified':savings,
     'Submitted Date':dateStr,
     'Review Status':'Pending',
     'Consultant Name':consultantName,
   });
   const atId=res?.records?.[0]?.id||null;
-  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,savings,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName});
+  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName});
   updateQueueBadge();
   const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
-  se.classList.remove('hidden');['f-property','f-units','f-notes','f-savings'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  se.classList.remove('hidden');['f-property','f-units','f-notes'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   setTimeout(()=>se.classList.add('hidden'),5000);
   if(!atId)showToast('Warning: submission saved locally but Airtable write failed','warn');
 }
