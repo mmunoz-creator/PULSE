@@ -146,7 +146,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .logout-btn:hover{color:rgba(255,255,255,.6)}
 /* MAIN */
 .main{flex:1;display:flex;flex-direction:column;margin-left:var(--sidebar-w);min-width:0;min-height:100vh}
-.main-inner{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.main-inner{flex:1;overflow-y:auto;display:flex;flex-direction:column;height:100vh}
 .mobile-topbar{display:none;background:var(--navy);padding:.75rem 1rem;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:30}
 .mobile-topbar-logo{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;color:white}
 .mobile-topbar-logo i{color:var(--blue-mid);font-size:20px}
@@ -983,7 +983,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v12k · elevatorpulse.com</div>
+    <div class="login-version">PULSE v12m · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1542,7 +1542,7 @@ window.PROPERTIES_SEED = [
                 <div style="font-size:11px;color:var(--blue-dark)"><strong>Reminder:</strong> All units in this phase must be the same product type and run concurrently. Create separate phases for staggered starts or different equipment types.</div>
               </div>
               <div id="phase-milestone-selector" style="display:none;margin-top:10px">
-                <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Select Applicable Steps <span style="font-size:10px;font-weight:400;color:var(--gray-mid);text-transform:none">(check steps that apply to this scope — all are optional)</span></div>
+                <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Select Applicable Steps <span style="font-size:10px;font-weight:400;color:var(--gray-mid);text-transform:none">(check steps that apply to this scope)</span></div>
                 <div id="phase-milestone-checks" style="display:flex;flex-direction:column;gap:4px"></div>
                 <div style="display:flex;gap:8px;margin-top:8px">
                   <button class="btn" style="font-size:10px;padding:3px 8px" onclick="selectAllPhaseMilestones(true)">Select All</button>
@@ -2635,52 +2635,63 @@ function getMsComplete(propName){
 // Returns risk assessment for a property based on today vs planned dates
 function calcScheduleRisk(propName){
   const today=new Date();today.setHours(0,0,0,0);
-  const ms=getMilestonesForProp(propName);
   const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
   let daysLate=0;
   let overdueCount=0;
   let atRiskCount=0;
+  let aheadCount=0;
   let projectedEnd=null;
 
-  // Check milestones: any incomplete with a planned date in the past?
-  ms.forEach(m=>{
-    if(m.status==='Complete'||m.status==='Not Started')return;
-    if(m.plannedDate){
-      const planned=new Date(m.plannedDate);
-      if(planned<today){
+  // Primary: check phase STEPS schedule health
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.checked!==false);
+  steps.forEach(s=>{
+    if(s.status==='Complete')return;
+    if(s.status==='At Risk')atRiskCount++;
+    if(s.plannedEnd){
+      const planned=new Date(s.plannedEnd);
+      if(planned<today&&s.status!=='Complete'){
         const delta=Math.round((today-planned)/(1000*60*60*24));
         daysLate=Math.max(daysLate,delta);
         overdueCount++;
       }
     }
-    if(m.status==='At Risk'||m.status==='atrisk')atRiskCount++;
+    // Check if ahead: In Progress step started before planned start
+    if(s.status==='In Progress'&&s.actualStart&&s.plannedStart){
+      if(new Date(s.actualStart)<new Date(s.plannedStart))aheadCount++;
+    }
   });
 
-  // Check phases: any incomplete with planned completion in the past?
-  phases.forEach(ph=>{
-    if(ph.status==='Complete')return;
-    if(ph.plannedCompletion){
-      const planned=new Date(ph.plannedCompletion);
-      if(planned<today){
-        const delta=Math.round((today-planned)/(1000*60*60*24));
-        daysLate=Math.max(daysLate,delta);
-        overdueCount++;
+  // Secondary: if no steps defined, fall back to phase-level planned completion
+  if(steps.length===0){
+    phases.forEach(ph=>{
+      if(ph.status==='Complete')return;
+      if(ph.plannedCompletion){
+        const planned=new Date(ph.plannedCompletion);
+        if(planned<today){
+          const delta=Math.round((today-planned)/(1000*60*60*24));
+          daysLate=Math.max(daysLate,delta);
+          overdueCount++;
+        }
+        if(!projectedEnd||planned>projectedEnd)projectedEnd=planned;
       }
-      // Track projected end: latest planned completion across all phases
-      if(!projectedEnd||planned>projectedEnd)projectedEnd=planned;
-    }
-    if(ph.plannedCompletion){
-      const planned=new Date(ph.plannedCompletion);
-      if(!projectedEnd||planned>projectedEnd)projectedEnd=planned;
-    }
-  });
+    });
+  } else {
+    // Use latest phase planned completion for projectedEnd
+    phases.forEach(ph=>{
+      if(ph.plannedCompletion){
+        const d=new Date(ph.plannedCompletion);
+        if(!projectedEnd||d>projectedEnd)projectedEnd=d;
+      }
+    });
+  }
 
-  // Risk level
+  // Risk level — driven by construction steps
   let riskLevel='On Track';
-  if(atRiskCount>0||daysLate>30)riskLevel='High';
+  if(atRiskCount>0||daysLate>60)riskLevel='High';
   else if(overdueCount>0||daysLate>0)riskLevel='Medium';
+  else if(aheadCount>0&&overdueCount===0&&atRiskCount===0)riskLevel='Ahead';
 
-  return {daysLate,overdueCount,atRiskCount,riskLevel,projectedEnd};
+  return {daysLate,overdueCount,atRiskCount,aheadCount,riskLevel,projectedEnd};
 }
 
 // Returns projected completion date from latest phase planned completion
@@ -3510,79 +3521,63 @@ function renderBudgetTab(p){
 }
 
 
-// ── PHASE STATUS DERIVATION ────────────────────────────────────────────
-function derivePhaseStatus(phaseId, propName, phaseName){
-  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName);
+function derivePhaseStatusFromSteps(propName, phaseName){
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName&&s.checked!==false);
   if(steps.length===0)return null; // no steps — use manual status
-  const activeSteps=steps.filter(s=>s.checked!==false); // respect checkbox selection
-  if(activeSteps.length===0)return null;
-  if(activeSteps.every(s=>s.status==='Complete'))return'Complete';
-  if(activeSteps.some(s=>s.status==='At Risk'))return'At Risk';
-  if(activeSteps.some(s=>s.status==='In Progress'))return'In Progress';
+  const statuses=steps.map(s=>getStepScheduleStatus(s));
+  if(statuses.every(s=>s==='Complete'))return'Complete';
+  if(statuses.some(s=>s==='Behind'))return'Behind';
+  if(statuses.some(s=>s==='In Progress'))return'In Progress';
+  if(statuses.some(s=>s==='Ahead'))return'Ahead';
   return'Not Started';
 }
 
-function getPhaseScheduleStatus(propName, phaseName){
-  const today=new Date();today.setHours(0,0,0,0);
-  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName&&s.checked!==false);
-  if(steps.length===0)return null;
-  // Check if any incomplete step is past its planned end date
-  const overdue=steps.some(s=>s.status!=='Complete'&&s.plannedEnd&&new Date(s.plannedEnd)<today);
-  if(overdue)return'Behind';
-  // Check if ahead: completed steps finished before planned end, or In Progress started before planned start
-  const inProgStep=steps.find(s=>s.status==='In Progress');
-  if(inProgStep&&inProgStep.actualStart&&inProgStep.plannedStart){
-    if(new Date(inProgStep.actualStart)<new Date(inProgStep.plannedStart))return'Ahead';
-  }
-  const completedEarly=steps.filter(s=>s.status==='Complete'&&s.actualEnd&&s.plannedEnd&&new Date(s.actualEnd)<new Date(s.plannedEnd));
-  if(completedEarly.length>0&&!overdue)return'Ahead';
-  return'On Track';
+function derivePropertyStatusFromPhases(propName){
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
+  if(phases.length===0)return'In Progress'; // no phases yet — in progress by default
+  const phaseStatuses=phases.map(ph=>{
+    const fromSteps=derivePhaseStatusFromSteps(propName,ph.phase);
+    return fromSteps||ph.status||'Not Started';
+  });
+  if(phaseStatuses.every(s=>s==='Complete'))return'Complete';
+  if(phaseStatuses.some(s=>s==='Behind'))return'At Risk'; // Phase Behind → Property At Risk
+  if(phaseStatuses.some(s=>s==='In Progress'||s==='Ahead'))return'In Progress';
+  return'Not Started';
 }
 
-function getCurrentStep(propName, phaseName){
-  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName&&s.checked!==false).sort((a,b)=>a.stepOrder-b.stepOrder);
-  return steps.find(s=>s.status==='In Progress')||steps.find(s=>s.status==='At Risk')||null;
+function renderPropertyStatusBadge(propName){
+  const status=derivePropertyStatusFromPhases(propName);
+  const map={
+    'Complete':`<span class="badge" style="background:var(--green-pale);color:var(--green)"><i class="ti ti-circle-check" style="font-size:10px"></i> Complete</span>`,
+    'At Risk':`<span class="badge b-behind">At Risk</span>`,
+    'In Progress':`<span class="badge b-nip">In Progress</span>`,
+    'Not Started':`<span class="badge b-nac">Not Started</span>`,
+  };
+  return map[status]||map['Not Started'];
+}
+
+function derivePhaseStatus(phaseId, propName, phaseName){
+  // Now uses step-based cascade — ignores manual status
+  const fromSteps=derivePhaseStatusFromSteps(propName,phaseName);
+  if(fromSteps)return fromSteps;
+  const ph=(window.UNIT_GROUPS||[]).find(u=>u.id===phaseId);
+  return ph?.status||'Not Started';
+}
+
+function getPhaseScheduleStatus(propName, phaseName){
+  return derivePhaseStatusFromSteps(propName,phaseName)||'On Track';
 }
 
 function renderPhaseStatusBadge(derivedStatus, scheduleStatus){
   const status=derivedStatus||'Not Started';
   if(status==='Complete')return`<span class="badge" style="background:var(--green-pale);color:var(--green)"><i class="ti ti-circle-check" style="font-size:11px;margin-right:2px"></i>Complete</span>`;
-  if(scheduleStatus==='Ahead')return`<span class="badge" style="background:var(--green-pale);color:var(--green)">Ahead</span>`;
-  if(scheduleStatus==='Behind'||status==='At Risk')return`<span class="badge b-behind">${status==='At Risk'?'At Risk':'Behind'}</span>`;
+  if(status==='Behind')return`<span class="badge b-behind">Behind</span>`;
+  if(status==='Ahead')return`<span class="badge" style="background:var(--green-pale);color:var(--green)">Ahead</span>`;
   if(status==='In Progress')return`<span class="badge b-nip">In Progress</span>`;
   return`<span class="badge b-nac">Not Started</span>`;
 }
 
-function renderStepLegend(propName, phaseName, isExpanded, phaseId){
-  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName&&s.checked!==false).sort((a,b)=>a.stepOrder-b.stepOrder);
-  if(steps.length===0)return'';
-  const statusDot={'Complete':'var(--green)','In Progress':'var(--blue-dark)','At Risk':'var(--red)','Not Started':'var(--gray-light)'};
-  const fmtD=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',year:'2-digit'}):'—';
-  const canPM=role==='pm'||role==='admin'||role==='consultant';
-  if(!isExpanded){
-    // Collapsed — show only current active step
-    const current=steps.find(s=>s.status==='In Progress')||steps.find(s=>s.status==='At Risk');
-    if(!current)return'';
-    return`<div style="margin-top:6px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid)">
-      <span style="width:8px;height:8px;border-radius:50%;background:${statusDot[current.status]};flex-shrink:0;display:inline-block"></span>
-      <span>Current: <strong style="color:var(--navy)">${current.stepName}</strong></span>
-      ${current.plannedEnd?`<span style="color:var(--gray-light)">· due ${fmtD(current.plannedEnd)}</span>`:''}
-    </div>`;
-  }
-  // Expanded — full list
-  return`<div style="margin-top:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em">Construction Steps</div>
-      ${canPM?`<button class="btn" style="font-size:9px;padding:2px 10px" onclick="openStepDatesForm('${phaseId}','${propName.replace(/'/g,"\\'")}','${phaseName.replace(/'/g,"\\'")}')"><i class="ti ti-edit" style="font-size:10px"></i> Edit Steps</button>`:''}
-    </div>
-    ${steps.map(s=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--gray-pale)">
-      <span style="width:9px;height:9px;border-radius:50%;background:${statusDot[s.status]||'var(--gray-light)'};flex-shrink:0;display:inline-block"></span>
-      <span style="font-size:11px;color:var(--navy);flex:1;font-weight:${s.status==='In Progress'?600:400}">${s.stepName}</span>
-      <span style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;white-space:nowrap">${fmtD(s.plannedStart)} – ${fmtD(s.plannedEnd)}</span>
-      ${s.actualEnd?`<span style="font-size:9px;color:var(--green)">✓ ${fmtD(s.actualEnd)}</span>`:''}
-    </div>`).join('')}
-  </div>`;
-}
+function derivePhaseStatusOLD(phaseId, propName, phaseName){return derivePhaseStatus(phaseId,propName,phaseName);}
 
 function renderPhasesTab(p){
   if(!p)return;
@@ -3660,14 +3655,6 @@ function renderPhasesTab(p){
       <div class="ph-body" style="display:none;padding:0 14px 12px;border-top:1px solid var(--border);background:var(--gray-xpale)">
         ${ph.actualStart?`<div style="font-size:11px;color:var(--gray-mid);margin-top:8px">Started: ${ph.actualStart}${ph.actualCompletion?' · Completed: '+ph.actualCompletion:''}</div>`:''}
         ${renderStepLegend(p.n,ph.phase,true,ph.id)}
-        ${canPM||canConsultant?`<div style="margin-top:10px;display:flex;gap:6px;align-items:center">
-          <span style="font-size:10px;color:var(--gray-light)">Override:</span>
-          <select class="form-select" style="font-size:10px;padding:2px 6px;height:auto;width:auto" onchange="updatePhaseStatus('${ph.id}',this.value,'${p.n.replace(/'/g,"\\'")}')">
-            <option${ph.status==='Not Started'?' selected':''}>Not Started</option>
-            <option${ph.status==='In Progress'?' selected':''}>In Progress</option>
-            <option${ph.status==='Complete'?' selected':''}>Complete</option>
-          </select>
-        </div>`:''}
       </div>
     </div>`;
   }).join('');
@@ -3680,7 +3667,7 @@ function renderStepTimeline(ph, propName){
   const canPM=role==='pm'||role==='admin'||role==='consultant';
   if(steps.length===0){
     if(ph.phaseMilestones&&ph.phaseMilestones.length>0){
-      return `<div style="margin-top:8px"><div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px">${ph.phaseMilestones.map(ms=>`<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:var(--gray-pale);color:var(--gray-mid)">${ms}</span>`).join('')}</div>${canPM?`<button class="btn" style="font-size:10px;padding:2px 8px" onclick="openStepDatesForm('${ph.id}','${propName.replace(/'/g,"\\'")}','${ph.phase.replace(/'/g,"\\'")}')"><i class="ti ti-calendar-plus" style="font-size:11px"></i> Add Step Dates</button>`:''}</div>`;
+      return `<div style="margin-top:8px"><div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px">${ph.phaseMilestones.map(ms=>`<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:var(--gray-pale);color:var(--gray-mid)">${ms}</span>`).join('')}</div>${canPM?`<button class="btn" style="font-size:10px;padding:2px 8px" onclick="openStepDatesForm('${ph.id}')"><i class="ti ti-calendar-plus" style="font-size:11px"></i> Add Step Dates</button>`:''}</div>`;
     }
     return '';
   }
@@ -3715,7 +3702,7 @@ function renderStepTimeline(ph, propName){
   return `<div style="margin-top:10px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
       <div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em">Construction Steps</div>
-      ${canPM?`<button class="btn" style="font-size:9px;padding:1px 8px" onclick="openStepDatesForm('${ph.id}','${propName.replace(/'/g,"\\'")}','${ph.phase.replace(/'/g,"\\'")}')"><i class="ti ti-edit" style="font-size:10px"></i> Edit Steps</button>`:''}
+      ${canPM?`<button class="btn" style="font-size:9px;padding:1px 8px" onclick="openStepDatesForm('${ph.id}')"><i class="ti ti-edit" style="font-size:10px"></i> Edit Steps</button>`:''}
     </div>
     <div style="position:relative">${showToday?`<div style="position:absolute;top:0;bottom:0;left:${todayPct}%;width:1px;background:var(--red);z-index:2;opacity:.6" title="Today"></div>`:''} ${bars}</div>
     <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--gray-light);font-family:'DM Mono',monospace;margin-top:2px">
@@ -3726,9 +3713,11 @@ function renderStepTimeline(ph, propName){
   </div>`;
 }
 
-function openStepDatesForm(phaseId, propName, phaseName){
+function openStepDatesForm(phaseId){
   const ph=(window.UNIT_GROUPS||[]).find(u=>u.id===phaseId);
-  if(!ph)return;
+  if(!ph){showToast('Phase not found','warn');return;}
+  const propName=ph.property||ph.n||currentProp?.n||'';
+  const phaseName=ph.phase||ph.phaseName||'';
   const existingSteps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===phaseName).sort((a,b)=>a.stepOrder-b.stepOrder);
   const template=PHASE_MILESTONE_TEMPLATES[ph.productType]||ph.phaseMilestones||[];
   const merged=template.map((name,i)=>{
@@ -3743,7 +3732,7 @@ function openStepDatesForm(phaseId, propName, phaseName){
     <input type="date" class="form-input step-actual-start" style="font-size:10px;padding:2px 3px;height:24px" value="${s.actualStart||''}">
     <input type="date" class="form-input step-actual-end" style="font-size:10px;padding:2px 3px;height:24px" value="${s.actualEnd||''}">
     <select class="form-select step-status" style="font-size:10px;padding:2px 3px;height:24px">
-      ${['Not Started','In Progress','Complete','At Risk'].map(st=>`<option${s.status===st?' selected':''}>${st}</option>`).join('')}
+      ${['Not Started','In Progress','Complete'].map(st=>`<option${s.status===st?' selected':''}>${st}</option>`).join('')}
     </select>
   </div>`).join('');
   const overlay=document.createElement('div');
@@ -3767,14 +3756,18 @@ function openStepDatesForm(phaseId, propName, phaseName){
       ${rows}
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px">
-      <button class="btn btn-primary" onclick="saveStepDates('${phaseId}','${propName.replace(/'/g,"\\'")}','${phaseName.replace(/'/g,"\\'")}')"><i class="ti ti-check"></i>Save Steps</button>
+      <button class="btn btn-primary" onclick="saveStepDates('${phaseId}')"><i class="ti ti-check"></i>Save Steps</button>
       <button class="btn" onclick="document.getElementById('step-dates-overlay').remove()">Cancel</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
 }
 
-async function saveStepDates(phaseId, propName, phaseName){
+async function saveStepDates(phaseId){
+  const ph=(window.UNIT_GROUPS||[]).find(u=>u.id===phaseId);
+  if(!ph){showToast('Phase not found','warn');return;}
+  const propName=ph.property||ph.n||currentProp?.n||'';
+  const phaseName=ph.phase||ph.phaseName||'';
   const rows=document.querySelectorAll('[data-step-idx]');
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
   for(const row of rows){
@@ -3889,7 +3882,7 @@ function renderPhaseMilestoneSelector(){
   checks.innerHTML=steps.map((s,i)=>`<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:3px 0;border-bottom:1px solid var(--gray-pale)">
     <input type="checkbox" class="phase-ms-check" value="${s}" checked style="width:14px;height:14px;flex-shrink:0">
     <span style="color:var(--gray-mid);font-size:10px;font-family:'DM Mono',monospace;width:18px;flex-shrink:0">${String(i+1).padStart(2,'0')}</span>
-    <span>${s}${optional.includes(s)?` <span style="font-size:9px;color:var(--gray-mid)">(optional)</span>`:''}</span>
+    <span>${s}</span>
   </label>`).join('');
   sel.style.display='block';
 }
@@ -3994,7 +3987,7 @@ function renderEditPhaseMilestoneSelector(ph){
     return `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:3px 0;border-bottom:1px solid var(--gray-pale)">
       <input type="checkbox" class="edit-phase-step-check" value="${s}" ${isChecked?'checked':''} style="width:14px;height:14px;flex-shrink:0">
       <span style="color:var(--gray-mid);font-size:10px;font-family:'DM Mono',monospace;width:18px;flex-shrink:0">${String(i+1).padStart(2,'0')}</span>
-      <span>${s}${optional.includes(s)?` <span style="font-size:9px;color:var(--gray-mid)">(optional)</span>`:''}</span>
+      <span>${s}</span>
     </label>`;
   }).join('');
   sel.style.display='block';
@@ -4303,8 +4296,14 @@ function renderCharts(){
   // 1. Heat Map: per-property schedule + milestone %
   const heatData=active.map(p=>{
     const risk=calcScheduleRisk(p.n);
-    const pct=Math.round(getMsComplete(p.n)/MILESTONES_DEF.length*100);
-    return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,riskLevel:risk.riskLevel,daysLate:risk.daysLate,overdueCount:risk.overdueCount};
+    const propStatus=derivePropertyStatusFromPhases(p.n);
+    const propSteps=(window.PHASE_STEPS||[]).filter(s=>s.property===p.n&&s.checked!==false);
+    const stepsComplete=propSteps.filter(s=>s.status==='Complete').length;
+    const pct=propSteps.length>0?Math.round(stepsComplete/propSteps.length*100):Math.round(getMsComplete(p.n)/MILESTONES_DEF.length*100);
+    const pctLabel=propSteps.length>0?`${pct}% steps`:`${pct}% ms`;
+    // Risk level from cascade: At Risk = Behind phase, not manual flags
+    const riskLevel=propStatus==='At Risk'?'High':propStatus==='Complete'?'None':risk.daysLate>0?'Medium':'Low';
+    return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,pctLabel,riskLevel,propStatus,daysLate:risk.daysLate,overdueCount:risk.overdueCount};
   });
 
   // 2. Budget vs Billed
@@ -4314,9 +4313,25 @@ function renderCharts(){
     return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:p.budget,billedYTD,pctBilled:Math.round((billedYTD/p.budget)*100)};
   }).sort((a,b)=>b.budget-a.budget).slice(0,12);
 
-  // 3. Schedule Variance
-  const schedCounts={Behind:0,'On Track':0,Ahead:0,Unknown:0};
-  active.forEach(p=>{if(schedCounts[p.r]!==undefined)schedCounts[p.r]++;else schedCounts.Unknown++;});
+  // 3. Elevator Company Performance — vertical stacked bar
+  const elevCoMap={};
+  active.forEach(p=>{
+    const ec=p.ec||'Unknown';
+    if(!elevCoMap[ec])elevCoMap[ec]={name:ec,complete:0,onTrack:0,behind:0,atRisk:0,notStarted:0,total:0};
+    elevCoMap[ec].total++;
+    const propStatus=derivePropertyStatusFromPhases(p.n);
+    if(propStatus==='Complete')elevCoMap[ec].complete++;
+    else if(propStatus==='At Risk')elevCoMap[ec].atRisk++;
+    else if(propStatus==='In Progress')elevCoMap[ec].onTrack++;
+    else elevCoMap[ec].notStarted++;
+  });
+  const elevCoData=Object.values(elevCoMap).sort((a,b)=>b.total-a.total);
+
+  // 3b. Budget data with CO Savings
+  const budgetDataWithSavings=budgetData.map(d=>{
+    const savings=(window.CO_SAVINGS||[]).filter(s=>s.property===d.fullName).reduce((a,s)=>a+(parseFloat(s.savings)||0),0);
+    return {...d,savings};
+  });
 
   // 4. Milestone Funnel: count of active properties at each milestone stage
   const funnelCounts=MILESTONES_DEF.map((_,i)=>({stage:i+1,name:MILESTONES_DEF[i],count:0}));
@@ -4366,7 +4381,7 @@ function renderCharts(){
     ${active.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No active properties</div>':''}
   </div>
 
-  <!-- ROW 2: Budget vs Billed | Schedule Variance -->
+  <!-- ROW 2: Budget vs Billed | Elevator Company Performance -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
     <div class="card">
       <div class="card-header"><div class="card-title">Budget vs Billed</div><div class="card-sub">Project budget vs YTD billed — active properties</div></div>
@@ -4374,8 +4389,8 @@ function renderCharts(){
       ${budgetData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries to populate this chart.</div>':''}
     </div>
     <div class="card">
-      <div class="card-header"><div class="card-title">Schedule Variance</div><div class="card-sub">Distribution across active portfolio</div></div>
-      <div id="sched-chart" style="margin-top:10px"></div>
+      <div class="card-header"><div class="card-title">Elevator Company Performance</div><div class="card-sub">Properties by status per contractor</div></div>
+      <div id="elev-co-chart" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -4403,27 +4418,34 @@ function renderCharts(){
   const heatGrid=document.getElementById('heat-grid');
   if(heatGrid){
     heatGrid.innerHTML=heatData.map(d=>{
-      const bg=d.riskLevel==='High'?'var(--red-pale)':d.schedule==='Behind'?'var(--amber-pale)':d.schedule==='Ahead'?'var(--teal-pale)':'var(--green-pale)';
-      const accent=d.riskLevel==='High'?'var(--red)':d.schedule==='Behind'?'var(--amber)':d.schedule==='Ahead'?'var(--teal)':'var(--green)';
-      const badge=d.riskLevel==='High'?`<span style="font-size:9px;color:var(--red);font-weight:600">HIGH RISK</span>`:
-        d.schedule==='Behind'?`<span style="font-size:9px;color:var(--amber);font-weight:600">BEHIND</span>`:
-        d.schedule==='Ahead'?`<span style="font-size:9px;color:var(--teal);font-weight:600">AHEAD</span>`:
-        `<span style="font-size:9px;color:var(--green);font-weight:600">ON TRACK</span>`;
+      const s=d.propStatus||'In Progress';
+      const bg=s==='At Risk'?'var(--red-pale)':s==='Behind'?'var(--amber-pale)':s==='Ahead'?'var(--teal-pale)':s==='Complete'?'var(--green-pale)':'white';
+      const accent=s==='At Risk'?'var(--red)':s==='Behind'?'var(--amber)':s==='Ahead'?'var(--teal)':s==='Complete'?'var(--green)':'var(--blue-mid)';
+      const badge=s==='At Risk'?`<span style="font-size:9px;color:var(--red);font-weight:600">AT RISK</span>`:
+        s==='Behind'?`<span style="font-size:9px;color:var(--amber);font-weight:600">BEHIND</span>`:
+        s==='Ahead'?`<span style="font-size:9px;color:var(--teal);font-weight:600">AHEAD</span>`:
+        s==='Complete'?`<span style="font-size:9px;color:var(--green);font-weight:600">COMPLETE</span>`:
+        `<span style="font-size:9px;color:var(--blue-dark);font-weight:600">ON TRACK</span>`;
       return `<div onclick="openProperty('${d.name.replace(/'/g,"\\'")}'')" style="background:${bg};border-radius:8px;padding:10px 12px;cursor:pointer;border-left:3px solid ${accent};transition:opacity .12s" onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
         <div style="font-size:11px;font-weight:600;color:var(--navy);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.shortName}</div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">${badge}<span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--gray-mid)">${d.pct}%</span></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">${badge}<span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--gray-mid)">${d.pctLabel||d.pct+'%'}</span></div>
         <div style="background:rgba(0,0,0,.08);border-radius:3px;height:4px"><div style="width:${d.pct}%;background:${accent};height:4px;border-radius:3px"></div></div>
         ${d.daysLate>0?`<div style="font-size:9px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:''}
       </div>`;
     }).join('');
   }
 
-  // ── 2. BUDGET VS BILLED (horizontal bars) ─────────────────────────
+  // ── 2. BUDGET VS BILLED + CO SAVINGS ──────────────────────────────
   const budgetBars=document.getElementById('budget-bars');
-  if(budgetBars&&budgetData.length>0){
-    const maxBudget=Math.max(...budgetData.map(d=>d.budget));
-    budgetBars.innerHTML=budgetData.map(d=>{
+  if(budgetBars&&budgetDataWithSavings.length>0){
+    const maxBudget=Math.max(...budgetDataWithSavings.map(d=>d.budget));
+    budgetBars.innerHTML=`<div style="display:flex;gap:12px;margin-bottom:8px;flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--gray-mid);display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:var(--blue-dark);display:inline-block"></span>Billed YTD</span>
+      <span style="font-size:10px;color:var(--gray-mid);display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:var(--teal);display:inline-block"></span>CO Savings</span>
+      <span style="font-size:10px;color:var(--gray-mid);display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:var(--blue-pale);display:inline-block"></span>Budget</span>
+    </div>`+budgetDataWithSavings.map(d=>{
       const overrun=d.pctBilled>100;
+      const savingsPct=d.budget>0?Math.min(Math.round((d.savings/maxBudget)*100),100):0;
       return `<div style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;margin-bottom:3px">
           <div style="font-size:11px;color:var(--blue-dark);font-weight:500;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}'">${d.name}</div>
@@ -4432,8 +4454,9 @@ function renderCharts(){
         <div style="position:relative;height:20px;background:var(--gray-pale);border-radius:4px;overflow:hidden">
           <div style="position:absolute;top:0;left:0;height:100%;width:${Math.round((d.budget/maxBudget)*100)}%;background:var(--blue-pale);border-radius:4px"></div>
           <div style="position:absolute;top:0;left:0;height:100%;width:${Math.min(Math.round((d.billedYTD/maxBudget)*100),100)}%;background:${overrun?'var(--red)':'var(--blue-dark)'};border-radius:4px;opacity:.85"></div>
+          ${d.savings>0?`<div style="position:absolute;top:0;left:${Math.min(Math.round((d.billedYTD/maxBudget)*100),100)}%;height:100%;width:${savingsPct}%;background:var(--teal);border-radius:0 4px 4px 0;opacity:.8"></div>`:''}
           <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;padding:0 6px;justify-content:space-between">
-            <span style="font-size:9px;color:white;font-weight:600">${d.pctBilled}% billed</span>
+            <span style="font-size:9px;color:white;font-weight:600">${d.pctBilled}% billed${d.savings>0?' · '+fmtCurrency(d.savings)+' saved':''}</span>
             ${overrun?'<span style="font-size:9px;color:white;font-weight:600">OVER</span>':''}
           </div>
         </div>
@@ -4441,27 +4464,36 @@ function renderCharts(){
     }).join('');
   }
 
-  // ── 3. SCHEDULE VARIANCE (stacked bar + breakdown) ─────────────────
-  const schedChart=document.getElementById('sched-chart');
-  if(schedChart){
-    const total=active.length||1;
-    const bars=[
-      {label:'On Track',count:schedCounts['On Track'],color:'var(--green)'},
-      {label:'Behind',count:schedCounts['Behind'],color:'var(--amber)'},
-      {label:'Ahead',count:schedCounts['Ahead'],color:'var(--teal)'},
-      {label:'Unknown',count:schedCounts['Unknown'],color:'var(--gray-light)'},
-    ].filter(b=>b.count>0);
-    const stackHtml=bars.map(b=>`<div style="height:100%;width:${Math.round((b.count/total)*100)}%;background:${b.color};position:relative" title="${b.label}: ${b.count}"></div>`).join('');
-    const legendHtml=bars.map(b=>`<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-      <div style="width:10px;height:10px;border-radius:2px;background:${b.color};flex-shrink:0"></div>
-      <div style="font-size:11px;color:var(--gray-mid);flex:1">${b.label}</div>
-      <div style="font-size:12px;font-weight:600;color:var(--navy);font-family:'DM Mono',monospace">${b.count}</div>
-      <div style="font-size:10px;color:var(--gray-light);width:28px;text-align:right">${Math.round((b.count/total)*100)}%</div>
-    </div>`).join('');
-    schedChart.innerHTML=`
-      <div style="height:32px;border-radius:6px;overflow:hidden;display:flex;margin-bottom:16px">${stackHtml}</div>
-      ${legendHtml}
-      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:10px;color:var(--gray-mid)">${total} active properties</div>`;
+  // ── 3. ELEVATOR COMPANY PERFORMANCE (vertical stacked bar) ──────────
+  const elevCoChart=document.getElementById('elev-co-chart');
+  if(elevCoChart&&elevCoData.length>0){
+    const maxTotal=Math.max(...elevCoData.map(d=>d.total));
+    const chartH=180;
+    const statusColors={complete:'var(--green)',onTrack:'var(--blue-dark)',behind:'var(--amber)',atRisk:'var(--red)',notStarted:'var(--gray-light)'};
+    const statusLabels={complete:'Complete',onTrack:'On Track',behind:'Behind',atRisk:'At Risk',notStarted:'Not Started'};
+    const barWidth=Math.min(48,Math.floor(280/elevCoData.length));
+    elevCoChart.innerHTML=`
+      <div style="display:flex;align-items:flex-end;gap:${Math.max(6,20-elevCoData.length*2)}px;height:${chartH}px;padding:0 8px;margin-bottom:6px">
+        ${elevCoData.map(d=>{
+          const segments=['complete','onTrack','behind','atRisk','notStarted'].map(k=>{
+            const count=d[k];
+            if(!count)return '';
+            const h=Math.round((count/maxTotal)*chartH);
+            return `<div style="width:100%;height:${h}px;background:${statusColors[k]};opacity:.85" title="${statusLabels[k]}: ${count}"></div>`;
+          }).reverse().join('');
+          return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:${barWidth}px;max-width:${barWidth+16}px">
+            <div style="font-size:9px;color:var(--gray-mid);margin-bottom:3px;font-family:'DM Mono',monospace">${d.total}</div>
+            <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;border-radius:4px 4px 0 0;overflow:hidden;border-bottom:2px solid var(--border)">${segments}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;gap:${Math.max(6,20-elevCoData.length*2)}px;padding:0 8px;margin-bottom:10px">
+        ${elevCoData.map(d=>`<div style="flex:1;min-width:${barWidth}px;max-width:${barWidth+16}px;text-align:center;font-size:9px;color:var(--navy);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${d.name}">${d.name.replace('Elevator','').replace('Escalator','').trim()}</div>`).join('')}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;padding:0 8px">
+        ${Object.entries(statusColors).map(([k,c])=>`<span style="font-size:9px;color:var(--gray-mid);display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:${c};display:inline-block;opacity:.85"></span>${statusLabels[k]}</span>`).join('')}
+      </div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;color:var(--gray-mid);padding-left:8px">${active.length} active properties · ${elevCoData.length} contractor${elevCoData.length!==1?'s':''}</div>`;
   }
 
   // ── 4. MILESTONE FUNNEL ────────────────────────────────────────────
@@ -4963,14 +4995,15 @@ function renderDashboard(){
   // Active properties table — top 6
   const activeRows=active.slice(0,6).map(p=>{
     const stClass={'In Progress':'b-nip','Complete':'b-done','Planned':'b-vda'}[p.st]||'b-nac';
-    const rClass={Behind:'b-behind','On Track':'b-track',Ahead:'b-ahead'}[p.r]||'';
+    const cascadeStatus=derivePropertyStatusFromPhases(p.n);
+    const rClass={'At Risk':'b-behind','In Progress':'b-nip','Complete':'b-done','Not Started':'b-nac'}[cascadeStatus]||'b-nac';
     return `<tr onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
       <td style="font-size:12px;font-weight:500">${p.n}</td>
       <td><span class="geo">${p.s}</span></td>
       <td style="font-size:11px">${p.ec}</td>
       <td style="font-family:'DM Mono',monospace;font-size:11px">${p.units||'—'} units</td>
       <td><span class="badge ${stClass}">${p.st}</span></td>
-      <td>${rClass?`<span class="badge ${rClass}">${p.r}</span>`:'<span style="color:var(--gray-light);font-size:11px">—</span>'}</td>
+      <td><span class="badge ${rClass}">${cascadeStatus}</span></td>
       <td style="font-size:11px;color:var(--gray-mid)">${p.v||'—'}</td>
     </tr>`;
   }).join('');
@@ -5461,8 +5494,9 @@ function populatePortfolio(){
   }
   port.forEach(p=>{
     const stClass={'In Progress':'b-nip','Complete':'b-done','Planned':'b-vda'}[p.st]||'b-nac';
-    const rClass={Behind:'b-behind','On Track':'b-track',Ahead:'b-ahead'}[p.r]||'';
-    const rh=rClass?`<span class="badge ${rClass}">${p.r}</span>`:`<span style="color:var(--gray-light);font-size:11px">—</span>`;
+    const cascadeStatus=derivePropertyStatusFromPhases(p.n);
+    const rClass={'At Risk':'b-behind','In Progress':'b-nip','Complete':'b-done','Not Started':'b-nac'}[cascadeStatus]||'b-nac';
+    const rh=`<span class="badge ${rClass}">${cascadeStatus}</span>`;
     tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${p.type}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
       <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${p.n}</td>
       <td><span class="geo">${p.s||'—'}</span></td>
@@ -5991,18 +6025,18 @@ function renderReport(){
             <thead><tr><th style="width:24%">${isDemo?'Store':'Property'}</th><th style="width:5%">State</th><th style="width:8%">Type</th><th style="width:14%">Elev. Company</th><th style="width:7%">Units</th><th style="width:10%">Schedule</th><th style="width:10%">Budget</th><th>Milestones</th></tr></thead>
             <tbody>
               ${activeProps.map(p=>{
-                const rc={Behind:'b-behind','On Track':'b-track',Ahead:'b-ahead'}[p.r]||'';
+                const cascadeStatus=derivePropertyStatusFromPhases(p.n);
+                const rc={'At Risk':'b-behind','In Progress':'b-nip','Complete':'b-done','Not Started':'b-nac'}[cascadeStatus]||'b-nac';
                 const msC=getMsComplete(p.n);
-                const msR=getMilestonesForProp(p.n).filter(m=>m.status==='At Risk').length;
                 return `<tr>
                   <td style="font-weight:500;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)">${p.n}</td>
                   <td><span class="geo">${p.s}</span></td>
                   <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
                   <td style="font-size:10px">${p.ec}</td>
                   <td style="font-family:'DM Mono',monospace">${p.units||'—'}</td>
-                  <td>${rc?`<span class="badge ${rc}" style="font-size:9px">${p.r}</span>`:'<span style="color:var(--gray-light)">—</span>'}</td>
+                  <td><span class="badge ${rc}" style="font-size:9px">${cascadeStatus}</span></td>
                   <td style="font-size:10px">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'}</td>
-                  <td style="font-family:'DM Mono',monospace;font-size:10px">${msC}/${MILESTONES_DEF.length}${msR>0?` <span style="color:var(--amber)">(${msR} at risk)</span>`:''}</td>
+                  <td style="font-family:'DM Mono',monospace;font-size:10px">${msC}/${MILESTONES_DEF.length}</td>
                 </tr>`;
               }).join('')}
             </tbody>
