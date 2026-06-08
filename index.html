@@ -19,8 +19,8 @@
   --shadow:0 1px 3px rgba(10,22,40,0.08);--shadow-md:0 4px 16px rgba(10,22,40,0.12);
   --sidebar-w:235px;
 }
-html,body{height:100%;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--gray-dark);background:#f5f4f1;line-height:1.5;-webkit-text-size-adjust:100%}
-input,select,textarea,button{font-family:'DM Sans',sans-serif;font-size:13px}
+html,body{height:100%;font-family:'DM Sans',sans-serif;font-size:15px;color:var(--gray-dark);background:#f5f4f1;line-height:1.5;-webkit-text-size-adjust:100%}
+input,select,textarea,button{font-family:'DM Sans',sans-serif;font-size:14px}
 /* Calendar */
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);border-left:1px solid var(--border);border-top:1px solid var(--border)}
 .cal-day-header{padding:6px 4px;font-size:10px;font-weight:600;color:var(--gray-mid);text-align:center;background:var(--gray-pale);border-right:1px solid var(--border);border-bottom:1px solid var(--border);font-family:'DM Mono',monospace;text-transform:uppercase}
@@ -741,6 +741,8 @@ async function loadAllData() {
         budget: r.fields['Project Budget']||0,
         comment: r.fields['Comments']||'',
         addr: r.fields['Address']||'',
+        dateAdded: r.fields['Date Added']||'',
+        dateRemoved: r.fields['Date Removed']||'',
         ms: [], // milestones now from MILESTONES table
       })).filter(p=>p.n).sort((a,b)=>a.n.localeCompare(b.n));
       window.PORTFOLIO = livePortfolio;
@@ -992,7 +994,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v13i · elevatorpulse.com</div>
+    <div class="login-version">PULSE v13j · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1734,48 +1736,76 @@ window.PROPERTIES_SEED = [
 
       <!-- CHARTS -->
       <div id="view-charts" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Analytics</h1><p>Visual Portfolio Analytics</p></div><div class="header-actions no-print"><button class="btn btn-primary" onclick="printCharts()"><i class="ti ti-printer"></i>Print / PDF</button></div></div>
-        <!-- CHART FILTER BAR -->
-        <div id="chart-filter-bar" style="background:white;border-bottom:1px solid var(--border);padding:10px 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;position:sticky;top:65px;z-index:30">
-          <span style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.08em;white-space:nowrap">Filter</span>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1;align-items:center">
-            <!-- Property search -->
-            <div style="position:relative;display:flex;align-items:center">
-              <input id="cf-property" type="text" placeholder="Property…" autocomplete="off"
-                style="font-size:12px;padding:5px 28px 5px 10px;border:1px solid var(--border);border-radius:6px;width:160px;color:var(--navy);outline:none"
-                oninput="cfPropertyInput(this.value)" onfocus="cfPropertyInput(this.value)" onkeydown="if(event.key==='Enter'){cfApplyPropertyText(this.value)}" onblur="setTimeout(()=>document.getElementById('cf-prop-dropdown').style.display='none',150)">
-              <button id="cf-property-clear" onclick="cfClearProperty()" style="display:none;position:absolute;right:6px;background:none;border:none;cursor:pointer;padding:0;color:var(--gray-mid);font-size:14px;line-height:1"><i class="ti ti-x"></i></button>
-              <div id="cf-prop-dropdown" style="display:none;position:absolute;top:100%;left:0;z-index:200;background:white;border:1px solid var(--border);border-radius:6px;box-shadow:var(--shadow-md);max-height:200px;overflow-y:auto;min-width:220px;margin-top:2px"></div>
+        <div class="page-header"><div class="page-header-left"><h1>Analytics</h1><p style="font-style:italic;color:var(--blue-dark);font-size:13px;margin-top:2px">Every property. Every unit. Always in view.</p></div><div class="header-actions no-print"><button class="btn" onclick="cfTogglePanel()" id="cf-panel-toggle-btn" title="Filters" style="position:relative"><i class="ti ti-adjustments-horizontal"></i> Filters <span id="cf-badge" style="display:none;position:absolute;top:-5px;right:-5px;background:var(--blue-dark);color:white;border-radius:10px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center"></span></button><button class="btn btn-primary" onclick="printCharts()"><i class="ti ti-printer"></i>Print / PDF</button></div></div>
+        <div class="page-body" id="analytics-body" style="position:relative"></div>
+        <!-- SIDE FILTER PANEL -->
+        <div id="cf-side-panel" style="display:none;position:fixed;top:0;right:0;width:280px;height:100vh;background:white;border-left:1px solid var(--border);box-shadow:-4px 0 20px rgba(0,0,0,.1);z-index:500;flex-direction:column">
+          <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:13px;font-weight:700;color:var(--navy)">Filters</span>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button onclick="cfClearAll()" style="font-size:11px;color:var(--blue-dark);background:none;border:none;cursor:pointer;font-weight:600;padding:0">Clear all</button>
+              <button onclick="cfTogglePanel()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px;line-height:1;padding:0"><i class="ti ti-x"></i></button>
             </div>
-            <!-- Schedule -->
-            <div id="cf-sched-wrap" style="display:flex;gap:4px">
-              <button class="cf-pill" data-filter="sched" data-val="On Track" onclick="cfToggle(this)">On Track</button>
-              <button class="cf-pill" data-filter="sched" data-val="Behind" onclick="cfToggle(this)">Behind</button>
-              <button class="cf-pill" data-filter="sched" data-val="Ahead" onclick="cfToggle(this)">Ahead</button>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:16px 20px">
+            <div style="margin-bottom:18px">
+              <div class="field-label">Property</div>
+              <div style="position:relative">
+                <input id="cf-property" type="text" placeholder="Search property…" autocomplete="off"
+                  style="font-size:12px;padding:7px 28px 7px 10px;border:1px solid var(--border);border-radius:6px;width:100%;box-sizing:border-box;color:var(--navy);outline:none"
+                  oninput="cfPropertyInput(this.value)" onfocus="cfPropertyInput(this.value)" onkeydown="if(event.key==='Enter'){cfApplyPropertyText(this.value)}" onblur="setTimeout(()=>document.getElementById('cf-prop-dropdown').style.display='none',150)">
+                <button id="cf-property-clear" onclick="cfClearProperty()" style="display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;color:var(--gray-mid);font-size:14px;line-height:1"><i class="ti ti-x"></i></button>
+                <div id="cf-prop-dropdown" style="display:none;position:absolute;top:100%;left:0;z-index:600;background:white;border:1px solid var(--border);border-radius:6px;box-shadow:var(--shadow-md);max-height:200px;overflow-y:auto;width:100%;margin-top:2px"></div>
+              </div>
             </div>
-            <!-- Asset Type -->
-            <div style="display:flex;gap:4px">
-              <button class="cf-pill" data-filter="type" data-val="Core" onclick="cfToggle(this)">Core</button>
-              <button class="cf-pill" data-filter="type" data-val="Non-Core" onclick="cfToggle(this)">Non-Core</button>
+            <div style="margin-bottom:18px">
+              <div class="field-label">Schedule</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <button class="cf-pill" data-filter="sched" data-val="On Track" onclick="cfToggle(this)" style="text-align:left">On Track</button>
+                <button class="cf-pill" data-filter="sched" data-val="Behind" onclick="cfToggle(this)" style="text-align:left">Behind</button>
+                <button class="cf-pill" data-filter="sched" data-val="Ahead" onclick="cfToggle(this)" style="text-align:left">Ahead</button>
+              </div>
             </div>
-            <!-- Elevator Company -->
-            <div style="position:relative">
-              <select id="cf-ec" style="font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer" onchange="cfApply()">
-                <option value="">Elevator Co…</option>
+            <div style="margin-bottom:18px">
+              <div class="field-label">Asset Type</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <button class="cf-pill" data-filter="type" data-val="Core" onclick="cfToggle(this)" style="text-align:left">Core</button>
+                <button class="cf-pill" data-filter="type" data-val="Non-Core" onclick="cfToggle(this)" style="text-align:left">Non-Core</button>
+              </div>
+            </div>
+            <div style="margin-bottom:18px">
+              <div class="field-label">Milestone Category</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <button class="cf-pill" data-filter="mscat" data-val="Pre-Construction" onclick="cfToggle(this)" style="text-align:left">Pre-Construction</button>
+                <button class="cf-pill" data-filter="mscat" data-val="Construction" onclick="cfToggle(this)" style="text-align:left">Construction</button>
+                <button class="cf-pill" data-filter="mscat" data-val="Project Closeout" onclick="cfToggle(this)" style="text-align:left">Project Closeout</button>
+                <button class="cf-pill" data-filter="mscat" data-val="Complete" onclick="cfToggle(this)" style="text-align:left">Complete</button>
+              </div>
+            </div>
+            <div style="margin-bottom:18px">
+              <div class="field-label">Priority</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <button class="cf-pill" data-filter="priority" data-val="High" onclick="cfToggle(this)" style="text-align:left">High</button>
+                <button class="cf-pill" data-filter="priority" data-val="Medium" onclick="cfToggle(this)" style="text-align:left">Medium</button>
+                <button class="cf-pill" data-filter="priority" data-val="Low" onclick="cfToggle(this)" style="text-align:left">Low</button>
+              </div>
+            </div>
+            <div style="margin-bottom:18px">
+              <div class="field-label">Elevator Company</div>
+              <select id="cf-ec" style="font-size:12px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer;width:100%" onchange="cfApply()">
+                <option value="">All contractors</option>
               </select>
             </div>
-            <!-- State -->
-            <div style="position:relative">
-              <select id="cf-state" style="font-size:12px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer" onchange="cfApply()">
-                <option value="">State…</option>
+            <div style="margin-bottom:18px">
+              <div class="field-label">State</div>
+              <select id="cf-state" style="font-size:12px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer;width:100%" onchange="cfApply()">
+                <option value="">All states</option>
               </select>
             </div>
           </div>
-          <!-- Active filter chips + clear -->
-          <div id="cf-chips" style="display:flex;gap:5px;flex-wrap:wrap;align-items:center"></div>
-          <button id="cf-clear-btn" onclick="cfClearAll()" style="display:none;font-size:11px;padding:4px 10px;border:1px solid var(--border-strong);border-radius:6px;background:white;color:var(--gray-mid);cursor:pointer;white-space:nowrap">Clear all</button>
+          <div id="cf-chips" style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:5px;flex-wrap:wrap;min-height:40px"></div>
         </div>
-        <div class="page-body" id="analytics-body"></div>
+        <div id="cf-panel-backdrop" onclick="cfTogglePanel()" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;z-index:499;background:rgba(0,0,0,.15)"></div>
       </div>
 
       <!-- CALENDAR -->
@@ -2000,21 +2030,21 @@ let demoRole='pm';
 const MILESTONES_DEF=['Modernization Survey','Technical Specification','RFP / Bid Process','Contract Award','Submittal Drawing Review','Material Procurement','Material Delivery','First Phase Start','25% Construction','50% Construction','75% Construction','Final Phase Start','Punch List','Punch List Resolution','Final (AHJ) Inspection','Owner Acceptance','Closeout Documentation','Project Closeout'];
 
 const DEMO_PORTFOLIO=[
-  {n:'Store #101',s:'NY',city:'New York',ec:'Otis',st:'CIP',r:'On Track',v:'Sarah Chen',units:12,unitDesc:'8 Elev / 4 Esc',vda:'D-1001',type:'Core',budget:4200000,addr:'500 Fifth Avenue, New York, NY',comment:'Flagship store. High traffic — night-only installation windows.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-06-10'},{ms:1,status:'complete',planned:'2024-09-01',actual:'2024-09-15'},{ms:2,status:'complete',planned:'2024-11-01',actual:'2024-11-01'},{ms:3,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:4,status:'complete',planned:'2025-04-01',actual:'2025-05-01'},{ms:5,status:'inprog',planned:'2025-07-01',actual:''}]},
-  {n:'Store #142',s:'IL',city:'Chicago',ec:'Schindler',st:'CIP',r:'Behind',v:'Marcus Webb',units:8,unitDesc:'6 Elev / 2 Esc',vda:'D-1002',type:'Core',budget:2800000,addr:'830 N Michigan Ave, Chicago, IL',comment:'Magnificent Mile location. Permit delays from city.',ms:[{ms:0,status:'complete',planned:'2024-08-01',actual:'2024-08-20'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2025-01-15'},{ms:2,status:'complete',planned:'2025-02-01',actual:'2025-02-01'},{ms:3,status:'complete',planned:'2025-04-01',actual:'2025-05-10'},{ms:4,status:'atrisk',planned:'2025-08-01',actual:''}]},
-  {n:'Store #208',s:'CA',city:'Los Angeles',ec:'Kone',st:'Awarded',r:'On Track',v:'Sarah Chen',units:6,unitDesc:'4 Elev / 2 Esc',vda:'D-1003',type:'Core',budget:1950000,addr:'Beverly Center, Los Angeles, CA',comment:'Mall anchor location. Coordinating with mall management.',ms:[{ms:0,status:'complete',planned:'2025-01-01',actual:'2025-01-10'},{ms:1,status:'complete',planned:'2025-05-01',actual:'2025-05-20'},{ms:2,status:'complete',planned:'2025-07-01',actual:'2025-07-01'},{ms:3,status:'inprog',planned:'2025-09-01',actual:''}]},
-  {n:'Store #315',s:'TX',city:'Houston',ec:'TBD',st:'Budgeting',r:'—',v:'James Ortiz',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1004',type:'Non-Core',budget:0,addr:'Galleria Mall, Houston, TX',comment:'Budget under review. Survey complete.',ms:[{ms:0,status:'complete',planned:'2025-06-01',actual:'2025-06-15'}]},
-  {n:'Store #089',s:'FL',city:'Miami',ec:'Otis',st:'Active',r:'On Track',v:'Marcus Webb',units:4,unitDesc:'3 Elev / 1 Esc',vda:'D-1005',type:'Non-Core',budget:1100000,addr:'Dadeland Mall, Miami, FL',comment:'Renovation aligned with store remodel.',ms:[{ms:0,status:'complete',planned:'2024-10-01',actual:'2024-10-15'},{ms:1,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:2,status:'complete',planned:'2025-04-01',actual:'2025-04-01'},{ms:3,status:'complete',planned:'2025-06-01',actual:'2025-06-20'},{ms:4,status:'inprog',planned:'2025-09-01',actual:''}]},
-  {n:'Store #422',s:'WA',city:'Seattle',ec:'TBD',st:'Survey',r:'—',v:'Sarah Chen',units:3,unitDesc:'3 Elev',vda:'D-1006',type:'Non-Core',budget:0,addr:'Westlake Center, Seattle, WA',comment:'Survey scheduled Q3 2026.',ms:[]},
-  {n:'Store #177',s:'MA',city:'Boston',ec:'Schindler',st:'Complete',r:'—',v:'James Ortiz',units:6,unitDesc:'4 Elev / 2 Esc',vda:'D-1007',type:'Core',budget:1800000,addr:'Prudential Center, Boston, MA',comment:'Project complete. Certificate of occupancy received.',ms:MILESTONES_DEF.slice(0,16).map((_,i)=>({ms:i,status:'complete',planned:'2024-01-01',actual:'2024-01-15'}))},
-  {n:'Store #531',s:'GA',city:'Atlanta',ec:'Kone',st:'Active',r:'Behind',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1008',type:'Non-Core',budget:1400000,addr:'Lenox Square, Atlanta, GA',comment:'Labor shortage impacting schedule. Recovery plan submitted.',ms:[{ms:0,status:'complete',planned:'2025-02-01',actual:'2025-02-10'},{ms:1,status:'complete',planned:'2025-05-01',actual:'2025-06-01'},{ms:2,status:'complete',planned:'2025-07-01',actual:'2025-07-01'},{ms:3,status:'atrisk',planned:'2025-09-01',actual:''}]},
-  {n:'Store #644',s:'CO',city:'Denver',ec:'TBD',st:'On Hold',r:'—',v:'James Ortiz',units:4,unitDesc:'3 Elev / 1 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Cherry Creek Mall, Denver, CO',comment:'On hold pending lease renewal.',ms:[]},
-  {n:'Store #712',s:'PA',city:'Philadelphia',ec:'Otis',st:'Awarded',r:'On Track',v:'Sarah Chen',units:7,unitDesc:'5 Elev / 2 Esc',vda:'D-1010',type:'Core',budget:2200000,addr:'King of Prussia Mall, Philadelphia, PA',comment:'Contract executed. Pre-construction meetings underway.',ms:[{ms:0,status:'complete',planned:'2025-03-01',actual:'2025-03-10'},{ms:1,status:'complete',planned:'2025-06-01',actual:'2025-06-15'},{ms:2,status:'complete',planned:'2025-08-01',actual:'2025-08-01'},{ms:3,status:'inprog',planned:'2025-10-01',actual:''}]},
-  {n:'Store #388',s:'MN',city:'Minneapolis',ec:'TBD',st:'Budgeting',r:'—',v:'James Ortiz',units:6,unitDesc:'4 Elev / 2 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Mall of America, Minneapolis, MN',comment:'Largest location. Budget pending board approval.',ms:[{ms:0,status:'inprog',planned:'2026-01-01',actual:''}]},
-  {n:'Store #055',s:'NV',city:'Las Vegas',ec:'Kone',st:'CIP',r:'Ahead',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1012',type:'Core',budget:1650000,addr:'Fashion Show Mall, Las Vegas, NV',comment:'Ahead of schedule. Contractor performing well.',ms:[{ms:0,status:'complete',planned:'2024-09-01',actual:'2024-08-20'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2024-11-15'},{ms:2,status:'complete',planned:'2025-02-01',actual:'2025-01-20'},{ms:3,status:'complete',planned:'2025-04-01',actual:'2025-03-25'},{ms:4,status:'complete',planned:'2025-06-01',actual:'2025-05-15'},{ms:5,status:'inprog',planned:'2025-08-01',actual:''}]},
-  {n:'Store #290',s:'AZ',city:'Phoenix',ec:'TBD',st:'On Hold',r:'—',v:'Sarah Chen',units:3,unitDesc:'3 Elev',vda:'—',type:'Non-Core',budget:0,addr:'Scottsdale Fashion Square, Phoenix, AZ',comment:'On hold. Ownership transfer in progress.',ms:[]},
-  {n:'Store #467',s:'OR',city:'Portland',ec:'Schindler',st:'Active',r:'On Track',v:'James Ortiz',units:4,unitDesc:'3 Elev / 1 Esc',vda:'D-1014',type:'Non-Core',budget:980000,addr:'Pioneer Place, Portland, OR',comment:'On track. First unit complete.',ms:[{ms:0,status:'complete',planned:'2025-01-01',actual:'2025-01-10'},{ms:1,status:'complete',planned:'2025-04-01',actual:'2025-04-05'},{ms:2,status:'complete',planned:'2025-06-01',actual:'2025-06-01'},{ms:3,status:'complete',planned:'2025-08-01',actual:'2025-08-10'},{ms:4,status:'inprog',planned:'2025-10-01',actual:''}]},
-  {n:'Store #823',s:'MI',city:'Detroit',ec:'TBD',st:'Survey',r:'—',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Somerset Collection, Detroit, MI',comment:'Survey complete. Awaiting proposal.',ms:[{ms:0,status:'complete',planned:'2026-02-01',actual:'2026-02-15'}]},
+  {n:'Store #101',s:'NY',city:'New York',ec:'Otis',st:'CIP',r:'On Track',v:'Sarah Chen',units:12,unitDesc:'8 Elev / 4 Esc',vda:'D-1001',type:'Core',budget:4200000,addr:'500 Fifth Avenue, New York, NY',dateAdded:'2024-05-15',dateRemoved:'',comment:'Flagship store. High traffic — night-only installation windows.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-06-10'},{ms:1,status:'complete',planned:'2024-09-01',actual:'2024-09-15'},{ms:2,status:'complete',planned:'2024-11-01',actual:'2024-11-01'},{ms:3,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:4,status:'complete',planned:'2025-04-01',actual:'2025-05-01'},{ms:5,status:'inprog',planned:'2025-07-01',actual:''}]},
+  {n:'Store #142',s:'IL',city:'Chicago',ec:'Schindler',st:'CIP',r:'Behind',v:'Marcus Webb',units:8,unitDesc:'6 Elev / 2 Esc',vda:'D-1002',type:'Core',budget:2800000,addr:'830 N Michigan Ave, Chicago, IL',dateAdded:'2024-07-20',dateRemoved:'',comment:'Magnificent Mile location. Permit delays from city.',ms:[{ms:0,status:'complete',planned:'2024-08-01',actual:'2024-08-20'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2025-01-15'},{ms:2,status:'complete',planned:'2025-02-01',actual:'2025-02-01'},{ms:3,status:'complete',planned:'2025-04-01',actual:'2025-05-10'},{ms:4,status:'atrisk',planned:'2025-08-01',actual:''}]},
+  {n:'Store #208',s:'CA',city:'Los Angeles',ec:'Kone',st:'Awarded',r:'On Track',v:'Sarah Chen',units:6,unitDesc:'4 Elev / 2 Esc',vda:'D-1003',type:'Core',budget:1950000,addr:'Beverly Center, Los Angeles, CA',dateAdded:'2024-12-10',dateRemoved:'',comment:'Mall anchor location. Coordinating with mall management.',ms:[{ms:0,status:'complete',planned:'2025-01-01',actual:'2025-01-10'},{ms:1,status:'complete',planned:'2025-05-01',actual:'2025-05-20'},{ms:2,status:'complete',planned:'2025-07-01',actual:'2025-07-01'},{ms:3,status:'inprog',planned:'2025-09-01',actual:''}]},
+  {n:'Store #315',s:'TX',city:'Houston',ec:'TBD',st:'Budgeting',r:'—',v:'James Ortiz',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1004',type:'Non-Core',budget:0,addr:'Galleria Mall, Houston, TX',dateAdded:'2025-03-01',dateRemoved:'',comment:'Budget under review. Survey complete.',ms:[{ms:0,status:'complete',planned:'2025-06-01',actual:'2025-06-15'}]},
+  {n:'Store #089',s:'FL',city:'Miami',ec:'Otis',st:'Active',r:'On Track',v:'Marcus Webb',units:4,unitDesc:'3 Elev / 1 Esc',vda:'D-1005',type:'Non-Core',budget:1100000,addr:'Dadeland Mall, Miami, FL',dateAdded:'2024-09-05',dateRemoved:'',comment:'Renovation aligned with store remodel.',ms:[{ms:0,status:'complete',planned:'2024-10-01',actual:'2024-10-15'},{ms:1,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:2,status:'complete',planned:'2025-04-01',actual:'2025-04-01'},{ms:3,status:'complete',planned:'2025-06-01',actual:'2025-06-20'},{ms:4,status:'inprog',planned:'2025-09-01',actual:''}]},
+  {n:'Store #422',s:'WA',city:'Seattle',ec:'TBD',st:'Survey',r:'—',v:'Sarah Chen',units:3,unitDesc:'3 Elev',vda:'D-1006',type:'Non-Core',budget:0,addr:'Westlake Center, Seattle, WA',dateAdded:'2026-05-20',dateRemoved:'',comment:'Survey scheduled Q3 2026.',ms:[]},
+  {n:'Store #177',s:'MA',city:'Boston',ec:'Schindler',st:'Complete',r:'—',v:'James Ortiz',units:6,unitDesc:'4 Elev / 2 Esc',vda:'D-1007',type:'Core',budget:1800000,addr:'Prudential Center, Boston, MA',dateAdded:'2023-11-01',dateRemoved:'',comment:'Project complete. Certificate of occupancy received.',ms:MILESTONES_DEF.slice(0,16).map((_,i)=>({ms:i,status:'complete',planned:'2024-01-01',actual:'2024-01-15'}))},
+  {n:'Store #531',s:'GA',city:'Atlanta',ec:'Kone',st:'Active',r:'Behind',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1008',type:'Non-Core',budget:1400000,addr:'Lenox Square, Atlanta, GA',dateAdded:'2025-01-15',dateRemoved:'',comment:'Labor shortage impacting schedule. Recovery plan submitted.',ms:[{ms:0,status:'complete',planned:'2025-02-01',actual:'2025-02-10'},{ms:1,status:'complete',planned:'2025-05-01',actual:'2025-06-01'},{ms:2,status:'complete',planned:'2025-07-01',actual:'2025-07-01'},{ms:3,status:'atrisk',planned:'2025-09-01',actual:''}]},
+  {n:'Store #644',s:'CO',city:'Denver',ec:'TBD',st:'On Hold',r:'—',v:'James Ortiz',units:4,unitDesc:'3 Elev / 1 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Cherry Creek Mall, Denver, CO',dateAdded:'2025-02-01',dateRemoved:'',comment:'On hold pending lease renewal.',ms:[]},
+  {n:'Store #712',s:'PA',city:'Philadelphia',ec:'Otis',st:'Awarded',r:'On Track',v:'Sarah Chen',units:7,unitDesc:'5 Elev / 2 Esc',vda:'D-1010',type:'Core',budget:2200000,addr:'King of Prussia Mall, Philadelphia, PA',dateAdded:'2025-02-28',dateRemoved:'',comment:'Contract executed. Pre-construction meetings underway.',ms:[{ms:0,status:'complete',planned:'2025-03-01',actual:'2025-03-10'},{ms:1,status:'complete',planned:'2025-06-01',actual:'2025-06-15'},{ms:2,status:'complete',planned:'2025-08-01',actual:'2025-08-01'},{ms:3,status:'inprog',planned:'2025-10-01',actual:''}]},
+  {n:'Store #388',s:'MN',city:'Minneapolis',ec:'TBD',st:'Budgeting',r:'—',v:'James Ortiz',units:6,unitDesc:'4 Elev / 2 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Mall of America, Minneapolis, MN',dateAdded:'2026-04-10',dateRemoved:'',comment:'Largest location. Budget pending board approval.',ms:[{ms:0,status:'inprog',planned:'2026-01-01',actual:''}]},
+  {n:'Store #055',s:'NV',city:'Las Vegas',ec:'Kone',st:'CIP',r:'Ahead',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1012',type:'Core',budget:1650000,addr:'Fashion Show Mall, Las Vegas, NV',dateAdded:'2024-08-01',dateRemoved:'',comment:'Ahead of schedule. Contractor performing well.',ms:[{ms:0,status:'complete',planned:'2024-09-01',actual:'2024-08-20'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2024-11-15'},{ms:2,status:'complete',planned:'2025-02-01',actual:'2025-01-20'},{ms:3,status:'complete',planned:'2025-04-01',actual:'2025-03-25'},{ms:4,status:'complete',planned:'2025-06-01',actual:'2025-05-15'},{ms:5,status:'inprog',planned:'2025-08-01',actual:''}]},
+  {n:'Store #290',s:'AZ',city:'Phoenix',ec:'TBD',st:'On Hold',r:'—',v:'Sarah Chen',units:3,unitDesc:'3 Elev',vda:'—',type:'Non-Core',budget:0,addr:'Scottsdale Fashion Square, Phoenix, AZ',dateAdded:'2025-08-15',dateRemoved:'2026-03-01',comment:'On hold. Ownership transfer in progress. Property sold.',ms:[]},
+  {n:'Store #467',s:'OR',city:'Portland',ec:'Schindler',st:'Active',r:'On Track',v:'James Ortiz',units:4,unitDesc:'3 Elev / 1 Esc',vda:'D-1014',type:'Non-Core',budget:980000,addr:'Pioneer Place, Portland, OR',dateAdded:'2024-12-20',dateRemoved:'',comment:'On track. First unit complete.',ms:[{ms:0,status:'complete',planned:'2025-01-01',actual:'2025-01-10'},{ms:1,status:'complete',planned:'2025-04-01',actual:'2025-04-05'},{ms:2,status:'complete',planned:'2025-06-01',actual:'2025-06-01'},{ms:3,status:'complete',planned:'2025-08-01',actual:'2025-08-10'},{ms:4,status:'inprog',planned:'2025-10-01',actual:''}]},
+  {n:'Store #823',s:'MI',city:'Detroit',ec:'TBD',st:'Survey',r:'—',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Somerset Collection, Detroit, MI',dateAdded:'2026-05-28',dateRemoved:'',comment:'Survey complete. Awaiting proposal.',ms:[{ms:0,status:'complete',planned:'2026-02-01',actual:'2026-02-15'}]},
 ];
 
 const DEMO_AI_CONTEXT=`You are a portfolio assistant for an elevator modernization consulting firm. You have access to the following Demo Retail Portfolio data. Answer questions only based on this data. Do not make up information not present here.
@@ -2548,11 +2578,27 @@ function switchPropTab(tab,btn){
   if(tab==='phases'&&currentProp)renderPhasesTab(currentProp);
 }
 
+function parseUnitDesc(desc){
+  // Parse unitDesc strings like "8 Elev / 4 Esc / 1 Lift" for fallback
+  if(!desc)return{elev:0,esc:0,lift:0,other:0};
+  const elevM=desc.match(/(\d+)\s*Elev/i);
+  const escM=desc.match(/(\d+)\s*Esc/i);
+  const liftM=desc.match(/(\d+)\s*(?:Lift|WC|Wheelchair)/i);
+  const servM=desc.match(/(\d+)\s*Serv/i);
+  return{
+    elev:elevM?parseInt(elevM[1]):0,
+    esc:escM?parseInt(escM[1]):0,
+    lift:liftM?parseInt(liftM[1]):0,
+    other:servM?parseInt(servM[1]):0
+  };
+}
+
 function renderPropertyView(p){
-  const elevCount=parseInt(p.elevatorCount)||0;
-  const escCount=parseInt(p.escalatorCount)||0;
-  const liftCount=parseInt(p.liftCount)||0;
-  const otherCount=parseInt(p.otherCount)||0;
+  const parsed=parseUnitDesc(p.unitDesc||'');
+  const elevCount=parseInt(p.elevatorCount)||parsed.elev||0;
+  const escCount=parseInt(p.escalatorCount)||parsed.esc||0;
+  const liftCount=parseInt(p.liftCount)||parsed.lift||0;
+  const otherCount=parseInt(p.otherCount)||parsed.other||0;
   document.getElementById('prop-title').textContent=p.n;
   document.getElementById('prop-subtitle').textContent=p.addr;
   document.getElementById('prop-hero-name').textContent=p.n;
@@ -4062,6 +4108,64 @@ function openStepDatesForm(phaseId){
   document.body.appendChild(overlay);
 }
 
+// ── PHASE → MILESTONE AUTO-TRIGGER ──────────────────────────────────
+// Milestone #5 (index 4): Submittal Drawing Review — triggers when any Phase 1
+//   task named like "Submittal" gets an Actual Start date
+// Milestone #9 (index 8): 25% Construction — triggers when ≥25% of phases complete
+// Milestone #10 (index 9): 50% Construction — triggers when ≥50% of phases complete
+async function checkMilestoneTriggers(propName){
+  if(!propName)return;
+  const ms=getMilestonesForProp(propName);
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
+  const tasks=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.checked!==false);
+  const totalPhases=phases.length;
+
+  // Trigger #5 — Submittal Drawing Review (ms index 4, milestone number 5)
+  const submittalTask=tasks.find(t=>/submittal/i.test(t.taskName||'')&&t.actualStart);
+  const ms5=ms.find(m=>m.milestoneNumber===5);
+  if(submittalTask&&ms5&&ms5.status!=='Complete'&&ms5.status!=='In Progress'){
+    await triggerMilestone(propName,ms5,submittalTask.actualStart,'In Progress');
+  }
+
+  if(totalPhases===0)return;
+  const completedPhases=phases.filter(ph=>derivePhaseStatus(ph.id,propName,ph.phase)==='Complete').length;
+  const pctDone=completedPhases/totalPhases;
+
+  // Trigger #9 — 25% Construction (ms index 8)
+  const ms9=ms.find(m=>m.milestoneNumber===9);
+  if(ms9&&pctDone>=0.25&&ms9.status!=='Complete'&&ms9.status!=='In Progress'){
+    await triggerMilestone(propName,ms9,new Date().toISOString().split('T')[0],'In Progress');
+  }
+  if(ms9&&pctDone>=1.0&&ms9.status!=='Complete'){
+    await triggerMilestone(propName,ms9,new Date().toISOString().split('T')[0],'Complete');
+  }
+
+  // Trigger #10 — 50% Construction (ms index 9)
+  const ms10=ms.find(m=>m.milestoneNumber===10);
+  if(ms10&&pctDone>=0.50&&ms10.status!=='Complete'&&ms10.status!=='In Progress'){
+    await triggerMilestone(propName,ms10,new Date().toISOString().split('T')[0],'In Progress');
+  }
+  if(ms10&&pctDone>=1.0&&ms10.status!=='Complete'){
+    await triggerMilestone(propName,ms10,new Date().toISOString().split('T')[0],'Complete');
+  }
+}
+
+async function triggerMilestone(propName,msObj,date,newStatus){
+  // Update local state
+  const liveMs=(window.MILESTONES||[]).find(m=>m.id===msObj.id);
+  if(liveMs){
+    liveMs.status=newStatus;
+    if(!liveMs.actualDate)liveMs.actualDate=date;
+  }
+  // Write to Airtable if live
+  if(!demoMode&&msObj.id&&!msObj.id.startsWith('demo-')){
+    const fields={'Status':newStatus};
+    if(date&&!msObj.actualDate)fields['Actual Date']=date;
+    await atUpdate('Milestones',msObj.id,fields);
+  }
+  showToast(`Milestone auto-updated: ${msObj.milestoneName}`,'info');
+}
+
 async function saveStepDates(phaseId){
   const ph=(window.UNIT_GROUPS||[]).find(u=>u.id===phaseId);
   if(!ph){showToast('Phase not found','warn');return;}
@@ -4093,6 +4197,7 @@ async function saveStepDates(phaseId){
   }
   document.getElementById('step-dates-overlay')?.remove();
   if(currentProp)renderPhasesTab(currentProp);
+  await checkMilestoneTriggers(propName);
   showToast('Tasks saved','success');
 }
 function togglePhaseCard(cardId){
@@ -4557,7 +4662,21 @@ async function saveBillingModal(){
 }
 
 // ── CHART FILTERS ─────────────────────────────────────────────────────
-const CF={property:[],sched:[],type:[],ec:'',state:''};
+const CF={property:[],sched:[],type:[],ec:'',state:'',mscat:[],priority:[]};
+let cfPanelOpen=false;
+function cfTogglePanel(){
+  cfPanelOpen=!cfPanelOpen;
+  const panel=document.getElementById('cf-side-panel');
+  const backdrop=document.getElementById('cf-panel-backdrop');
+  if(panel){panel.style.display=cfPanelOpen?'flex':'none';}
+  if(backdrop){backdrop.style.display=cfPanelOpen?'block':'none';}
+  if(cfPanelOpen)cfInit();
+}
+function cfUpdateBadge(){
+  const count=CF.property.length+CF.sched.length+CF.type.length+(CF.ec?1:0)+(CF.state?1:0)+CF.mscat.length+CF.priority.length;
+  const badge=document.getElementById('cf-badge');
+  if(badge){badge.style.display=count>0?'inline-block':'none';badge.textContent=count;}
+}
 
 function cfInit(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
@@ -4599,12 +4718,17 @@ function cfGetFiltered(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const inp=document.getElementById('cf-property')?.value.trim().toLowerCase()||'';
   return port.filter(p=>{
+    if(p.st==='Removed')return false; // never show removed in charts
     if(inp&&CF.property.length===0&&!p.n.toLowerCase().includes(inp))return false;
     if(CF.property.length&&!CF.property.includes(p.n))return false;
     if(CF.sched.length&&!CF.sched.includes(p.r))return false;
     if(CF.type.length&&!CF.type.includes(p.type))return false;
     if(CF.ec&&p.ec!==CF.ec)return false;
     if(CF.state&&p.s!==CF.state)return false;
+    if(CF.mscat.length){
+      const cat=getMilestoneCategoryForProp(p.n);
+      if(!CF.mscat.includes(cat))return false;
+    }
     return true;
   });
 }
@@ -4621,6 +4745,7 @@ function cfApply(){
   CF.ec=document.getElementById('cf-ec')?.value||'';
   CF.state=document.getElementById('cf-state')?.value||'';
   cfRenderChips();
+  cfUpdateBadge();
   renderCharts();
 }
 
@@ -4663,18 +4788,17 @@ function cfSelectProperty(name){
 
 function cfRenderChips(){
   const chips=document.getElementById('cf-chips');
-  const clearBtn=document.getElementById('cf-clear-btn');
   if(!chips)return;
   const items=[];
   CF.property.forEach(n=>items.push({label:n.length>20?n.slice(0,18)+'…':n,remove:()=>{CF.property=CF.property.filter(x=>x!==n);cfApply();}}));
   CF.sched.forEach(v=>items.push({label:v,remove:()=>{CF.sched=CF.sched.filter(x=>x!==v);document.querySelectorAll('.cf-pill[data-filter="sched"][data-val="'+v+'"]').forEach(b=>b.classList.remove('active'));cfApply();}}));
   CF.type.forEach(v=>items.push({label:v,remove:()=>{CF.type=CF.type.filter(x=>x!==v);document.querySelectorAll('.cf-pill[data-filter="type"][data-val="'+v+'"]').forEach(b=>b.classList.remove('active'));cfApply();}}));
+  CF.mscat.forEach(v=>items.push({label:v,remove:()=>{CF.mscat=CF.mscat.filter(x=>x!==v);document.querySelectorAll('.cf-pill[data-filter="mscat"][data-val="'+v+'"]').forEach(b=>b.classList.remove('active'));cfApply();}}));
+  CF.priority.forEach(v=>items.push({label:'Priority: '+v,remove:()=>{CF.priority=CF.priority.filter(x=>x!==v);document.querySelectorAll('.cf-pill[data-filter="priority"][data-val="'+v+'"]').forEach(b=>b.classList.remove('active'));cfApply();}}));
   if(CF.ec)items.push({label:CF.ec,remove:()=>{CF.ec='';const s=document.getElementById('cf-ec');if(s)s.value='';cfApply();}});
   if(CF.state)items.push({label:CF.state,remove:()=>{CF.state='';const s=document.getElementById('cf-state');if(s)s.value='';cfApply();}});
   chips.innerHTML=items.map((item,i)=>`<span class="cf-chip">${item.label}<button onclick="cfRemoveChip(${i})" title="Remove">×</button></span>`).join('');
-  // Store removers on window for onclick access
   window._cfChipRemovers=items.map(i=>i.remove);
-  if(clearBtn)clearBtn.style.display=items.length?'block':'none';
 }
 
 function cfRemoveChip(i){
@@ -4682,13 +4806,28 @@ function cfRemoveChip(i){
 }
 
 function cfClearAll(){
-  CF.property=[];CF.sched=[];CF.type=[];CF.ec='';CF.state='';
+  CF.property=[];CF.sched=[];CF.type=[];CF.ec='';CF.state='';CF.mscat=[];CF.priority=[];
   document.querySelectorAll('.cf-pill').forEach(b=>b.classList.remove('active'));
   const ecSel=document.getElementById('cf-ec');if(ecSel)ecSel.value='';
   const stSel=document.getElementById('cf-state');if(stSel)stSel.value='';
   const inp=document.getElementById('cf-property');if(inp)inp.value='';
   cfApply();
 }
+
+// ── MILESTONE CATEGORY HELPER ─────────────────────────────────────────
+// Pre-Construction: milestones 1-4, Construction: 5-12, Project Closeout: 13-17, Complete: 18
+function getMilestoneCategoryForProp(propName){
+  const ms=getMilestonesForProp(propName);
+  const complete=ms.filter(m=>m.status==='Complete').length;
+  if(complete>=18)return'Complete';
+  if(complete>=12)return'Project Closeout';
+  if(complete>=4)return'Construction';
+  return'Pre-Construction';
+}
+
+// ── FORECASTED COMPLETION DRILL STATE ────────────────────────────────
+let fcDrillYear=null; // null = year view, number = month view for that year
+let fsDrillYear=null; // same for forecasted spend
 
 // ── CHARTS ────────────────────────────────────────────────────────────
 function renderCharts(){
@@ -4697,38 +4836,24 @@ function renderCharts(){
   if(!container)return;
   const today=new Date();today.setHours(0,0,0,0);
 
-  // Init filter dropdowns (populates EC/State options, restores state)
   cfInit();
 
-  // All charts use filtered set; active = filtered + In Progress
   const filtered=cfGetFiltered();
-  const active=filtered.filter(p=>p.st==='In Progress');
+  const active=filtered.filter(p=>p.st==='In Progress'||p.st==='Complete'||p.st==='Planned');
 
-  // ── DATA PREP ──────────────────────────────────────────────────────
+  // ── DATA PREP ─────────────────────────────────────────────────────
 
-  // 1. Heat Map: per-property schedule + milestone %
-  const heatData=active.map(p=>{
-    const risk=calcScheduleRisk(p.n);
-    const propStatus=derivePropertyStatusFromPhases(p.n);
-    const propSteps=(window.PHASE_STEPS||[]).filter(s=>s.property===p.n&&s.checked!==false);
-    const stepsComplete=propSteps.filter(s=>s.status==='Complete').length;
-    const pct=propSteps.length>0?Math.round(stepsComplete/propSteps.length*100):Math.round(getMsComplete(p.n)/MILESTONES_DEF.length*100);
-    
-    // Risk level from cascade: At Risk = Behind phase, not manual flags
-    const riskLevel=propStatus==='At Risk'?'High':propStatus==='Complete'?'None':risk.daysLate>0?'Medium':'Low';
-    return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,riskLevel,propStatus,daysLate:risk.daysLate,overdueCount:risk.overdueCount};
-  });
-
-  // 2. Budget vs Billed — use all filtered props (not just In Progress) so single-property filter shows data
-  const budgetSource=CF.property.length>0?filtered:active;
+  // 1. Budget vs Billed
+  const budgetSource=CF.property.length>0?filtered:active.filter(p=>p.st==='In Progress');
   const budgetData=budgetSource.filter(p=>p.budget>0).map(p=>{
     const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
     const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
-    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:p.budget,billedYTD,pctBilled:Math.round((billedYTD/p.budget)*100)};
+    const savings=(window.CO_SAVINGS||[]).filter(s=>s.property===p.n).reduce((a,s)=>a+(parseFloat(s.savings)||0),0);
+    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:p.budget,billedYTD,savings,pctBilled:Math.round((billedYTD/p.budget)*100)};
   }).sort((a,b)=>b.budget-a.budget).slice(0,12);
 
-  // ── 3. ELEVATOR COMPANY PERFORMANCE ──────────────────────────────────
-  const elevCoSource=CF.property.length>0?filtered:active;
+  // 2. Elevator Company Performance
+  const elevCoSource=CF.property.length>0?filtered:active.filter(p=>p.st==='In Progress');
   const elevCoMap={};
   elevCoSource.forEach(p=>{
     const ec=(p.ec&&p.ec!=='TBD'&&p.ec.trim()!=='')?p.ec:'TBD';
@@ -4745,106 +4870,156 @@ function renderCharts(){
     return b.total-a.total;
   });
 
-  // 3b. Budget data with CO Savings
-  const budgetDataWithSavings=budgetData.map(d=>{
-    const savings=(window.CO_SAVINGS||[]).filter(s=>s.property===d.fullName).reduce((a,s)=>a+(parseFloat(s.savings)||0),0);
-    return {...d,savings};
+  // 3. Active Projects by Milestone Category
+  const msCatCounts={'Pre-Construction':0,'Construction':0,'Project Closeout':0,'Complete':0};
+  const allProps=port.filter(p=>p.st!=='Removed');
+  allProps.forEach(p=>{
+    const cat=getMilestoneCategoryForProp(p.n);
+    if(msCatCounts[cat]!==undefined)msCatCounts[cat]++;
   });
 
-  // 4. Milestone Funnel: count of active properties at each milestone stage
-  const funnelCounts=MILESTONES_DEF.map((_,i)=>({stage:i+1,name:MILESTONES_DEF[i],count:0}));
-  active.forEach(p=>{
-    const ms=getMilestonesForProp(p.n);
-    const complete=ms.filter(m=>m.status==='Complete').length;
-    if(complete<MILESTONES_DEF.length)funnelCounts[complete].count++;
+  // 4. Forecasted Completion — year or month drill
+  const fcSource=port.filter(p=>p.st!=='Removed');
+  const fcByYear={};
+  const fcByMonth={};
+  fcSource.forEach(p=>{
+    const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
+    let latest=null;
+    phases.forEach(ph=>{if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!latest||d>latest)latest=d;}});
+    if(!latest)return;
+    const yr=latest.getFullYear();
+    const mo=latest.getFullYear()+'-'+(latest.getMonth()+1);
+    fcByYear[yr]=(fcByYear[yr]||0)+1;
+    fcByMonth[mo]=(fcByMonth[mo]||0)+1;
   });
-  const funnelMax=Math.max(1,...funnelCounts.map(f=>f.count));
+  const fcYears=Object.keys(fcByYear).map(Number).sort();
+  const fcMonthKeys=Object.keys(fcByMonth).filter(k=>k.startsWith(fcDrillYear)).sort();
 
-  // 5. Forecast Completion: planned vs projected per property (from phases)
-  const forecastData=active.map(p=>{
+  // 5. Forecasted Spend — budget minus billed, by year or month
+  const fsSource=port.filter(p=>p.st!=='Removed'&&p.budget>0);
+  const fsByYear={};
+  const fsByMonth={};
+  fsSource.forEach(p=>{
+    const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+    const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
+    const remaining=Math.max(0,p.budget-billedYTD);
     const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
-    let plannedEnd=null,projectedEnd=null;
-    phases.forEach(ph=>{
-      if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!plannedEnd||d>plannedEnd)plannedEnd=d;}
-      if(ph.plannedCompletion&&ph.status!=='Complete'){const d=new Date(ph.plannedCompletion);if(!projectedEnd||d>projectedEnd)projectedEnd=d;}
-    });
-    const risk=calcScheduleRisk(p.n);
-    return {name:p.n.length>20?p.n.slice(0,18)+'…':p.n,fullName:p.n,plannedEnd,projectedEnd,daysLate:risk.daysLate};
-  }).filter(d=>d.plannedEnd).sort((a,b)=>a.plannedEnd-b.plannedEnd).slice(0,10);
+    let latest=null;
+    phases.forEach(ph=>{if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!latest||d>latest)latest=d;}});
+    if(!latest)return;
+    const yr=latest.getFullYear();
+    const mo=latest.getFullYear()+'-'+(latest.getMonth()+1);
+    fsByYear[yr]=(fsByYear[yr]||0)+remaining;
+    fsByMonth[mo]=(fsByMonth[mo]||0)+remaining;
+  });
+  const fsYears=Object.keys(fsByYear).map(Number).sort();
+  const fsMonthKeys=Object.keys(fsByMonth).filter(k=>k.startsWith(fsDrillYear)).sort();
 
-  // 6. Building Completion Progress
-  const progressData=active.map(p=>{
-    const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
-    const totalUnits=parseInt(p.units)||phases.reduce((a,u)=>a+u.units,0)||0;
-    const doneUnits=phases.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
-    const pct=totalUnits>0?Math.round((doneUnits/totalUnits)*100):0;
-    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,total:totalUnits,done:doneUnits,pct};
-  }).sort((a,b)=>b.pct-a.pct);
+  // 6. Portfolio % Complete
+  const allPortProps=port.filter(p=>p.st!=='Removed');
+  const totalPortCount=allPortProps.length;
+  const completeCount=allPortProps.filter(p=>p.st==='Complete').length;
+  const pctComplete=totalPortCount>0?Math.round((completeCount/totalPortCount)*100):0;
 
-  // ── RENDER SHELL ──────────────────────────────────────────────────
-  const heatCols=Math.min(active.length,6)||1;
+  // 7. Open Task Roll-up by Priority (Action Items)
+  const allActions=actionItems||(window.ACTION_ITEMS||[]);
+  const openActions=allActions.filter(a=>a.status==='Open');
+  const priorityFilter=CF.priority.length>0?CF.priority:null;
+  const priorityCounts={High:0,Medium:0,Low:0};
+  openActions.forEach(a=>{
+    const pri=a.priority||'Medium';
+    if(priorityCounts[pri]!==undefined)priorityCounts[pri]++;
+  });
+  const filteredPriorityCounts=priorityFilter?
+    Object.fromEntries(Object.entries(priorityCounts).filter(([k])=>priorityFilter.includes(k))):
+    priorityCounts;
+  const totalOpenActions=Object.values(filteredPriorityCounts).reduce((a,b)=>a+b,0);
+
+  // ── RENDER SHELL ────────────────────────────────────────────────────
+  const inProgCount=active.filter(p=>p.st==='In Progress').length;
   container.innerHTML=`
-  <!-- ROW 1: Budget vs Billed | Elevator Company Performance -->
+  <!-- ROW 1: Budget vs Billed — full width -->
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-header"><div class="card-title">Budget vs Billed</div><div class="card-sub">Project budget vs YTD billed — active properties</div></div>
+    <div id="budget-bars" style="margin-top:10px"></div>
+    ${budgetData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries to populate this chart.</div>':''}
+  </div>
+
+  <!-- ROW 2: Elevator Company Performance | Active Projects by Milestone Category -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
     <div class="card">
-      <div class="card-header"><div class="card-title">Budget vs Billed</div><div class="card-sub">Project budget vs YTD billed — active properties</div></div>
-      <div id="budget-bars" style="margin-top:10px"></div>
-      ${budgetData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries to populate this chart.</div>':''}
+      <div class="card-header"><div class="card-title">Elevator Company Performance</div><div class="card-sub">Project count by status per contractor</div></div>
+      <div id="elev-co-chart" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <div class="card-header"><div class="card-title">Elevator Company Performance</div><div class="card-sub">Properties by status per contractor</div></div>
-      <div id="elev-co-chart" style="margin-top:10px"></div>
+      <div class="card-header"><div class="card-title">Active Projects by Stage</div><div class="card-sub">Portfolio distribution across project lifecycle stages</div></div>
+      <div id="ms-stage-chart" style="margin-top:10px"></div>
     </div>
   </div>
 
-  <!-- ROW 3: Schedule Health Table full width -->
+  <!-- ROW 3: Forecasted Completion | Forecasted Spend -->
+  <div class="two-col" style="gap:20px;margin-bottom:20px">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Forecasted Completion</div>
+          <div class="card-sub">${fcDrillYear?'Monthly view — '+fcDrillYear:'Properties completing by calendar year'}</div>
+        </div>
+        ${fcDrillYear?`<button onclick="fcDrillYear=null;renderCharts()" style="font-size:11px;color:var(--blue-dark);background:none;border:1px solid var(--blue-light);border-radius:6px;padding:4px 10px;cursor:pointer;display:flex;align-items:center;gap:4px"><i class="ti ti-arrow-left" style="font-size:11px"></i> All Years</button>`:''}
+      </div>
+      <div id="fc-chart" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">Forecasted Spend</div>
+          <div class="card-sub">${fsDrillYear?'Monthly view — '+fsDrillYear:'Remaining budget (budget minus billed) by year'}</div>
+        </div>
+        ${fsDrillYear?`<button onclick="fsDrillYear=null;renderCharts()" style="font-size:11px;color:var(--blue-dark);background:none;border:1px solid var(--blue-light);border-radius:6px;padding:4px 10px;cursor:pointer;display:flex;align-items:center;gap:4px"><i class="ti ti-arrow-left" style="font-size:11px"></i> All Years</button>`:''}
+      </div>
+      <div id="fs-chart" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <!-- ROW 4: Portfolio % Complete | Open Task Roll-up -->
+  <div class="two-col" style="gap:20px;margin-bottom:20px">
+    <div class="card">
+      <div class="card-header"><div class="card-title">Portfolio % Complete</div><div class="card-sub">Buildings modernized vs total portfolio</div></div>
+      <div id="portfolio-complete-chart" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">Open Task Roll-up</div><div class="card-sub">Open action items by priority</div></div>
+      <div id="task-rollup-chart" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <!-- ROW 5: Schedule Health — full width -->
   <div class="card" style="margin-bottom:20px">
     <div class="card-header"><div class="card-title">Schedule Health</div><div class="card-sub">Planned vs actual completion by property</div></div>
     <div id="schedule-health-table" style="margin-top:8px"></div>
   </div>`;
 
-  // ── 1. HEAT MAP ───────────────────────────────────────────────────
-  const heatGrid=document.getElementById('heat-grid');
-  if(heatGrid){
-    heatGrid.innerHTML=heatData.map(d=>{
-      const s=d.propStatus||'In Progress';
-      const bg=s==='At Risk'?'var(--red-pale)':s==='Behind'?'var(--amber-pale)':s==='Ahead'?'var(--teal-pale)':s==='Complete'?'var(--green-pale)':'white';
-      const accent=s==='At Risk'?'var(--red)':s==='Behind'?'var(--amber)':s==='Ahead'?'var(--teal)':s==='Complete'?'var(--green)':'var(--blue-mid)';
-      const badge=s==='At Risk'?`<span style="font-size:9px;color:var(--red);font-weight:600">AT RISK</span>`:
-        s==='Behind'?`<span style="font-size:9px;color:var(--amber);font-weight:600">BEHIND</span>`:
-        s==='Ahead'?`<span style="font-size:9px;color:var(--teal);font-weight:600">AHEAD</span>`:
-        s==='Complete'?`<span style="font-size:9px;color:var(--green);font-weight:600">COMPLETE</span>`:
-        `<span style="font-size:9px;color:var(--blue-dark);font-weight:600">ON TRACK</span>`;
-      return `<div onclick="openProperty('${d.name.replace(/'/g,"\\'")}'')" style="background:${bg};border-radius:8px;padding:10px 12px;cursor:pointer;border-left:3px solid ${accent};transition:opacity .12s" onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
-        <div style="font-size:11px;font-weight:600;color:var(--navy);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${d.shortName}</div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">${badge}<span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--gray-mid)">${d.pct}%</span></div>
-        <div style="background:rgba(0,0,0,.08);border-radius:3px;height:4px"><div style="width:${d.pct}%;background:${accent};height:4px;border-radius:3px"></div></div>
-        ${d.daysLate>0?`<div style="font-size:9px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:''}
-      </div>`;
-    }).join('');
-  }
-
-  // ── 2. BUDGET VS BILLED — two bars per property ──────────────────────
+  // ── 1. BUDGET VS BILLED ───────────────────────────────────────────
   const budgetBars=document.getElementById('budget-bars');
-  if(budgetBars&&budgetDataWithSavings.length>0){
-    const maxBudget=Math.max(...budgetDataWithSavings.map(d=>d.budget));
-    budgetBars.innerHTML=budgetDataWithSavings.map(d=>{
+  if(budgetBars&&budgetData.length>0){
+    const maxBudget=Math.max(...budgetData.map(d=>d.budget));
+    budgetBars.innerHTML=budgetData.map(d=>{
       const billedPct=Math.min(Math.round((d.billedYTD/maxBudget)*100),100);
       const savingsPct=Math.min(Math.round((d.savings/maxBudget)*100),100);
       const overrun=d.pctBilled>100;
       return `<div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <div style="font-size:11px;color:var(--blue-dark);font-weight:500;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}'">${d.name}</div>
-          <div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;flex-shrink:0">${fmtCurrency(d.budget)}</div>
+          <div style="font-size:12px;color:var(--blue-dark);font-weight:500;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}')">${d.name}</div>
+          <div style="font-size:11px;color:var(--gray-mid);font-family:'DM Mono',monospace;flex-shrink:0">${fmtCurrency(d.budget)}</div>
         </div>
         <div style="margin-bottom:3px">
-          <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--gray-mid);margin-bottom:2px"><span>Billed YTD</span><span style="font-family:'DM Mono',monospace;color:${overrun?'var(--red)':'var(--blue-dark)'}">${fmtCurrency(d.billedYTD)} · ${d.pctBilled}%</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-bottom:2px"><span>Billed YTD</span><span style="font-family:'DM Mono',monospace;color:${overrun?'var(--red)':'var(--blue-dark)'}">${fmtCurrency(d.billedYTD)} · ${d.pctBilled}%</span></div>
           <div style="position:relative;height:14px;background:var(--gray-pale);border-radius:3px;overflow:hidden">
             <div style="position:absolute;top:0;left:0;height:100%;width:${billedPct}%;background:${overrun?'var(--red)':'var(--blue-dark)'};border-radius:3px;opacity:.85"></div>
           </div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--gray-mid);margin-bottom:2px"><span>CO Savings</span><span style="font-family:'DM Mono',monospace;color:var(--teal)">${d.savings>0?fmtCurrency(d.savings):'—'}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-bottom:2px"><span>CO Savings</span><span style="font-family:'DM Mono',monospace;color:var(--teal)">${d.savings>0?fmtCurrency(d.savings):'—'}</span></div>
           <div style="position:relative;height:14px;background:var(--gray-pale);border-radius:3px;overflow:hidden">
             ${d.savings>0?`<div style="position:absolute;top:0;left:0;height:100%;width:${savingsPct}%;background:var(--teal);border-radius:3px;opacity:.85"></div>`:''}
           </div>
@@ -4853,78 +5028,312 @@ function renderCharts(){
     }).join('');
   }
 
-  // ── 3. ELEVATOR COMPANY PERFORMANCE (vertical stacked bar) ──────────
+  // ── 2. ELEVATOR COMPANY PERFORMANCE ──────────────────────────────
   const elevCoChart=document.getElementById('elev-co-chart');
   if(elevCoChart&&elevCoData.length>0){
     const maxTotal=Math.max(...elevCoData.map(d=>d.total));
     const chartH=160;
     const n=elevCoData.length;
-    // Fixed comfortable spacing: 24px gap between bars, bars 60px wide, up to 5 contractors
-    const totalGap=24;
-    const barW=Math.max(48,Math.min(80,Math.floor((((elevCoChart.parentElement?.offsetWidth||400)-40-(n-1)*totalGap)/n))));
+    const totalGap=20;
+    const barW=Math.max(44,Math.min(70,Math.floor(((240-(n-1)*totalGap)/n))));
     const statusColors={complete:'var(--green)',onTrack:'var(--blue-dark)',atRisk:'var(--red)',notStarted:'var(--gray-light)'};
     const statusLabels={complete:'Complete',onTrack:'On Track',atRisk:'At Risk',notStarted:'Not Started'};
+    // Y-axis ticks
+    const yTicks=[0,Math.ceil(maxTotal/2),maxTotal];
     elevCoChart.innerHTML=`
-      <div style="display:flex;align-items:flex-end;gap:${totalGap}px;height:${chartH}px;padding:0 4px;margin-bottom:4px">
-        ${elevCoData.map(d=>{
-          const isTBD=d.name==='TBD';
-          const segments=['complete','onTrack','atRisk','notStarted'].map(k=>{
-            if(!d[k])return '';
-            const h=Math.max(4,Math.round((d[k]/maxTotal)*chartH));
-            return `<div style="width:100%;height:${h}px;background:${statusColors[k]};opacity:${isTBD?0.5:0.85}" title="${statusLabels[k]}: ${d[k]}"></div>`;
-          }).reverse().join('');
-          return `<div style="display:flex;flex-direction:column;align-items:center;width:${barW}px;flex-shrink:0">
-            <div style="font-size:9px;color:var(--gray-mid);margin-bottom:3px;font-family:'DM Mono',monospace">${d.total}</div>
-            <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;border-radius:4px 4px 0 0;overflow:hidden;border-bottom:2px solid var(--border)">${segments}</div>
+      <div style="display:flex;align-items:flex-end;gap:0">
+        <!-- Y axis -->
+        <div style="display:flex;flex-direction:column;justify-content:space-between;height:${chartH}px;padding-right:6px;padding-bottom:2px">
+          ${[...yTicks].reverse().map(t=>`<div style="font-size:9px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-align:right">${t}</div>`).join('')}
+        </div>
+        <!-- Bars -->
+        <div style="flex:1;display:flex;flex-direction:column">
+          <!-- Grid lines -->
+          <div style="position:relative;height:${chartH}px;display:flex;align-items:flex-end;gap:${totalGap}px;padding:0 4px">
+            ${[0.5,1].map(f=>`<div style="position:absolute;left:0;right:0;bottom:${Math.round(f*chartH)}px;border-top:1px dashed var(--border);z-index:0"></div>`).join('')}
+            ${elevCoData.map(d=>{
+              const isTBD=d.name==='TBD';
+              const segments=['complete','onTrack','atRisk','notStarted'].map(k=>{
+                if(!d[k])return'';
+                const h=Math.max(4,Math.round((d[k]/maxTotal)*chartH));
+                return `<div style="width:100%;height:${h}px;background:${statusColors[k]};opacity:${isTBD?0.5:0.85};position:relative;z-index:1" title="${statusLabels[k]}: ${d[k]}">
+                  ${d[k]>0?`<span style="position:absolute;top:2px;left:0;right:0;text-align:center;font-size:9px;color:white;font-weight:600;line-height:1">${d[k]}</span>`:''}
+                </div>`;
+              }).reverse().join('');
+              return `<div style="display:flex;flex-direction:column;align-items:center;width:${barW}px;flex-shrink:0;position:relative;z-index:1">
+                <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;border-radius:4px 4px 0 0;overflow:hidden;border-bottom:2px solid var(--border)">${segments}</div>
+              </div>`;
+            }).join('')}
+          </div>
+          <!-- X labels -->
+          <div style="display:flex;gap:${totalGap}px;padding:4px 4px 0;margin-left:0">
+            ${elevCoData.map(d=>`<div style="width:${barW}px;flex-shrink:0;text-align:center;font-size:${n>4?'8':'10'}px;color:${d.name==='TBD'?'var(--gray-mid)':'var(--navy)'};font-weight:${d.name==='TBD'?400:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${d.name}">${d.name}</div>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;padding:10px 4px 0">
+        ${Object.entries(statusColors).map(([k,c])=>`<span style="font-size:10px;color:var(--gray-mid);display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:${c};display:inline-block;opacity:.85"></span>${statusLabels[k]}</span>`).join('')}
+      </div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${elevCoSource.length} properties · ${elevCoData.filter(d=>d.name!=='TBD').length} contractor${elevCoData.filter(d=>d.name!=='TBD').length!==1?'s':''}</div>`;
+  }else if(elevCoChart){
+    elevCoChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No contractor data available.</div>';
+  }
+
+  // ── 3. ACTIVE PROJECTS BY MILESTONE STAGE ────────────────────────
+  const msStageChart=document.getElementById('ms-stage-chart');
+  if(msStageChart){
+    const cats=['Pre-Construction','Construction','Project Closeout','Complete'];
+    const catColors={'Pre-Construction':'var(--gray-mid)','Construction':'var(--blue-dark)','Project Closeout':'var(--amber)','Complete':'var(--green)'};
+    const catIcons={'Pre-Construction':'ti-clipboard-list','Construction':'ti-building-skyscraper','Project Closeout':'ti-checklist','Complete':'ti-circle-check'};
+    const maxCat=Math.max(1,...cats.map(c=>msCatCounts[c]));
+    const chartH=140;
+    const barW=56;
+    msStageChart.innerHTML=`
+      <div style="display:flex;align-items:flex-end;gap:16px;height:${chartH+24}px;padding:0 8px">
+        ${cats.map(cat=>{
+          const count=msCatCounts[cat]||0;
+          const h=count>0?Math.max(16,Math.round((count/maxCat)*chartH)):0;
+          const color=catColors[cat];
+          return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+            <div style="font-size:11px;font-weight:700;color:var(--navy);margin-bottom:4px">${count}</div>
+            <div style="width:100%;height:${h||4}px;background:${count>0?color:'var(--gray-pale)'};border-radius:4px 4px 0 0;cursor:default;transition:opacity .12s" title="${cat}: ${count}" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'"></div>
+            <div style="width:100%;height:3px;background:var(--border)"></div>
           </div>`;
         }).join('')}
       </div>
-      <div style="display:flex;gap:${totalGap}px;padding:0 4px;margin-bottom:10px">
-        ${elevCoData.map(d=>`<div style="width:${barW}px;flex-shrink:0;text-align:center;font-size:${n>4?'8':'9'}px;color:${d.name==='TBD'?'var(--gray-mid)':'var(--navy)'};font-weight:${d.name==='TBD'?400:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${d.name}">${d.name}</div>`).join('')}
+      <div style="display:flex;gap:16px;padding:6px 8px 0">
+        ${cats.map(cat=>`<div style="flex:1;min-width:0;text-align:center">
+          <i class="ti ${catIcons[cat]}" style="font-size:12px;color:${catColors[cat]}"></i>
+          <div style="font-size:9px;color:var(--gray-mid);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${cat}">${cat}</div>
+        </div>`).join('')}
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;padding:0 4px">
-        ${Object.entries(statusColors).map(([k,c])=>`<span style="font-size:9px;color:var(--gray-mid);display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:${c};display:inline-block;opacity:.85"></span>${statusLabels[k]}</span>`).join('')}
-      </div>
-      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;color:var(--gray-mid);padding-left:4px">${active.length} active properties · ${elevCoData.filter(d=>d.name!=='TBD').length} contractor${elevCoData.filter(d=>d.name!=='TBD').length!==1?'s':''}</div>`;
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${allPortProps.length} total properties across all stages</div>`;
   }
 
+  // ── 4. FORECASTED COMPLETION ──────────────────────────────────────
+  const fcChart=document.getElementById('fc-chart');
+  if(fcChart){
+    if(!fcDrillYear){
+      // Year view
+      if(fcYears.length===0){
+        fcChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No phase completion dates set.</div>';
+      }else{
+        const maxFc=Math.max(...fcYears.map(y=>fcByYear[y]));
+        const chartH=120;
+        fcChart.innerHTML=`
+          <div style="display:flex;align-items:flex-end;gap:12px;height:${chartH+24}px;padding:0 4px">
+            ${fcYears.map(yr=>{
+              const count=fcByYear[yr];
+              const h=Math.max(16,Math.round((count/maxFc)*chartH));
+              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;cursor:pointer" onclick="fcDrillYear=${yr};renderCharts()" title="Click to see monthly breakdown for ${yr}">
+                <div style="font-size:11px;font-weight:700;color:var(--navy);margin-bottom:4px">${count}</div>
+                <div style="width:100%;height:${h}px;background:var(--blue-dark);border-radius:4px 4px 0 0;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>
+                <div style="width:100%;height:3px;background:var(--border)"></div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div style="display:flex;gap:12px;padding:4px 4px 0">
+            ${fcYears.map(yr=>`<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${yr}</div>`).join('')}
+          </div>
+          <div style="margin-top:8px;font-size:10px;color:var(--gray-mid);font-style:italic">Click a bar to see monthly breakdown</div>`;
+      }
+    }else{
+      // Month drill view
+      const monthNames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      if(fcMonthKeys.length===0){
+        fcChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No properties completing in '+fcDrillYear+'.</div>';
+      }else{
+        const maxFcM=Math.max(...fcMonthKeys.map(k=>fcByMonth[k]));
+        const chartH=120;
+        fcChart.innerHTML=`
+          <div style="display:flex;align-items:flex-end;gap:8px;height:${chartH+24}px;padding:0 4px">
+            ${fcMonthKeys.map(k=>{
+              const count=fcByMonth[k];
+              const mo=parseInt(k.split('-')[1])-1;
+              const h=Math.max(12,Math.round((count/maxFcM)*chartH));
+              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+                <div style="font-size:11px;font-weight:700;color:var(--navy);margin-bottom:4px">${count}</div>
+                <div style="width:100%;height:${h}px;background:var(--blue-dark);border-radius:4px 4px 0 0;opacity:.85"></div>
+                <div style="width:100%;height:3px;background:var(--border)"></div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div style="display:flex;gap:8px;padding:4px 4px 0">
+            ${fcMonthKeys.map(k=>{
+              const mo=parseInt(k.split('-')[1])-1;
+              return `<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${monthNames[mo]}</div>`;
+            }).join('')}
+          </div>`;
+      }
+    }
+  }
 
-  // ── 4. SCHEDULE HEALTH TABLE ──────────────────────────────────────
+  // ── 5. FORECASTED SPEND ────────────────────────────────────────────
+  const fsChart=document.getElementById('fs-chart');
+  if(fsChart){
+    if(!fsDrillYear){
+      if(fsYears.length===0){
+        fsChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No budget or phase data available.</div>';
+      }else{
+        const maxFs=Math.max(...fsYears.map(y=>fsByYear[y]));
+        const chartH=120;
+        fsChart.innerHTML=`
+          <div style="display:flex;align-items:flex-end;gap:12px;height:${chartH+24}px;padding:0 4px">
+            ${fsYears.map(yr=>{
+              const amt=fsByYear[yr];
+              const h=Math.max(16,Math.round((amt/maxFs)*chartH));
+              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;cursor:pointer" onclick="fsDrillYear=${yr};renderCharts()" title="Click to see monthly breakdown for ${yr}">
+                <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:4px;font-family:'DM Mono',monospace">${fmtCurrency(amt)}</div>
+                <div style="width:100%;height:${h}px;background:var(--teal);border-radius:4px 4px 0 0;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>
+                <div style="width:100%;height:3px;background:var(--border)"></div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div style="display:flex;gap:12px;padding:4px 4px 0">
+            ${fsYears.map(yr=>`<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${yr}</div>`).join('')}
+          </div>
+          <div style="margin-top:8px;font-size:10px;color:var(--gray-mid);font-style:italic">Click a bar to see monthly breakdown</div>`;
+      }
+    }else{
+      const monthNames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      if(fsMonthKeys.length===0){
+        fsChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No spend data for '+fsDrillYear+'.</div>';
+      }else{
+        const maxFsM=Math.max(...fsMonthKeys.map(k=>fsByMonth[k]));
+        const chartH=120;
+        fsChart.innerHTML=`
+          <div style="display:flex;align-items:flex-end;gap:8px;height:${chartH+24}px;padding:0 4px">
+            ${fsMonthKeys.map(k=>{
+              const amt=fsByMonth[k];
+              const mo=parseInt(k.split('-')[1])-1;
+              const h=Math.max(12,Math.round((amt/maxFsM)*chartH));
+              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+                <div style="font-size:9px;font-weight:700;color:var(--navy);margin-bottom:4px;font-family:'DM Mono',monospace">${fmtCurrency(amt)}</div>
+                <div style="width:100%;height:${h}px;background:var(--teal);border-radius:4px 4px 0 0;opacity:.85"></div>
+                <div style="width:100%;height:3px;background:var(--border)"></div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div style="display:flex;gap:8px;padding:4px 4px 0">
+            ${fsMonthKeys.map(k=>{
+              const mo=parseInt(k.split('-')[1])-1;
+              return `<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${monthNames[mo]}</div>`;
+            }).join('')}
+          </div>`;
+      }
+    }
+  }
+
+  // ── 6. PORTFOLIO % COMPLETE ───────────────────────────────────────
+  const portCompleteChart=document.getElementById('portfolio-complete-chart');
+  if(portCompleteChart){
+    const inProgressCount=allPortProps.filter(p=>p.st==='In Progress').length;
+    const plannedCount=allPortProps.filter(p=>p.st==='Planned').length;
+    const donutR=60,donutStroke=18;
+    const cx=80,cy=80,r=donutR;
+    const circumference=2*Math.PI*r;
+    const completePct=totalPortCount>0?completeCount/totalPortCount:0;
+    const inProgPct=totalPortCount>0?inProgressCount/totalPortCount:0;
+    const completeArc=circumference*completePct;
+    const inProgArc=circumference*inProgPct;
+    const plannedArc=circumference*(1-completePct-inProgPct);
+    portCompleteChart.innerHTML=`
+      <div style="display:flex;align-items:center;gap:24px;padding:8px 0">
+        <svg width="160" height="160" viewBox="0 0 160 160">
+          <!-- Background circle -->
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--gray-pale)" stroke-width="${donutStroke}"/>
+          <!-- Planned (gray) -->
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--gray-light)" stroke-width="${donutStroke}"
+            stroke-dasharray="${plannedArc} ${circumference}" stroke-dashoffset="${-completeArc-inProgArc}" transform="rotate(-90 ${cx} ${cy})"/>
+          <!-- In Progress (blue) -->
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--blue-dark)" stroke-width="${donutStroke}"
+            stroke-dasharray="${inProgArc} ${circumference}" stroke-dashoffset="${-completeArc}" transform="rotate(-90 ${cx} ${cy})"/>
+          <!-- Complete (green) -->
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--green)" stroke-width="${donutStroke}"
+            stroke-dasharray="${completeArc} ${circumference}" stroke-dashoffset="0" transform="rotate(-90 ${cx} ${cy})"/>
+          <text x="${cx}" y="${cy-6}" text-anchor="middle" font-size="20" font-weight="700" fill="var(--navy)">${pctComplete}%</text>
+          <text x="${cx}" y="${cy+14}" text-anchor="middle" font-size="10" fill="var(--gray-mid)">Complete</text>
+        </svg>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div><div style="font-size:13px;font-weight:700;color:var(--green)">${completeCount}</div><div style="font-size:10px;color:var(--gray-mid)">Complete</div></div>
+          <div><div style="font-size:13px;font-weight:700;color:var(--blue-dark)">${inProgressCount}</div><div style="font-size:10px;color:var(--gray-mid)">In Progress</div></div>
+          <div><div style="font-size:13px;font-weight:700;color:var(--gray-mid)">${plannedCount}</div><div style="font-size:10px;color:var(--gray-mid)">Planned</div></div>
+          <div style="margin-top:4px;padding-top:8px;border-top:1px solid var(--border)"><div style="font-size:13px;font-weight:700;color:var(--navy)">${totalPortCount}</div><div style="font-size:10px;color:var(--gray-mid)">Total Portfolio</div></div>
+        </div>
+      </div>`;
+  }
+
+  // ── 7. OPEN TASK ROLL-UP ──────────────────────────────────────────
+  const taskRollupChart=document.getElementById('task-rollup-chart');
+  if(taskRollupChart){
+    const priColors={High:'var(--red)',Medium:'var(--amber)',Low:'var(--blue-light)'};
+    const priIcons={High:'ti-alert-triangle',Medium:'ti-alert-circle',Low:'ti-info-circle'};
+    const pris=['High','Medium','Low'];
+    const maxPri=Math.max(1,...pris.map(p=>priorityCounts[p]||0));
+    taskRollupChart.innerHTML=`
+      <div style="display:flex;flex-direction:column;gap:12px;padding:4px 0">
+        ${pris.map(pri=>{
+          const count=priorityCounts[pri]||0;
+          const pct=Math.round((count/Math.max(1,totalOpenActions))*100);
+          const barW=totalOpenActions>0?Math.round((count/totalOpenActions)*100):0;
+          const isActive=!priorityFilter||priorityFilter.includes(pri);
+          return `<div style="opacity:${isActive?1:0.4}">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+              <div style="display:flex;align-items:center;gap:6px">
+                <i class="ti ${priIcons[pri]}" style="color:${priColors[pri]};font-size:14px"></i>
+                <span style="font-size:12px;font-weight:600;color:var(--navy)">${pri}</span>
+              </div>
+              <span style="font-size:12px;font-weight:700;color:var(--navy);font-family:'DM Mono',monospace">${count}</span>
+            </div>
+            <div style="background:var(--gray-pale);border-radius:4px;height:10px;overflow:hidden">
+              <div style="height:100%;width:${barW}%;background:${priColors[pri]};border-radius:4px;opacity:.85;transition:width .3s"></div>
+            </div>
+          </div>`;
+        }).join('')}
+        <div style="margin-top:4px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${totalOpenActions} total open action items</div>
+      </div>`;
+  }
+
+  // ── 8. SCHEDULE HEALTH TABLE ──────────────────────────────────────
   const schedTable=document.getElementById('schedule-health-table');
   if(schedTable){
     const fmtDate=dt=>dt?new Date(dt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'—';
-    const rows=active.map(p=>{
+    const activeForSched=filtered.filter(p=>p.st==='In Progress');
+    const rows=activeForSched.map(p=>{
       const propStatus=derivePropertyStatusFromPhases(p.n);
       const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
       const latestPhase=phases.sort((a,b)=>new Date(b.plannedCompletion||0)-new Date(a.plannedCompletion||0))[0];
       const plannedEnd=latestPhase?.plannedCompletion||null;
       const risk=calcScheduleRisk(p.n);
       const healthBadge=renderHealthBadge(p.n);
-      return {name:p.n,plannedEnd,daysLate:risk.daysLate,propStatus,healthBadge};
+      return {name:p.n,plannedEnd,daysLate:risk.daysLate,propStatus,healthBadge,ec:p.ec||'TBD'};
     }).sort((a,b)=>b.daysLate-a.daysLate);
-    schedTable.innerHTML=`<table style="width:100%;border-collapse:collapse">
-      <thead><tr>
-        <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Property</th>
-        <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Contractor</th>
-        <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Planned Completion</th>
-        <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Health</th>
-        <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Variance</th>
-      </tr></thead>
-      <tbody>
-        ${rows.map(r=>{
-          const prop=active.find(p=>p.n===r.name);
-          return `<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${r.name.replace(/'/g,"\'")}')">
-            <td style="padding:8px 10px;font-size:11px;font-weight:500;color:var(--blue-dark)">${r.name}</td>
-            <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${prop?.ec||'TBD'}</td>
-            <td style="padding:8px 10px;font-size:11px;font-family:'DM Mono',monospace">${fmtDate(r.plannedEnd)}</td>
+    if(rows.length===0){
+      schedTable.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">No active properties to display.</div>';
+    }else{
+      schedTable.innerHTML=`<table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Property</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Contractor</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Planned Completion</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Health</th>
+          <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;border-bottom:1px solid var(--border)">Variance</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${r.name.replace(/'/g,"\\'")}')">
+            <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${r.name}</td>
+            <td style="padding:8px 10px;font-size:12px;color:var(--gray-mid)">${r.ec}</td>
+            <td style="padding:8px 10px;font-size:12px;font-family:'DM Mono',monospace">${fmtDate(r.plannedEnd)}</td>
             <td style="padding:8px 10px">${r.healthBadge}</td>
-            <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${r.daysLate>0?'var(--red)':r.daysLate<0?'var(--green)':'var(--gray-mid)'}">${r.daysLate>0?r.daysLate+'d late':r.daysLate<0?Math.abs(r.daysLate)+'d ahead':'On time'}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>`;
+            <td style="padding:8px 10px;font-size:12px;font-weight:600;color:${r.daysLate>0?'var(--red)':r.daysLate<0?'var(--green)':'var(--gray-mid)'}">${r.daysLate>0?r.daysLate+'d late':r.daysLate<0?Math.abs(r.daysLate)+'d ahead':'On time'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    }
   }
 }
+
+
 let calYear=new Date().getFullYear();
 let calMonth=new Date().getMonth();
 let calDay=new Date().getDate();
@@ -5454,6 +5863,54 @@ function renderDashboard(){
       </div>`;
     }).join('');
   }
+
+  // Recently Added / Removed section
+  const allPort=window.PORTFOLIO||[];
+  const recentAdded=[...allPort]
+    .filter(p=>p.dateAdded)
+    .sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded))
+    .slice(0,4);
+  const recentRemoved=[...allPort]
+    .filter(p=>p.dateRemoved||p.st==='Removed')
+    .sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0))
+    .slice(0,4);
+
+  const fmtDateShort=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+
+  const recentSection=document.createElement('div');
+  recentSection.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px';
+  recentSection.innerHTML=`
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><i class="ti ti-circle-plus" style="color:var(--green);margin-right:6px;font-size:14px"></i>Recently Added</div>
+      </div>
+      ${recentAdded.length===0
+        ?'<div style="font-size:12px;color:var(--gray-mid)">No date added data. Set <em>Date Added</em> in Airtable to populate.</div>'
+        :recentAdded.map(p=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
+            <div class="action-dot" style="background:var(--green)"></div>
+            <div class="action-desc">
+              <strong>${p.n}</strong>
+              <br><span style="color:var(--gray-mid)">Added ${fmtDateShort(p.dateAdded)} · ${p.s||'—'} · ${p.ec||'TBD'}</span>
+            </div>
+          </div>`).join('')
+      }
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><i class="ti ti-circle-minus" style="color:var(--red);margin-right:6px;font-size:14px"></i>Recently Removed</div>
+      </div>
+      ${recentRemoved.length===0
+        ?'<div style="font-size:12px;color:var(--gray-mid)">No properties removed from portfolio.</div>'
+        :recentRemoved.map(p=>`<div class="action-item-row">
+            <div class="action-dot" style="background:var(--red)"></div>
+            <div class="action-desc">
+              <strong style="color:var(--gray-mid)">${p.n}</strong>
+              <br><span style="color:var(--gray-mid)">Removed ${fmtDateShort(p.dateRemoved)} · ${p.s||'—'} · ${p.ec||'TBD'}</span>
+            </div>
+          </div>`).join('')
+      }
+    </div>`;
+  document.getElementById('dashboard-body').appendChild(recentSection);
 }
 
 function refreshDashActions(){
