@@ -292,7 +292,15 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .milestone-dates{font-size:11px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-align:right;flex-shrink:0}
 /* BUDGET */
 .budget-bar-wrap{margin:6px 0}
-.budget-bar-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--gray-mid);margin-bottom:4px;font-family:'DM Mono',monospace}
+.budget-bar-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--gray-mid);margin-bottom:4px}
+.co-status-pending{background:#FEF3C7;color:#92400E;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;display:inline-block}
+.co-status-approved{background:#D1FAE5;color:#065F46;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;display:inline-block}
+.co-status-rejected{background:#FEE2E2;color:#991B1B;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;display:inline-block}
+.co-status-client{background:#DBEAFE;color:#1E40AF;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;display:inline-block}
+.co-row{border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;background:white}
+.co-row.co-rejected{opacity:.65;border-left:3px solid var(--red)}
+.co-row.co-approved{border-left:3px solid var(--green)}
+.co-row.co-pending{border-left:3px solid var(--amber)}
 .budget-track{height:10px;background:var(--gray-pale);border-radius:5px;overflow:hidden}
 .budget-fill{height:100%;border-radius:5px;transition:width .4s}
 /* DOCUMENT FOLDERS */
@@ -448,16 +456,27 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   #view-charts.print-active{display:block!important}
   [id^="view-"]:not(#view-report):not(#view-dashboard.print-active):not(#view-charts.print-active){display:none!important}
   body{background:white}
+  @page{margin:16mm 12mm;size:A4 portrait}
   .report-page{max-width:100%;box-shadow:none}
   .report-header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .stat-card,.card{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .stat-card,.card{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid;page-break-inside:avoid}
   .page-body{padding:8px 16px!important}
   .stat-grid{gap:6px!important;margin-bottom:10px!important}
   .stat-card{padding:8px 10px!important}
   .two-col{display:grid!important;grid-template-columns:1fr 1fr!important;gap:10px!important;margin-bottom:10px!important}
-  .card{padding:10px 12px!important;margin-bottom:8px!important}
+  .card{padding:10px 12px!important;margin-bottom:8px!important;overflow:visible!important;height:auto!important;max-height:none!important}
   .card-header{margin-bottom:6px!important}
   .rep-row{margin-bottom:3px!important}
+  /* Allow charts to break across pages */
+  #analytics-body .card{break-inside:auto;page-break-inside:auto}
+  #analytics-body .two-col{break-inside:auto;page-break-inside:auto}
+  #dashboard-body .card{break-inside:avoid;page-break-inside:avoid}
+  /* Remove overflow restrictions that clip content */
+  #analytics-body,#dashboard-body{overflow:visible!important;height:auto!important;max-height:none!important}
+  /* Force SVG and canvas to print */
+  svg,canvas{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid}
+  /* Side filter panel never prints */
+  #cf-side-panel,#cf-panel-backdrop{display:none!important}
 }
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%)}
@@ -720,11 +739,11 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
-      atGet('Phase Tasks')
+      atGet('Phase Tasks'), atGet('Change Order Savings Log')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     if (props.length > 0) {
@@ -891,6 +910,20 @@ async function loadAllData() {
       visibility: r.fields['Visibility']||'PM Only',
       created: r.fields['Created']||'',
     })).sort((a,b)=>new Date(a.created)-new Date(b.created));
+    // Change Order Savings Log
+    window.CO_SAVINGS = coSavings.map(r=>({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      description: r.fields['Change Order Description']||'',
+      originalAmount: parseFloat(r.fields['Original CO Amount'])||0,
+      negotiatedAmount: parseFloat(r.fields['Negotiated Amount'])||0,
+      savings: parseFloat(r.fields['Savings Captured'])||0,
+      status: r.fields['Status']||'Pending',
+      ec: r.fields['Elevator Company']||'',
+      loggedBy: r.fields['Logged By']||'',
+      date: r.fields['Date']||'',
+      notes: r.fields['Notes']||'',
+    })).sort((a,b)=>new Date(b.date)-new Date(a.date));
     AT_CONNECTED = true;
     console.log('AT_CONNECTED set to true - updating UI');
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
@@ -1001,7 +1034,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v14f · elevatorpulse.com</div>
+    <div class="login-version">PULSE v14h · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1194,6 +1227,63 @@ window.PROPERTIES_SEED = [
 </div>
 
 <!-- BILLING MODAL -->
+<!-- CHANGE ORDER MODAL -->
+<div id="co-modal-overlay" onclick="closeCOModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
+<div id="co-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:480px;max-width:95vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2);max-height:90vh;overflow-y:auto">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <div style="font-size:16px;font-weight:700;color:var(--navy)" id="co-modal-title">Log Change Order</div>
+    <button onclick="closeCOModal()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--gray-mid);line-height:1">×</button>
+  </div>
+  <input type="hidden" id="co-edit-id">
+  <div class="form-group">
+    <label class="form-label">Change Order Description</label>
+    <textarea class="form-input" id="co-desc" rows="3" placeholder="Describe the scope change…" style="resize:vertical"></textarea>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="form-group">
+      <label class="form-label">Original CO Amount</label>
+      <input class="form-input" type="number" id="co-original" placeholder="e.g. 50000" step="100">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Negotiated Amount</label>
+      <input class="form-input" type="number" id="co-negotiated" placeholder="e.g. 30000" step="100">
+    </div>
+  </div>
+  <div class="form-group" id="co-savings-preview" style="display:none">
+    <div style="background:var(--green-pale);border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:12px;color:var(--green);font-weight:600">Savings Captured</span>
+      <span id="co-savings-val" style="font-size:14px;font-weight:700;color:var(--green)">$0</span>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="form-group">
+      <label class="form-label">Status</label>
+      <select class="form-input" id="co-status">
+        <option value="Pending">Pending</option>
+        <option value="Approved">Approved</option>
+        <option value="Rejected">Rejected</option>
+        <option value="Client Approved">Client Approved</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input class="form-input" type="date" id="co-date">
+    </div>
+  </div>
+  <div class="form-group">
+    <label class="form-label">Elevator Company</label>
+    <input class="form-input" type="text" id="co-ec" placeholder="e.g. Otis">
+  </div>
+  <div class="form-group">
+    <label class="form-label">Notes</label>
+    <textarea class="form-input" id="co-notes" rows="2" placeholder="Optional notes…" style="resize:vertical"></textarea>
+  </div>
+  <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+    <button class="btn btn-edit" onclick="closeCOModal()">Cancel</button>
+    <button class="btn btn-add" onclick="saveCO()">+ <i class="ti ti-device-floppy"></i>Save</button>
+  </div>
+</div>
+
 <div id="billing-modal-overlay" onclick="closeBillingModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
 <div id="billing-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:420px;max-width:90vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -1457,7 +1547,7 @@ window.PROPERTIES_SEED = [
               <option value="Core">Core Only</option>
               <option value="Non-Core">Non-core Only</option>
             </select>
-            <button class="btn btn-add" id="add-property-btn" onclick="openAddPropertyModal()" style="display:none">+ <i class="ti ti-plus"></i>Property</button>
+            <button class="btn btn-add" id="add-property-btn" onclick="openAddPropertyModal()" style="display:none">+ <i class="ti ti-building"></i>Property</button>
             <button class="btn btn-delete" id="delete-property-header-btn" onclick="deleteProperty()" style="display:none"><i class="ti ti-trash"></i>Delete Property</button>
           </div>
         </div>
@@ -1495,6 +1585,7 @@ window.PROPERTIES_SEED = [
           <div class="tab-row">
             <button class="tab-btn active" onclick="switchPropTab('overview',this)">Overview</button>
             <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget Performance</button>
+            <button class="tab-btn" onclick="switchPropTab('changeorders',this)">Change Orders</button>
             <button class="tab-btn" onclick="switchPropTab('milestones',this)">Milestones</button>
             <button class="tab-btn" onclick="switchPropTab('phases',this)">Unit Phases</button>
             <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions</button>
@@ -1654,6 +1745,26 @@ window.PROPERTIES_SEED = [
               <div>
                 <div class="card"><div class="card-header"><div class="card-title">Open Action Items</div><button class="btn btn-add" onclick="openActionItemModal(currentProp?.n)" style="font-size:12px">+ <i class="ti ti-checkbox"></i>Action</button></div><div id="prop-issues-list"></div></div>
                 <div class="card"><div class="card-header"><div class="card-title">Upcoming Site Visits</div><button class="btn btn-add" onclick="showVisitEntry()" style="font-size:12px">+ <i class="ti ti-calendar-plus"></i>Site Visit</button></div><div id="prop-visits-preview"></div></div>
+              </div>
+            </div>
+          </div>
+          <div id="prop-tab-changeorders" class="tab-content">
+            <div class="two-col" style="gap:16px">
+              <div style="grid-column:1/-1">
+                <div class="card">
+                  <div class="card-header">
+                    <div>
+                      <div class="card-title">Change Order Log</div>
+                      <div class="card-sub">Scope changes issued by elevator contractor</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span id="co-summary-badge" style="font-size:11px;color:var(--gray-mid)"></span>
+                      <button class="btn btn-add" id="co-add-btn" onclick="openCOModal()" style="display:none">+ <i class="ti ti-file-invoice"></i>Change Order</button>
+                    </div>
+                  </div>
+                  <div id="co-summary-bar" style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:12px;flex-wrap:wrap"></div>
+                  <div id="co-list"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -2190,7 +2301,12 @@ function enterDemo(){
     {id:'dps28',property:'Store #142',phaseName:'Phase 1 — All Units',taskName:'Final Inspection',taskOrder:7,plannedStart:'2026-08-15',plannedEnd:'2026-09-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
     {id:'dps29',property:'Store #142',phaseName:'Phase 1 — All Units',taskName:'Owner Acceptance',taskOrder:8,plannedStart:'2026-09-15',plannedEnd:'2026-10-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
   ];
-  window.CO_SAVINGS=[];
+  window.CO_SAVINGS=[
+    {id:'co1',property:'Store #101',description:'Owner-requested upgrade to stainless steel cab interiors not included in original scope',originalAmount:48000,negotiatedAmount:31500,savings:16500,status:'Approved',ec:'Otis',loggedBy:'Sarah Chen',date:'2025-06-15',notes:'Negotiated unit price down; standardized across all 8 units'},
+    {id:'co2',property:'Store #101',description:'Additional structural reinforcement required due to existing pit conditions discovered during demolition',originalAmount:22000,negotiatedAmount:18500,savings:3500,status:'Approved',ec:'Otis',loggedBy:'Sarah Chen',date:'2025-08-20',notes:'Unforeseen condition; owner approved after review'},
+    {id:'co3',property:'Store #142',description:'Owner requested additional floor landings not in original contract scope',originalAmount:35000,negotiatedAmount:35000,savings:0,status:'Pending',ec:'Schindler',loggedBy:'Marcus Webb',date:'2026-05-01',notes:'Under review — evaluating whether scope is legitimate'},
+    {id:'co4',property:'Store #055',description:'Upgraded motor controls requested by owner for energy efficiency compliance',originalAmount:15000,negotiatedAmount:11200,savings:3800,status:'Client Approved',ec:'Kone',loggedBy:'Marcus Webb',date:'2026-03-10',notes:'Client authorized payment on 2026-03-18'},
+  ];
   clientFlags=[];flagIdCounter=0;
 
   setupDemoPortal();
@@ -2585,6 +2701,7 @@ function switchPropTab(tab,btn){
   if(tab==='docs'&&currentProp)renderPropDocFolder(currentProp);
   if(tab==='budget'&&currentProp)renderBudgetTab(currentProp);
   if(tab==='phases'&&currentProp)renderPhasesTab(currentProp);
+  if(tab==='changeorders'&&currentProp)renderChangeOrdersTab(currentProp);
 }
 
 function parseUnitDesc(desc){
@@ -2645,7 +2762,7 @@ function renderPropertyView(p){
   // Product mix
   const hasMix=elevCount||escCount||liftCount||otherCount;
 
-  const propSavings=(window.CO_SAVINGS||[]).filter(s=>s.property===p.n).reduce((a,s)=>a+(parseFloat(s.savings)||0),0);
+  const propSavings=(window.CO_SAVINGS||[]).filter(s=>s.property===p.n&&(s.status==='Approved'||s.status==='Client Approved')).reduce((a,s)=>a+(parseFloat(s.savings)||0),0);
 
   const propPhases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
   const phasesTotal=propPhases.length;
@@ -3687,6 +3804,254 @@ function fmtCurrencyFull(val){
   if(!val||isNaN(val))return '';
   return Number(val).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0});
 }
+// ── CHANGE ORDER SAVINGS LOG ──────────────────────────────────────────
+function renderChangeOrdersTab(p){
+  const canEdit=role==='pm'||role==='admin'||role==='consultant';
+  const coAddBtn=document.getElementById('co-add-btn');
+  if(coAddBtn)coAddBtn.style.display=canEdit?'inline-flex':'none';
+  if(coAddBtn&&canEdit){
+    // Pre-fill elevator company from property
+    document.getElementById('co-ec').value=p.ec||'';
+  }
+  const cos=(window.CO_SAVINGS||[]).filter(c=>c.property===p.n);
+  const approved=cos.filter(c=>c.status==='Approved'||c.status==='Client Approved');
+  const totalSavings=approved.reduce((a,c)=>a+c.savings,0);
+  const totalOriginal=cos.reduce((a,c)=>a+c.originalAmount,0);
+  const totalNegotiated=cos.reduce((a,c)=>a+c.negotiatedAmount,0);
+  // Summary bar
+  const summaryBar=document.getElementById('co-summary-bar');
+  if(summaryBar){
+    summaryBar.innerHTML=`
+      <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Total COs</div><div style="font-size:16px;font-weight:700;color:var(--navy)">${cos.length}</div></div>
+      <div style="width:1px;background:var(--border)"></div>
+      <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Original Requested</div><div style="font-size:16px;font-weight:700;color:var(--navy)">${fmtCurrency(totalOriginal)}</div></div>
+      <div style="width:1px;background:var(--border)"></div>
+      <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Negotiated Total</div><div style="font-size:16px;font-weight:700;color:var(--navy)">${fmtCurrency(totalNegotiated)}</div></div>
+      <div style="width:1px;background:var(--border)"></div>
+      <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Savings Captured</div><div style="font-size:16px;font-weight:700;color:var(--green)">${totalSavings>0?fmtCurrency(totalSavings):'—'}</div></div>
+      <div style="width:1px;background:var(--border)"></div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="font-size:10px;color:var(--amber);font-weight:600">${cos.filter(c=>c.status==='Pending').length} Pending</span>
+        <span style="font-size:10px;color:var(--green);font-weight:600">${approved.length} Approved</span>
+        <span style="font-size:10px;color:var(--red);font-weight:600">${cos.filter(c=>c.status==='Rejected').length} Rejected</span>
+      </div>`;
+  }
+  // Summary badge
+  const badge=document.getElementById('co-summary-badge');
+  if(badge)badge.textContent=cos.length>0?`${cos.length} change order${cos.length!==1?'s':''}  ·  ${fmtCurrency(totalSavings)} saved`:'';
+  // CO list
+  const list=document.getElementById('co-list');
+  if(!list)return;
+  if(cos.length===0){
+    list.innerHTML='<div class="empty-state" style="padding:2rem"><i class="ti ti-file-invoice"></i><div class="empty-state-title">No Change Orders</div><div class="empty-state-sub">Log a change order when the contractor issues a scope change</div></div>';
+    return;
+  }
+  list.innerHTML=cos.map(co=>{
+    const statusClass=co.status==='Approved'||co.status==='Client Approved'?'co-approved':co.status==='Rejected'?'co-rejected':'co-pending';
+    const statusBadgeClass=co.status==='Approved'||co.status==='Client Approved'?'co-status-approved':co.status==='Rejected'?'co-status-rejected':co.status==='Client Approved'?'co-status-client':'co-status-pending';
+    const isLocked=co.status==='Rejected';
+    const canNotify=co.status==='Approved';
+    return `<div class="co-row ${statusClass}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${co.description}</div>
+          <div style="font-size:11px;color:var(--gray-mid)">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date?new Date(co.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</div>
+        </div>
+        <span class="${statusBadgeClass}">${co.status}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
+        <div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Original CO Amount</div>
+          <div style="font-size:13px;font-weight:700;color:var(--navy)">${fmtCurrency(co.originalAmount)}</div>
+        </div>
+        <div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Negotiated Amount</div>
+          <div style="font-size:13px;font-weight:700;color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</div>
+        </div>
+        <div style="background:${co.savings>0?'var(--green-pale)':'var(--gray-xpale)'};border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Savings Captured</div>
+          <div style="font-size:13px;font-weight:700;color:${co.savings>0?'var(--green)':'var(--gray-mid)'}">${co.savings>0?fmtCurrency(co.savings):'—'}</div>
+        </div>
+      </div>
+      ${co.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${co.notes}</div>`:''}
+      ${canEdit?`<div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${!isLocked?`<button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editCO('${co.id}')">Edit</button>`:''}
+        ${co.status==='Pending'?`<button class="btn btn-add" style="font-size:10px;padding:2px 8px" onclick="updateCOStatus('${co.id}','Approved')">+ <i class="ti ti-circle-check"></i>Approve</button>`:''}
+        ${co.status==='Pending'?`<button class="btn btn-delete" style="font-size:10px;padding:2px 8px" onclick="updateCOStatus('${co.id}','Rejected')">Reject</button>`:''}
+        ${canNotify?`<button class="btn" style="font-size:10px;padding:2px 8px;color:var(--blue-dark);border-color:var(--blue-dark)" onclick="notifyClientCO('${co.id}')"><i class="ti ti-mail"></i> Notify Client</button>`:''}
+        ${co.status==='Approved'?`<button class="btn" style="font-size:10px;padding:2px 8px;color:var(--teal);border-color:var(--teal)" onclick="updateCOStatus('${co.id}','Client Approved')"><i class="ti ti-check"></i> Mark Client Approved</button>`:''}
+      </div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function openCOModal(editId){
+  const today=new Date().toISOString().split('T')[0];
+  if(!editId){
+    document.getElementById('co-modal-title').textContent='Log Change Order';
+    document.getElementById('co-edit-id').value='';
+    document.getElementById('co-desc').value='';
+    document.getElementById('co-original').value='';
+    document.getElementById('co-negotiated').value='';
+    document.getElementById('co-status').value='Pending';
+    document.getElementById('co-date').value=today;
+    document.getElementById('co-notes').value='';
+    document.getElementById('co-ec').value=currentProp?.ec||'';
+    document.getElementById('co-savings-preview').style.display='none';
+  }
+  document.getElementById('co-modal-overlay').style.display='block';
+  document.getElementById('co-modal').style.display='block';
+  // Wire savings preview
+  ['co-original','co-negotiated'].forEach(id=>{
+    document.getElementById(id).oninput=updateCOSavingsPreview;
+  });
+}
+
+function updateCOSavingsPreview(){
+  const orig=parseFloat(document.getElementById('co-original').value)||0;
+  const neg=parseFloat(document.getElementById('co-negotiated').value)||0;
+  const savings=orig-neg;
+  const preview=document.getElementById('co-savings-preview');
+  const val=document.getElementById('co-savings-val');
+  if(orig>0&&neg>0){
+    preview.style.display='block';
+    val.textContent=fmtCurrency(savings);
+    val.style.color=savings>0?'var(--green)':savings<0?'var(--red)':'var(--gray-mid)';
+  }else{
+    preview.style.display='none';
+  }
+}
+
+function closeCOModal(){
+  document.getElementById('co-modal-overlay').style.display='none';
+  document.getElementById('co-modal').style.display='none';
+}
+
+function editCO(coId){
+  const co=(window.CO_SAVINGS||[]).find(c=>c.id===coId);
+  if(!co)return;
+  document.getElementById('co-modal-title').textContent='Edit Change Order';
+  document.getElementById('co-edit-id').value=coId;
+  document.getElementById('co-desc').value=co.description||'';
+  document.getElementById('co-original').value=co.originalAmount||'';
+  document.getElementById('co-negotiated').value=co.negotiatedAmount||'';
+  document.getElementById('co-status').value=co.status||'Pending';
+  document.getElementById('co-date').value=co.date||'';
+  document.getElementById('co-notes').value=co.notes||'';
+  document.getElementById('co-ec').value=co.ec||'';
+  openCOModal(coId);
+  updateCOSavingsPreview();
+}
+
+async function saveCO(){
+  const desc=document.getElementById('co-desc').value.trim();
+  const orig=parseFloat(document.getElementById('co-original').value)||0;
+  const neg=parseFloat(document.getElementById('co-negotiated').value)||0;
+  const status=document.getElementById('co-status').value;
+  const date=document.getElementById('co-date').value;
+  const notes=document.getElementById('co-notes').value.trim();
+  const ec=document.getElementById('co-ec').value.trim();
+  const editId=document.getElementById('co-edit-id').value;
+  if(!desc){showToast('Please enter a change order description','warn');return;}
+  if(!orig){showToast('Please enter the original CO amount','warn');return;}
+  const savings=orig-neg;
+  const propName=currentProp?.n||'';
+  const loggedBy=window._userName||'PM User';
+  if(demoMode){
+    if(editId){
+      const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
+      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy});}
+    }else{
+      const newCO={id:'co_'+Date.now(),property:propName,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy};
+      window.CO_SAVINGS.push(newCO);
+      if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
+    }
+    showToast(editId?'Change order updated':'Change order logged','success');
+  }else{
+    const fields={
+      'Property Name':propName,
+      'Change Order Description':desc,
+      'Original CO Amount':orig,
+      'Negotiated Amount':neg,
+      'Status':status,
+      'Elevator Company':ec||undefined,
+      'Logged By':loggedBy,
+      'Notes':notes||undefined,
+    };
+    if(date)fields['Date']=date;
+    try{
+      if(editId){
+        await atUpdate('Change Order Savings Log',editId,fields);
+        const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
+        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy});
+      }else{
+        const rec=await atCreate('Change Order Savings Log',fields);
+        const newCO={id:rec.id,property:propName,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy};
+        if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
+        window.CO_SAVINGS.push(newCO);
+        if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
+      }
+      showToast(editId?'Change order updated':'Change order saved','success');
+    }catch(e){showToast('Error saving change order','error');return;}
+  }
+  closeCOModal();
+  if(currentProp)renderChangeOrdersTab(currentProp);
+  refreshPendingReview();
+  renderDashboard();
+}
+
+async function updateCOStatus(coId,newStatus){
+  const co=(window.CO_SAVINGS||[]).find(c=>c.id===coId);
+  if(!co)return;
+  const oldStatus=co.status;
+  co.status=newStatus;
+  if(!demoMode&&!coId.startsWith('co_')){
+    try{await atUpdate('Change Order Savings Log',coId,{'Status':newStatus});}
+    catch(e){co.status=oldStatus;showToast('Error updating status','error');return;}
+  }
+  if(newStatus==='Approved')autoCreateCODocument(co);
+  showToast(`Change order ${newStatus.toLowerCase()}`,'success');
+  if(currentProp)renderChangeOrdersTab(currentProp);
+  renderDashboard();
+  refreshPendingReview();
+}
+
+function autoCreateCODocument(co){
+  // Auto-generate a draft document record for approved COs
+  const docName=`Change Order — ${co.description.slice(0,40)}${co.description.length>40?'…':''}`;
+  const newDoc={
+    id:'co-doc-'+co.id,
+    name:docName,
+    property:co.property,
+    type:'Change Order',
+    subfolder:'Change Orders',
+    uploaded:co.date||new Date().toISOString().split('T')[0],
+    visibility:'Draft',
+    size:'',
+    uploadedBy:co.loggedBy||'',
+    notes:`Original: ${fmtCurrency(co.originalAmount)} | Negotiated: ${fmtCurrency(co.negotiatedAmount)} | Savings: ${fmtCurrency(co.savings)}`,
+    rtfContent:'',
+    isDraft:true,
+  };
+  if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
+  window.DOCUMENTS_LIVE.push(newDoc);
+  showToast('Draft document created in Documents tab','info');
+}
+
+function notifyClientCO(coId){
+  // Placeholder — requires SendGrid setup
+  showToast('SendGrid setup required before client notifications can be sent','warn');
+}
+
+function refreshPendingReview(){
+  // Re-render pending review queue to include pending COs
+  const badge=document.getElementById('queue-badge');
+  const pendingCOs=(window.CO_SAVINGS||[]).filter(c=>c.status==='Pending').length;
+  const pendingSubs=(submissions||[]).filter(s=>s.reviewStatus==='pending').length;
+  const total=pendingCOs+pendingSubs;
+  if(badge){badge.textContent=total>0?total:'';badge.style.display=total>0?'inline-flex':'none';}
+}
+
 function renderBudgetTab(p){
   const canPM=role==='pm'||role==='admin';
   const canConsultant=role==='consultant';
@@ -3718,10 +4083,10 @@ function renderBudgetTab(p){
   // Budget performance card
   document.getElementById('budget-perf-detail').innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
-      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:4px">Project Budget</div>
-        <div style="font-size:20px;font-weight:700;color:var(--navy);font-family:'DM Mono',monospace">${budget?fmtCurrency(budget):'TBD'}</div></div>
-      <div><div style="font-size:10px;color:var(--gray-mid);font-family:'DM Mono',monospace;text-transform:uppercase;margin-bottom:4px">Billed YTD</div>
-        <div style="font-size:20px;font-weight:700;color:var(--blue-dark);font-family:'DM Mono',monospace">${billedYTD?fmtCurrency(billedYTD):'—'}</div>
+      <div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:4px">Project Budget</div>
+        <div style="font-size:20px;font-weight:700;color:var(--navy)">${budget?fmtCurrency(budget):'TBD'}</div></div>
+      <div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:4px">Billed YTD</div>
+        <div style="font-size:20px;font-weight:700;color:var(--blue-dark)">${billedYTD?fmtCurrency(billedYTD):'—'}</div>
         ${latest?`<div style="font-size:10px;color:var(--gray-light);margin-top:2px">as of ${latest.entryDate}</div>`:''}</div>
     </div>
     ${budget&&billedYTD?`
@@ -3742,18 +4107,18 @@ function renderBudgetTab(p){
     `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Billing Entries Yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
     `<table class="data-table" style="margin-top:0;table-layout:fixed;width:100%">
       <thead><tr>
-        <th style="width:14%">Date</th>
-        <th style="width:15%">Current Through</th>
-        <th style="width:16%">Billed YTD</th>
-        <th style="width:11%">% Budget</th>
+        <th style="width:12%">Date</th>
+        <th style="width:18%">Current Through</th>
+        <th style="width:18%">Billed YTD</th>
+        <th style="width:10%">%</th>
         <th style="width:20%">Notes</th>
-        ${canPM?'<th style="width:24%"></th>':''}
+        ${canPM?'<th style="width:22%"></th>':''}
       </tr></thead>
       <tbody>${propBilling.map((b,i)=>`<tr id="billing-row-${b.id}">
-        <td style="font-family:'DM Mono',monospace;font-size:11px">${b.entryDate}</td>
+        <td style="font-size:11px">${b.entryDate}</td>
         <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
-        <td style="font-family:'DM Mono',monospace;font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
-        <td style="font-family:'DM Mono',monospace;font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
+        <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
+        <td style="font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
         <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.notes||'—'}</td>
         ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
           <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
@@ -4863,14 +5228,14 @@ function renderCharts(){
 
   // 3. Active Projects by Milestone Category
   const msCatCounts={'Pre-Construction':0,'Construction':0,'Project Closeout':0,'Complete':0};
-  const allProps=port.filter(p=>p.st!=='Removed');
+  const allProps=filtered.filter(p=>p.st!=='Removed');
   allProps.forEach(p=>{
     const cat=getMilestoneCategoryForProp(p.n);
     if(msCatCounts[cat]!==undefined)msCatCounts[cat]++;
   });
 
   // 4. Forecasted Completion — year or month drill
-  const fcSource=port.filter(p=>p.st!=='Removed');
+  const fcSource=filtered.filter(p=>p.st!=='Removed');
   const fcByYear={};
   const fcByMonth={};
   fcSource.forEach(p=>{
@@ -4887,7 +5252,7 @@ function renderCharts(){
   const fcMonthKeys=Object.keys(fcByMonth).filter(k=>k.startsWith(fcDrillYear)).sort();
 
   // 5. Forecasted Spend — budget minus billed, by year or month
-  const fsSource=port.filter(p=>p.st!=='Removed'&&p.budget>0);
+  const fsSource=filtered.filter(p=>p.st!=='Removed'&&p.budget>0);
   const fsByYear={};
   const fsByMonth={};
   fsSource.forEach(p=>{
@@ -4907,7 +5272,7 @@ function renderCharts(){
   const fsMonthKeys=Object.keys(fsByMonth).filter(k=>k.startsWith(fsDrillYear)).sort();
 
   // 6. Portfolio % Complete
-  const allPortProps=port.filter(p=>p.st!=='Removed');
+  const allPortProps=filtered.filter(p=>p.st!=='Removed');
   const totalPortCount=allPortProps.length;
   const completeCount=allPortProps.filter(p=>p.st==='Complete').length;
   const pctComplete=totalPortCount>0?Math.round((completeCount/totalPortCount)*100):0;
@@ -4929,7 +5294,9 @@ function renderCharts(){
   // ── RENDER SHELL ────────────────────────────────────────────────────
   // Budget % Spent data
   const totalPortBudget=fsSource.reduce((a,p)=>a+p.budget,0);
+  const filteredPropNames=new Set(filtered.map(p=>p.n));
   const totalBilledAll=(window.BILLING_LOG||[]).reduce((sum,b)=>{
+    if(!filteredPropNames.has(b.property))return sum;
     const latest=(window.BILLING_LOG||[]).filter(x=>x.property===b.property).sort((a,bb)=>{const d=new Date(bb.entryDate)-new Date(a.entryDate);return d!==0?d:Number(bb.billedYTD)-Number(a.billedYTD);})[0];
     return latest&&latest.id===b.id?sum+(Number(b.billedYTD)||0):sum;
   },0);
@@ -5010,7 +5377,7 @@ function renderCharts(){
   const top5Chart=document.getElementById('top5-units-chart');
   if(top5Chart){
     // Get all properties, sort by unit count desc, take top 5
-    const allForTop5=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
+    const allForTop5=filtered.filter(p=>p.st!=='Removed');
     const top5=allForTop5.slice().sort((a,b)=>(b.units||0)-(a.units||0)).slice(0,5);
     const maxUnits=Math.max(1,...top5.map(p=>p.units||0));
 
@@ -5068,16 +5435,16 @@ function renderCharts(){
       return `<div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px">
           <div style="font-size:12px;color:var(--blue-dark);font-weight:500;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}')">${d.name}</div>
-          <div style="font-size:11px;color:var(--gray-mid);font-family:'DM Mono',monospace;flex-shrink:0">${fmtCurrency(d.budget)}</div>
+          <div style="font-size:11px;color:var(--gray-mid);flex-shrink:0">${fmtCurrency(d.budget)}</div>
         </div>
         <div style="margin-bottom:3px">
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-bottom:2px"><span>Billed YTD</span><span style="font-family:'DM Mono',monospace;color:${overrun?'var(--red)':'var(--blue-dark)'}">${fmtCurrency(d.billedYTD)} · ${d.pctBilled}%</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-bottom:2px"><span>Billed YTD</span><span style="color:${overrun?'var(--red)':'var(--blue-dark)'}">${fmtCurrency(d.billedYTD)} · ${d.pctBilled}%</span></div>
           <div style="position:relative;height:14px;background:var(--gray-pale);border-radius:3px;overflow:hidden">
             <div style="position:absolute;top:0;left:0;height:100%;width:${billedPct}%;background:${overrun?'var(--red)':'var(--blue-dark)'};border-radius:3px;opacity:.85"></div>
           </div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-bottom:2px"><span>CO Savings</span><span style="font-family:'DM Mono',monospace;color:var(--teal)">${d.savings>0?fmtCurrency(d.savings):'—'}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-bottom:2px"><span>CO Savings</span><span style="color:var(--teal)">${d.savings>0?fmtCurrency(d.savings):'—'}</span></div>
           <div style="position:relative;height:14px;background:var(--gray-pale);border-radius:3px;overflow:hidden">
             ${d.savings>0?`<div style="position:absolute;top:0;left:0;height:100%;width:${savingsPct}%;background:var(--teal);border-radius:3px;opacity:.85"></div>`:''}
           </div>
@@ -5241,7 +5608,7 @@ function renderCharts(){
               const amt=fsByYear[yr];
               const h=Math.max(16,Math.round((amt/maxFs)*chartH));
               return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;cursor:pointer" onclick="fsDrillYear=${yr};renderCharts()" title="Click to see monthly breakdown for ${yr}">
-                <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:4px;font-family:'DM Mono',monospace">${fmtCurrency(amt)}</div>
+                <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:4px">${fmtCurrency(amt)}</div>
                 <div style="width:100%;height:${h}px;background:var(--teal);border-radius:4px 4px 0 0;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>
                 <div style="width:100%;height:3px;background:var(--border)"></div>
               </div>`;
@@ -5266,7 +5633,7 @@ function renderCharts(){
               const mo=parseInt(k.split('-')[1])-1;
               const h=Math.max(12,Math.round((amt/maxFsM)*chartH));
               return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
-                <div style="font-size:9px;font-weight:700;color:var(--navy);margin-bottom:4px;font-family:'DM Mono',monospace">${fmtCurrency(amt)}</div>
+                <div style="font-size:9px;font-weight:700;color:var(--navy);margin-bottom:4px">${fmtCurrency(amt)}</div>
                 <div style="width:100%;height:${h}px;background:var(--teal);border-radius:4px 4px 0 0;opacity:.85"></div>
                 <div style="width:100%;height:3px;background:var(--border)"></div>
               </div>`;
@@ -5806,7 +6173,7 @@ function renderDashboard(){
   // Only sum budgets from Airtable-sourced properties (have an airtableId); avoid stale seed totals
   const budgetProps=port.filter(p=>p.budget&&p.budget>0);
   const totalBudget=budgetProps.length>0?budgetProps.reduce((a,p)=>a+(p.budget||0),0):0;
-  const totalSavings=((window.CO_SAVINGS||[]).reduce((a,s)=>a+(parseFloat(s.savings)||0),0));
+  const totalSavings=((window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+(parseFloat(s.savings)||0),0));
   const inProgress=port.filter(p=>p.st==='In Progress').length;
   const planned=port.filter(p=>p.st==='Planned').length;
   const complete=port.filter(p=>p.st==='Complete').length;
@@ -6700,12 +7067,14 @@ function renderPropUpdates(p){
 // QUEUE
 function refreshQueue(){
   const pending=submissions.filter(s=>s.reviewStatus==='pending');
+  const pendingCOs=(window.CO_SAVINGS||[]).filter(c=>c.status==='Pending');
   const list=document.getElementById('queue-dynamic-list');const empty=document.getElementById('queue-empty');
   if(!list)return;
-  if(pending.length===0){list.innerHTML='';empty.classList.remove('hidden');}
+  const totalPending=pending.length+pendingCOs.length;
+  if(totalPending===0){list.innerHTML='';empty.classList.remove('hidden');}
   else{
     empty.classList.add('hidden');
-    list.innerHTML=pending.map(s=>`<div class="queue-item">
+    const subItems=pending.map(s=>`<div class="queue-item">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
         <div class="queue-item-title">${s.property} — Week of ${s.week}</div>
         <div style="display:flex;gap:6px;align-items:center">
@@ -6720,6 +7089,27 @@ function refreshQueue(){
         <button class="btn btn-warn" onclick="kickSubmission('${s.id}')"><i class="ti ti-arrow-back-up"></i>Return with note</button>
       </div>
     </div>`).join('');
+    const coItems=pendingCOs.map(co=>`<div class="queue-item" style="border-left:3px solid var(--amber)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+        <div class="queue-item-title"><i class="ti ti-file-invoice" style="font-size:12px;margin-right:4px"></i>${co.property} — Change Order</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span class="co-status-pending">Pending</span>
+        </div>
+      </div>
+      <div class="queue-item-meta">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date||'—'}</div>
+      <div class="queue-item-body">${(co.description||'').slice(0,120)}${(co.description||'').length>120?'...':''}</div>
+      <div style="display:flex;gap:8px;padding-top:8px;font-size:11px">
+        <span style="color:var(--gray-mid)">Original: <strong>${fmtCurrency(co.originalAmount)}</strong></span>
+        <span style="color:var(--gray-mid)">Negotiated: <strong style="color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</strong></span>
+        <span style="color:var(--gray-mid)">Savings: <strong style="color:var(--green)">${co.savings>0?fmtCurrency(co.savings):'—'}</strong></span>
+      </div>
+      <div class="queue-actions">
+        <button class="btn btn-add" style="font-size:11px" onclick="updateCOStatus('${co.id}','Approved');openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',null),300)">+ <i class="ti ti-circle-check"></i>Approve</button>
+        <button class="btn btn-delete" style="font-size:11px" onclick="updateCOStatus('${co.id}','Rejected')">Reject</button>
+        <button class="btn" style="font-size:11px;color:var(--blue-dark)" onclick="openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',null),300)"><i class="ti ti-external-link"></i>View CO</button>
+      </div>
+    </div>`).join('');
+    list.innerHTML=subItems+coItems;
   }
   updateQueueBadge();
 }
@@ -6805,7 +7195,7 @@ async function kickSubmission(id){
   showToast(`Update returned — ${s.consultant} has been notified`,'warn');
 }
 function updateQueueBadge(){
-  const qc=submissions.filter(s=>s.reviewStatus==='pending').length;
+  const qc=submissions.filter(s=>s.reviewStatus==='pending').length+((window.CO_SAVINGS||[]).filter(c=>c.status==='Pending').length);
   ['queue-badge','queue-badge-admin'].forEach(id=>{const qb=document.getElementById(id);if(qb){qb.textContent=qc;qb.classList.toggle('hidden',qc===0);}});
   const nc=notifications.length;const nb=document.getElementById('notif-badge');if(nb){nb.textContent=nc;nb.classList.toggle('hidden',nc===0);}
 }
