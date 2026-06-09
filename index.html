@@ -449,18 +449,20 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 @keyframes dots{0%{content:'.'}33%{content:'..'}66%{content:'...'}100%{content:'.'}}
 @media print{
   .sidebar,.mobile-topbar,.page-header,.no-print{display:none!important}
-  .main{margin-left:0!important}
+  .main{margin-left:0!important;overflow:visible!important;height:auto!important;max-height:none!important}
+  .main-inner{overflow:visible!important;height:auto!important;max-height:none!important}
   #view-report{display:block!important}
-  #view-dashboard.print-active{display:block!important}
+  #view-dashboard.print-active{display:block!important;overflow:visible!important;height:auto!important}
   #view-charts.print-active{display:block!important}
   #view-schedule.print-active{display:block!important}
   [id^="view-"]:not(#view-report):not(#view-dashboard.print-active):not(#view-charts.print-active):not(#view-schedule.print-active){display:none!important}
-  body{background:white}
+  body{background:white;overflow:visible!important}
+  html{overflow:visible!important}
   @page{margin:16mm 12mm;size:A4 portrait}
   .report-page{max-width:100%;box-shadow:none}
   .report-header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .stat-card,.card{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid;page-break-inside:avoid}
-  .page-body{padding:8px 16px!important}
+  .page-body{padding:8px 16px!important;overflow:visible!important;height:auto!important;max-height:none!important}
   .stat-grid{gap:6px!important;margin-bottom:10px!important}
   .stat-card{padding:8px 10px!important}
   .two-col{display:grid!important;grid-template-columns:1fr 1fr!important;gap:10px!important;margin-bottom:10px!important}
@@ -477,6 +479,8 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   svg,canvas{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid}
   /* Side filter panel never prints */
   #cf-side-panel,#cf-panel-backdrop{display:none!important}
+  /* Heat map full width */
+  .heatmap-grid{break-inside:auto!important}
 }
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%)}
@@ -1051,7 +1055,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v15b · elevatorpulse.com</div>
+    <div class="login-version">PULSE v15c · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -4069,11 +4073,54 @@ async function saveCO(){
 async function updateCOStatus(coId,newStatus){
   const co=(window.CO_SAVINGS||[]).find(c=>c.id===coId);
   if(!co)return;
+  // Show note modal for Approved and Rejected
+  if(newStatus==='Approved'||newStatus==='Rejected'){
+    showCOStatusNoteModal(coId,newStatus);
+    return;
+  }
+  await _applyUpdateCOStatus(coId,newStatus,'');
+}
+function showCOStatusNoteModal(coId,newStatus){
+  const isApproved=newStatus==='Approved';
+  const overlay=document.createElement('div');
+  overlay.id='co-note-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:440px;box-shadow:var(--shadow-md);padding:24px">
+    <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:6px">
+      <i class="ti ti-${isApproved?'circle-check':'circle-x'}" style="color:${isApproved?'var(--green)':'var(--red)'};margin-right:6px"></i>
+      ${isApproved?'Approve':'Reject'} Change Order
+    </div>
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">Optionally add a note to the client explaining this decision.</div>
+    <div class="form-group" style="margin-bottom:16px">
+      <label class="form-label">Note to Client <span style="font-weight:400;color:var(--gray-mid)">(optional)</span></label>
+      <textarea class="form-input" id="co-note-input" rows="3" placeholder="e.g. ${isApproved?'Approved — scope verified and pricing is within contract parameters.':'Rejected — scope is included in original contract. Please review section 4.2.'}" style="resize:vertical"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('co-note-overlay').remove()">Cancel</button>
+      <button class="btn ${isApproved?'btn-success':'btn-delete'}" onclick="_submitCOStatusNote('${coId}','${newStatus}')">
+        <i class="ti ti-check"></i>${isApproved?'Approve':'Reject'}
+      </button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+async function _submitCOStatusNote(coId,newStatus){
+  const note=document.getElementById('co-note-input')?.value.trim()||'';
+  document.getElementById('co-note-overlay')?.remove();
+  await _applyUpdateCOStatus(coId,newStatus,note);
+}
+async function _applyUpdateCOStatus(coId,newStatus,note){
+  const co=(window.CO_SAVINGS||[]).find(c=>c.id===coId);
+  if(!co)return;
   const oldStatus=co.status;
   co.status=newStatus;
+  if(note)co.clientNote=note;
   if(!demoMode&&!coId.startsWith('co_')){
-    try{await atUpdate('Change Order Savings Log',coId,{'Status':newStatus});}
-    catch(e){co.status=oldStatus;showToast('Error updating status','error');return;}
+    try{
+      const fields={'Status':newStatus};
+      if(note)fields['Notes']=(co.notes?co.notes+'\n\nClient note: ':'')+note;
+      await atUpdate('Change Order Savings Log',coId,fields);
+    }catch(e){co.status=oldStatus;showToast('Error updating status','error');return;}
   }
   if(newStatus==='Approved')autoCreateCODocument(co);
   showToast(`Change order ${newStatus.toLowerCase()}`,'success');
@@ -6620,7 +6667,56 @@ function visitCardHtml(v, isPast){
     <div style="flex:1"><div style="font-size:13px;font-weight:500;color:${titleColor}">${v.property}</div><div style="font-size:11px;color:#9CA3AF;margin-top:2px">${v.consultant} · ${v.purpose}</div></div>
   </div>`;
 }
-function showVisitEntry(){if(currentProp)showVisitForm(currentProp.n);}
+function showVisitEntry(){
+  if(!currentProp)return;
+  const propName=currentProp.n;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const overlay=document.createElement('div');
+  overlay.id='visit-prop-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===propName?' selected':''}>${p.n}</option>`).join('');
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:420px;box-shadow:var(--shadow-md);padding:24px">
+    <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:16px">Schedule a Site Visit</div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label">Property</label>
+      <select class="form-input" id="visit-prop-select">${options}</select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="form-group">
+        <label class="form-label">Visit Date</label>
+        <input class="form-input" type="date" id="visit-date-input" value="${new Date().toISOString().split('T')[0]}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Time</label>
+        <input class="form-input" type="time" id="visit-time-input" value="09:00">
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label">Timezone</label>
+      <select class="form-input" id="visit-tz-input">
+        <option value="America/New_York">Eastern (ET)</option>
+        <option value="America/Chicago">Central (CT)</option>
+        <option value="America/Denver">Mountain (MT)</option>
+        <option value="America/Los_Angeles">Pacific (PT)</option>
+        <option value="America/Anchorage">Alaska (AKT)</option>
+        <option value="Pacific/Honolulu">Hawaii (HT)</option>
+      </select>
+    </div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label">Consultant Attending</label>
+      <input class="form-input" type="text" id="visit-consultant-input" placeholder="Consultant name">
+    </div>
+    <div class="form-group" style="margin-bottom:16px">
+      <label class="form-label">Purpose</label>
+      <input class="form-input" type="text" id="visit-purpose-input" placeholder="e.g. Monthly site inspection">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('visit-prop-overlay').remove()">Cancel</button>
+      <button class="btn btn-add" onclick="saveGlobalVisit()"><i class="ti ti-calendar-plus"></i>Finish & Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
 function showGlobalVisitEntry(){
   const overlay=document.createElement('div');
   overlay.id='visit-prop-overlay';
@@ -6855,13 +6951,13 @@ async function sendCalendarMeetingNotifications({propName,date,time,tz,type,purp
   const h=parseInt(hh);const ampm=h>=12?'PM':'AM';const h12=h%12||12;
   const timeDisplay=`${h12}:${mm} ${ampm} ${tzAbbr}`;
   const formattedDate=date?new Date(date+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'}):date;
-  // Build ICS
+  // Build ICS as base64 attachment for Resend
   const icsContent=buildIcsContent(
     `PULSE Meeting — ${propName}`,
-    `${type}\\nProperty: ${propName}\\nPurpose: ${purpose||'—'}\\nLogged by: ${loggedBy}${notes?'\\nNotes: '+notes:''}`,
+    `${type}\nProperty: ${propName}\nPurpose: ${purpose||'—'}\nLogged by: ${loggedBy}${notes?'\nNotes: '+notes:''}`,
     propName,date,time,tz,60
   );
-  const icsUri=icsDataUri(icsContent);
+  const icsBase64=btoa(unescape(encodeURIComponent(icsContent)));
   const htmlBody=`
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#1a1a2e">
       <div style="background:#0a1628;padding:20px 24px;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:12px">
@@ -6880,9 +6976,7 @@ async function sendCalendarMeetingNotifications({propName,date,time,tz,type,purp
           <tr><td style="padding:8px 12px;background:#eee;font-size:11px;font-weight:600;text-transform:uppercase;color:#666">Logged By</td><td style="padding:8px 12px;font-size:13px;color:#1a1a2e">${loggedBy}</td></tr>
           ${notes?`<tr><td style="padding:8px 12px;background:#eee;font-size:11px;font-weight:600;text-transform:uppercase;color:#666">Notes</td><td style="padding:8px 12px;font-size:13px;color:#1a1a2e">${notes}</td></tr>`:''}
         </table>
-        <div style="margin-bottom:20px">
-          <a href="${icsUri}" style="display:inline-block;background:#185FA5;color:white;padding:10px 18px;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">&#128197; Add to Calendar</a>
-        </div>
+        <p style="margin:0 0 12px;font-size:13px;color:#555">A calendar invitation (.ics) is attached to this email. Open the attachment to add this meeting to your calendar.</p>
         <p style="margin:0;color:#666;font-size:12px">This notification was sent from <a href="mailto:noreply@elevatorpulse.com" style="color:#185FA5">noreply@elevatorpulse.com</a> via PULSE Portal — Park Hotels &amp; Resorts Modernization Program.</p>
       </div>
     </div>`;
@@ -6898,13 +6992,13 @@ async function sendCalendarMeetingNotifications({propName,date,time,tz,type,purp
       const resp=await fetch('https://pulse-api.misty-munoz.workers.dev/send-email',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({to:email,subject:`Meeting Scheduled — ${propName} · ${formattedDate} · ${timeDisplay}`,html:htmlBody})
+        body:JSON.stringify({to:email,subject:`Meeting Scheduled — ${propName} · ${formattedDate} · ${timeDisplay}`,html:htmlBody,attachments:[{filename:'meeting-invite.ics',content:icsBase64,type:'text/calendar'}]})
       });
       if(resp.ok)sentCount++;
     }catch(e){console.error('Meeting notify error:',e);}
   }
   if(demoMode&&sentCount>0){showToast(`Notifications sent to ${sentCount} attendee${sentCount!==1?'s':''} (demo mode)`,'success');return;}
-  if(sentCount>0)showToast(`Notification sent to ${sentCount} attendee${sentCount!==1?'s':''}${noEmailCount>0?` · ${noEmailCount} not found in Access PINs`:'`'}`, 'success');
+  if(sentCount>0)showToast(`Notification sent to ${sentCount} attendee${sentCount!==1?'s':''}${noEmailCount>0?` · ${noEmailCount} not found in Access PINs`:''}`, 'success');
   else if(noEmailCount>0)showToast(`Meeting saved — ${noEmailCount} attendee${noEmailCount!==1?'s':''} not found in Access PINs`,'warn');
 }
 async function saveGlobalVisit(){
@@ -6919,13 +7013,30 @@ async function saveGlobalVisit(){
   await showVisitForm(propName,date,consultant,purpose,time,tz);
 }
 async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpose,prefillTime,prefillTz){
-  const date=prefillDate||prompt('Visit date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);if(!date)return;
-  const consultant=prefillConsultant||prompt('Consultant attending:','Paul Parios');if(!consultant)return;
-  const purpose=prefillPurpose||prompt('Purpose:','Monthly site inspection');if(!purpose)return;
-  siteVisits.push({id:'v'+Date.now(),property:propName,date,time:prefillTime||'09:00',tz:prefillTz||'America/New_York',consultant,purpose});
+  const date=prefillDate;if(!date)return;
+  const consultant=prefillConsultant;if(!consultant)return;
+  const purpose=prefillPurpose;if(!purpose)return;
+  const time=prefillTime||'09:00';
+  const tz=prefillTz||'America/New_York';
+  const newVisit={id:'v'+Date.now(),property:propName,date,time,tz,consultant,purpose};
+  // Write to Airtable
+  if(!demoMode){
+    try{
+      const res=await atCreate('Site Visits',{
+        'Property Name':propName,
+        'Visit Date':date,
+        'Consultant':consultant,
+        'Purpose':purpose,
+      });
+      newVisit.id=res?.records?.[0]?.id||newVisit.id;
+      newVisit.atId=newVisit.id;
+    }catch(e){console.error('Site visit Airtable error:',e);}
+  }
+  siteVisits.push(newVisit);
+  // Immediately refresh property view if on that property
   if(currentProp&&currentProp.n===propName)renderPropertyView(currentProp);
   renderAllSiteVisits();
-  // Email invite will be sent via SendGrid when configured
+  renderCalendar();
 }
 function downloadICS(propName,date,consultant){
   const d=date.replace(/-/g,'');
