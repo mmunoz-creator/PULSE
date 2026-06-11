@@ -1061,7 +1061,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v16f · elevatorpulse.com</div>
+    <div class="login-version">PULSE v16i · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2064,6 +2064,7 @@ window.PROPERTIES_SEED = [
                 <option value="In Progress">Active</option>
                 <option value="Planned">Planned</option>
                 <option value="Complete">Complete</option>
+                <option value="Capital Plan">Capital Plan</option>
               </select>
             </div>
             <div style="margin-bottom:16px">
@@ -2448,6 +2449,12 @@ function enterDemo(){
     {id:'dbl1',property:'Store #101',billedYTD:1250000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Progress billing through PE2 completion',loggedBy:'PM User'},
     {id:'dbl2',property:'Store #142',billedYTD:680000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Partial billing — schedule delay',loggedBy:'PM User'},
     {id:'dbl3',property:'Store #055',billedYTD:920000,entryDate:'2026-05-15',invoiceMonth:'April 2026',notes:'Ahead of schedule billing',loggedBy:'PM User'},
+    {id:'dbl4',property:'Store #712',billedYTD:440000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Pre-construction and mobilization billing',loggedBy:'PM User'},
+    {id:'dbl5',property:'Store #208',billedYTD:390000,entryDate:'2026-05-15',invoiceMonth:'April 2026',notes:'Phase 1 initial billing',loggedBy:'PM User'},
+    {id:'dbl6',property:'Store #531',billedYTD:280000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Partial billing — labor recovery plan in effect',loggedBy:'PM User'},
+    {id:'dbl7',property:'Store #089',billedYTD:660000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Phase 4 progress billing',loggedBy:'PM User'},
+    {id:'dbl8',property:'Store #467',billedYTD:310000,entryDate:'2026-05-15',invoiceMonth:'April 2026',notes:'First unit complete — progress billing submitted',loggedBy:'PM User'},
+    {id:'dbl9',property:'Store #177',billedYTD:1800000,entryDate:'2026-03-01',invoiceMonth:'Feb 2026',notes:'Final billing — project complete',loggedBy:'PM User'},
   ];
 
   notifications=[
@@ -4672,6 +4679,10 @@ function derivePhaseStatusFromSteps(propName, phaseName){
 }
 
 function derivePropertyStatusFromPhases(propName){
+  // Capital plan properties have no phases — always Not Started
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const prop=port.find(p=>p.n===propName);
+  if(prop&&prop.st==='Capital Plan')return'Not Started';
   const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
   if(phases.length===0)return'In Progress'; // no phases yet — in progress by default
   const phaseStatuses=phases.map(ph=>{
@@ -6018,12 +6029,45 @@ function renderCharts(){
   cfInit();
 
   const filtered=cfGetFiltered();
-  const active=filtered.filter(p=>p.st==='In Progress'||p.st==='Complete'||p.st==='Planned');
+  const active=chartFiltered.filter(p=>p.st==='In Progress'||p.st==='Complete'||p.st==='Planned');
 
   // ── DATA PREP ─────────────────────────────────────────────────────
 
+  // Capital plan properties (always from full portfolio, not filtered)
+  const allPort=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const capitalProps=allPort.filter(p=>p.st==='Capital Plan');
+  const capitalBudgetTotal=capitalProps.reduce((a,p)=>a+(p.budget||0),0);
+  const capitalUnitsTotal=capitalProps.reduce((a,p)=>a+(p.units||0),0);
+
+  // Capital outlook by year
+  const capitalByYear={};
+  capitalProps.forEach(p=>{
+    const yr=p.plannedYear||'TBD';
+    if(!capitalByYear[yr])capitalByYear[yr]={budget:0,units:0,count:0,p1:0,p2:0,p3:0,p4:0};
+    capitalByYear[yr].budget+=(p.budget||0);
+    capitalByYear[yr].units+=(p.units||0);
+    capitalByYear[yr].count++;
+    const pk=parseInt((p.priority||'4').charAt(0));
+    if(pk===1)capitalByYear[yr].p1++;
+    else if(pk===2)capitalByYear[yr].p2++;
+    else if(pk===3)capitalByYear[yr].p3++;
+    else capitalByYear[yr].p4++;
+  });
+  const capitalYearKeys=Object.keys(capitalByYear).sort((a,b)=>{
+    if(a==='TBD')return 1;if(b==='TBD')return-1;return parseInt(a)-parseInt(b);
+  });
+
+  // Active portfolio totals (for program summary)
+  const activeProps=allPort.filter(p=>p.st==='In Progress');
+  const activeBudget=activeProps.reduce((a,p)=>a+(p.budget||0),0);
+  const totalProgramValue=activeBudget+capitalBudgetTotal;
+  const totalSavingsAll=(window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
+
+  // Exclude Capital Plan from active charts unless specifically filtered
+  const chartFiltered=CF.status==='Capital Plan'?filtered:filtered.filter(p=>p.st!=='Capital Plan');
+
   // 1. Budget vs Billed
-  const budgetSource=filtered; // already filtered by cfGetFiltered — no additional status filter needed
+  const budgetSource=chartFiltered; // Capital Plan excluded from billing chart unless filter is set
   const budgetData=budgetSource.filter(p=>p.budget>0).map(p=>{
     const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
     const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
@@ -6032,7 +6076,7 @@ function renderCharts(){
   }).sort((a,b)=>b.budget-a.budget).slice(0,12);
 
   // 2. Elevator Company Performance
-  const elevCoSource=CF.property.length>0?filtered:active.filter(p=>p.st==='In Progress');
+  const elevCoSource=CF.property.length>0?chartFiltered:active.filter(p=>p.st==='In Progress');
   const elevCoMap={};
   elevCoSource.forEach(p=>{
     const ec=(p.ec&&p.ec!=='TBD'&&p.ec.trim()!=='')?p.ec:'TBD';
@@ -6051,7 +6095,7 @@ function renderCharts(){
 
   // 3. Active Projects by Milestone Category
   const msCatCounts={'Pre-Construction':0,'Construction':0,'Project Closeout':0,'Complete':0};
-  const allProps=filtered.filter(p=>p.st!=='Removed');
+  const allProps=chartFiltered.filter(p=>p.st!=='Removed');
   allProps.forEach(p=>{
     const cat=getMilestoneCategoryForProp(p.n);
     if(msCatCounts[cat]!==undefined)msCatCounts[cat]++;
@@ -6131,6 +6175,40 @@ function renderCharts(){
 
   const inProgCount=active.filter(p=>p.st==='In Progress').length;
   container.innerHTML=`
+  <!-- PROGRAM SUMMARY BAR -->
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
+    <div class="stat-card" style="border-top:3px solid var(--navy)">
+      <div class="stat-label">Total Program Value</div>
+      <div class="stat-value" style="font-size:20px">${totalProgramValue?'$'+(totalProgramValue/1000000).toFixed(1)+'M':'—'}</div>
+      <div class="stat-sub">active + pipeline</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
+      <div class="stat-label">Active Projects</div>
+      <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${activeProps.length}</div>
+      <div class="stat-sub">$${activeBudget?(activeBudget/1000000).toFixed(1)+'M':'0'} in construction</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--indigo)">
+      <div class="stat-label">Pipeline Properties</div>
+      <div class="stat-value" style="font-size:20px;color:var(--indigo)">${capitalProps.length}</div>
+      <div class="stat-sub">${capitalBudgetTotal?'$'+(capitalBudgetTotal/1000000).toFixed(1)+'M estimated':'budget TBD'}</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--teal)">
+      <div class="stat-label">Active Units</div>
+      <div class="stat-value" style="font-size:20px;color:var(--teal)">${activeProps.reduce((a,p)=>a+(p.units||0),0)}</div>
+      <div class="stat-sub">in modernization</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--purple)">
+      <div class="stat-label">Pipeline Units</div>
+      <div class="stat-value" style="font-size:20px;color:var(--purple)">${capitalUnitsTotal}</div>
+      <div class="stat-sub">planned modernization</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--green)">
+      <div class="stat-label">CO Savings Captured</div>
+      <div class="stat-value" style="font-size:20px;color:var(--green)">${totalSavingsAll?'$'+(totalSavingsAll/1000).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,','):'—'}</div>
+      <div class="stat-sub">approved change orders</div>
+    </div>
+  </div>
+
   <!-- ROW 1: Portfolio % Complete | Budget % Spent -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
     <div class="card">
@@ -6197,6 +6275,19 @@ function renderCharts(){
     <div id="budget-bars" style="margin-top:10px"></div>
     ${budgetData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries to populate this chart.</div>':''}
   </div>
+
+  <!-- ROW 6: Capital Outlook — full width -->
+  ${capitalProps.length>0?`
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-header">
+      <div>
+        <div class="card-title">Capital Outlook</div>
+        <div class="card-sub">Pipeline budget by planned modernization year — ${capitalProps.length} propert${capitalProps.length===1?'y':'ies'} · $${capitalBudgetTotal?(capitalBudgetTotal/1000000).toFixed(1)+'M':'TBD'} estimated</div>
+      </div>
+      <a href="#" onclick="event.preventDefault();gotoView('capital',null)" style="font-size:12px;color:var(--indigo);font-weight:600;text-decoration:none">View Capital Plan <i class="ti ti-arrow-right" style="font-size:11px"></i></a>
+    </div>
+    <div id="capital-outlook-chart" style="margin-top:10px"></div>
+  </div>`:''}
 `;
 
 
@@ -6586,6 +6677,43 @@ function renderCharts(){
           </div>`;
         }).join('')}
         <div style="margin-top:4px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${totalOpenActions} total open action items</div>
+      </div>`;
+  }
+
+  // ── 8. CAPITAL OUTLOOK ────────────────────────────────────────────
+  const capitalOutlookEl=document.getElementById('capital-outlook-chart');
+  if(capitalOutlookEl&&capitalYearKeys.length>0){
+    const maxYrBudget=Math.max(...capitalYearKeys.map(yr=>capitalByYear[yr].budget||1));
+    const priColors={'1':'var(--red)','2':'var(--amber)','3':'var(--blue-dark)','4':'var(--gray-light)'};
+    capitalOutlookEl.innerHTML=`
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end">
+        ${capitalYearKeys.map(yr=>{
+          const d=capitalByYear[yr];
+          const barPct=Math.max(4,Math.round((d.budget/maxYrBudget)*100));
+          const budgetLabel=d.budget?'$'+(d.budget/1000000).toFixed(1)+'M':'TBD';
+          // Stacked priority segments
+          const total=d.p1+d.p2+d.p3+d.p4||1;
+          const segments=[['1',d.p1],['2',d.p2],['3',d.p3],['4',d.p4]]
+            .filter(([,v])=>v>0)
+            .map(([k,v])=>`<div style="flex:${v};background:${priColors[k]};opacity:.85;min-width:4px" title="P${k}: ${v}"></div>`)
+            .join('');
+          return `<div style="flex:1;min-width:80px;max-width:160px">
+            <div style="font-size:11px;font-weight:700;color:var(--navy);margin-bottom:4px;text-align:center">${yr==='TBD'?'Year TBD':yr}</div>
+            <div style="position:relative;height:120px;background:var(--gray-pale);border-radius:6px;overflow:hidden;cursor:pointer" onclick="cfApplyDropdown('status','Capital Plan');document.getElementById('cf-status').value='Capital Plan'" title="Filter to capital plan">
+              <div style="position:absolute;bottom:0;left:0;right:0;height:${barPct}%;display:flex;border-radius:0 0 6px 6px;overflow:hidden">${segments}</div>
+            </div>
+            <div style="text-align:center;margin-top:6px">
+              <div style="font-size:12px;font-weight:700;color:var(--navy)">${budgetLabel}</div>
+              <div style="font-size:10px;color:var(--gray-mid)">${d.count} propert${d.count===1?'y':'ies'} · ${d.units} units</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px">
+        ${[['1','var(--red)','Critical'],['2','var(--amber)','High'],['3','var(--blue-dark)','Medium'],['4','var(--gray-light)','Standard']].map(([k,c,l])=>
+          `<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--gray-mid)"><div style="width:10px;height:10px;border-radius:2px;background:${c};opacity:.85"></div>P${k} ${l}</div>`
+        ).join('')}
+        <div style="margin-left:auto;font-size:11px;color:var(--gray-mid)">${capitalProps.length} properties · ${capitalUnitsTotal} units · ${capitalBudgetTotal?'$'+(capitalBudgetTotal/1000000).toFixed(1)+'M total estimated':'budget TBD'}</div>
       </div>`;
   }
 
