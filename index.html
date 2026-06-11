@@ -790,6 +790,9 @@ async function loadAllData() {
         budget: r.fields['Project Budget']||0,
         comment: r.fields['Comments']||'',
         addr: r.fields['Address']||'',
+        city: r.fields['City']||'',
+        plannedYear: r.fields['Planned Year']?parseInt(r.fields['Planned Year']):null,
+        budgetStatus: r.fields['Budget Status']||'TBD',
         dateAdded: r.fields['Date Added']||'',
         dateRemoved: r.fields['Date Removed']||'',
         ms: [], // milestones now from MILESTONES table
@@ -1058,7 +1061,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v16b · elevatorpulse.com</div>
+    <div class="login-version">PULSE v16e · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1448,6 +1451,7 @@ window.PROPERTIES_SEED = [
         <div class="nav-section-label">Program</div>
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
+        <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('schedule',this)"><i class="ti ti-timeline"></i>Schedule</button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
       </div>
@@ -1472,6 +1476,7 @@ window.PROPERTIES_SEED = [
         <div class="nav-section-label">Program</div>
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
+        <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('schedule',this)"><i class="ti ti-timeline"></i>Schedule</button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
       </div>
@@ -1520,6 +1525,7 @@ window.PROPERTIES_SEED = [
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
+        <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('schedule',this)"><i class="ti ti-timeline"></i>Schedule</button>
       </div>
       <div class="nav-section">
@@ -1888,6 +1894,19 @@ window.PROPERTIES_SEED = [
       </div>
 
       <!-- MILESTONES VIEW -->
+      <div id="view-capital" class="hidden">
+        <div class="page-header">
+          <div class="page-header-left"><h1>Capital Plan</h1><p>Lifecycle Pipeline &amp; Multi-Year Budget Outlook</p></div>
+          <div class="header-actions" id="capital-header-actions">
+            <button class="btn btn-add" onclick="openCapitalPlanEntry()"><i class="ti ti-plus"></i> Add to Capital Plan</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div id="capital-summary-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
+          <div id="capital-plan-body"></div>
+        </div>
+      </div>
+
       <div id="view-milestones" class="hidden">
         <div class="page-header"><div class="page-header-left"><h1>Active Properties</h1><p>Schedule Health and Milestone Progress</p></div></div>
         <div class="page-body">
@@ -2373,11 +2392,12 @@ function enterDemo(){
   document.getElementById('demo-screen').style.display='none';
   document.getElementById('portal-screen').classList.add('active');
   // Override PORTFOLIO with demo data — map statuses to PULSE schema
-  window.PORTFOLIO=DEMO_PORTFOLIO.map(p=>({
+  window.PORTFOLIO=[...DEMO_PORTFOLIO.map(p=>({
     ...p,
     id:'demo-'+p.n,
     st:({'CIP':'In Progress','Active':'In Progress','Awarded':'In Progress','Complete':'Complete','Survey':'Planned','Budgeting':'Planned','On Hold':'Planned'}[p.st])||'Planned',
-  })).sort((a,b)=>a.n.localeCompare(b.n));
+  })),...CAPITAL_PLAN_DEMO.map(p=>({...p,id:p.id}))].sort((a,b)=>a.n.localeCompare(b.n));
+  window.CAPITAL_PLAN_LIVE=CAPITAL_PLAN_DEMO;
 
   // Seed demo meetings
   meetings=[
@@ -2602,6 +2622,19 @@ const PORTFOLIO=[
   {n:'Doubletree Seattle Airport',s:'WA',ec:'TBD',st:'On Hold',r:'—',v:'Dane Carollo',units:11,unitDesc:'11 Elev',vda:'—',type:'Non-Core',budget:0,addr:'18740 International Blvd, Seattle, WA',comment:'Surveyed. Spec not authorized to proceed.',ms:[{ms:0,status:'complete',planned:'2024-01-01',actual:'2024-02-01'}]},
   {n:'Embassy Suites Austin',s:'TX',ec:'TBD',st:'On Hold',r:'—',v:'Jake Seibert',units:2,unitDesc:'2 Elev',vda:'—',type:'Non-Core',budget:0,addr:'300 S Congress Ave, Austin, TX',comment:'On Hold.',ms:[]},
   {n:'Juniper Hotel Cupertino',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:3,unitDesc:'3 Elev',vda:'—',type:'Non-Core',budget:1536000,addr:'10050 S De Anza Blvd, Cupertino, CA',comment:'On Hold.',ms:[]},
+];
+
+
+// Capital Plan demo properties — pre-Modernization Survey (no M1 date set)
+const CAPITAL_PLAN_DEMO=[
+  {id:'cp1',n:'Hilton Americas Houston',s:'TX',city:'Houston',ec:'TBD',st:'Capital Plan',r:'—',v:'Jake Seibert',units:44,unitDesc:'28 Elev / 4 Esc',vda:'',type:'Core',budget:16200000,budgetStatus:'Approved',plannedYear:2026,priority:'1: Critical',addr:'1600 Lamar Street, Houston, TX',comment:'Priority 1 — aging hydraulic systems, compliance risk.',ms:[]},
+  {id:'cp2',n:'Hilton New York Midtown',s:'NY',city:'New York',ec:'TBD',st:'Capital Plan',r:'—',v:'John Frondi',units:22,unitDesc:'18 Elev / 4 Esc',vda:'',type:'Core',budget:8750000,budgetStatus:'Approved',plannedYear:2026,priority:'1: Critical',addr:'1335 6th Avenue, New York, NY',comment:'Urgent — multiple units out of service.',ms:[]},
+  {id:'cp3',n:'Doubletree by Hilton Orlando',s:'FL',city:'Orlando',ec:'TBD',st:'Capital Plan',r:'—',v:'Paul Parios',units:18,unitDesc:'12 Elev / 2 Esc',vda:'',type:'Core',budget:5400000,budgetStatus:'Approved',plannedYear:2027,priority:'2: High',addr:'5780 Major Blvd, Orlando, FL',comment:'Budget approved Q4 2025.',ms:[]},
+  {id:'cp4',n:'Hilton Washington DC',s:'DC',city:'Washington',ec:'TBD',st:'Capital Plan',r:'—',v:'Chris Shields',units:31,unitDesc:'22 Elev / 4 Esc',vda:'',type:'Core',budget:11800000,budgetStatus:'Approved',plannedYear:2027,priority:'2: High',addr:'1919 Connecticut Ave NW, Washington, DC',comment:'Modernization study complete.',ms:[]},
+  {id:'cp5',n:'Embassy Suites Nashville',s:'TN',city:'Nashville',ec:'TBD',st:'Capital Plan',r:'—',v:'Jake Seibert',units:8,unitDesc:'8 Elev',vda:'',type:'Non-Core',budget:2800000,budgetStatus:'Preliminary',plannedYear:2027,priority:'3: Medium',addr:'10 Century Blvd, Nashville, TN',comment:'Survey scheduled Q1 2027.',ms:[]},
+  {id:'cp6',n:'Hilton Minneapolis',s:'MN',city:'Minneapolis',ec:'TBD',st:'Capital Plan',r:'—',v:'Dane Carollo',units:14,unitDesc:'10 Elev / 2 Esc',vda:'',type:'Core',budget:4900000,budgetStatus:'Preliminary',plannedYear:2028,priority:'3: Medium',addr:'1001 Marquette Ave, Minneapolis, MN',comment:'Included in 2028 capital cycle.',ms:[]},
+  {id:'cp7',n:'Hilton Portland Downtown',s:'OR',city:'Portland',ec:'TBD',st:'Capital Plan',r:'—',v:'Dane Carollo',units:9,unitDesc:'7 Elev',vda:'',type:'Non-Core',budget:3100000,budgetStatus:'TBD',plannedYear:2028,priority:'4: Standard',addr:'921 SW Sixth Ave, Portland, OR',comment:'Preliminary scope only.',ms:[]},
+  {id:'cp8',n:'Hilton Austin',s:'TX',city:'Austin',ec:'TBD',st:'Capital Plan',r:'—',v:'Jake Seibert',units:16,unitDesc:'12 Elev / 2 Esc',vda:'',type:'Core',budget:0,budgetStatus:'TBD',plannedYear:null,priority:'4: Standard',addr:'500 E 4th Street, Austin, TX',comment:'Long-range — year TBD.',ms:[]},
 ];
 
 const DOCUMENTS=[];  // Documents loaded from Airtable
@@ -2841,6 +2874,7 @@ function gotoView(viewId,btn){
   if(viewId==='reports')renderAnalytics();
   if(viewId==='charts'||viewId==='analytics')renderCharts();
   if(viewId==='calendar')renderCalendar();
+  if(viewId==='capital')renderCapitalPlan();
   if(viewId==='dashboard')renderDashboard();
   if(viewId==='glossary')renderGlossary();
   if(viewId==='schedule')renderGantt();
@@ -4062,6 +4096,8 @@ function fmtCurrencyFull(val){
 // ── CHANGE ORDER SAVINGS LOG ──────────────────────────────────────────
 function renderChangeOrdersTab(p){
   const canEdit=role==='pm'||role==='admin'||role==='consultant';
+  const addBtn=document.getElementById('capital-header-actions');
+  if(addBtn)addBtn.style.display=canEdit?'':'none';
   const coAddBtn=document.getElementById('co-add-btn');
   if(coAddBtn)coAddBtn.style.display=canEdit?'inline-flex':'none';
   if(coAddBtn&&canEdit){
@@ -5676,6 +5712,302 @@ function getMilestoneCategoryForProp(propName){
 let fcDrillYear=null; // null = year view, number = month view for that year
 let fsDrillYear=null; // same for forecasted spend
 
+// ── CAPITAL PLAN ──────────────────────────────────────────────────────
+
+function getCapitalPlanProperties(){
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  // A property is in the capital plan if: status='Capital Plan' OR (no M1 milestone date set and status not In Progress/Complete)
+  return port.filter(p=>{
+    if(p.st==='Removed')return false;
+    if(p.st==='Capital Plan')return true;
+    if(p.st==='In Progress'||p.st==='Complete')return false;
+    // Check if Modernization Survey (M1) milestone exists with a planned date
+    const m1=getMilestonesForProp(p.n).find(m=>m.number===1||m.ms===1);
+    if(m1&&(m1.planned||m1.actual))return false; // has M1 — graduated
+    return false; // default: only explicit Capital Plan status shown
+  });
+}
+
+function renderCapitalPlan(){
+  const props=getCapitalPlanProperties();
+  const totalBudget=props.reduce((a,p)=>a+(p.budget||0),0);
+  const totalUnits=props.reduce((a,p)=>a+(p.units||0),0);
+  const approvedCount=props.filter(p=>p.budgetStatus==='Approved').length;
+
+  // Summary cards
+  const cards=document.getElementById('capital-summary-cards');
+  if(cards){
+    const priMap={'1':0,'2':0,'3':0,'4':0};
+    props.forEach(p=>{const k=(p.priority||'4').charAt(0);if(priMap[k]!==undefined)priMap[k]++;});
+    cards.innerHTML=`
+      <div class="stat-card"><div class="stat-label">Properties in Pipeline</div><div class="stat-value">${props.length}</div><div class="stat-sub">${approvedCount} budget approved</div></div>
+      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${totalBudget?'$'+(totalBudget/1000000).toFixed(1)+'M':'TBD'}</div><div class="stat-sub">${props.filter(p=>!p.budget).length} budget TBD</div></div>
+      <div class="stat-card"><div class="stat-label">Units in Pipeline</div><div class="stat-value">${totalUnits}</div><div class="stat-sub">elevators &amp; escalators</div></div>
+      <div class="stat-card"><div class="stat-label">Priority Breakdown</div><div class="stat-value" style="font-size:13px;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+        ${priMap['1']?`<span class="badge" style="background:#fdecea;color:var(--red);border:1px solid #f5c2c2">P1: ${priMap['1']}</span>`:''}
+        ${priMap['2']?`<span class="badge" style="background:#fff7e6;color:var(--amber);border:1px solid #fde6a0">P2: ${priMap['2']}</span>`:''}
+        ${priMap['3']?`<span class="badge" style="background:var(--blue-xpale);color:var(--blue-dark);border:1px solid var(--blue-light)">P3: ${priMap['3']}</span>`:''}
+        ${priMap['4']?`<span class="badge" style="background:var(--gray-pale);color:var(--gray-mid);border:1px solid var(--border)">P4: ${priMap['4']}</span>`:''}
+      </div></div>`;
+  }
+
+  // Group by planned year
+  const byYear={};
+  props.forEach(p=>{
+    const yr=p.plannedYear||'TBD';
+    if(!byYear[yr])byYear[yr]=[];
+    byYear[yr].push(p);
+  });
+
+  const yearKeys=Object.keys(byYear).sort((a,b)=>{
+    if(a==='TBD')return 1;if(b==='TBD')return-1;
+    return parseInt(a)-parseInt(b);
+  });
+
+  const priColor=pri=>{
+    const k=(pri||'4').charAt(0);
+    return k==='1'?'var(--red)':k==='2'?'var(--amber)':k==='3'?'var(--blue-dark)':'var(--gray-mid)';
+  };
+  const priBg=pri=>{
+    const k=(pri||'4').charAt(0);
+    return k==='1'?'#fdecea':k==='2'?'#fff7e6':k==='3'?'var(--blue-xpale)':'var(--gray-pale)';
+  };
+  const budgetStatusBadge=bs=>{
+    const cfg={Approved:{bg:'var(--green-pale)',c:'var(--green)'},Preliminary:{bg:'#fff7e6',c:'var(--amber)'},TBD:{bg:'var(--gray-pale)',c:'var(--gray-mid)'}};
+    const s=cfg[bs]||cfg['TBD'];
+    return `<span class="badge" style="background:${s.bg};color:${s.c};border:none;font-size:10px">${bs||'TBD'}</span>`;
+  };
+
+  const canEdit=role==='pm'||role==='admin'||role==='consultant';
+
+  let html='';
+  yearKeys.forEach(yr=>{
+    const yrProps=byYear[yr].sort((a,b)=>{
+      const pa=parseInt((a.priority||'4').charAt(0));
+      const pb=parseInt((b.priority||'4').charAt(0));
+      return pa-pb;
+    });
+    const yrBudget=yrProps.reduce((a,p)=>a+(p.budget||0),0);
+    const yrUnits=yrProps.reduce((a,p)=>a+(p.units||0),0);
+    html+=`<div style="margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:8px;border-bottom:2px solid var(--border)">
+        <div style="font-size:14px;font-weight:700;color:var(--navy)">${yr==='TBD'?'Year TBD':yr+' Program'}</div>
+        <div style="display:flex;gap:16px;font-size:12px;color:var(--gray-mid)">
+          <span><strong style="color:var(--navy)">${yrProps.length}</strong> propert${yrProps.length===1?'y':'ies'}</span>
+          <span><strong style="color:var(--navy)">${yrUnits}</strong> units</span>
+          ${yrBudget?`<span><strong style="color:var(--navy)">$${(yrBudget/1000000).toFixed(1)}M</strong> estimated</span>`:''}
+        </div>
+      </div>
+      <div class="table-wrap"><table class="data-table" style="table-layout:fixed">
+        <thead><tr>
+          <th style="width:22%">Property</th>
+          <th style="width:10%">Location</th>
+          <th style="width:7%">Priority</th>
+          <th style="width:8%">Units</th>
+          <th style="width:7%">Type</th>
+          <th style="width:12%">Est. Budget</th>
+          <th style="width:10%">Budget Status</th>
+          <th style="width:12%">Consultant</th>
+          <th style="width:12%">Mod. Survey Date</th>
+          ${canEdit?'<th style="width:6%"></th>':''}
+        </tr></thead>
+        <tbody>
+        ${yrProps.map(p=>{
+          const m1=getMilestonesForProp(p.n).find(m=>m.number===1||m.ms===1);
+          const m1Date=m1?.planned||'';
+          const graduating=m1Date&&m1Date!=='';
+          return `<tr style="${graduating?'background:var(--green-xpale,#f0faf4)':''}">
+            <td>
+              <div style="font-weight:600;color:var(--navy);font-size:13px">${p.n}</div>
+              ${p.comment?`<div style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:normal">${p.comment.slice(0,60)}${p.comment.length>60?'…':''}</div>`:''}
+              ${graduating?`<div style="font-size:10px;color:var(--green);font-weight:600;margin-top:2px"><i class="ti ti-arrow-up-right" style="font-size:10px"></i> Activating</div>`:''}
+            </td>
+            <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
+            <td><span class="badge" style="background:${priBg(p.priority)};color:${priColor(p.priority)};border:none;font-size:10px">${(p.priority||'—').split(':')[0]}</span></td>
+            <td style="font-size:12px">${p.units||'—'}${p.unitDesc?`<div style="font-size:10px;color:var(--gray-mid)">${p.unitDesc}</div>`:''}</td>
+            <td style="font-size:12px">${p.type||'—'}</td>
+            <td style="font-size:12px;font-weight:600;color:var(--navy)">${p.budget?'$'+(p.budget/1000).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,','):'TBD'}</td>
+            <td>${budgetStatusBadge(p.budgetStatus)}</td>
+            <td style="font-size:12px">${p.v||'—'}</td>
+            <td style="font-size:12px">${m1Date||'<span style="color:var(--gray-mid)">Not set</span>'}</td>
+            ${canEdit?`<td><button class="btn btn-icon" onclick="openCapitalPlanEdit('${p.id||p.n.replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:13px"></i></button></td>`:''}
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div>
+    </div>`;
+  });
+
+  const body=document.getElementById('capital-plan-body');
+  if(body)body.innerHTML=props.length===0?
+    `<div class="empty-state" style="padding:3rem"><i class="ti ti-calendar-stats" style="font-size:2rem"></i><div class="empty-state-title">No properties in capital plan</div><div class="empty-state-sub">Add properties to begin pipeline planning</div></div>`:
+    html;
+}
+
+function openCapitalPlanEntry(prefillId){
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const existing=prefillId?port.find(p=>(p.id||p.n)===prefillId):null;
+  const overlay=document.createElement('div');
+  overlay.id='capital-entry-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
+  const v=existing||{};
+  const priOptions=['1: Critical','2: High','3: Medium','4: Standard'].map(p=>`<option value="${p}"${(v.priority||'')==p?' selected':''}>${p}</option>`).join('');
+  const bsOptions=['Approved','Preliminary','TBD'].map(b=>`<option value="${b}"${(v.budgetStatus||'TBD')==b?' selected':''}>${b}</option>`).join('');
+  const typeOptions=['Core','Non-Core'].map(t=>`<option value="${t}"${(v.type||'Core')==t?' selected':''}>${t}</option>`).join('');
+  const yrVal=v.plannedYear||'';
+  const title=existing?'Edit Capital Plan Entry':'Add to Capital Plan';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:560px;box-shadow:var(--shadow-md);margin:auto">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-calendar-stats" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>${title}</div>
+      <button onclick="document.getElementById('capital-entry-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
+    </div>
+    <div style="padding:20px 22px">
+      <input type="hidden" id="cp-edit-id" value="${v.id||''}">
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:10px">Property Identity</div>
+      <div class="form-group"><label class="form-label">Property Name</label><input class="form-input" type="text" id="cp-name" value="${(v.n||'').replace(/"/g,'&quot;')}" placeholder="Full hotel property name"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">City</label><input class="form-input" type="text" id="cp-city" value="${(v.city||'').replace(/"/g,'&quot;')}" placeholder="City"></div>
+        <div class="form-group"><label class="form-label">State</label><input class="form-input" type="text" id="cp-state" value="${(v.s||'').replace(/"/g,'&quot;')}" placeholder="ST" maxlength="2"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Asset Type</label><select class="form-input" id="cp-type">${typeOptions}</select></div>
+        <div class="form-group"><label class="form-label">Priority</label><select class="form-input" id="cp-priority">${priOptions}</select></div>
+      </div>
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:16px 0 10px">Units</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Elevators</label><input class="form-input" type="number" id="cp-elevators" value="${v.elevatorCount||''}" min="0" placeholder="0"></div>
+        <div class="form-group"><label class="form-label">Escalators</label><input class="form-input" type="number" id="cp-escalators" value="${v.escalatorCount||''}" min="0" placeholder="0"></div>
+        <div class="form-group"><label class="form-label">VPLs</label><input class="form-input" type="number" id="cp-lifts" value="${v.liftCount||''}" min="0" placeholder="0"></div>
+        <div class="form-group"><label class="form-label">Other</label><input class="form-input" type="number" id="cp-other" value="${v.otherCount||''}" min="0" placeholder="0"></div>
+      </div>
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:16px 0 10px">Capital Budget</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Planned Year</label><input class="form-input" type="number" id="cp-year" value="${yrVal}" placeholder="2026" min="2024" max="2040"></div>
+        <div class="form-group"><label class="form-label">Est. Budget ($)</label><input class="form-input" type="number" id="cp-budget" value="${v.budget||''}" placeholder="0" min="0"></div>
+        <div class="form-group"><label class="form-label">Budget Status</label><select class="form-input" id="cp-budgetstatus">${bsOptions}</select></div>
+      </div>
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:16px 0 10px">Project Context</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input" type="text" id="cp-consultant" value="${(v.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
+        <div class="form-group"><label class="form-label">Elevator Company</label><input class="form-input" type="text" id="cp-ec" value="${(v.ec==='TBD'?'':v.ec||'').replace(/"/g,'&quot;')}" placeholder="TBD"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Notes / Known Issues</label><textarea class="form-input" id="cp-notes" rows="2" style="resize:vertical" placeholder="Known constraints, scope notes, or blockers">${v.comment||''}</textarea></div>
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:16px 0 10px">Graduation Trigger</div>
+      <div class="form-group">
+        <label class="form-label">Modernization Survey Date <span style="font-weight:400;color:var(--gray-mid)">(optional — setting this activates the property)</span></label>
+        <input class="form-input" type="date" id="cp-m1date" value="">
+      </div>
+    </div>
+    <div style="padding:12px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('capital-entry-overlay').remove()">Cancel</button>
+      <button class="btn btn-add" onclick="saveCapitalPlanEntry()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+function openCapitalPlanEdit(propId){
+  openCapitalPlanEntry(propId);
+}
+
+async function saveCapitalPlanEntry(){
+  const editId=document.getElementById('cp-edit-id')?.value||'';
+  const name=document.getElementById('cp-name')?.value.trim();
+  const city=document.getElementById('cp-city')?.value.trim()||'';
+  const state=document.getElementById('cp-state')?.value.trim()||'';
+  const type=document.getElementById('cp-type')?.value||'Core';
+  const priority=document.getElementById('cp-priority')?.value||'4: Standard';
+  const elevators=parseInt(document.getElementById('cp-elevators')?.value)||0;
+  const escalators=parseInt(document.getElementById('cp-escalators')?.value)||0;
+  const lifts=parseInt(document.getElementById('cp-lifts')?.value)||0;
+  const other=parseInt(document.getElementById('cp-other')?.value)||0;
+  const totalUnits=elevators+escalators+lifts+other;
+  const unitDesc=[elevators?`${elevators} Elev`:'',escalators?`${escalators} Esc`:'',lifts?`${lifts} VPL`:'',other?`${other} Other`:''].filter(Boolean).join(' / ');
+  const plannedYear=parseInt(document.getElementById('cp-year')?.value)||null;
+  const budget=parseFloat(document.getElementById('cp-budget')?.value)||0;
+  const budgetStatus=document.getElementById('cp-budgetstatus')?.value||'TBD';
+  const consultant=document.getElementById('cp-consultant')?.value.trim()||'TBD';
+  const ec=document.getElementById('cp-ec')?.value.trim()||'TBD';
+  const notes=document.getElementById('cp-notes')?.value.trim()||'';
+  const m1date=document.getElementById('cp-m1date')?.value||'';
+
+  if(!name){showToast('Property name is required','warn');return;}
+
+  const hasM1=!!m1date;
+  const newStatus=hasM1?'Planned':'Capital Plan';
+
+  const fields={
+    'Property Name':name,
+    'City':city,
+    'State':state,
+    'Asset Type':type,
+    'Priority':priority,
+    'Unit Count':totalUnits,
+    'Elevator Count':elevators,
+    'Escalator Count':escalators,
+    'Wheelchair Lift Count':lifts,
+    'Other Count':other,
+    'Unit Description':unitDesc,
+    'Planned Year':plannedYear,
+    'Project Budget':budget||null,
+    'Budget Status':budgetStatus,
+    'VDA Consultant':consultant,
+    'Elevator Company':ec,
+    'Comments':notes,
+    'Status':newStatus,
+  };
+
+  let atId=editId||null;
+  if(!demoMode){
+    if(editId){
+      await atUpdate('Properties',editId,fields);
+    } else {
+      const res=await atCreate('Properties',fields);
+      atId=res?.records?.[0]?.id||null;
+    }
+    // If M1 date set, create Milestone 1 record
+    if(hasM1&&name){
+      await atCreate('Milestones',{
+        'Property Name':name,
+        'Milestone Number':1,
+        'Milestone Name':'Modernization Survey',
+        'Planned Date':m1date,
+        'Status':'Not Started',
+      });
+    }
+  }
+
+  // Update local PORTFOLIO
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const propObj={
+    id:atId||editId||'cp_'+Date.now(),
+    n:name,city,s:state,ec,st:newStatus,r:'—',v:consultant,
+    units:totalUnits,unitDesc,elevatorCount:elevators,escalatorCount:escalators,
+    liftCount:lifts,otherCount:other,type,budget,budgetStatus,plannedYear,
+    priority,comment:notes,addr:'',dateAdded:'',ms:[],
+  };
+
+  if(editId){
+    const idx=port.findIndex(p=>p.id===editId||p.n===name);
+    if(idx>=0)port.splice(idx,1,propObj);
+    else port.push(propObj);
+  } else {
+    port.push(propObj);
+  }
+
+  window.PORTFOLIO=port.sort((a,b)=>a.n.localeCompare(b.n));
+  document.getElementById('capital-entry-overlay')?.remove();
+  renderCapitalPlan();
+  if(hasM1){renderCharts();}
+  showToast(hasM1?`${name} added and activated`:`${name} added to capital plan`,'success');
+}
+
+
 // ── CHARTS ────────────────────────────────────────────────────────────
 function renderCharts(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
@@ -5691,7 +6023,7 @@ function renderCharts(){
   // ── DATA PREP ─────────────────────────────────────────────────────
 
   // 1. Budget vs Billed
-  const budgetSource=filtered.filter(p=>p.st==='In Progress'||p.st==='Planned'||p.st==='Complete');
+  const budgetSource=filtered; // already filtered by cfGetFiltered — no additional status filter needed
   const budgetData=budgetSource.filter(p=>p.budget>0).map(p=>{
     const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
     const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
@@ -5861,7 +6193,7 @@ function renderCharts(){
 
   <!-- ROW 5: Budget vs Billed — full width -->
   <div class="card" style="margin-bottom:20px">
-    <div class="card-header"><div class="card-title">Budget vs Billed</div><div class="card-sub">Project budget vs YTD billed — active properties</div></div>
+    <div class="card-header"><div class="card-title">Budget vs Billed</div><div class="card-sub">Project budget vs YTD billed — ${CF.status?CF.status.toLowerCase()+' properties':CF.property.length===1?CF.property[0]:CF.property.length>1?CF.property.length+' properties selected':'all properties'}</div></div>
     <div id="budget-bars" style="margin-top:10px"></div>
     ${budgetData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries to populate this chart.</div>':''}
   </div>
