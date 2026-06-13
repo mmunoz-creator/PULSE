@@ -1066,7 +1066,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v17c · elevatorpulse.com</div>
+    <div class="login-version">PULSE v17d · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -9606,6 +9606,10 @@ function buildReportHTML(filter,periodDays,isWeekly){
     ...highActions.map(a=>({level:'high',property:a.property,ec:'—',type:'Action Item',desc:a.description})),
     ...medActions.map(a=>({level:'medium',property:a.property,ec:'—',type:'Action Item',desc:a.description})),
   ].slice(0,6);
+  const rptBudget=activeProps.reduce((a,p)=>a+(p.budget||0),0);
+  const rptBilled=activeProps.reduce((a,p)=>a+(p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((x,b)=>Math.max(x,b.billedYTD||0),0)),0);
+  const rptRemain=rptBudget-rptBilled;
+  const rptSavings=(window.CO_SAVINGS||[]).filter(c=>c.status==='Client Approved').reduce((a,c)=>a+(c.originalAmount-c.negotiatedAmount),0);
   const summarySection=isWeekly?`
     <div class="report-section">
       <div class="report-section-title">What's changed this week</div>
@@ -9638,28 +9642,37 @@ function buildReportHTML(filter,periodDays,isWeekly){
           <div class="score-card"><div class="score-label">Total VT units</div><div class="score-value" style="color:var(--blue-dark)">${props.reduce((a,p)=>a+(parseInt(p.units)||0),0)}</div><div class="score-sub">elevators &amp; escalators</div></div>
           <div class="score-card"><div class="score-label">Milestones at risk</div><div class="score-value" style="color:${msAtRisk>0?'var(--amber)':'var(--green)'}">${msAtRisk}</div><div class="score-sub">across portfolio</div></div>
         </div>
+        <div class="report-scorecard" style="margin-top:10px;margin-bottom:0">
+          <div class="score-card"><div class="score-label">Total program budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?'$'+(rptBudget/1000000).toFixed(1)+'M':'--'}</div><div class="score-sub">active properties</div></div>
+          <div class="score-card"><div class="score-label">Total billed YTD</div><div class="score-value" style="font-size:1.25rem;color:var(--blue-dark)">${rptBilled?'$'+(rptBilled/1000000).toFixed(1)+'M':'--'}</div><div class="score-sub">${rptBudget?Math.round(rptBilled/rptBudget*100)+'% of budget':'--'}</div></div>
+          <div class="score-card"><div class="score-label">Remaining budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?'$'+(rptRemain/1000000).toFixed(1)+'M':'--'}</div><div class="score-sub">budget minus billed</div></div>
+          <div class="score-card"><div class="score-label">CO savings captured</div><div class="score-value" style="font-size:1.25rem;color:var(--green)">${rptSavings>0?fmtCurrency(rptSavings):'--'}</div><div class="score-sub">approved change orders</div></div>
+        </div>
       </div>
       ${summarySection}
       <div class="report-section">
         <div class="report-section-title">Active property schedule performance</div>
         <div class="table-wrap">
           <table class="report-table">
-            <thead><tr><th style="width:22%">${isDemo?'Store':'Property'}</th><th style="width:5%">State</th><th style="width:8%">Type</th><th style="width:13%">Elev. Company</th><th style="width:7%">Units</th><th style="width:8%">Status</th><th style="width:10%">Health</th><th style="width:9%">Budget</th><th>Milestones</th></tr></thead>
+            <thead><tr><th style="width:20%">${isDemo?'Store':'Property'}</th><th style="width:8%">Type</th><th style="width:13%">Elev. Company</th><th style="width:6%">Units</th><th style="width:11%">Project Status</th><th style="width:11%">Project Health</th><th style="width:9%">Budget</th><th style="width:9%">% Spent</th><th style="width:9%">% Complete</th></tr></thead>
             <tbody>
               ${activeProps.map(p=>{
                 const msC=getMsComplete(p.n);
                 const health=derivePropertyStatusFromPhases(p.n);
                 const healthBadge=health==='At Risk'?'<span class="badge b-behind">At Risk</span>':health==='Ahead'?'<span class="badge b-health-ahead">Ahead</span>':health==='Complete'?'<span class="badge b-done">Complete</span>':'<span class="badge b-nip">On Track</span>';
+                const billedYTD=p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((a,b)=>Math.max(a,b.billedYTD||0),0);
+                const pctSpent=p.budget&&billedYTD?Math.round(billedYTD/p.budget*100):null;
+                const pctComplete=Math.round(msC/MILESTONES_DEF.length*100);
                 return `<tr>
                   <td style="font-weight:500;color:var(--blue-dark)">${p.n}</td>
-                  <td><span class="geo">${p.s}</span></td>
                   <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
                   <td style="font-size:10px">${p.ec||'TBD'}</td>
                   <td style="font-family:'Plus Jakarta Sans',sans-serif">${p.units||'—'}</td>
                   <td>${renderStatusBadge(p.st)}</td>
                   <td>${healthBadge}</td>
                   <td style="font-size:10px">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'}</td>
-                  <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:10px">${msC}/${MILESTONES_DEF.length}</td>
+                  <td style="font-size:10px;color:${pctSpent!==null&&pctSpent>90?'var(--red)':pctSpent!==null&&pctSpent>75?'var(--amber)':'inherit'}">${pctSpent!==null?pctSpent+'%':'--'}</td>
+                  <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:10px">${pctComplete}%</td>
                 </tr>`;
               }).join('')}
             </tbody>
