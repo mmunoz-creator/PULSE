@@ -1067,7 +1067,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v17j · elevatorpulse.com</div>
+    <div class="login-version">PULSE v17k · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2890,6 +2890,12 @@ function gotoView(viewId,btn){
     if(role==='client'){
       const ccb=document.getElementById('cc-badge-client');
       if(ccb){ccb.textContent='0';ccb.classList.add('hidden');}
+    }
+    if(role==='pm'||role==='admin'){
+      ['cc-badge-pm','cc-badge-admin'].forEach(id=>{
+        const el=document.getElementById(id);
+        if(el){el.textContent='0';el.classList.add('hidden');}
+      });
     }
   }
   if(viewId==='reports')renderAnalytics();
@@ -6060,7 +6066,8 @@ async function saveCapitalPlanEntry(){
       await atUpdate('Properties',editId,fields);
       // On edit: create M1 milestone only if date set and doesn't already exist
       if(hasM1&&name){
-        const existingM1=milestones.find(m=>(m.property===name||m.fields?.['Property Name']===name)&&(m.number===1||m.ms===1||m.fields?.['Milestone Number']===1));
+        const _msArr=typeof milestones!=='undefined'?milestones:(window.MILESTONES_LIVE||[]);
+        const existingM1=_msArr.find(m=>(m.property===name||m.fields?.['Property Name']===name)&&(m.number===1||m.ms===1||m.fields?.['Milestone Number']===1));
         if(!existingM1){
           const newMs=await atCreate('Milestones',{
             'Property Name':name,
@@ -7633,8 +7640,8 @@ function renderDashboard(){
   const d30=new Date(today2);d30.setDate(d30.getDate()+30);
   const allActions2=actionItems||(window.ACTION_ITEMS||[]);
   const openActions2=allActions2.filter(a=>a.status==='Open'||a.status==='open');
-  const overdueActions=openActions2.filter(a=>a.dueDate&&new Date(a.dueDate)<today2);
-  const due30Actions=openActions2.filter(a=>a.dueDate&&new Date(a.dueDate)>=today2&&new Date(a.dueDate)<=d30);
+  const overdueActions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today2);
+  const due30Actions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)>=today2&&new Date(a.due)<=d30);
   const pendingReviewCount=submissions.filter(s=>s.reviewStatus==='pending').length+((window.CO_SAVINGS||[]).filter(c=>c.status==='Pending').length);
   const recentAdded2=[...allPort].filter(p=>p.dateAdded&&!p.dateRemoved&&p.st!=='Removed').sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,3);
   const recentRemoved2=[...allPort].filter(p=>p.dateRemoved||p.st==='Removed').sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,3);
@@ -7690,7 +7697,7 @@ function renderDashboard(){
         <button class="btn" style="font-size:11px" onclick="gotoView('opscenter',null)">View All Actions →</button>
       </div>
       ${horizonActions.length===0
-        ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0"><i class="ti ti-circle-check" style="color:var(--green);margin-right:6px"></i>No overdue or upcoming actions — you\'re on top of it.</div>'
+        ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0"><i class="ti ti-circle-check" style="color:var(--green);margin-right:6px"></i>No overdue or upcoming actions. You\'re on top of it.</div>'
         :`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           ${horizonActions.map(a=>`<div class="action-item-row" style="cursor:pointer;border-left:2px solid ${a.bucketColor};padding-left:8px" onclick="openProperty('${(a.property||'').replace(/'/g,"\\'")}')">
             <div style="flex:1;min-width:0">
@@ -7725,7 +7732,7 @@ function renderDashboard(){
     ;(meetings||[]).filter(m=>m.status!=='Scheduled').forEach(m=>{
       const d=new Date(m.date||0);
       feedItems.push({_date:d,_type:'Meeting',_icon:'ti-notes',_color:'var(--blue-dark)',
-        _title:`${m.type||'Meeting'} — ${m.property}`,_sub:`${m.date||'—'}${m.elevco?' · '+m.elevco:''}`,_prop:m.property});
+        _title:`${m.type?m.type+' — ':''}${m.property}`,_sub:`${m.date||'—'}${m.elevco?' · '+m.elevco:''}`,_prop:m.property});
     });
     // Site visits
     ;(siteVisits||[]).forEach(v=>{
@@ -7747,10 +7754,12 @@ function renderDashboard(){
       ${feed.length===0
         ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No recent activity.</div>'
         :feed.map(item=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(item._prop||'').replace(/'/g,"\\'")}')">
-          <div class="action-dot" style="background:${item._color}"></div>
+          <div style="width:28px;height:28px;border-radius:50%;background:${item._color}22;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i class="ti ${item._icon}" style="font-size:13px;color:${item._color}"></i>
+          </div>
           <div class="action-desc" style="flex:1">
             <span style="color:var(--blue-dark);font-weight:600">${item._title}</span>
-            <br><span style="color:var(--gray-mid);font-size:11px"><span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:var(--gray-pale);color:var(--gray-mid);margin-right:4px;text-transform:capitalize">${item._type}</span>${item._sub}</span>
+            <br><span style="color:var(--gray-mid);font-size:11px"><span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:${item._color}18;color:${item._color};margin-right:4px;text-transform:capitalize">${item._type}</span>${item._sub}</span>
           </div>
         </div>`).join('')
       }
@@ -10097,18 +10106,18 @@ function renderOpsCenter(){
   // Build combined horizon items: actions + scheduled meetings + site visits
   const horizonItems=[];
   openActions.forEach(a=>{
-    if(a.dueDate) horizonItems.push({_type:'action',_date:new Date(a.dueDate),_label:a.title||a.description||'Action',_sub:`${a.property||'—'} · ${a.owner||'—'} · Due: ${a.dueDate}`,_prop:a.property||'',_priority:a.priority});
+    if(a.due&&a.due!=='TBD') horizonItems.push({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${a.property||'—'} · ${a.owner||'—'} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority});
   });
   (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date).forEach(m=>{
     const d=new Date(m.date+'T12:00:00');
-    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:(m.type||'Meeting')+' — '+m.property,_sub:`${m.property||'—'} · ${m.date}${m.attClient?' · '+m.attClient:''}`,_prop:m.property||'',_priority:''});
+    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:(m.type?m.type+' — ':'')+m.property,_sub:`${m.property||'—'} · ${m.date}${m.attClient?' · '+m.attClient:''}`,_prop:m.property||'',_priority:''});
   });
   (siteVisits||[]).filter(v=>v.date).forEach(v=>{
     const d=new Date(v.date+'T12:00:00');
     if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${v.property||'—'} · ${v.date}${v.consultant?' · '+v.consultant:''}`,_prop:v.property||'',_priority:''});
   });
 
-  const overdue=openActions.filter(a=>a.dueDate&&new Date(a.dueDate)<today).map(a=>({_type:'action',_date:new Date(a.dueDate),_label:a.title||a.description||'Action',_sub:`${a.property||'—'} · ${a.owner||'—'} · Due: ${a.dueDate}`,_prop:a.property||'',_priority:a.priority})).sort((a,b)=>a._date-b._date);
+  const overdue=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today).map(a=>({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${a.property||'—'} · ${a.owner||'—'} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority})).sort((a,b)=>a._date-b._date);
   const next30=horizonItems.filter(i=>i._date>=today&&i._date<=d30).sort((a,b)=>a._date-b._date);
   const next60=horizonItems.filter(i=>i._date>d30&&i._date<=d60).sort((a,b)=>a._date-b._date);
   const next90=horizonItems.filter(i=>i._date>d60&&i._date<=d90).sort((a,b)=>a._date-b._date);
