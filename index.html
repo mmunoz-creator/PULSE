@@ -1071,7 +1071,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v19a · elevatorpulse.com</div>
+    <div class="login-version">PULSE v19b · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1517,8 +1517,8 @@ window.PROPERTIES_SEED = [
         <div class="nav-section-label">Operations</div>
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-consultant" class="nav-badge hidden" style="background:var(--red)">0</span></button>
-        <button class="nav-item" onclick="gotoView('submit',this)"><i class="ti ti-upload"></i>Submit Update</button>
         <button class="nav-item" onclick="gotoView('notifications',this)"><i class="ti ti-bell"></i>Notifications<span id="notif-badge" class="nav-badge hidden">0</span></button>
+        <button class="nav-item" onclick="gotoView('submit',this)"><i class="ti ti-upload"></i>Submit Update</button>
         <button class="nav-item" onclick="gotoView('sitevisits',this)"><i class="ti ti-calendar-event"></i>Site Visits</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
@@ -3276,7 +3276,7 @@ function renderMilestones(p){
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Status</div>
-            <select class="form-select" style="font-size:11px;padding:3px 6px;height:auto;width:auto"
+            <select class="form-select" style="font-size:11px;padding:3px 6px;height:auto;width:auto" data-ms-status-id="${m.id}"
               onchange="updateMilestoneField('${m.id}','Status',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
               ${['Not Started','In Progress','At Risk','Complete'].map(s=>`<option${m.status===s?' selected':''}>${s}</option>`).join('')}
             </select>
@@ -3313,18 +3313,30 @@ function renderMilestones(p){
 async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
   if(window._msRendering)return; // guard against onchange firing during render
   const fields={[fieldName]:value};
+  // Auto-derive status from completion date
+  if(fieldName==='Actual Date'){
+    const derivedStatus=value?'Complete':'Not Started';
+    fields['Status']=derivedStatus;
+  }
   await updateMilestone(msId,fields,propName);
+  // Determine effective status for circle update
+  const effectiveStatus=fields['Status']||(fieldName==='Status'?value:null);
   // Update circle color and icon immediately if status changed
-  if(fieldName==='Status'&&circleId){
+  if(effectiveStatus&&circleId){
     const statusColors={Complete:'#6FCFA0','In Progress':'#7BB8E8','At Risk':'#F4A0B0','Not Started':'#CBD5E1'};
     const statusIcons={Complete:'ti-circle-check','In Progress':'ti-circle-dot','At Risk':'ti-alert-triangle','Not Started':'ti-circle'};
     const statusTextColor={Complete:'white','In Progress':'white','At Risk':'white','Not Started':'var(--gray-mid)'};
     const circle=document.getElementById(circleId);
     if(circle){
-      circle.style.background=statusColors[value]||statusColors['Not Started'];
-      circle.style.color=statusTextColor[value]||'var(--gray-mid)';
+      circle.style.background=statusColors[effectiveStatus]||statusColors['Not Started'];
+      circle.style.color=statusTextColor[effectiveStatus]||'var(--gray-mid)';
       const icon=circle.querySelector('i');
-      if(icon){icon.className=`ti ${statusIcons[value]||'ti-circle'}`;}
+      if(icon){icon.className=`ti ${statusIcons[effectiveStatus]||'ti-circle'}`;}
+    }
+    // Also update the status dropdown in the UI if it exists
+    if(fieldName==='Actual Date'){
+      const statusSel=document.querySelector(`[data-ms-status-id="${msId}"]`);
+      if(statusSel)statusSel.value=effectiveStatus;
     }
   }
   // Refresh progress badge
