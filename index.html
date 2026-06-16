@@ -940,6 +940,9 @@ async function loadAllData() {
       status: r.fields['Status']||'Open',
       visibility: r.fields['Visibility']||'PM Only',
       created: r.fields['Created']||'',
+      read: r.fields['Read']||false,
+      readByPM: r.fields['Read by PM']||false,
+      readByClient: r.fields['Read by Client']||false,
     })).sort((a,b)=>new Date(a.created)-new Date(b.created));
     // Change Order Savings Log
     window.CO_SAVINGS = coSavings.map(r=>({
@@ -1067,7 +1070,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v18c · elevatorpulse.com</div>
+    <div class="login-version">PULSE v18e · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2885,16 +2888,6 @@ function gotoView(viewId,btn){
   if(viewId==='sitevisits')renderAllSiteVisits();
   if(viewId==='comments'){
     renderCommentsView();
-    if(role==='client'){
-      const ccb=document.getElementById('cc-badge-client');
-      if(ccb){ccb.textContent='0';ccb.classList.add('hidden');}
-    }
-    if(role==='pm'||role==='admin'){
-      ['cc-badge-pm','cc-badge-admin'].forEach(id=>{
-        const el=document.getElementById(id);
-        if(el){el.textContent='0';el.classList.add('hidden');}
-      });
-    }
   }
   if(viewId==='reports')renderAnalytics();
   if(viewId==='charts'||viewId==='analytics')renderCharts();
@@ -5905,7 +5898,7 @@ function renderCapitalPlan(){
             <td>${budgetStatusBadge(p.budgetStatus)}</td>
             <td style="font-size:12px">${p.v||'—'}</td>
             <td style="font-size:12px">${m1Date||'<span style="color:var(--gray-mid)">Not set</span>'}</td>
-            ${canEdit?`<td><button class="btn btn-icon" onclick="openCapitalPlanEdit('${p.id||p.n.replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:13px"></i></button></td>`:''}
+            ${canEdit?`<td style="display:flex;gap:4px"><button class="btn btn-icon" onclick="openCapitalPlanEdit('${p.id||p.n.replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:13px"></i></button><button class="btn btn-icon" style="color:var(--red)" onclick="deleteCapitalEntry('${p.id||''}','${p.n.replace(/'/g,"\\'")}')"><i class="ti ti-trash" style="font-size:13px"></i></button></td>`:''}
           </tr>`;
         }).join('')}
         </tbody>
@@ -6001,6 +5994,34 @@ function printCapitalPlan(){
   window.print();
   setTimeout(()=>el?.classList.remove('print-active'),1000);
 }
+function deleteCapitalEntry(propId, propName){
+  const overlay=document.createElement('div');
+  overlay.id='delete-capital-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:420px;box-shadow:var(--shadow-md);padding:24px">
+    <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:6px"><i class="ti ti-trash" style="color:var(--red);margin-right:6px"></i>Delete Capital Plan Entry</div>
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">Remove <strong>${propName}</strong> from the Capital Plan? This cannot be undone.</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('delete-capital-overlay').remove()">Cancel</button>
+      <button class="btn btn-delete" onclick="confirmDeleteCapitalEntry('${propId}','${propName.replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i>Delete</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function confirmDeleteCapitalEntry(propId, propName){
+  document.getElementById('delete-capital-overlay')?.remove();
+  const prop=(window.PORTFOLIO||[]).find(p=>p.id===propId||p.n===propName);
+  if(prop?.id&&!demoMode){
+    try{await atDelete('Properties',prop.id);}
+    catch(e){showToast('Airtable delete failed — removed locally only','warn');}
+  }
+  window.PORTFOLIO=(window.PORTFOLIO||[]).filter(p=>p.n!==propName);
+  showToast(`${propName} removed from Capital Plan`,'success');
+  renderCapitalPlan();
+  renderCharts();
+}
+
 function openCapitalPlanEdit(propId){
   openCapitalPlanEntry(propId);
 }
@@ -8863,10 +8884,23 @@ async function confirmDeleteProperty(){
     try{await atDelete('Properties',prop.id);}
     catch(e){showToast('Airtable delete failed — removed locally only','warn');}
   }
+  // Cascade: remove all related in-memory data
   window.PORTFOLIO=(window.PORTFOLIO||[]).filter(p=>p.n!==name);
+  window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.property!==name);
+  window.BILLING_LOG=(window.BILLING_LOG||[]).filter(b=>b.property!==name);
+  window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).filter(u=>u.property!==name);
+  window.PHASE_STEPS=(window.PHASE_STEPS||[]).filter(s=>s.property!==name);
+  window.DOCUMENTS_LIVE=(window.DOCUMENTS_LIVE||[]).filter(d=>d.property!==name);
+  window.CLIENT_COMMENTS=(window.CLIENT_COMMENTS||[]).filter(c=>c.property!==name);
+  window.CO_SAVINGS=(window.CO_SAVINGS||[]).filter(c=>c.property!==name);
+  actionItems=actionItems.filter(a=>a.property!==name);
+  meetings=meetings.filter(m=>m.property!==name);
+  siteVisits=siteVisits.filter(v=>v.property!==name);
   if(currentProp?.n===name){currentProp=null;gotoView('portfolio');}
   showToast(`${name} deleted`,'success');
   populatePortfolio();
+  updateClientCommentsBadge();
+  updateQueueBadge();
 }
 
 function closeEditPropertyPanel(){
@@ -9294,14 +9328,16 @@ async function kickSubmission(id){
 }
 function updateClientCommentsBadge(){
   const cc=window.CLIENT_COMMENTS||[];
-  const openFlags=cc.filter(c=>c.status==='Open'||c.status==='open').length;
+  const threads={};
+  cc.forEach(c=>{if(!threads[c.threadId])threads[c.threadId]=c;});
+  const openUnread=Object.values(threads).filter(c=>(c.status==='Open'||c.status==='open')&&!c.readByPM).length;
   ['cc-badge-pm','cc-badge-admin'].forEach(id=>{
     const el=document.getElementById(id);
-    if(el){el.textContent=openFlags;el.classList.toggle('hidden',openFlags===0);}
+    if(el){el.textContent=openUnread;el.classList.toggle('hidden',openUnread===0);}
   });
-  const pmReplied=cc.filter(c=>c.authorRole==='pm'||c.authorRole==='consultant').length;
+  const clientUnread=Object.values(threads).filter(c=>!c.readByClient&&(c.authorRole==='pm'||c.authorRole==='consultant')).length;
   const ccb=document.getElementById('cc-badge-client');
-  if(ccb){ccb.textContent=pmReplied;ccb.classList.toggle('hidden',pmReplied===0);}
+  if(ccb){ccb.textContent=clientUnread;ccb.classList.toggle('hidden',clientUnread===0);}
 }
 function updateQueueBadge(){
   const qc=submissions.filter(s=>s.reviewStatus==='pending').length+((window.CO_SAVINGS||[]).filter(c=>c.status==='Pending').length);
@@ -9447,6 +9483,24 @@ async function resolveFlag(threadId){
   showToast('Flag marked as resolved','success');
 }
 
+async function markThreadRead(threadId, isRead){
+  const cc=window.CLIENT_COMMENTS||[];
+  const first=cc.find(c=>c.threadId===threadId);
+  if(first){
+    const isPMRole=role==='pm'||role==='admin';
+    const fieldName=isPMRole?'Read by PM':'Read by Client';
+    const localField=isPMRole?'readByPM':'readByClient';
+    first[localField]=isRead;
+    first.read=isRead; // keep generic read in sync for badge fallback
+    if(!demoMode){
+      try{await atUpdate('Client Comments',first.id,{[fieldName]:isRead});}
+      catch(e){showToast('Could not save read status','warn');}
+    }
+  }
+  updateClientCommentsBadge();
+  renderCommentsView();
+}
+
 function renderCommentsView(){
   const isClient=role==='client';
   const isPM=role==='pm'||role==='admin';
@@ -9474,12 +9528,17 @@ function renderCommentsView(){
   const clientInitials=demoMode?'DR':'PH';
   container.innerHTML=threadList.map(thread=>{
     const flag=thread[0];const threadId=flag.threadId;const isOpen=flag.status==='Open';
-    return `<div class="card" style="margin-bottom:1rem">
+    const myReadField=isPM?'readByPM':'readByClient';
+    const isRead=flag[myReadField]||false;
+    const otherReadLabel=isPM?(flag.readByClient?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eye" style="font-size:10px"></i> Seen by client</span>':''):(flag.readByPM?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eye" style="font-size:10px"></i> Seen by PM</span>':'');
+    return `<div class="card" style="margin-bottom:1rem;${isRead?'opacity:0.6':''}">
       <div class="card-header">
         <div><div class="card-title">${flag.property}</div><div class="card-sub">${flag.flagType} concern · ${new Date(flag.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div>
         <div style="display:flex;align-items:center;gap:8px">
+          ${otherReadLabel}
           <span style="font-size:10px;color:var(--gray-mid)">${flag.visibility}</span>
           <span class="badge ${isOpen?'b-hold':'b-approved'}">${isOpen?'Open':'Resolved'}</span>
+          <button class="btn" style="font-size:11px" onclick="markThreadRead('${threadId}',${!isRead})" title="${isRead?'Mark unread':'Mark read'}"><i class="ti ${isRead?'ti-mail':'ti-mail-opened'}"></i>${isRead?'Unread':'Read'}</button>
           ${isOpen&&isPM?`<button class="btn" style="font-size:11px" onclick="resolveFlag('${threadId}')"><i class="ti ti-check"></i>Resolve</button>`:''}
         </div>
       </div>
