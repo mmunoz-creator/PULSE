@@ -2368,11 +2368,11 @@ PORTFOLIO SUMMARY:
 - Client: Demo Retail Portfolio (fictional retail department store chain)
 - Total stores: 15 across the US
 - Total VT units: ${DEMO_PORTFOLIO.reduce((a,p)=>a+p.units,0)} elevators and escalators
-- Total forecasted budget (where known): $${(DEMO_PORTFOLIO.reduce((a,p)=>a+(p.budget||0),0)/1000000).toFixed(1)}M
+- Total forecasted budget (where known): ${fmtBudget(DEMO_PORTFOLIO.reduce((a,p)=>a+(p.budget||0),0))}
 - VDA Consultants: Sarah Chen, Marcus Webb, James Ortiz
 
 STORE DATA:
-${DEMO_PORTFOLIO.map(p=>`- ${p.n} | ${p.city}, ${p.s} | Status: ${p.st} | Schedule: ${p.r||'N/A'} | Elevator Co: ${p.ec} | Units: ${p.units} (${p.unitDesc}) | Budget: ${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'} | Consultant: ${p.v} | Type: ${p.type} | Notes: ${p.comment}`).join('\n')}
+${DEMO_PORTFOLIO.map(p=>`- ${p.n} | ${p.city}, ${p.s} | Status: ${p.st} | Schedule: ${p.r||'N/A'} | Elevator Co: ${p.ec} | Units: ${p.units} (${p.unitDesc}) | Budget: ${p.budget?fmtBudget(p.budget):'TBD'} | Consultant: ${p.v} | Type: ${p.type} | Notes: ${p.comment}`).join('\n')}
 
 STATUS BREAKDOWN:
 - CIP/Active/Awarded: ${DEMO_PORTFOLIO.filter(p=>['CIP','Active','Awarded'].includes(p.st)).length} stores
@@ -3143,26 +3143,34 @@ function getProjectedCompletion(propName){
 }
 
 async function autoPopulateMilestones(propName){
-  const existing=(window.MILESTONES||[]).filter(m=>m.property===propName);
-  if(existing.length===MILESTONES_DEF.length)return; // all 18 already exist
-  if(!demoMode&&existing.length===0)showToast('Setting up milestones for '+propName+'...','info');
-  const newMs=[];
-  for(let i=0;i<MILESTONES_DEF.length;i++){
-    const msNum=i+1;
-    // Skip if this milestone number already exists for this property
-    if(existing.find(m=>m.milestoneNumber===msNum))continue;
-    const fields={
-      'Property Name':propName,
-      'Milestone Number':msNum,
-      'Milestone Name':MILESTONES_DEF[i],
-      'Status':'Not Started',
-    };
-    const res=demoMode?null:await atCreate('Milestones',fields);
-    const newId=res?.records?.[0]?.id||'ms-'+Date.now()+'-'+i;
-    newMs.push({id:newId,property:propName,milestoneNumber:msNum,milestoneName:MILESTONES_DEF[i],status:'Not Started',plannedDate:'',actualDate:'',variance:null,notes:''});
+  // Prevent concurrent calls for the same property
+  if(!window._msPopulating)window._msPopulating={};
+  if(window._msPopulating[propName])return;
+  window._msPopulating[propName]=true;
+  try{
+    const existing=(window.MILESTONES||[]).filter(m=>m.property===propName);
+    if(existing.length===MILESTONES_DEF.length){window._msPopulating[propName]=false;return;} // all 18 already exist
+    if(!demoMode&&existing.length===0)showToast('Setting up milestones for '+propName+'...','info');
+    const newMs=[];
+    for(let i=0;i<MILESTONES_DEF.length;i++){
+      const msNum=i+1;
+      // Skip if this milestone number already exists for this property
+      if((window.MILESTONES||[]).find(m=>m.property===propName&&m.milestoneNumber===msNum))continue;
+      const fields={
+        'Property Name':propName,
+        'Milestone Number':msNum,
+        'Milestone Name':MILESTONES_DEF[i],
+        'Status':'Not Started',
+      };
+      const res=demoMode?null:await atCreate('Milestones',fields);
+      const newId=res?.records?.[0]?.id||'ms-'+Date.now()+'-'+i;
+      newMs.push({id:newId,property:propName,milestoneNumber:msNum,milestoneName:MILESTONES_DEF[i],status:'Not Started',plannedDate:'',actualDate:'',variance:null,notes:''});
+      window.MILESTONES=(window.MILESTONES||[]).concat([newMs[newMs.length-1]]);
+    }
+    if(!demoMode&&newMs.length>0)showToast('Milestones initialized','success');
+  }finally{
+    window._msPopulating[propName]=false;
   }
-  window.MILESTONES=(window.MILESTONES||[]).concat(newMs);
-  if(!demoMode&&newMs.length>0)showToast('Milestones initialized','success');
 }
 
 async function updateMilestone(msId,fields,propName){
@@ -4123,6 +4131,13 @@ function renderAllMeetings(){
 // ── CURRENCY HELPERS ──────────────────────────────────────────────────
 function fmtCurrency(val){
   if(!val||isNaN(val))return '—';
+  const n=Number(val);
+  if(n>=1000000)return '$'+(n/1000000).toFixed(1)+'M';
+  if(n>=1000)return '$'+(n/1000).toFixed(0)+'K';
+  return '$'+n.toLocaleString();
+}
+function fmtBudget(val){
+  if(!val||isNaN(val))return 'TBD';
   const n=Number(val);
   if(n>=1000000)return '$'+(n/1000000).toFixed(1)+'M';
   if(n>=1000)return '$'+(n/1000).toFixed(0)+'K';
@@ -5823,7 +5838,7 @@ function renderCapitalPlan(){
     props.forEach(p=>{const k=(p.priority||'4').charAt(0);if(priMap[k]!==undefined)priMap[k]++;});
     cards.innerHTML=`
       <div class="stat-card"><div class="stat-label">Properties in Pipeline</div><div class="stat-value">${props.length}</div><div class="stat-sub">${approvedCount} Budget Approved</div></div>
-      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${totalBudget?'$'+(totalBudget/1000000).toFixed(1)+'M':'TBD'}</div><div class="stat-sub">${props.filter(p=>!p.budget).length} Budget TBD</div></div>
+      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${totalBudget?fmtBudget(totalBudget):'TBD'}</div><div class="stat-sub">${props.filter(p=>!p.budget).length} Budget TBD</div></div>
       <div class="stat-card"><div class="stat-label">Units in Pipeline</div><div class="stat-value">${totalUnits}</div><div class="stat-sub">Elevators &amp; Escalators</div></div>
       <div class="stat-card"><div class="stat-label">Priority Breakdown</div><div class="stat-value" style="font-size:13px;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
         ${priMap['1']?`<span class="badge" style="background:#fdecea;color:var(--red);border:1px solid #f5c2c2">P1: ${priMap['1']}</span>`:''}
@@ -5885,7 +5900,7 @@ function renderCapitalPlan(){
         <div style="display:flex;gap:16px;font-size:12px;color:var(--gray-mid)">
           <span><strong style="color:var(--navy)">${yrProps.length}</strong> propert${yrProps.length===1?'y':'ies'}</span>
           <span><strong style="color:var(--navy)">${yrUnits}</strong> units</span>
-          ${yrBudget?`<span><strong style="color:var(--navy)">$${(yrBudget/1000000).toFixed(1)}M</strong> estimated</span>`:''}
+          ${yrBudget?`<span><strong style="color:var(--navy)">${fmtBudget(yrBudget)}</strong> estimated</span>`:''}
         </div>
       </div>
       <div id="${bandId}" class="table-wrap"><table class="data-table" style="table-layout:fixed">
@@ -6342,7 +6357,7 @@ function renderCharts(){
   <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
     <div class="stat-card" style="border-top:3px solid var(--navy)">
       <div class="stat-label">Total Program Value</div>
-      <div class="stat-value" style="font-size:20px">${totalProgramValue?'$'+(totalProgramValue/1000000).toFixed(1)+'M':'—'}</div>
+      <div class="stat-value" style="font-size:20px">${totalProgramValue?fmtBudget(totalProgramValue):'—'}</div>
       <div class="stat-sub">Active + Pipeline</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
@@ -6353,7 +6368,7 @@ function renderCharts(){
     <div class="stat-card" style="border-top:3px solid var(--indigo)">
       <div class="stat-label">Pipeline Properties</div>
       <div class="stat-value" style="font-size:20px;color:var(--indigo)">${capitalProps.length}</div>
-      <div class="stat-sub">${capitalBudgetTotal?'$'+(capitalBudgetTotal/1000000).toFixed(1)+'M Estimated':'Budget TBD'}</div>
+      <div class="stat-sub">${capitalBudgetTotal?fmtBudget(capitalBudgetTotal)+' Estimated':'Budget TBD'}</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--teal)">
       <div class="stat-label">Active Units</div>
@@ -6378,7 +6393,7 @@ function renderCharts(){
     <div class="card-header">
       <div>
         <div class="card-title">Capital Outlook</div>
-        <div class="card-sub">Pipeline budget by planned modernization year — ${capitalProps.length} propert${capitalProps.length===1?'y':'ies'} · $${capitalBudgetTotal?(capitalBudgetTotal/1000000).toFixed(1)+'M':'TBD'} estimated</div>
+        <div class="card-sub">Pipeline budget by planned modernization year — ${capitalProps.length} propert${capitalProps.length===1?'y':'ies'} · ${fmtBudget(capitalBudgetTotal)} estimated</div>
       </div>
       <a href="#" onclick="event.preventDefault();gotoView('capital',null)" style="font-size:12px;color:var(--indigo);font-weight:600;text-decoration:none">View Capital Plan <i class="ti ti-arrow-right" style="font-size:11px"></i></a>
     </div>
@@ -6853,7 +6868,7 @@ function renderCharts(){
         ${capitalYearKeys.map(yr=>{
           const d=capitalByYear[yr];
           const barPct=Math.max(4,Math.round((d.budget/maxYrBudget)*100));
-          const budgetLabel=d.budget?'$'+(d.budget/1000000).toFixed(1)+'M':'TBD';
+          const budgetLabel=d.budget?fmtBudget(d.budget):'TBD';
           // Stacked priority segments
           const total=d.p1+d.p2+d.p3+d.p4||1;
           const segments=[['1',d.p1],['2',d.p2],['3',d.p3],['4',d.p4]]
@@ -6876,7 +6891,7 @@ function renderCharts(){
         ${[['1','var(--red)','Critical'],['2','var(--amber)','High'],['3','var(--blue-dark)','Medium'],['4','var(--gray-light)','Standard']].map(([k,c,l])=>
           `<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--gray-mid)"><div style="width:10px;height:10px;border-radius:2px;background:${c};opacity:.85"></div>P${k} ${l}</div>`
         ).join('')}
-        <div style="margin-left:auto;font-size:11px;color:var(--gray-mid)">${capitalProps.length} properties · ${capitalUnitsTotal} units · ${capitalBudgetTotal?'$'+(capitalBudgetTotal/1000000).toFixed(1)+'M total estimated':'budget TBD'}</div>
+        <div style="margin-left:auto;font-size:11px;color:var(--gray-mid)">${capitalProps.length} properties · ${capitalUnitsTotal} units · ${capitalBudgetTotal?fmtBudget(capitalBudgetTotal)+' total estimated':'budget TBD'}</div>
       </div>`;
   }
 
@@ -6999,7 +7014,7 @@ function showBarDrilldown(type,value){
       <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
       <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
       <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${p.units||'—'}</td>
-      <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--gray-mid)">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'—'}</td>
+      <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--gray-mid)">${p.budget?fmtBudget(p.budget):'—'}</td>
     </tr>`;
   }).join('');
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:620px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
@@ -7609,7 +7624,7 @@ function renderDashboard(){
       return `<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1.25rem">
         <div class="stat-card" style="border-top:3px solid var(--navy)">
           <div class="stat-label">Total Program Value</div>
-          <div class="stat-value" style="font-size:20px">${_progVal?'$'+(_progVal/1000000).toFixed(1)+'M':'—'}</div>
+          <div class="stat-value" style="font-size:20px">${_progVal?fmtBudget(_progVal):'—'}</div>
           <div class="stat-sub">Active + Pipeline</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
@@ -7620,7 +7635,7 @@ function renderDashboard(){
         <div class="stat-card" style="border-top:3px solid var(--indigo)">
           <div class="stat-label">Pipeline Properties</div>
           <div class="stat-value" style="font-size:20px;color:var(--indigo)">${_cpProps.length}</div>
-          <div class="stat-sub">${_cpBudget?'$'+(_cpBudget/1000000).toFixed(1)+'M Estimated':'Budget TBD'}</div>
+          <div class="stat-sub">${_cpBudget?fmtBudget(_cpBudget)+' Estimated':'Budget TBD'}</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--teal)">
           <div class="stat-label">Active Units</div>
@@ -9894,9 +9909,9 @@ function buildReportHTML(filter,periodDays,isWeekly){
           <div class="score-card"><div class="score-label">Milestones at risk</div><div class="score-value" style="color:${msAtRisk>0?'var(--amber)':'var(--green)'}">${msAtRisk}</div><div class="score-sub">Across Portfolio</div></div>
         </div>
         <div class="report-scorecard" style="margin-top:10px;margin-bottom:0">
-          <div class="score-card"><div class="score-label">Total program budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?'$'+(rptBudget/1000000).toFixed(1)+'M':'--'}</div><div class="score-sub">Active Properties</div></div>
-          <div class="score-card"><div class="score-label">Total billed YTD</div><div class="score-value" style="font-size:1.25rem;color:var(--blue-dark)">${rptBilled?'$'+(rptBilled/1000000).toFixed(1)+'M':'--'}</div><div class="score-sub">${rptBudget?Math.round(rptBilled/rptBudget*100)+'% of Budget':'--'}</div></div>
-          <div class="score-card"><div class="score-label">Remaining budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?'$'+(rptRemain/1000000).toFixed(1)+'M':'--'}</div><div class="score-sub">Budget Minus Billed</div></div>
+          <div class="score-card"><div class="score-label">Total program budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?fmtBudget(rptBudget):'--'}</div><div class="score-sub">Active Properties</div></div>
+          <div class="score-card"><div class="score-label">Total billed YTD</div><div class="score-value" style="font-size:1.25rem;color:var(--blue-dark)">${rptBilled?fmtBudget(rptBilled):'--'}</div><div class="score-sub">${rptBudget?Math.round(rptBilled/rptBudget*100)+'% of Budget':'--'}</div></div>
+          <div class="score-card"><div class="score-label">Remaining budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?fmtBudget(rptRemain):'--'}</div><div class="score-sub">Budget Minus Billed</div></div>
           <div class="score-card"><div class="score-label">CO savings captured</div><div class="score-value" style="font-size:1.25rem;color:var(--green)">${rptSavings>0?fmtCurrency(rptSavings):'--'}</div><div class="score-sub">Approved Change Orders</div></div>
         </div>
       </div>
@@ -9921,7 +9936,7 @@ function buildReportHTML(filter,periodDays,isWeekly){
                   <td style="font-family:'Plus Jakarta Sans',sans-serif">${p.units||'—'}</td>
                   <td>${renderStatusBadge(p.st)}</td>
                   <td>${healthBadge}</td>
-                  <td style="font-size:10px">${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'}</td>
+                  <td style="font-size:10px">${p.budget?fmtBudget(p.budget):'TBD'}</td>
                   <td style="font-size:10px;color:${pctSpent!==null&&pctSpent>90?'var(--red)':pctSpent!==null&&pctSpent>75?'var(--amber)':'inherit'}">${pctSpent!==null?pctSpent+'%':'--'}</td>
                   <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:10px">${pctComplete}%</td>
                 </tr>`;
@@ -9978,10 +9993,10 @@ PORTFOLIO: ${port.length} properties
 PORTFOLIO SUMMARY:
 - Active/CIP/Awarded: ${active.length}
 - Behind schedule: ${behind.length} (${behind.map(p=>p.n).join(', ')||'none'})
-- Total forecasted budget: $${(totalBudget/1000000).toFixed(1)}M
+- Total forecasted budget: ${fmtBudget(totalBudget)}
 
 ACTIVE PROPERTIES:
-${active.map(p=>`- ${p.n} | ${p.s} | ${p.ec} | ${p.units} units | Schedule: ${p.r||'—'} | Consultant: ${p.v} | Budget: ${p.budget?'$'+(p.budget/1000000).toFixed(1)+'M':'TBD'} | Notes: ${p.comment}`).join('\n')}
+${active.map(p=>`- ${p.n} | ${p.s} | ${p.ec} | ${p.units} units | Schedule: ${p.r||'—'} | Consultant: ${p.v} | Budget: ${p.budget?fmtBudget(p.budget):'TBD'} | Notes: ${p.comment}`).join('\n')}
 
 ALL PROPERTIES:
 ${port.map(p=>`- ${p.n} (${p.s}): ${p.st} | ${p.ec} | Consultant: ${p.v}`).join('\n')}
