@@ -943,6 +943,7 @@ async function loadAllData() {
       read: r.fields['Read']||false,
       readByPM: r.fields['Read by PM']||false,
       readByClient: r.fields['Read by Client']||false,
+      readByConsultant: r.fields['Read by Consultant']||false,
     })).sort((a,b)=>new Date(a.created)-new Date(b.created));
     // Change Order Savings Log
     window.CO_SAVINGS = coSavings.map(r=>({
@@ -1070,7 +1071,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v18m · elevatorpulse.com</div>
+    <div class="login-version">PULSE v18p · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1514,7 +1515,7 @@ window.PROPERTIES_SEED = [
       <div class="nav-section">
         <div class="nav-section-label">Operations</div>
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
-        <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments</button>
+        <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-consultant" class="nav-badge hidden" style="background:var(--red)">0</span></button>
         <button class="nav-item" onclick="gotoView('submit',this)"><i class="ti ti-upload"></i>Submit Update</button>
         <button class="nav-item" onclick="gotoView('notifications',this)"><i class="ti ti-bell"></i>Notifications<span id="notif-badge" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('my-updates',this)"><i class="ti ti-history"></i>My Updates</button>
@@ -5665,6 +5666,7 @@ function cfGetFiltered(){
   const inp=document.getElementById('cf-property')?.value.trim().toLowerCase()||'';
   return port.filter(p=>{
     if(p.st==='Removed')return false;
+    if(p.st==='Capital Plan')return false;
     if(inp&&CF.property.length===0&&!p.n.toLowerCase().includes(inp))return false;
     if(CF.property.length&&!CF.property.includes(p.n))return false;
     if(CF.status&&p.st!==CF.status)return false;
@@ -6033,11 +6035,21 @@ function deleteCapitalEntry(propId, propName){
 async function confirmDeleteCapitalEntry(propId, propName){
   document.getElementById('delete-capital-overlay')?.remove();
   const prop=(window.PORTFOLIO||[]).find(p=>p.id===propId||p.n===propName);
-  if(prop?.id&&!demoMode){
-    try{await atDelete('Properties',prop.id);}
-    catch(e){showToast('Airtable delete failed — removed locally only','warn');}
+  if(!demoMode){
+    showToast(`Removing ${propName} from Capital Plan...`,'info');
+    if(prop?.id){
+      try{await atDelete('Properties',prop.id);}
+      catch(e){console.warn('Capital Plan property delete failed',e);}
+    }
+    // Also delete any milestones created for this property
+    const msToDelete=(window.MILESTONES||[]).filter(m=>m.property===propName&&m.id&&m.id.startsWith('rec'));
+    for(const m of msToDelete){
+      try{await atDelete('Milestones',m.id);}
+      catch(e){console.warn('Milestone delete failed',m.id,e);}
+    }
   }
   window.PORTFOLIO=(window.PORTFOLIO||[]).filter(p=>p.n!==propName);
+  window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.property!==propName);
   showToast(`${propName} removed from Capital Plan`,'success');
   renderCapitalPlan();
   renderCharts();
@@ -6204,7 +6216,8 @@ function renderCharts(){
   });
 
   // Active portfolio totals (for program summary)
-  const activeProps=allPort.filter(p=>p.st==='In Progress');
+  const activeProps=allPort.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed');
+  const inProgressProps=allPort.filter(p=>p.st==='In Progress');
   const activeBudget=allPort.filter(p=>p.st!=='Capital Plan').reduce((a,p)=>a+(p.budget||0),0);
   const totalProgramValue=activeBudget+capitalBudgetTotal;
   const totalSavingsAll=(window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
@@ -6330,9 +6343,9 @@ function renderCharts(){
       <div class="stat-sub">Active + Pipeline</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
-      <div class="stat-label">Active Projects</div>
+      <div class="stat-label">Active Properties</div>
       <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${activeProps.length}</div>
-      <div class="stat-sub">$${activeBudget?(activeBudget/1000000).toFixed(1)+'M':'0'} in Construction</div>
+      <div class="stat-sub">${inProgressProps.length>0?inProgressProps.length+' in Construction':'In Active Program'}</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--indigo)">
       <div class="stat-label">Pipeline Properties</div>
@@ -7584,7 +7597,8 @@ function renderDashboard(){
       const _cpProps=port.filter(p=>p.st==='Capital Plan');
       const _cpBudget=_cpProps.reduce((a,p)=>a+(p.budget||0),0);
       const _cpUnits=_cpProps.reduce((a,p)=>a+(parseInt(p.units)||0),0);
-      const _actProps=port.filter(p=>p.st==='In Progress');
+      const _actProps=port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed');
+      const _inProgressProps=port.filter(p=>p.st==='In Progress');
       const _actBudget=port.filter(p=>p.st!=='Capital Plan').reduce((a,p)=>a+(p.budget||0),0);
       const _actUnits=port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').reduce((a,p)=>a+(parseInt(p.units)||0),0);
       const _progVal=_actBudget+_cpBudget;
@@ -7596,9 +7610,9 @@ function renderDashboard(){
           <div class="stat-sub">Active + Pipeline</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
-          <div class="stat-label">Active Projects</div>
+          <div class="stat-label">Active Properties</div>
           <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${_actProps.length}</div>
-          <div class="stat-sub">${_actBudget?'$'+(_actBudget/1000000).toFixed(1)+'M in Construction':'no budget set'}</div>
+          <div class="stat-sub">${_inProgressProps.length>0?_inProgressProps.length+' in Construction':'In Active Program'}</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--indigo)">
           <div class="stat-label">Pipeline Properties</div>
@@ -8792,8 +8806,8 @@ function populatePortfolio(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const tbody=document.getElementById('portfolio-tbody');if(!tbody)return;
   const sub=document.getElementById('portfolio-sub');
-  const totalPortUnits=port.reduce((a,p)=>a+(parseInt(p.units)||0),0);
-  if(sub)sub.textContent=port.length>0?`${port.length} ${demoMode?'stores':'properties'} | ${totalPortUnits} units · click any row to view details`:'Loading properties...';
+  const totalPortUnits=port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').reduce((a,p)=>a+(parseInt(p.units)||0),0);
+  if(sub)sub.textContent=port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').length>0?`${port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').length} ${demoMode?'stores':'properties'} | ${totalPortUnits} units · click any row to view details`:'Loading properties...';
   const addBtn=document.getElementById('add-property-btn');
   if(addBtn)addBtn.style.display=(role==='pm'||role==='admin')?'inline-flex':'none';
   const delBtn=document.getElementById('delete-property-header-btn');
@@ -8803,7 +8817,7 @@ function populatePortfolio(){
     tbody.innerHTML=`<tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Loading from database...</td></tr>`;
     return;
   }
-  port.forEach(p=>{
+  port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').forEach(p=>{
     const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
     const endDate=getProjectEndDate(p.n);
     tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${p.type}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
@@ -8906,10 +8920,36 @@ async function confirmDeleteProperty(){
   if(!name)return;
   document.getElementById('delete-prop-overlay')?.remove();
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===name);
-  if(prop?.id&&!demoMode){
-    try{await atDelete('Properties',prop.id);}
-    catch(e){showToast('Airtable delete failed — removed locally only','warn');}
+
+  if(!demoMode){
+    showToast(`Deleting ${name} and all associated records...`,'info');
+    // Delete property record
+    if(prop?.id){
+      try{await atDelete('Properties',prop.id);}
+      catch(e){console.warn('Property delete failed',e);}
+    }
+    // Cascade delete all related Airtable records
+    const cascadeTargets=[
+      {arr:window.MILESTONES||[],   table:'Milestones',      field:'property'},
+      {arr:window.BILLING_LOG||[],  table:'Billing Log',     field:'property'},
+      {arr:window.UNIT_GROUPS||[],  table:'Unit Groups',     field:'property'},
+      {arr:window.PHASE_STEPS||[],  table:'Phase Tasks',     field:'property'},
+      {arr:window.DOCUMENTS_LIVE||[],table:'Documents',      field:'property'},
+      {arr:window.CLIENT_COMMENTS||[],table:'Client Comments',field:'property'},
+      {arr:window.CO_SAVINGS||[],   table:'Change Order Savings Log',field:'property'},
+      {arr:actionItems,             table:'Action Items',    field:'property'},
+      {arr:meetings,                table:'Meetings',        field:'property'},
+      {arr:siteVisits,              table:'Site Visits',     field:'property'},
+    ];
+    for(const {arr,table,field} of cascadeTargets){
+      const toDelete=arr.filter(r=>r[field]===name&&r.id&&r.id.startsWith('rec'));
+      for(const r of toDelete){
+        try{await atDelete(table,r.id);}
+        catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);}
+      }
+    }
   }
+
   // Cascade: remove all related in-memory data
   window.PORTFOLIO=(window.PORTFOLIO||[]).filter(p=>p.n!==name);
   window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.property!==name);
@@ -8923,7 +8963,7 @@ async function confirmDeleteProperty(){
   meetings=meetings.filter(m=>m.property!==name);
   siteVisits=siteVisits.filter(v=>v.property!==name);
   if(currentProp?.n===name){currentProp=null;gotoView('portfolio');}
-  showToast(`${name} deleted`,'success');
+  showToast(`${name} and all associated records deleted`,'success');
   populatePortfolio();
   updateClientCommentsBadge();
   updateQueueBadge();
@@ -9354,25 +9394,18 @@ async function kickSubmission(id){
 }
 function updateClientCommentsBadge(){
   const cc=window.CLIENT_COMMENTS||[];
-  // Group all comments by threadId
   const threads={};
   cc.forEach(c=>{if(!threads[c.threadId])threads[c.threadId]=[];threads[c.threadId].push(c);});
-  // PM badge: unread if NO record in thread has readByPM=true AND thread is open
-  const pmUnread=Object.values(threads).filter(t=>{
-    const isOpen=t.some(c=>c.status==='Open'||c.status==='open');
-    const anyRead=t.some(c=>c.readByPM);
-    return isOpen&&!anyRead;
-  }).length;
-  ['cc-badge-pm','cc-badge-admin'].forEach(id=>{
-    const el=document.getElementById(id);
-    if(el){el.textContent=pmUnread;el.classList.toggle('hidden',pmUnread===0);}
-  });
-  // Client badge: unread if thread has a PM/consultant reply AND NO record has readByClient=true
-  const clientUnread=Object.values(threads).filter(t=>{
-    const hasPMReply=t.some(c=>c.authorRole==='pm'||c.authorRole==='consultant');
-    const anyRead=t.some(c=>c.readByClient);
-    return hasPMReply&&!anyRead;
-  }).length;
+  const threadList=Object.values(threads);
+  // PM badge: open thread where no record has readByPM=true
+  const pmUnread=threadList.filter(t=>t.some(c=>c.status==='Open'||c.status==='open')&&!t.some(c=>c.readByPM)).length;
+  ['cc-badge-pm','cc-badge-admin'].forEach(id=>{const el=document.getElementById(id);if(el){el.textContent=pmUnread;el.classList.toggle('hidden',pmUnread===0);}});
+  // Consultant badge: open thread where no record has readByConsultant=true
+  const conUnread=threadList.filter(t=>t.some(c=>c.status==='Open'||c.status==='open')&&!t.some(c=>c.readByConsultant)).length;
+  const ccbCon=document.getElementById('cc-badge-consultant');
+  if(ccbCon){ccbCon.textContent=conUnread;ccbCon.classList.toggle('hidden',conUnread===0);}
+  // Client badge: thread has PM/consultant reply AND no record has readByClient=true
+  const clientUnread=threadList.filter(t=>t.some(c=>c.authorRole==='pm'||c.authorRole==='consultant')&&!t.some(c=>c.readByClient)).length;
   const ccb=document.getElementById('cc-badge-client');
   if(ccb){ccb.textContent=clientUnread;ccb.classList.toggle('hidden',clientUnread===0);}
 }
@@ -9506,14 +9539,23 @@ async function addReply(threadId){
     const res=await atCreate('Client Comments',{'Property Name':record.property,'Thread ID':threadId,'Author Role':record.authorRole,'Author Name':record.authorName,'Message':text,'Flag Type':record.flagType,'Status':record.status,'Visibility':record.visibility,'Created':now});
     record.id=res?.records?.[0]?.id||record.id;
   }
-  // Flip the other party's read state to unread on the first comment (thread marker)
+  // Flip the other party's read state to unread on all thread records
   if(flagRecord){
-    const otherField=isClient?'readByPM':'readByClient';
-    const otherAirtableField=isClient?'Read by PM':'Read by Client';
-    flagRecord[otherField]=false;
-    if(!demoMode){
-      try{await atUpdate('Client Comments',flagRecord.id,{[otherAirtableField]:false});}
-      catch(e){console.warn('Could not reset read state',e);}
+    const threadRecords=(window.CLIENT_COMMENTS||[]).filter(c=>c.threadId===threadId);
+    if(isClient){
+      // Client replied — reset VDA reads
+      threadRecords.forEach(c=>{c.readByPM=false;c.readByConsultant=false;});
+      if(!demoMode&&flagRecord.id&&!flagRecord.id.startsWith('cc-')){
+        try{await atUpdate('Client Comments',flagRecord.id,{'Read by PM':false,'Read by Consultant':false});}
+        catch(e){console.warn('Could not reset VDA read state',e);}
+      }
+    } else {
+      // PM or consultant replied — reset client read
+      threadRecords.forEach(c=>{c.readByClient=false;});
+      if(!demoMode&&flagRecord.id&&!flagRecord.id.startsWith('cc-')){
+        try{await atUpdate('Client Comments',flagRecord.id,{'Read by Client':false});}
+        catch(e){console.warn('Could not reset client read state',e);}
+      }
     }
   }
   window.CLIENT_COMMENTS=(window.CLIENT_COMMENTS||[]).concat([record]);
@@ -9533,12 +9575,11 @@ async function resolveFlag(threadId){
 async function markThreadRead(threadId, isRead){
   const cc=window.CLIENT_COMMENTS||[];
   const isPMRole=role==='pm'||role==='admin';
-  const fieldName=isPMRole?'Read by PM':'Read by Client';
-  const localField=isPMRole?'readByPM':'readByClient';
-  // Update all records in thread locally
+  const isConsultant=role==='consultant';
+  const fieldName=isPMRole?'Read by PM':isConsultant?'Read by Consultant':'Read by Client';
+  const localField=isPMRole?'readByPM':isConsultant?'readByConsultant':'readByClient';
   const threadRecords=cc.filter(c=>c.threadId===threadId);
   threadRecords.forEach(c=>c[localField]=isRead);
-  // Write to Airtable on all records so badge logic works regardless of sort order
   if(!demoMode){
     for(const c of threadRecords){
       if(c.id&&!c.id.startsWith('cc-')){
@@ -9576,15 +9617,27 @@ function renderCommentsView(){
     return;
   }
   const clientInitials=demoMode?'DR':'PH';
+  const consultantInitials='VDA';
   container.innerHTML=threadList.map(thread=>{
     const flag=thread[0];const threadId=flag.threadId;const isOpen=flag.status==='Open';
-    const myReadField=isPM?'readByPM':'readByClient';
+    const isConsultantRole=role==='consultant';
+    const myReadField=isPM?'readByPM':isConsultantRole?'readByConsultant':'readByClient';
     const isRead=thread.some(c=>c[myReadField]);
-    const otherReadLabel=isPM?(flag.readByClient?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eyeglass" style="font-size:10px"></i> Seen by client</span>':''):(flag.readByPM?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eyeglass" style="font-size:10px"></i> Seen by PM</span>':'');
-    return `<div class="card" style="margin-bottom:1rem;${isRead?'opacity:0.6':''}">
-      <div class="card-header">
-        <div><div class="card-title">${flag.property}</div><div class="card-sub">${flag.flagType} concern · ${new Date(flag.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div>
-        <div style="display:flex;align-items:center;gap:8px">
+    // VDA team = PM or consultant has read
+    const seenByVDA=thread.some(c=>c.readByPM||c.readByConsultant);
+    const seenByClient=thread.some(c=>c.readByClient);
+    const otherReadLabel=(isClient?(seenByVDA?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eyeglass" style="font-size:10px"></i> Seen by VDA team</span>':''):(seenByClient?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eyeglass" style="font-size:10px"></i> Seen by client</span>':''));
+    // Collapsed by default if resolved or read
+    const collapseId='thread-body-'+threadId;
+    const defaultCollapsed=!isOpen||isRead;
+    const chevronRotate=defaultCollapsed?'rotate(-90deg)':'';
+    return `<div class="card" style="margin-bottom:1rem;${isRead&&!isOpen?'opacity:0.6':''}">
+      <div class="card-header" style="cursor:pointer" onclick="toggleThreadBody('${collapseId}','${threadId}-chev')">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+          <i class="ti ti-chevron-down" id="${threadId}-chev" style="font-size:13px;color:var(--gray-mid);transition:transform .2s;transform:${chevronRotate};flex-shrink:0"></i>
+          <div><div class="card-title">${flag.property}</div><div class="card-sub">${flag.flagType} concern · ${new Date(flag.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px" onclick="event.stopPropagation()">
           ${otherReadLabel}
           <span style="font-size:10px;color:var(--gray-mid)">${flag.visibility}</span>
           <span class="badge ${isOpen?'b-hold':'b-approved'}">${isOpen?'Open':'Resolved'}</span>
@@ -9592,16 +9645,27 @@ function renderCommentsView(){
           ${isOpen&&isPM?`<button class="btn" style="font-size:11px" onclick="resolveFlag('${threadId}')"><i class="ti ti-check"></i>Resolve</button>`:''}
         </div>
       </div>
+      <div id="${collapseId}" style="display:${defaultCollapsed?'none':'block'}">
       ${thread.map(c=>`<div class="comment-item">
-        <div class="comment-av ${c.authorRole==='client'?'c-av-client':'c-av-team'}">${c.authorRole==='client'?clientInitials:'PM'}</div>
+        <div class="comment-av ${c.authorRole==='client'?'c-av-client':'c-av-team'}">${c.authorRole==='client'?clientInitials:c.authorRole==='consultant'?consultantInitials:'PM'}</div>
         <div><div><span class="comment-author">${c.authorName}</span><span class="comment-time">${new Date(c.created).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span></div><div class="comment-text">${c.message}</div></div>
       </div>`).join('')}
       <div class="comment-input-row">
         <textarea class="comment-textarea" id="reply-input-${threadId}" placeholder="Add a reply..."></textarea>
         <button class="btn btn-primary" onclick="addReply('${threadId}')"><i class="ti ti-send"></i>Send</button>
       </div>
+      </div>
     </div>`;
   }).join('');
+}
+
+function toggleThreadBody(collapseId, chevId){
+  const body=document.getElementById(collapseId);
+  const chev=document.getElementById(chevId);
+  if(!body)return;
+  const isCollapsed=body.style.display==='none';
+  body.style.display=isCollapsed?'block':'none';
+  if(chev)chev.style.transform=isCollapsed?'':'rotate(-90deg)';
 }
 
 function addComment(){const input=document.getElementById('comment-input');if(input)input.value='';}
