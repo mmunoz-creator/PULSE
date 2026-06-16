@@ -1071,7 +1071,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v18p · elevatorpulse.com</div>
+    <div class="login-version">PULSE v19a · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1511,6 +1511,7 @@ window.PROPERTIES_SEED = [
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
+        <button class="nav-item" onclick="gotoView('my-updates',this)"><i class="ti ti-history"></i>My Updates</button>
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Operations</div>
@@ -1518,14 +1519,12 @@ window.PROPERTIES_SEED = [
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-consultant" class="nav-badge hidden" style="background:var(--red)">0</span></button>
         <button class="nav-item" onclick="gotoView('submit',this)"><i class="ti ti-upload"></i>Submit Update</button>
         <button class="nav-item" onclick="gotoView('notifications',this)"><i class="ti ti-bell"></i>Notifications<span id="notif-badge" class="nav-badge hidden">0</span></button>
-        <button class="nav-item" onclick="gotoView('my-updates',this)"><i class="ti ti-history"></i>My Updates</button>
         <button class="nav-item" onclick="gotoView('sitevisits',this)"><i class="ti ti-calendar-event"></i>Site Visits</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Intelligence</div>
         <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
-        <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Reports</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
       </div>
     </div>
@@ -6129,6 +6128,8 @@ async function saveCapitalPlanEntry(){
           existingM1.plannedDate=m1date;
           if(existingM1.id) await atUpdate('Milestones',existingM1.id,{'Planned Date':m1date});
         }
+        // Auto-populate M2–M18 (skips M1 if already exists)
+        await autoPopulateMilestones(name);
       }
     } else {
       const res=await atCreate('Properties',fields);
@@ -6148,6 +6149,8 @@ async function saveCapitalPlanEntry(){
             window.MILESTONES=(window.MILESTONES||[]).concat([{id:newMs.records[0].id,...newMs.records[0].fields,property:name,milestoneNumber:1,milestoneName:'Modernization Survey',plannedDate:m1date,status:'Not Started'}]);
           }
         }
+        // Auto-populate M2–M18 (skips M1 if already exists)
+        await autoPopulateMilestones(name);
       }
     }
   }
@@ -9589,10 +9592,17 @@ async function markThreadRead(threadId, isRead){
     }
   }
   updateClientCommentsBadge();
-  renderCommentsView();
+  // Preserve expanded state — don't collapse thread just because it was marked read
+  const expandedThreads=new Set();
+  document.querySelectorAll('[id^="thread-body-"]').forEach(el=>{
+    if(el.style.display!=='none') expandedThreads.add(el.id.replace('thread-body-',''));
+  });
+  // Always keep the thread we just acted on expanded
+  expandedThreads.add(threadId);
+  renderCommentsView(expandedThreads);
 }
 
-function renderCommentsView(){
+function renderCommentsView(expandedThreads){
   const isClient=role==='client';
   const isPM=role==='pm'||role==='admin';
   const flagArea=document.getElementById('comments-new-flag-area');
@@ -9627,9 +9637,9 @@ function renderCommentsView(){
     const seenByVDA=thread.some(c=>c.readByPM||c.readByConsultant);
     const seenByClient=thread.some(c=>c.readByClient);
     const otherReadLabel=(isClient?(seenByVDA?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eyeglass" style="font-size:10px"></i> Seen by VDA team</span>':''):(seenByClient?'<span style="font-size:10px;color:var(--green)"><i class="ti ti-eyeglass" style="font-size:10px"></i> Seen by client</span>':''));
-    // Collapsed by default if resolved or read
+    // Collapsed by default if resolved or read; but preserve explicitly expanded threads
     const collapseId='thread-body-'+threadId;
-    const defaultCollapsed=!isOpen||isRead;
+    const defaultCollapsed=expandedThreads?!expandedThreads.has(threadId):(!isOpen||isRead);
     const chevronRotate=defaultCollapsed?'rotate(-90deg)':'';
     return `<div class="card" style="margin-bottom:1rem;${isRead&&!isOpen?'opacity:0.6':''}">
       <div class="card-header" style="cursor:pointer" onclick="toggleThreadBody('${collapseId}','${threadId}-chev')">
