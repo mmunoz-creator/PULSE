@@ -925,6 +925,7 @@ async function loadAllData() {
       status: r.fields['Status']||'Not Started',
       plannedDate: r.fields['Planned Date']||'',
       actualDate: r.fields['Actual Date']||'',
+      completionDate: r.fields['Completion Date']||'',
       variance: r.fields['Variance']||null,
       notes: r.fields['Notes']||'',
     })); // newest first
@@ -1071,7 +1072,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v19c · elevatorpulse.com</div>
+    <div class="login-version">PULSE v19e · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2899,6 +2900,7 @@ function gotoView(viewId,btn){
   if(viewId==='glossary')renderGlossary();
   if(viewId==='schedule')renderGantt();
   if(viewId==='opscenter')renderOpsCenter();
+  if(viewId==='submit')populateSubmitDropdown();
 }
 
 function openProperty(name){
@@ -3178,7 +3180,7 @@ async function updateMilestone(msId,fields,propName){
   if(msId&&!demoMode){
     const cleanFields={};
     Object.entries(fields).forEach(([k,v])=>{
-      if((k==='Planned Date'||k==='Actual Date')&&(v===''||v===null)){
+      if((k==='Planned Date'||k==='Actual Date'||k==='Completion Date')&&(v===''||v===null)){
         cleanFields[k]=null;
       } else if(v!==''||k==='Status'||k==='Notes'){
         cleanFields[k]=v;
@@ -3193,6 +3195,7 @@ async function updateMilestone(msId,fields,propName){
     if(fields['Status'])ms.status=fields['Status'];
     if(fields['Planned Date']!==undefined)ms.plannedDate=fields['Planned Date']||'';
     if(fields['Actual Date']!==undefined)ms.actualDate=fields['Actual Date']||'';
+    if(fields['Completion Date']!==undefined)ms.completionDate=fields['Completion Date']||'';
     if(fields['Notes']!==undefined)ms.notes=fields['Notes'];
   }
   if(currentProp&&currentProp.n===propName){
@@ -3211,7 +3214,7 @@ async function deriveAndWritePropertyStatus(propName){
   const ms1=msData.find(m=>m.milestoneNumber===1||m.ms===0);
   const ms18=msData.find(m=>m.milestoneNumber===18||m.ms===17);
   let newStatus='Planned';
-  if(ms18&&(ms18.actualDate||ms18.actual))newStatus='Complete';
+  if(ms18&&(ms18.completionDate||ms18.actualDate||ms18.actual))newStatus='Complete';
   else if(ms1&&(ms1.actualDate||ms1.actual))newStatus='In Progress';
   // Update local portfolio
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===propName);
@@ -3296,7 +3299,7 @@ function renderMilestones(p){
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Completion</div>
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.completionDate||''}"
-              onchange="updateMilestoneField('${m.id}','Actual Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
+              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>
           <div style="min-width:100px;max-width:160px">
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Notes</div>
@@ -3314,8 +3317,8 @@ function renderMilestones(p){
 async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
   if(window._msRendering)return; // guard against onchange firing during render
   const fields={[fieldName]:value};
-  // Auto-derive status from completion date
-  if(fieldName==='Actual Date'){
+  // Auto-derive status from completion date (NOT actual start date)
+  if(fieldName==='Completion Date'){
     const derivedStatus=value?'Complete':'Not Started';
     fields['Status']=derivedStatus;
   }
@@ -3335,7 +3338,7 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
       if(icon){icon.className=`ti ${statusIcons[effectiveStatus]||'ti-circle'}`;}
     }
     // Also update the status dropdown in the UI if it exists
-    if(fieldName==='Actual Date'){
+    if(fieldName==='Completion Date'){
       const statusSel=document.querySelector(`[data-ms-status-id="${msId}"]`);
       if(statusSel)statusSel.value=effectiveStatus;
     }
@@ -7399,9 +7402,12 @@ function showEditCalEvent(type,id){
   const tzOptions=`<option value="America/New_York"${(record.tz||'America/New_York')==='America/New_York'?' selected':''}>Eastern (ET)</option><option value="America/Chicago"${record.tz==='America/Chicago'?' selected':''}>Central (CT)</option><option value="America/Denver"${record.tz==='America/Denver'?' selected':''}>Mountain (MT)</option><option value="America/Los_Angeles"${record.tz==='America/Los_Angeles'?' selected':''}>Pacific (PT)</option><option value="America/Anchorage"${record.tz==='America/Anchorage'?' selected':''}>Alaska (AKT)</option><option value="Pacific/Honolulu"${record.tz==='Pacific/Honolulu'?' selected':''}>Hawaii (HT)</option>`;
   const overlay=document.createElement('div');
   overlay.id='cal-edit-overlay';
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
-  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:440px;box-shadow:var(--shadow-md);padding:24px;margin:auto">
-    <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:16px">Edit ${isVisit?'Site Visit':'Meeting'}</div>
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:480px;box-shadow:var(--shadow-md);padding:24px;margin:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:15px;font-weight:600;color:var(--navy)"><i class="ti ti-calendar-event" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>Edit ${isVisit?'Site Visit':'Meeting'}</div>
+      <button onclick="document.getElementById('cal-edit-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
+    </div>
     <div class="form-group" style="margin-bottom:12px">
       <label class="form-label">Property</label>
       <select class="form-input" id="caledit-property">${options}</select>
@@ -7431,16 +7437,47 @@ function showEditCalEvent(type,id){
         ${['Progress Meeting','Kickoff Meeting','Design Review','Site Walkthrough','Client Update','Internal Review','Other'].map(t=>`<option${t===record.type?' selected':''}>${t}</option>`).join('')}
       </select>
     </div>
-    <div class="form-group" style="margin-bottom:16px">
-      <label class="form-label">Purpose</label>
-      <input class="form-input" type="text" id="caledit-purpose" value="${record.agenda||record.purpose||''}">
+    <div class="form-group" style="margin-bottom:6px">
+      <label class="form-label">Agenda Topics</label>
+      <div id="caledit-agenda-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
+      <button type="button" onclick="addCaleditAgendaTopic()" style="background:none;border:1px dashed var(--border);border-radius:6px;padding:5px 10px;font-size:12px;color:var(--indigo);cursor:pointer;width:100%;text-align:left"><i class="ti ti-plus" style="font-size:11px;margin-right:4px"></i>Add agenda topic</button>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:14px 0 12px;padding-top:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:10px"><i class="ti ti-users" style="font-size:12px;margin-right:4px;color:var(--indigo)"></i>Attendees <span style="font-weight:400;color:var(--gray-mid)">(optional)</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">VDA</label><input class="form-input" type="text" id="caledit-att-vda" value="${record.attVDA||''}" placeholder="Name"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Elevator Co.</label><input class="form-input" type="text" id="caledit-att-elev" value="${record.attElev||''}" placeholder="Name"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Client</label><input class="form-input" type="text" id="caledit-att-client" value="${record.attClient||''}" placeholder="Name"></div>
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:14px 0 12px;padding-top:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:10px"><i class="ti ti-mail" style="font-size:12px;margin-right:4px;color:var(--indigo)"></i>Notify Attendees <span style="font-weight:400;color:var(--gray-mid)">(optional)</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Consultant 1</label><input class="form-input" type="text" id="caledit-notify1" placeholder="Email"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Consultant 2</label><input class="form-input" type="text" id="caledit-notify2" placeholder="Email"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Client</label><input class="form-input" type="text" id="caledit-notify-client" placeholder="Email"></div>
+      </div>
     </div>`}
-    <div style="display:flex;gap:8px;justify-content:flex-end">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
       <button class="btn" onclick="document.getElementById('cal-edit-overlay').remove()">Cancel</button>
       <button class="btn btn-add" onclick="saveEditCalEvent('${type}','${id}')"><i class="ti ti-check"></i>Finish & Save</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
+  // Pre-populate agenda topics for meetings
+  if(!isVisit){
+    const existingTopics=(record.agenda||'').split('\n').filter(Boolean);
+    if(existingTopics.length>0){existingTopics.forEach(t=>addCaleditAgendaTopic(t));}
+    else{addCaleditAgendaTopic();}
+  }
+}
+function addCaleditAgendaTopic(val){
+  const list=document.getElementById('caledit-agenda-list');if(!list)return;
+  const rowId='caledit-topic-'+Date.now()+'-'+Math.random().toString(36).slice(2,6);
+  const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center';
+  row.innerHTML=`<input class="form-input" type="text" id="${rowId}" placeholder="Agenda topic" value="${(val||'').replace(/"/g,'&quot;')}" style="flex:1;font-size:13px">
+    <button type="button" onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px;padding:0 2px;line-height:1">&times;</button>`;
+  list.appendChild(row);
 }
 async function saveEditCalEvent(type,id){
   const isVisit=type==='visit';
@@ -7459,10 +7496,29 @@ async function saveEditCalEvent(type,id){
     }
   } else {
     record.type=document.getElementById('caledit-type')?.value||record.type;
-    record.agenda=document.getElementById('caledit-purpose')?.value||record.agenda;
+    record.attVDA=document.getElementById('caledit-att-vda')?.value.trim()||record.attVDA||'';
+    record.attElev=document.getElementById('caledit-att-elev')?.value.trim()||record.attElev||'';
+    record.attClient=document.getElementById('caledit-att-client')?.value.trim()||record.attClient||'';
+    const topics=[...document.querySelectorAll('#caledit-agenda-list input')].map(i=>i.value.trim()).filter(Boolean);
+    record.agenda=topics.join('\n')||record.agenda;
+    const notify1=document.getElementById('caledit-notify1')?.value.trim()||'';
+    const notify2=document.getElementById('caledit-notify2')?.value.trim()||'';
+    const notifyClient=document.getElementById('caledit-notify-client')?.value.trim()||'';
     if(!demoMode&&record.atId){
-      try{await atUpdate('Meetings',record.atId,{'Meeting Date':record.date,'Meeting Type':record.type,'Agenda':record.agenda});}
+      try{await atUpdate('Meetings',record.atId,{
+        'Property Name':record.property,
+        'Meeting Date':record.date,
+        'Meeting Type':record.type,
+        'Agenda':record.agenda,
+        'VDA Attendees':record.attVDA,
+        'Elevator Company Attendees':record.attElev,
+        'Client Attendees':record.attClient,
+      });}
       catch(e){console.error('Meeting update error:',e);}
+    }
+    // Re-send notifications if any notify fields filled
+    if(notify1||notify2||notifyClient){
+      await sendCalendarMeetingNotifications({propName:record.property,date:record.date,time:record.time||'',tz:record.tz||'America/New_York',type:record.type,purpose:record.agenda,notes:'',notify1,notify2,notifyClient,loggedBy:record.loggedBy||''});
     }
   }
   document.getElementById('cal-edit-overlay')?.remove();
@@ -9450,6 +9506,18 @@ function updateQueueBadge(){
   const nc=notifications.length;const nb=document.getElementById('notif-badge');if(nb){nb.textContent=nc;nb.classList.toggle('hidden',nc===0);}
   updateClientCommentsBadge();
 }
+function populateSubmitDropdown(){
+  const sel=document.getElementById('f-property');
+  if(!sel)return;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  // Consultants only see their assigned properties; PM/Admin see all
+  const filtered=role==='consultant'
+    ? port.filter(p=>(p.v||'').trim().toLowerCase()===(userName||'').trim().toLowerCase())
+    : port;
+  const current=sel.value;
+  sel.innerHTML='<option value="">Select a property...</option>'+
+    filtered.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===current?' selected':''}>${p.n}</option>`).join('');
+}
 async function submitUpdate(){
   const property=document.getElementById('f-property').value;if(!property){alert('Please select a property.');return;}
   const notes=document.getElementById('f-notes').value.trim();if(!notes){alert('Please add weekly notes.');return;}
@@ -10304,7 +10372,15 @@ function renderOpsCenter(){
   const today=new Date();today.setHours(0,0,0,0);
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const allActions=actionItems||(window.ACTION_ITEMS||[]);
-  const openActions=allActions.filter(a=>a.status==='Open'||a.status==='open');
+
+  // Consultant filtering — only show items for assigned properties
+  const isConsultant=role==='consultant';
+  const consultantProps=isConsultant
+    ? new Set(port.filter(p=>(p.v||'').trim().toLowerCase()===(userName||'').trim().toLowerCase()).map(p=>p.n))
+    : null;
+  const propFilter=prop=>!isConsultant||consultantProps.has(prop);
+
+  const openActions=allActions.filter(a=>(a.status==='Open'||a.status==='open')&&propFilter(a.property));
 
   // Bucket actions by horizon
   const d30=new Date(today);d30.setDate(d30.getDate()+30);
@@ -10316,11 +10392,11 @@ function renderOpsCenter(){
   openActions.forEach(a=>{
     if(a.due&&a.due!=='TBD') horizonItems.push({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${a.property||'—'} · ${a.owner||'—'} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority});
   });
-  (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date).forEach(m=>{
+  (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)).forEach(m=>{
     const d=new Date(m.date+'T12:00:00');
-    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:(m.type?m.type+' — ':'')+m.property,_sub:`${m.property||'—'} · ${m.date}${m.attClient?' · '+m.attClient:''}`,_prop:m.property||'',_priority:''});
+    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${m.property||'—'} · ${m.date}${m.attClient?' · '+m.attClient:''}`,_prop:m.property||'',_priority:''});
   });
-  (siteVisits||[]).filter(v=>v.date).forEach(v=>{
+  (siteVisits||[]).filter(v=>v.date&&propFilter(v.property)).forEach(v=>{
     const d=new Date(v.date+'T12:00:00');
     if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${v.property||'—'} · ${v.date}${v.consultant?' · '+v.consultant:''}`,_prop:v.property||'',_priority:''});
   });
@@ -10367,15 +10443,15 @@ function renderOpsCenter(){
   }
 
     // Recently added/removed
-  const recentAdded=[...port].filter(p=>p.dateAdded&&!p.dateRemoved&&p.st!=='Removed').sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,4);
-  const recentRemoved=[...port].filter(p=>p.dateRemoved||p.st==='Removed').sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,4);
+  const recentAdded=[...port].filter(p=>p.dateAdded&&!p.dateRemoved&&p.st!=='Removed'&&propFilter(p.n)).sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,4);
+  const recentRemoved=[...port].filter(p=>(p.dateRemoved||p.st==='Removed')&&propFilter(p.n)).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,4);
   const fmtShort=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
 
   // Recent field updates
-  const recentUpdates=(submissions||[]).filter(s=>s.reviewStatus==='approved').slice().reverse().slice(0,4);
+  const recentUpdates=(submissions||[]).filter(s=>s.reviewStatus==='approved'&&propFilter(s.property)).slice().reverse().slice(0,4);
 
   // Recent meetings
-  const recentMeetings=(meetings||[]).slice().reverse().slice(0,4);
+  const recentMeetings=(meetings||[]).filter(m=>propFilter(m.property)).slice().reverse().slice(0,4);
 
   container.innerHTML=`
     <!-- ACTION PLAN -->
@@ -10433,7 +10509,7 @@ function renderOpsCenter(){
           ?'<div style="font-size:12px;color:var(--gray-mid)">No meetings logged yet.</div>'
           :recentMeetings.map(m=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
             <div class="action-dot" style="background:var(--blue-dark)"></div>
-            <div class="action-desc" style="flex:1"><strong>${m.type}: ${m.property}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+m.elevco:''}</span></div>
+            <div class="action-desc" style="flex:1"><strong>${(m.type||'Meeting')}: ${m.property}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+m.elevco:''}</span></div>
             <i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px;flex-shrink:0"></i>
           </div>`).join('')
         }
