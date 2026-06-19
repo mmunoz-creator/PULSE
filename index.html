@@ -800,6 +800,13 @@ async function loadAllData() {
         budgetStatus: r.fields['Budget Status']||'TBD',
         dateAdded: r.fields['Date Added']||'',
         dateRemoved: r.fields['Date Removed']||'',
+        // Build 4a — Contract Rates. CO Material Markup % / CO O&P Markup % are
+        // Airtable Percent fields: stored as decimal (0.10 = 10%). Multiply by
+        // 100 here so the UI always works in whole-number percent display.
+        coRateST: r.fields['CO Rate - ST']!=null?Number(r.fields['CO Rate - ST']):null,
+        coRateOT: r.fields['CO Rate - OT']!=null?Number(r.fields['CO Rate - OT']):null,
+        coMaterialMarkup: r.fields['CO Material Markup %']!=null?Number(r.fields['CO Material Markup %'])*100:null,
+        coOPMarkup: r.fields['CO O&P Markup %']!=null?Number(r.fields['CO O&P Markup %'])*100:null,
         ms: [], // milestones now from MILESTONES table
       })).filter(p=>p.n).sort((a,b)=>a.n.localeCompare(b.n));
       window.PORTFOLIO = livePortfolio;
@@ -1097,7 +1104,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v20c · elevatorpulse.com</div>
+    <div class="login-version">PULSE v20e · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1319,6 +1326,15 @@ window.PROPERTIES_SEED = [
     <button onclick="closeCOModal()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--gray-mid);line-height:1">×</button>
   </div>
   <input type="hidden" id="co-edit-id">
+  <div id="co-contract-rates-ref" style="display:none;background:var(--gray-xpale);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11px">
+    <div style="font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;font-size:9px;margin-bottom:6px">Contract Rates (reference only — not validated against entries below)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;color:var(--gray-dark)">
+      <div>ST Rate: <strong id="co-ref-rate-st">—</strong></div>
+      <div>OT Rate: <strong id="co-ref-rate-ot">—</strong></div>
+      <div>Material Markup: <strong id="co-ref-material-markup">—</strong></div>
+      <div>O&amp;P Markup: <strong id="co-ref-op-markup">—</strong></div>
+    </div>
+  </div>
   <div class="form-group">
     <label class="form-label">Change Order Description</label>
     <textarea class="form-input" id="co-desc" rows="3" placeholder="Describe the scope change…" style="resize:vertical"></textarea>
@@ -1331,6 +1347,24 @@ window.PROPERTIES_SEED = [
     <div class="form-group">
       <label class="form-label">Negotiated Amount</label>
       <input class="form-input" type="text" inputmode="numeric" id="co-negotiated" placeholder="e.g. 30,000">
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="form-group">
+      <label class="form-label">ST Hours</label>
+      <input class="form-input" type="number" id="co-st-hours" placeholder="0" min="0" step="0.5">
+    </div>
+    <div class="form-group">
+      <label class="form-label">OT Hours</label>
+      <input class="form-input" type="number" id="co-ot-hours" placeholder="0" min="0" step="0.5">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Material Cost</label>
+      <input class="form-input" type="text" inputmode="numeric" id="co-material-cost" placeholder="e.g. 5,000">
+    </div>
+    <div class="form-group">
+      <label class="form-label">O&amp;P Claimed</label>
+      <input class="form-input" type="text" inputmode="numeric" id="co-op-claimed" placeholder="e.g. 1,200">
     </div>
   </div>
   <div class="form-group" id="co-savings-preview" style="display:none">
@@ -1463,6 +1497,11 @@ window.PROPERTIES_SEED = [
       <div class="form-group"><label class="form-label">Escalator Count</label><input class="form-input" type="number" id="ep-escalators" placeholder="0" min="0"></div>
       <div class="form-group"><label class="form-label">Wheelchair Lift Count</label><input class="form-input" type="number" id="ep-lifts" placeholder="0" min="0"></div>
       <div class="form-group"><label class="form-label">Other Count</label><input class="form-input" type="number" id="ep-other" placeholder="0" min="0"></div>
+      <div class="form-group" style="grid-column:1/-1;margin-top:8px;padding-top:12px;border-top:1px solid var(--border)"><div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Contract Rates <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">— used for Change Order reference (Section 10: reference only, not validation)</span></div></div>
+      <div class="form-group"><label class="form-label">ST Rate ($/hr)</label><input class="form-input" type="number" id="ep-co-rate-st" placeholder="e.g. 85" min="0" step="0.01"></div>
+      <div class="form-group"><label class="form-label">OT Rate ($/hr)</label><input class="form-input" type="number" id="ep-co-rate-ot" placeholder="e.g. 127.50" min="0" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Material Markup (%)</label><input class="form-input" type="number" id="ep-co-material-markup" placeholder="e.g. 15" min="0" max="100" step="0.1"></div>
+      <div class="form-group"><label class="form-label">O&amp;P Markup (%)</label><input class="form-input" type="number" id="ep-co-op-markup" placeholder="e.g. 10" min="0" max="100" step="0.1"></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Comments / Status Notes</label><textarea class="form-textarea" id="ep-notes" placeholder="Any notes about this property..." rows="3"></textarea></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
@@ -2568,7 +2607,7 @@ function enterDemo(){
   renderDashboard();renderAllMeetings();populatePanelPropertyList();
   if(role==='pm')gotoView('dashboard',null);
   else gotoView('dashboard',null);
-  setFirstNavActive();updateQueueBadge();
+  setFirstNavActive('dashboard');updateQueueBadge();
   document.getElementById('dash-sub').textContent='Demo Retail Portfolio · Elevator Modernization Program';
   showToast('Demo mode — fictional data only','info');
   // Update chatbot for demo
@@ -2846,7 +2885,7 @@ async function _finishLogin(){
   renderDashboard(); // will show loading state if no data
   if(role==='consultant')gotoView('submit',null);
   else gotoView('dashboard',null);
-  setFirstNavActive();updateQueueBadge();refreshDashActions();
+  setFirstNavActive(role==='consultant'?'submit':'dashboard');updateQueueBadge();refreshDashActions();
   document.getElementById('login-screen').style.display='none';
   pushHistoryState();
   if(client==='park') {
@@ -2895,7 +2934,16 @@ function doLogout(){
   document.getElementById('portal-screen').classList.remove('active');
   document.getElementById('login-screen').style.display='flex';
 }
-function setFirstNavActive(){const nb=document.querySelector('#nav-'+role+' .nav-item');if(nb)nb.classList.add('active');}
+function setFirstNavActive(viewId){
+  const container=document.querySelector('#nav-'+role);
+  if(!container)return;
+  const items=container.querySelectorAll('.nav-item');
+  let matched=null;
+  if(viewId){
+    matched=Array.from(items).find(btn=>(btn.getAttribute('onclick')||'').includes(`gotoView('${viewId}'`));
+  }
+  (matched||items[0])?.classList.add('active');
+}
 
 function setupPortal(){
   const cn=CLIENTS[client]||'Park Hotels & Resorts';const short=cn.split(' ').slice(0,2).join(' ');
@@ -4519,6 +4567,15 @@ function renderChangeOrdersTab(p){
           <div style="font-size:13px;font-weight:700;color:${co.savings>0?'var(--green)':'var(--gray-mid)'}">${co.savings>0?fmtCurrency(co.savings):'—'}</div>
         </div>
       </div>
+      ${(co.stHours!=null||co.otHours!=null||co.materialCost!=null||co.opClaimed!=null)?`<div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px;margin-bottom:8px">
+        <div style="font-size:9px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Line Items <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">— reference only, not validated against Contract Rates</span></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;font-size:11px;color:var(--gray-dark)">
+          <div>ST Hours: <strong>${co.stHours!=null?co.stHours:'—'}</strong>${p.coRateST!=null&&co.stHours!=null?` <span style="color:var(--gray-mid)">(${fmtCurrency(p.coRateST)}/hr)</span>`:''}</div>
+          <div>OT Hours: <strong>${co.otHours!=null?co.otHours:'—'}</strong>${p.coRateOT!=null&&co.otHours!=null?` <span style="color:var(--gray-mid)">(${fmtCurrency(p.coRateOT)}/hr)</span>`:''}</div>
+          <div>Material Cost: <strong>${co.materialCost!=null?fmtCurrency(co.materialCost):'—'}</strong>${p.coMaterialMarkup!=null?` <span style="color:var(--gray-mid)">(${p.coMaterialMarkup}% markup)</span>`:''}</div>
+          <div>O&amp;P Claimed: <strong>${co.opClaimed!=null?fmtCurrency(co.opClaimed):'—'}</strong>${p.coOPMarkup!=null?` <span style="color:var(--gray-mid)">(${p.coOPMarkup}% markup)</span>`:''}</div>
+        </div>
+      </div>`:''}
       ${co.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${co.notes}</div>`:''}
       ${canEdit?`<div style="display:flex;gap:6px;flex-wrap:wrap">
         ${!isLocked?`<button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editCO('${co.id}')">Edit</button>`:''}
@@ -4536,6 +4593,8 @@ function renderChangeOrdersTab(p){
 function openCOModal(editId){
   initCurrencyInput('co-original');
   initCurrencyInput('co-negotiated');
+  initCurrencyInput('co-material-cost');
+  initCurrencyInput('co-op-claimed');
   const today=new Date().toISOString().split('T')[0];
   if(!editId){
     document.getElementById('co-modal-title').textContent='Log Change Order';
@@ -4547,7 +4606,24 @@ function openCOModal(editId){
     document.getElementById('co-date').value=today;
     document.getElementById('co-notes').value='';
     document.getElementById('co-ec').value=currentProp?.ec||'';
+    document.getElementById('co-st-hours').value='';
+    document.getElementById('co-ot-hours').value='';
+    document.getElementById('co-material-cost').value='';
+    document.getElementById('co-op-claimed').value='';
     document.getElementById('co-savings-preview').style.display='none';
+  }
+  // Build 4a — Contract Rates reference block. Reference only, never used to
+  // validate/flag the entries above (Section 10: Reference vs. Validation).
+  const refBlock=document.getElementById('co-contract-rates-ref');
+  const p=currentProp;
+  if(p&&(p.coRateST!=null||p.coRateOT!=null||p.coMaterialMarkup!=null||p.coOPMarkup!=null)){
+    document.getElementById('co-ref-rate-st').textContent=p.coRateST!=null?fmtCurrency(p.coRateST)+'/hr':'—';
+    document.getElementById('co-ref-rate-ot').textContent=p.coRateOT!=null?fmtCurrency(p.coRateOT)+'/hr':'—';
+    document.getElementById('co-ref-material-markup').textContent=p.coMaterialMarkup!=null?p.coMaterialMarkup+'%':'—';
+    document.getElementById('co-ref-op-markup').textContent=p.coOPMarkup!=null?p.coOPMarkup+'%':'—';
+    refBlock.style.display='block';
+  }else{
+    refBlock.style.display='none';
   }
   document.getElementById('co-modal-overlay').style.display='block';
   document.getElementById('co-modal').style.display='block';
@@ -4589,6 +4665,10 @@ function editCO(coId){
   document.getElementById('co-date').value=co.date||'';
   document.getElementById('co-notes').value=co.notes||'';
   document.getElementById('co-ec').value=co.ec||'';
+  document.getElementById('co-st-hours').value=co.stHours!=null?co.stHours:'';
+  document.getElementById('co-ot-hours').value=co.otHours!=null?co.otHours:'';
+  document.getElementById('co-material-cost').value=co.materialCost!=null?co.materialCost:'';
+  document.getElementById('co-op-claimed').value=co.opClaimed!=null?co.opClaimed:'';
   openCOModal(coId);
   updateCOSavingsPreview();
 }
@@ -4602,6 +4682,14 @@ async function saveCO(){
   const notes=document.getElementById('co-notes').value.trim();
   const ec=document.getElementById('co-ec').value.trim();
   const editId=document.getElementById('co-edit-id').value;
+  // Build 4a — additive line item fields. All optional; omit from the
+  // Airtable payload entirely when blank (never send empty string/NaN).
+  const stHoursRaw=document.getElementById('co-st-hours').value;
+  const otHoursRaw=document.getElementById('co-ot-hours').value;
+  const stHours=stHoursRaw!==''?parseFloat(stHoursRaw):null;
+  const otHours=otHoursRaw!==''?parseFloat(otHoursRaw):null;
+  const materialCost=getCurrencyValue('co-material-cost')||null;
+  const opClaimed=getCurrencyValue('co-op-claimed')||null;
   if(!desc){showToast('Please enter a change order description','warn');return;}
   if(!orig){showToast('Please enter the original CO amount','warn');return;}
   const savings=orig-neg;
@@ -4610,9 +4698,9 @@ async function saveCO(){
   if(demoMode){
     if(editId){
       const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy});}
+      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed});}
     }else{
-      const newCO={id:'co_'+Date.now(),property:propName,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy};
+      const newCO={id:'co_'+Date.now(),property:propName,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed};
       window.CO_SAVINGS.push(newCO);
       if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
     }
@@ -4629,14 +4717,18 @@ async function saveCO(){
       'Notes':notes||undefined,
     };
     if(date)fields['Date']=date;
+    if(stHours!=null&&!isNaN(stHours))fields['ST Hours']=stHours;
+    if(otHours!=null&&!isNaN(otHours))fields['OT Hours']=otHours;
+    if(materialCost!=null&&!isNaN(materialCost))fields['Material Cost']=materialCost;
+    if(opClaimed!=null&&!isNaN(opClaimed))fields['O&P Claimed']=opClaimed;
     try{
       if(editId){
         await atUpdate('Change Order Savings Log',editId,fields);
         const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy});
+        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed});
       }else{
         const rec=await atCreate('Change Order Savings Log',fields);
-        const newCO={id:rec.id,property:propName,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy};
+        const newCO={id:rec.id,property:propName,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed};
         if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
         window.CO_SAVINGS.push(newCO);
         if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
@@ -4651,6 +4743,10 @@ async function saveCO(){
           savings:parseFloat(r.fields['Savings Captured'])||0,status:r.fields['Status']||'Pending',
           ec:r.fields['Elevator Company']||'',loggedBy:r.fields['Logged By']||'',
           date:r.fields['Date']||'',notes:r.fields['Notes']||'',
+          stHours:r.fields['ST Hours']!=null?Number(r.fields['ST Hours']):null,
+          otHours:r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
+          materialCost:r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
+          opClaimed:r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
         })).sort((a,b)=>new Date(b.date)-new Date(a.date));
       }
     }catch(e){showToast('Error saving change order','error');return;}
@@ -9340,6 +9436,10 @@ function openEditPropertyPanel(){
   document.getElementById('ep-escalators').value=p.escalatorCount||'';
   document.getElementById('ep-lifts').value=p.liftCount||'';
   document.getElementById('ep-other').value=p.otherCount||'';
+  document.getElementById('ep-co-rate-st').value=p.coRateST!=null?p.coRateST:'';
+  document.getElementById('ep-co-rate-ot').value=p.coRateOT!=null?p.coRateOT:'';
+  document.getElementById('ep-co-material-markup').value=p.coMaterialMarkup!=null?p.coMaterialMarkup:'';
+  document.getElementById('ep-co-op-markup').value=p.coOPMarkup!=null?p.coOPMarkup:'';
   document.getElementById('ep-notes').value=p.comment||'';
   overlay.style.display='block';
   panel.style.display='block';
@@ -9461,6 +9561,18 @@ async function saveEditProperty(){
   if(!isNaN(lifts))fields['Wheelchair Lift Count']=lifts;
   const other=parseInt(document.getElementById('ep-other').value);
   if(!isNaN(other))fields['Other Count']=other;
+  // Build 4a — Contract Rates. Material/O&P markup are Airtable Percent
+  // fields (decimal storage: 10% = 0.10) — convert from the whole-number
+  // percent shown in the UI before sending. Omit fields entirely if blank,
+  // never send empty string (Airtable landmine — Section 2).
+  const coRateST=parseFloat(document.getElementById('ep-co-rate-st').value);
+  if(!isNaN(coRateST))fields['CO Rate - ST']=coRateST;
+  const coRateOT=parseFloat(document.getElementById('ep-co-rate-ot').value);
+  if(!isNaN(coRateOT))fields['CO Rate - OT']=coRateOT;
+  const coMaterialMarkup=parseFloat(document.getElementById('ep-co-material-markup').value);
+  if(!isNaN(coMaterialMarkup))fields['CO Material Markup %']=coMaterialMarkup/100;
+  const coOPMarkup=parseFloat(document.getElementById('ep-co-op-markup').value);
+  if(!isNaN(coOPMarkup))fields['CO O&P Markup %']=coOPMarkup/100;
   // Update local prop object
   p.n=name;p.addr=fields['Address'];p.s=fields['State'];
   if(fields['Asset Type'])p.type=fields['Asset Type'];
@@ -9473,6 +9585,10 @@ async function saveEditProperty(){
   if(!isNaN(escalators))p.escalatorCount=escalators;
   if(!isNaN(lifts))p.liftCount=lifts;
   if(!isNaN(other))p.otherCount=other;
+  if(!isNaN(coRateST))p.coRateST=coRateST;
+  if(!isNaN(coRateOT))p.coRateOT=coRateOT;
+  if(!isNaN(coMaterialMarkup))p.coMaterialMarkup=coMaterialMarkup;
+  if(!isNaN(coOPMarkup))p.coOPMarkup=coOPMarkup;
   // Write to Airtable
   if(p.id){
     try{await atUpdate('Properties',p.id,fields);showToast('Property updated','success');}
@@ -9802,6 +9918,7 @@ function previewQueueItem(subId){
 
 async function approveSubmission(id){
   const s=submissions.find(s=>s.id===id);if(!s)return;
+  if(s.reviewStatus==='approved')return; // already approved — prevent duplicate Documents records (v20d fix)
   s.reviewStatus='approved';
   s.approvedAt=new Date().toISOString();
   const today=new Date().toISOString().split('T')[0];
