@@ -991,6 +991,30 @@ function showToast(msg, type='info') {
   t.textContent=msg;document.body.appendChild(t);
   setTimeout(()=>t.remove(),4000);
 }
+
+// ── BACK-BUTTON SESSION GUARD ──────────────────────────────────────────
+// PULSE has no view-level routing — login and portal are sibling divs
+// toggled by display state, invisible to browser history by default.
+// Without this, hitting the browser back button exits the page entirely
+// and a fresh load always shows the login screen, silently destroying
+// the active session. This guard does NOT add in-app back/forward
+// navigation between views — it only prevents back from ending the
+// session. pushHistoryState() is called once, right after a successful
+// login, so there's a history entry for popstate to fire against.
+function pushHistoryState(){
+  try{ history.pushState({pulseSession:true}, '', location.href); }
+  catch(e){ /* ignore — not fatal if history API is unavailable */ }
+}
+window.addEventListener('popstate', function(e){
+  const portalActive=document.getElementById('portal-screen')?.classList.contains('active');
+  if(portalActive){
+    // Re-push state so the next back press doesn't fall through to a real
+    // navigation, and keep the portal visible instead of showing login.
+    pushHistoryState();
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('portal-screen').classList.add('active');
+  }
+});
 </script>
 <script>
 window.PROPERTIES_SEED = [
@@ -1072,7 +1096,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v19i · elevatorpulse.com</div>
+    <div class="login-version">PULSE v20a · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1100,7 +1124,7 @@ window.PROPERTIES_SEED = [
         <div class="login-right-card">
           <div class="login-right-card-icon"><i class="ti ti-flag" style="color:#85B7EB;font-size:17px"></i></div>
           <div class="login-right-card-title">Milestone Tracking</div>
-          <div class="login-right-card-desc">18-point modernization schedule with planned vs. actual variance</div>
+          <div class="login-right-card-desc">14-point modernization schedule with planned vs. actual variance</div>
         </div>
         <div class="login-right-card">
           <div class="login-right-card-icon"><i class="ti ti-upload" style="color:#85B7EB;font-size:17px"></i></div>
@@ -1779,7 +1803,7 @@ window.PROPERTIES_SEED = [
                     <option>Wheelchair Lift</option>
                   </select>
                 </div>
-                <div class="form-group"><label class="form-label">Units in Phase</label><input class="form-input" type="number" id="phase-units-input" placeholder="e.g. 2" min="1"></div>
+                <div class="form-group"><label class="form-label"># Units in Phase</label><input class="form-input" type="number" id="phase-units-input" placeholder="e.g. 2" min="1"></div>
               </div>
               <div class="two-col" style="gap:12px">
                 <div class="form-group"><label class="form-label">Unit Names <span style="font-size:10px;color:var(--gray-mid)">(must be concurrent)</span></label><input class="form-input" type="text" id="phase-unit-names" placeholder="e.g. PE1, PE2"></div>
@@ -1825,7 +1849,7 @@ window.PROPERTIES_SEED = [
               </div>
               <div class="two-col" style="gap:12px">
                 <div class="form-group"><label class="form-label">Unit Names</label><input class="form-input" type="text" id="edit-phase-unit-names" placeholder="e.g. PE1, PE2"></div>
-                <div class="form-group"><label class="form-label">Units in Phase</label><input class="form-input" type="number" id="edit-phase-units" min="1"></div>
+                <div class="form-group"><label class="form-label"># Units in Phase</label><input class="form-input" type="number" id="edit-phase-units" min="1"></div>
               </div>
               <div class="two-col" style="gap:12px">
                 <div class="form-group"><label class="form-label">Planned Start</label><input class="form-input" type="date" id="edit-phase-planned-start"></div>
@@ -2426,6 +2450,7 @@ function enterDemo(){
   client='demo';
   document.getElementById('demo-screen').style.display='none';
   document.getElementById('portal-screen').classList.add('active');
+  pushHistoryState();
   // Override PORTFOLIO with demo data — map statuses to PULSE schema
   window.PORTFOLIO=[...DEMO_PORTFOLIO.map(p=>({
     ...p,
@@ -2827,6 +2852,7 @@ async function _finishLogin(){
   else gotoView('dashboard',null);
   setFirstNavActive();updateQueueBadge();refreshDashActions();
   document.getElementById('login-screen').style.display='none';
+  pushHistoryState();
   if(client==='park') {
     loadAllData().then(() => {
       if(AT_CONNECTED) {
@@ -3161,6 +3187,72 @@ function deriveMilestoneStatus(propName,milestoneNumber,plannedDate,actualDate,c
   }
 }
 
+// Returns {actualStart, completionDate} for phase-linked milestones (M5-M12) by
+// routing through the same MILESTONE_DERIVATION rule used for status — but
+// returning the underlying task date(s) instead of a status string, so the UI
+// can show read-only Actual Start / Completion fields rather than just a note.
+// Calendar milestones (M1-M4, M13-M14) don't use this — they have their own
+// editable date fields already.
+function getDerivedDatesForMilestone(propName,milestoneNumber){
+  const rule=MILESTONE_DERIVATION[milestoneNumber];
+  if(!rule)return{actualStart:'',completionDate:''};
+  switch(rule.type){
+    case 'phase-task':{
+      const phases=getOrderedPhases(propName);
+      const targetPhase=phases[rule.phase-1];
+      if(!targetPhase)return{actualStart:'',completionDate:''};
+      const phaseName=targetPhase.phase||targetPhase.phaseName;
+      const tasks=getPhaseTasksForProp(propName).filter(t=>(t.phaseName===phaseName)&&t.checked!==false);
+      const task=tasks.find(t=>t.taskOrder===rule.taskOrder);
+      return{actualStart:task?.actualStart||'',completionDate:task?.completionDate||''};
+    }
+    case 'phase-pct':{
+      // No single task maps to a % threshold. actualStart = earliest actualStart
+      // across all phase tasks (construction has begun); completionDate only
+      // populates once the threshold is fully met, using the latest completionDate
+      // among tasks that are complete at that point.
+      const allTasks=getPhaseTasksForProp(propName).filter(t=>t.checked!==false);
+      if(allTasks.length===0)return{actualStart:'',completionDate:''};
+      const startedTasks=allTasks.filter(t=>t.actualStart);
+      const earliestStart=startedTasks.length>0
+        ?startedTasks.map(t=>t.actualStart).sort()[0]
+        :'';
+      const status=derivePhasePctStatus(propName,rule.pct);
+      if(status!=='Complete')return{actualStart:earliestStart,completionDate:''};
+      const completedTasks=allTasks.filter(t=>t.completionDate);
+      const latestCompletion=completedTasks.length>0
+        ?completedTasks.map(t=>t.completionDate).sort().slice(-1)[0]
+        :'';
+      return{actualStart:earliestStart,completionDate:latestCompletion};
+    }
+    case 'phase-last':{
+      const phases=getOrderedPhases(propName);
+      if(phases.length===0)return{actualStart:'',completionDate:''};
+      const lastPhase=phases[phases.length-1];
+      const phaseName=lastPhase.phase||lastPhase.phaseName;
+      const tasks=getPhaseTasksForProp(propName).filter(t=>(t.phaseName===phaseName)&&t.checked!==false).sort((a,b)=>(a.taskOrder||0)-(b.taskOrder||0));
+      if(tasks.length===0)return{actualStart:'',completionDate:''};
+      const lastTask=tasks[tasks.length-1];
+      return{actualStart:lastTask.actualStart||'',completionDate:lastTask.completionDate||''};
+    }
+    case 'phase-rollup':{
+      const pattern=rule.taskType==='punchlist'?/punch\s*list/i:/inspection/i;
+      const matchingTasks=getPhaseTasksForProp(propName).filter(t=>t.checked!==false&&pattern.test(t.taskName||''));
+      if(matchingTasks.length===0)return{actualStart:'',completionDate:''};
+      const startedTasks=matchingTasks.filter(t=>t.actualStart);
+      const earliestStart=startedTasks.length>0
+        ?startedTasks.map(t=>t.actualStart).sort()[0]
+        :'';
+      const allComplete=matchingTasks.every(t=>!!t.completionDate);
+      if(!allComplete)return{actualStart:earliestStart,completionDate:''};
+      const latestCompletion=matchingTasks.map(t=>t.completionDate).sort().slice(-1)[0]||'';
+      return{actualStart:earliestStart,completionDate:latestCompletion};
+    }
+    default:
+      return{actualStart:'',completionDate:''};
+  }
+}
+
 // Re-derive and write status for all milestones of a property.
 // Call this whenever Phase Tasks change, or on milestone render, to keep
 // phase-linked milestones accurate without requiring manual field edits.
@@ -3427,6 +3519,7 @@ function renderMilestones(p){
 
     const rule=MILESTONE_DERIVATION[m.milestoneNumber]||{type:'calendar'};
     const isCalendar=rule.type==='calendar';
+    const derivedDates=isCalendar?null:getDerivedDatesForMilestone(p.n,m.milestoneNumber);
     const statusBadge=`<span style="display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;background:${circleColor};color:${textColor};text-transform:uppercase;letter-spacing:.03em">${m.status}</span>`;
 
     return `<div class="milestone-row" id="ms-row-${m.id||idx}">
@@ -3457,7 +3550,19 @@ function renderMilestones(p){
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.completionDate||''}"
               onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>`:canEdit?`
-          <div style="font-size:11px;color:var(--gray-mid);font-style:italic;padding:3px 0">Derived from Phase Tasks — view in Unit Phases tab</div>`:''}
+          <div>
+            <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.plannedDate||''}"
+              onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Actual Start</div>
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${derivedDates.actualStart||''}" readonly title="Derived from Phase Tasks — view in Unit Phases tab">
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Completion</div>
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${derivedDates.completionDate||''}" readonly title="Derived from Phase Tasks — view in Unit Phases tab">
+          </div>`:''}
           ${canEdit?`
           <div style="min-width:100px;max-width:160px">
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Notes</div>
@@ -3471,6 +3576,7 @@ function renderMilestones(p){
   }).join('');
   requestAnimationFrame(()=>{window._msRendering=false;});
 }
+
 
 async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
   if(window._msRendering)return; // guard against onchange firing during render
@@ -4875,7 +4981,7 @@ function renderBudgetTab(p){
     `<table class="data-table" style="margin-top:0;table-layout:fixed;width:100%">
       <thead><tr>
         <th style="width:12%">Date</th>
-        <th style="width:18%">Current Through</th>
+        <th style="width:18%;white-space:normal;line-height:1.3">Current<br>Through</th>
         <th style="width:18%">Billed YTD</th>
         <th style="width:10%">%</th>
         <th style="width:20%">Notes</th>
@@ -5390,7 +5496,7 @@ async function saveNewPhase(){
   if(!currentProp)return;
   const phaseNum=document.getElementById('phase-number-input')?.value.trim()||'';
   const phaseDesc=document.getElementById('phase-description-input')?.value.trim()||'';
-  const name=phaseDesc?`${phaseNum} — ${phaseDesc}`:phaseNum;
+  const name=phaseDesc?`${phaseNum}: ${phaseDesc}`:phaseNum;
   const productType=document.getElementById('phase-product-type').value;
   const unitNames=document.getElementById('phase-unit-names').value.trim();
   const units=parseInt(document.getElementById('phase-units-input').value)||0;
@@ -5548,6 +5654,7 @@ async function saveEditPhase(){
   const notes=document.getElementById('edit-phase-notes').value.trim();
   const selectedSteps=[...document.querySelectorAll('.edit-phase-step-check:checked')].map(c=>c.value);
   if(!name){showToast('Phase name required','warn');return;}
+  const oldPhaseName=ph.phase;
   // Mutate in place by index to ensure UNIT_GROUPS array is updated
   // Remove unchecked tasks from PHASE_STEPS locally
   const allTasksForPhase=(window.PHASE_STEPS||[]).filter(s=>s.property===ph.property&&s.phaseName===ph.phase);
@@ -5556,6 +5663,17 @@ async function saveEditPhase(){
     const idx2=window.PHASE_STEPS.indexOf(s);
     if(idx2>=0)window.PHASE_STEPS.splice(idx2,1);
   });
+  // Propagate rename to surviving Phase Tasks records — without this, editing a
+  // phase's name orphans its task list (PHASE_STEPS lookups match on phaseName string)
+  if(name!==oldPhaseName){
+    const survivingTasks=(window.PHASE_STEPS||[]).filter(s=>s.property===ph.property&&s.phaseName===oldPhaseName);
+    for(const task of survivingTasks){
+      task.phaseName=name;
+      if(!demoMode&&task.id&&task.id.startsWith('rec')){
+        atUpdate('Phase Tasks',task.id,{'Phase Name':name});
+      }
+    }
+  }
   window.UNIT_GROUPS[idx]={...ph,phase:name,units,unitNames,productType,
     plannedStart,plannedCompletion:plannedEnd,
     actualStart,actualCompletion:actualEnd,
@@ -5593,14 +5711,28 @@ async function reorderPhase(id,propName,dir){
   propPhases[swapIdx].phaseOrder=tmp;
   // Renumber phase names (Phase 1, Phase 2...) keeping descriptions
   propPhases.sort((a,b)=>a.phaseOrder-b.phaseOrder);
-  propPhases.forEach((ph,i)=>{
+  for(const ph of propPhases){
+    const oldPhaseName=ph.phase;
+    const i=propPhases.indexOf(ph);
     const desc=ph.phase.replace(/^Phase \d+[: —]+/,'').replace(/^Phase \d+$/,'').trim();
-    ph.phase=desc?`Phase ${i+1}: ${desc}`:`Phase ${i+1}`;
+    const newPhaseName=desc?`Phase ${i+1}: ${desc}`:`Phase ${i+1}`;
+    ph.phase=newPhaseName;
     ph.phaseOrder=i+1;
     if(!demoMode&&ph.id.startsWith('rec')){
-      atUpdate('Unit Groups',ph.id,{'Phase Name':ph.phase,'Phase Order':ph.phaseOrder});
+      atUpdate('Unit Groups',ph.id,{'Phase Name':newPhaseName,'Phase Order':ph.phaseOrder});
     }
-  });
+    // Propagate rename to matching Phase Tasks records — without this, reordering
+    // a phase orphans its task list (PHASE_STEPS lookups match on phaseName string)
+    if(newPhaseName!==oldPhaseName){
+      const matchingTasks=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.phaseName===oldPhaseName);
+      for(const task of matchingTasks){
+        task.phaseName=newPhaseName;
+        if(!demoMode&&task.id&&task.id.startsWith('rec')){
+          atUpdate('Phase Tasks',task.id,{'Phase Name':newPhaseName});
+        }
+      }
+    }
+  }
   if(currentProp)renderPhasesTab(currentProp);
   showToast('Phase order updated','success');
 }
