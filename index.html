@@ -1072,7 +1072,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v19h · elevatorpulse.com</div>
+    <div class="login-version">PULSE v19i · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -3166,17 +3166,20 @@ function deriveMilestoneStatus(propName,milestoneNumber,plannedDate,actualDate,c
 // phase-linked milestones accurate without requiring manual field edits.
 async function recalculateAllMilestoneStatuses(propName){
   const ms=(window.MILESTONES||[]).filter(m=>m.property===propName);
+  let anyChanged=false;
   for(const m of ms){
     const newStatus=deriveMilestoneStatus(propName,m.milestoneNumber,m.plannedDate,m.actualDate,m.completionDate);
     if(newStatus!==m.status){
       m.status=newStatus;
+      anyChanged=true;
       if(m.id&&!demoMode){
         try{await atUpdate('Milestones',m.id,{'Status':newStatus});}
         catch(e){console.error('Milestone status recalc error:',e);}
       }
     }
   }
-  await deriveAndWritePropertyStatus(propName);
+  if(anyChanged)await deriveAndWritePropertyStatus(propName);
+  return anyChanged;
 }
 
 function getMilestonesForProp(propName){
@@ -3388,13 +3391,18 @@ function renderMilestones(p){
     }
   }
 
-  // Re-derive phase-linked and at-risk statuses in the background on every view.
-  // Guarded so it only runs once per render pass and doesn't loop.
-  if(!demoMode&&liveMsCount>0&&!window._msRecalcInFlight){
+  // Re-derive phase-linked and at-risk statuses in the background, ONCE per
+  // property per session (not on every render — that caused an infinite loop
+  // in v19h since recalc's own re-render re-triggered this same block).
+  if(!window._msRecalculatedProps)window._msRecalculatedProps={};
+  if(!demoMode&&liveMsCount>0&&!window._msRecalculatedProps[p.n]&&!window._msRecalcInFlight){
+    window._msRecalculatedProps[p.n]=true;
     window._msRecalcInFlight=true;
-    recalculateAllMilestoneStatuses(p.n).then(()=>{
+    recalculateAllMilestoneStatuses(p.n).then((changed)=>{
       window._msRecalcInFlight=false;
-      if(currentProp&&currentProp.n===p.n)renderMilestones(p);
+      // Only re-render if something actually changed AND we're still viewing this property.
+      // This re-render will hit the guard above (already true) and will NOT recurse.
+      if(changed&&currentProp&&currentProp.n===p.n)renderMilestones(p);
     }).catch(()=>{window._msRecalcInFlight=false;});
   }
 
