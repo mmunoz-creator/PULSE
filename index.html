@@ -604,6 +604,7 @@ window.UNIT_GROUPS = window.UNIT_GROUPS || [];
 window.BILLING_LOG = window.BILLING_LOG || [];
 window.MILESTONES = window.MILESTONES || [];
 window.CLIENT_COMMENTS = window.CLIENT_COMMENTS || [];
+window.RETAINAGE_RELEASES = window.RETAINAGE_RELEASES || [];
 
 // No token needed in browser - Worker holds it securely
 function saveToken() {
@@ -766,11 +767,11 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
-      atGet('Phase Tasks'), atGet('Change Order Savings Log')
+      atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     if (props.length > 0) {
@@ -807,6 +808,11 @@ async function loadAllData() {
         coRateOT: r.fields['CO Rate - OT']!=null?Number(r.fields['CO Rate - OT']):null,
         coMaterialMarkup: r.fields['CO Material Markup %']!=null?Number(r.fields['CO Material Markup %'])*100:null,
         coOPMarkup: r.fields['CO O&P Markup %']!=null?Number(r.fields['CO O&P Markup %'])*100:null,
+        // Retainage — flat rate withheld by the client from elevator company
+        // invoices, monitored by VDA on the client's behalf (not VDA's own
+        // retainage). Airtable Percent field, same decimal convention as the
+        // CO markups above (0.10 = 10%).
+        retainagePct: r.fields['Retainage %']!=null?Number(r.fields['Retainage %'])*100:null,
         ms: [], // milestones now from MILESTONES table
       })).filter(p=>p.n).sort((a,b)=>a.n.localeCompare(b.n));
       window.PORTFOLIO = livePortfolio;
@@ -923,6 +929,19 @@ async function loadAllData() {
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
     })).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+
+    // Retainage Releases — discrete release events (client pays contractor
+    // some/all of the retainage held, typically at or after ~90% complete,
+    // but can be partial/phased earlier). Separate from Billing Log because
+    // these are release transactions, not gross invoiced amounts.
+    window.RETAINAGE_RELEASES = retainageReleases.map(r=>({
+      id: r.id,
+      property: r.fields['Property Name']||'',
+      releaseDate: r.fields['Release Date']||'',
+      amountReleased: r.fields['Amount Released']!=null?Number(r.fields['Amount Released']):0,
+      notes: r.fields['Notes']||'',
+      loggedBy: r.fields['Logged By']||'',
+    })).sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate));
 
     // Milestones — one record per milestone per property
     window.MILESTONES = milestones.map(r=>({
@@ -1104,7 +1123,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v20g · elevatorpulse.com</div>
+    <div class="login-version">PULSE v21b · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1502,6 +1521,8 @@ window.PROPERTIES_SEED = [
       <div class="form-group"><label class="form-label">OT Rate</label><div style="position:relative"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:13px">$</span><input class="form-input" type="text" inputmode="numeric" id="ep-co-rate-ot" placeholder="e.g. 127.50" style="padding-left:22px"><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:11px">/hr</span></div></div>
       <div class="form-group"><label class="form-label">Material Markup</label><div style="position:relative"><input class="form-input" type="number" id="ep-co-material-markup" placeholder="e.g. 15" min="0" max="100" step="0.1" style="padding-right:24px"><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:13px">%</span></div></div>
       <div class="form-group"><label class="form-label">O&amp;P Markup</label><div style="position:relative"><input class="form-input" type="number" id="ep-co-op-markup" placeholder="e.g. 10" min="0" max="100" step="0.1" style="padding-right:24px"><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:13px">%</span></div></div>
+      <div class="form-group" style="grid-column:1/-1;margin-top:8px;padding-top:12px;border-top:1px solid var(--border)"><div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Retainage <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">- % client withholds from contractor invoices</span></div></div>
+      <div class="form-group"><label class="form-label">Retainage %</label><div style="position:relative"><input class="form-input" type="number" id="ep-retainage-pct" placeholder="e.g. 10" min="0" max="100" step="0.1" style="padding-right:24px"><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:13px">%</span></div></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Comments / Status Notes</label><textarea class="form-textarea" id="ep-notes" placeholder="Any notes about this property..." rows="3"></textarea></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
@@ -1800,6 +1821,27 @@ window.PROPERTIES_SEED = [
               <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
                 <button class="btn btn-primary" onclick="saveBillingEntry()"><i class="ti ti-check"></i>Finish &amp; Save</button>
                 <button class="btn" onclick="document.getElementById('billing-entry-form').style.display='none'">Cancel</button>
+              </div>
+            </div>
+            <!-- Retainage tracking — accounting purposes only; monitors what the
+                 client (not VDA) withholds from and pays out to the elevator
+                 company. Visually secondary to the billing/progress block above. -->
+            <div class="card" style="margin-top:1rem;background:var(--gray-xpale)">
+              <div class="card-header"><div><div class="card-title" style="font-size:13px">Retainage Tracking</div><div class="card-sub">Client cash flow — accounting reference only</div></div><button class="btn btn-add" onclick="openRetainageReleaseForm()" style="font-size:12px">+ <i class="ti ti-cash"></i>Release</button></div>
+              <div id="retainage-detail"></div>
+              <div id="retainage-history-list"></div>
+            </div>
+            <!-- Retainage release entry form -->
+            <div class="card" id="retainage-release-form" style="display:none;margin-top:1rem">
+              <div class="card-header"><div class="card-title">+ Retainage Release</div></div>
+              <div class="two-col" style="gap:12px">
+                <div class="form-group"><label class="form-label">Amount released</label><input class="form-input" type="text" inputmode="numeric" id="retainage-release-amount-input" placeholder="e.g. 45,000"></div>
+                <div class="form-group"><label class="form-label">Release date</label><input class="form-input" type="date" id="retainage-release-date-input"></div>
+              </div>
+              <div class="form-group"><label class="form-label">Notes (optional)</label><input class="form-input" type="text" id="retainage-release-notes-input" placeholder="e.g. 50% release at halfway point"></div>
+              <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
+                <button class="btn btn-primary" onclick="saveRetainageRelease()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+                <button class="btn" onclick="document.getElementById('retainage-release-form').style.display='none'">Cancel</button>
               </div>
             </div>
           </div>
@@ -2915,7 +2957,7 @@ function doLogout(){
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];
   clientFlags=[];flagIdCounter=0;
   window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
   // Reset chatbot to Park Hotels context
@@ -3048,10 +3090,15 @@ function parseUnitDesc(desc){
 
 function renderPropertyView(p){
   const parsed=parseUnitDesc(p.unitDesc||'');
-  const elevCount=parseInt(p.elevatorCount)||parsed.elev||0;
-  const escCount=parseInt(p.escalatorCount)||parsed.esc||0;
-  const liftCount=parseInt(p.liftCount)||parsed.lift||0;
-  const otherCount=parseInt(p.otherCount)||parsed.other||0;
+  // Bug fix (v21a) — previously parseInt(p.elevatorCount)||parsed.elev||0
+  // treated a cleared/null count field the same as a never-set one, so
+  // clearing Elevator Count in Edit Property fell back to the stale legacy
+  // unitDesc text instead of showing the cleared value. Now: only fall back
+  // to the legacy parse when the count field is genuinely null/undefined.
+  const elevCount=p.elevatorCount!=null?parseInt(p.elevatorCount)||0:parsed.elev;
+  const escCount=p.escalatorCount!=null?parseInt(p.escalatorCount)||0:parsed.esc;
+  const liftCount=p.liftCount!=null?parseInt(p.liftCount)||0:parsed.lift;
+  const otherCount=p.otherCount!=null?parseInt(p.otherCount)||0:parsed.other;
   document.getElementById('prop-title').textContent=p.n;
   document.getElementById('prop-subtitle').textContent=p.addr;
   document.getElementById('prop-hero-name').textContent=p.n;
@@ -3101,8 +3148,8 @@ function renderPropertyView(p){
     <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount} of ${MILESTONES_DEF.length} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Project Phases</div><div class="prop-mini-val" style="color:var(--blue-dark)">${phasesTotal>0?Math.round((phasesComplete/phasesTotal)*100)+'%':'—'}</div><div class="prop-mini-sub">${phasesComplete} of ${phasesTotal||0} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Open Actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val" style="font-size:13px">${p.budget?fmtCurrency(p.budget):'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Project Savings</div><div class="prop-mini-val" style="font-size:13px;color:var(--teal)">${propSavings>0?fmtCurrency(propSavings):'—'}</div><div class="prop-mini-sub">Negotiated savings</div></div>`;
+    <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val">${p.budget?fmtCurrency(p.budget):'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">Project Savings</div><div class="prop-mini-val" style="color:var(--teal)">${propSavings>0?fmtCurrency(propSavings):'—'}</div><div class="prop-mini-sub">Negotiated savings</div></div>`;
 
   // Product mix display
   // Budget summary removed from overview (now lives in Budget Performance tab)
@@ -3134,6 +3181,12 @@ function renderPropertyView(p){
           <span>Material <strong>${p.coMaterialMarkup!=null?p.coMaterialMarkup+'%':'—'}</strong></span>
           <span>O&amp;P <strong>${p.coOPMarkup!=null?p.coOPMarkup+'%':'—'}</strong></span>
         </div>`:`
+        <span style="color:var(--amber);font-weight:600">Not set</span>`}
+    </div>
+    <div style="padding-bottom:8px;margin-top:8px;border-top:1px solid var(--border);padding-top:8px;font-size:12px">
+      <div style="color:var(--blue-dark);margin-bottom:6px">Retainage %</div>
+      ${p.retainagePct!=null?`
+        <span style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px"><strong>${p.retainagePct}%</strong> withheld by client</span>`:`
         <span style="color:var(--amber);font-weight:600">Not set</span>`}
     </div>
 
@@ -5135,6 +5188,55 @@ function renderBudgetTab(p){
         </td>`:''}
       </tr>`).join('')}</tbody>
     </table>`;
+
+  // Retainage tracking — derived from Billed YTD + property Retainage %.
+  // Client withholds Retainage % from each invoice; releases reduce the net
+  // amount currently held. Accounting reference only, kept visually
+  // secondary to the billing/progress block above.
+  const retainagePct=p.retainagePct;
+  const retained=retainagePct!=null?billedYTD*(retainagePct/100):null;
+  const propReleases=(window.RETAINAGE_RELEASES||[]).filter(r=>r.property===p.n).sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate));
+  const totalReleased=propReleases.reduce((a,r)=>a+(Number(r.amountReleased)||0),0);
+  const netRetainageHeld=retained!=null?Math.max(0,retained-totalReleased):null;
+  const paidToDate=retained!=null?billedYTD-netRetainageHeld:null;
+
+  document.getElementById('retainage-detail').innerHTML=
+    retainagePct==null?
+    `<div style="font-size:12px;color:var(--amber);font-weight:600;padding:8px 0">Retainage % not set — add it in Edit Property to enable tracking.</div>`:
+    `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0;font-size:12px">
+      <div><div style="font-size:9px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:3px">Retainage Rate</div>
+        <div style="font-size:15px;font-weight:600;color:var(--navy)">${retainagePct}%</div></div>
+      <div><div style="font-size:9px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:3px">Retained to Date</div>
+        <div style="font-size:15px;font-weight:600;color:var(--navy)">${fmtCurrency(retained)}</div></div>
+      <div><div style="font-size:9px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:3px">Released to Date</div>
+        <div style="font-size:15px;font-weight:600;color:var(--teal)">${totalReleased?fmtCurrency(totalReleased):'—'}</div></div>
+      <div><div style="font-size:9px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:3px">Net Retainage Held</div>
+        <div style="font-size:15px;font-weight:600;color:var(--navy)">${fmtCurrency(netRetainageHeld)}</div></div>
+      <div><div style="font-size:9px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:3px">Paid to Date</div>
+        <div style="font-size:15px;font-weight:600;color:var(--blue-dark)">${fmtCurrency(paidToDate)}</div></div>
+    </div>`;
+
+  const retHistEl=document.getElementById('retainage-history-list');
+  if(retHistEl){
+    retHistEl.innerHTML=propReleases.length===0?
+      `<div style="font-size:11px;color:var(--gray-mid);padding:4px 0">No retainage releases logged yet.</div>`:
+      `<table class="data-table" style="margin-top:4px;table-layout:fixed;width:100%">
+        <thead><tr>
+          <th style="width:18%">Date</th>
+          <th style="width:22%">Amount Released</th>
+          <th style="width:38%">Notes</th>
+          ${canPM?'<th style="width:22%"></th>':''}
+        </tr></thead>
+        <tbody>${propReleases.map(rl=>`<tr id="retainage-row-${rl.id}">
+          <td style="font-size:11px">${rl.releaseDate||'—'}</td>
+          <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(rl.amountReleased)}</td>
+          <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${rl.notes||'—'}</td>
+          ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
+            <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
+          </td>`:''}
+        </tr>`).join('')}</tbody>
+      </table>`;
+  }
 }
 
 
@@ -5603,6 +5705,71 @@ function editBillingEntry(id,propName){
   document.getElementById('bm-editing-id').value=id;
   document.getElementById('billing-modal-overlay').style.display='block';
   document.getElementById('billing-modal').style.display='block';
+}
+
+function openRetainageReleaseForm(){
+  const form=document.getElementById('retainage-release-form');
+  form.style.display='block';
+  document.getElementById('retainage-release-amount-input').value='';
+  document.getElementById('retainage-release-date-input').value=new Date().toISOString().split('T')[0];
+  document.getElementById('retainage-release-notes-input').value='';
+  document.getElementById('retainage-release-form').dataset.editingId='';
+  initCurrencyInput('retainage-release-amount-input');
+  form.scrollIntoView({behavior:'smooth'});
+}
+
+async function saveRetainageRelease(){
+  if(!currentProp)return;
+  initCurrencyInput('retainage-release-amount-input');
+  const amount=getCurrencyValue('retainage-release-amount-input');
+  const date=document.getElementById('retainage-release-date-input').value;
+  const notes=document.getElementById('retainage-release-notes-input').value.trim();
+  if(!amount||!date){showToast('Please enter an amount released and date','warn');return;}
+  const loggedBy=window._userName||'PM User';
+  const editingId=document.getElementById('retainage-release-form').dataset.editingId||'';
+  if(editingId){
+    const existing=(window.RETAINAGE_RELEASES||[]).find(r=>r.id===editingId);
+    if(existing){
+      existing.amountReleased=amount;existing.releaseDate=date;existing.notes=notes;
+      if(!demoMode)await atUpdate('Retainage Releases',editingId,{'Amount Released':amount,'Release Date':date,'Notes':notes||''});
+      showToast('Retainage release updated','success');
+    }
+  }else{
+    const res=demoMode?null:await atCreate('Retainage Releases',{
+      'Property Name':currentProp.n,
+      'Amount Released':amount,
+      'Release Date':date,
+      'Notes':notes||'',
+      'Logged By':loggedBy,
+    });
+    const newEntry={id:res?.records?.[0]?.id||'rr-'+Date.now(),property:currentProp.n,amountReleased:amount,releaseDate:date,notes,loggedBy};
+    window.RETAINAGE_RELEASES=(window.RETAINAGE_RELEASES||[]).concat([newEntry]);
+    showToast('Retainage release logged','success');
+  }
+  document.getElementById('retainage-release-form').style.display='none';
+  document.getElementById('retainage-release-form').dataset.editingId='';
+  renderBudgetTab(currentProp);
+}
+
+function editRetainageRelease(id,propName){
+  const rl=(window.RETAINAGE_RELEASES||[]).find(r=>r.id===id);
+  if(!rl)return;
+  const form=document.getElementById('retainage-release-form');
+  form.style.display='block';
+  initCurrencyInput('retainage-release-amount-input');
+  document.getElementById('retainage-release-amount-input').value=rl.amountReleased?Number(rl.amountReleased).toLocaleString('en-US'):'';
+  document.getElementById('retainage-release-date-input').value=rl.releaseDate||new Date().toISOString().split('T')[0];
+  document.getElementById('retainage-release-notes-input').value=rl.notes||'';
+  form.dataset.editingId=id;
+  form.scrollIntoView({behavior:'smooth'});
+}
+
+async function deleteRetainageRelease(id,propName){
+  if(!confirm('Remove this retainage release entry?'))return;
+  window.RETAINAGE_RELEASES=(window.RETAINAGE_RELEASES||[]).filter(r=>r.id!==id);
+  if(!demoMode)await atDelete('Retainage Releases',id);
+  renderBudgetTab(currentProp);
+  showToast('Retainage release removed','success');
 }
 
 function openAddPhaseForm(){
@@ -9493,6 +9660,7 @@ function openEditPropertyPanel(){
   document.getElementById('ep-co-rate-ot').value=p.coRateOT!=null?p.coRateOT:'';
   document.getElementById('ep-co-material-markup').value=p.coMaterialMarkup!=null?p.coMaterialMarkup:'';
   document.getElementById('ep-co-op-markup').value=p.coOPMarkup!=null?p.coOPMarkup:'';
+  document.getElementById('ep-retainage-pct').value=p.retainagePct!=null?p.retainagePct:'';
   document.getElementById('ep-notes').value=p.comment||'';
   overlay.style.display='block';
   panel.style.display='block';
@@ -9642,6 +9810,12 @@ async function saveEditProperty(){
   const coOPMarkupRaw=document.getElementById('ep-co-op-markup').value.trim();
   const coOPMarkup=coOPMarkupRaw!==''?parseFloat(coOPMarkupRaw):null;
   fields['CO O&P Markup %']=coOPMarkup!=null?coOPMarkup/100:null;
+  // Retainage % — flat rate the client withholds from elevator company
+  // invoices. Same Airtable Percent decimal convention and clear-to-null
+  // pattern as the CO markup fields above.
+  const retainagePctRaw=document.getElementById('ep-retainage-pct').value.trim();
+  const retainagePct=retainagePctRaw!==''?parseFloat(retainagePctRaw):null;
+  fields['Retainage %']=retainagePct!=null?retainagePct/100:null;
   // Update local prop object
   p.n=name;p.addr=fields['Address'];p.s=fields['State'];
   if(fields['Asset Type'])p.type=fields['Asset Type'];
@@ -9658,6 +9832,7 @@ async function saveEditProperty(){
   p.coRateOT=coRateOT;
   p.coMaterialMarkup=coMaterialMarkup;
   p.coOPMarkup=coOPMarkup;
+  p.retainagePct=retainagePct;
   // Write to Airtable
   if(p.id){
     try{await atUpdate('Properties',p.id,fields);showToast('Property updated','success');}
