@@ -1132,7 +1132,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v21d · elevatorpulse.com</div>
+    <div class="login-version">PULSE v21f · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1564,7 +1564,6 @@ window.PROPERTIES_SEED = [
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('queue',this)"><i class="ti ti-inbox"></i>Pending Review<span id="queue-badge-admin" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-admin" class="nav-badge hidden" style="background:var(--red)">0</span></button>
-        <button class="nav-item" onclick="gotoView('sitevisits',this)"><i class="ti ti-calendar-event"></i>Site Visits</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
       <div class="nav-section">
@@ -1589,7 +1588,6 @@ window.PROPERTIES_SEED = [
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('queue',this)"><i class="ti ti-inbox"></i>Pending Review<span id="queue-badge" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-pm" class="nav-badge hidden" style="background:var(--red)">0</span></button>
-        <button class="nav-item" onclick="gotoView('sitevisits',this)"><i class="ti ti-calendar-event"></i>Site Visits</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
       <div class="nav-section">
@@ -1614,7 +1612,6 @@ window.PROPERTIES_SEED = [
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-consultant" class="nav-badge hidden" style="background:var(--red)">0</span></button>
         <button class="nav-item" onclick="gotoView('submit',this)"><i class="ti ti-upload"></i>Submit Update</button>
-        <button class="nav-item" onclick="gotoView('sitevisits',this)"><i class="ti ti-calendar-event"></i>Site Visits</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
       <div class="nav-section">
@@ -6572,7 +6569,9 @@ function getMilestoneCategoryForProp(propName){
 
 // ── FORECASTED COMPLETION DRILL STATE ────────────────────────────────
 let fcDrillYear=null; // null = year view, number = month view for that year
-let fsDrillYear=null; // same for forecasted spend
+// fsDrillYear removed (v21e) — Forecasted Spend no longer has a monthly
+// drill-down now that it combines active + pipeline budget; click-through
+// goes straight to the property list drilldown instead (see showBarDrilldown).
 
 // ── CAPITAL PLAN ──────────────────────────────────────────────────────
 
@@ -7064,11 +7063,11 @@ function renderCharts(){
   const fcYears=Object.keys(fcByYear).map(Number).sort();
   const fcMonthKeys=Object.keys(fcByMonth).filter(k=>k.startsWith(fcDrillYear)).sort();
 
-  // 5. Forecasted Spend — budget minus billed, by year or month
+  // 5. Forecasted Spend — active remaining budget by year (monthly
+  // breakdown removed in v21e; see note above showBarDrilldown's fs- cases)
   const fsSource=filtered.filter(p=>p.st!=='Removed'&&p.budget>0);
   const fsByYear={};
   const fsByYearUnits={};
-  const fsByMonth={};
   fsSource.forEach(p=>{
     const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
     const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
@@ -7078,13 +7077,23 @@ function renderCharts(){
     phases.forEach(ph=>{if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!latest||d>latest)latest=d;}});
     if(!latest)return;
     const yr=latest.getFullYear();
-    const mo=latest.getFullYear()+'-'+(latest.getMonth()+1);
     fsByYear[yr]=(fsByYear[yr]||0)+remaining;
     fsByYearUnits[yr]=(fsByYearUnits[yr]||0)+(parseInt(p.units)||0);
-    fsByMonth[mo]=(fsByMonth[mo]||0)+remaining;
   });
-  const fsYears=Object.keys(fsByYear).map(Number).sort();
-  const fsMonthKeys=Object.keys(fsByMonth).filter(k=>k.startsWith(fsDrillYear)).sort();
+  // Pipeline budget — Capital Plan properties haven't started (no billing,
+  // usually no phases yet), so their FULL budget counts toward whichever
+  // year they're planned to begin, using the already-computed capitalByYear
+  // above. 'TBD' (no Planned Year set) is excluded — can't stack into a
+  // numeric year bucket. This gives the chart the full 10-year outlook
+  // (active remaining spend + pipeline budget) rather than active-only.
+  const fsPipelineByYear={};
+  Object.keys(capitalByYear).forEach(yr=>{
+    if(yr==='TBD')return;
+    fsPipelineByYear[yr]=capitalByYear[yr].budget||0;
+  });
+  const fsYears=[...new Set([...Object.keys(fsByYear),...Object.keys(fsPipelineByYear)])].map(Number).sort((a,b)=>a-b);
+
+
 
   // 6. Portfolio % Complete
   const allPortProps=filtered.filter(p=>p.st!=='Removed');
@@ -7196,9 +7205,12 @@ function renderCharts(){
       <div class="card-header">
         <div>
           <div class="card-title">Forecasted Spend</div>
-          <div class="card-sub">${fsDrillYear?'Monthly view — '+fsDrillYear:'Remaining Budget by Year'}</div>
+          <div class="card-sub">Active remaining budget + pipeline budget, by year</div>
         </div>
-        ${fsDrillYear?`<button onclick="fsDrillYear=null;renderCharts()" style="font-size:11px;color:var(--blue-dark);background:none;border:1px solid var(--blue-light);border-radius:6px;padding:4px 10px;cursor:pointer;display:flex;align-items:center;gap:4px"><i class="ti ti-arrow-left" style="font-size:11px"></i> All Years</button>`:''}
+      </div>
+      <div id="fs-legend" style="display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--gray-mid)">
+        <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--teal);display:inline-block"></span>Active — remaining budget</span>
+        <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--blue-light);display:inline-block"></span>Pipeline — capital plan budget</span>
       </div>
       <div id="fs-chart" style="margin-top:10px"></div>
     </div>
@@ -7473,60 +7485,44 @@ function renderCharts(){
   }
 
   // ── 5. FORECASTED SPEND ────────────────────────────────────────────
+  // v21e — now stacks active remaining budget with Capital Plan pipeline
+  // budget for the full 10-year outlook (previously active-only). Monthly
+  // drill-down removed since pipeline data has no monthly granularity;
+  // click-through goes straight to a property list instead, with the
+  // active and pipeline segments as separate click targets (matches the
+  // existing click-to-drill pattern used by every other chart on this tab,
+  // rather than introducing a new hover-tooltip interaction here).
   const fsChart=document.getElementById('fs-chart');
   if(fsChart){
-    if(!fsDrillYear){
-      if(fsYears.length===0){
-        fsChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No budget or phase data available.</div>';
-      }else{
-        const maxFs=Math.max(...fsYears.map(y=>fsByYear[y]));
-        const chartH=120;
-        fsChart.innerHTML=`
-          <div style="display:flex;align-items:flex-end;gap:12px;height:${chartH+24}px;padding:0 4px">
-            ${fsYears.map(yr=>{
-              const amt=fsByYear[yr];
-              const units=fsByYearUnits[yr]||0;
-              const h=Math.max(16,Math.round((amt/maxFs)*chartH));
-              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;cursor:pointer" onclick="showBarDrilldown('fs-year',String(${yr}))" title="Click bar to see properties with spend in ${yr}">
-                <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:2px">${fmtCurrency(amt)}</div>
-                <div style="font-size:9px;color:var(--gray-mid);margin-bottom:4px">${units} unit${units!==1?'s':''}</div>
-                <div style="width:100%;height:${h}px;background:var(--teal);border-radius:4px 4px 0 0;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>
-                <div style="width:100%;height:3px;background:var(--border)"></div>
-              </div>`;
-            }).join('')}
-          </div>
-          <div style="display:flex;gap:12px;padding:4px 4px 0">
-            ${fsYears.map(yr=>`<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${yr}</div>`).join('')}
-          </div>
-          <div style="margin-top:8px;font-size:10px;color:var(--gray-mid);font-style:italic">Click a bar to see monthly breakdown</div>`;
-      }
+    if(fsYears.length===0){
+      fsChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No budget, phase, or pipeline data available.</div>';
     }else{
-      const monthNames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      if(fsMonthKeys.length===0){
-        fsChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No spend data for '+fsDrillYear+'.</div>';
-      }else{
-        const maxFsM=Math.max(...fsMonthKeys.map(k=>fsByMonth[k]));
-        const chartH=120;
-        fsChart.innerHTML=`
-          <div style="display:flex;align-items:flex-end;gap:8px;height:${chartH+24}px;padding:0 4px">
-            ${fsMonthKeys.map(k=>{
-              const amt=fsByMonth[k];
-              const mo=parseInt(k.split('-')[1])-1;
-              const h=Math.max(12,Math.round((amt/maxFsM)*chartH));
-              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
-                <div style="font-size:9px;font-weight:700;color:var(--navy);margin-bottom:4px">${fmtCurrency(amt)}</div>
-                <div style="width:100%;height:${h}px;background:var(--teal);border-radius:4px 4px 0 0;opacity:.85"></div>
-                <div style="width:100%;height:3px;background:var(--border)"></div>
-              </div>`;
-            }).join('')}
-          </div>
-          <div style="display:flex;gap:8px;padding:4px 4px 0">
-            ${fsMonthKeys.map(k=>{
-              const mo=parseInt(k.split('-')[1])-1;
-              return `<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${monthNames[mo]}</div>`;
-            }).join('')}
-          </div>`;
-      }
+      const maxFs=Math.max(...fsYears.map(y=>(fsByYear[y]||0)+(fsPipelineByYear[y]||0)));
+      const chartH=120;
+      fsChart.innerHTML=`
+        <div style="display:flex;align-items:flex-end;gap:12px;height:${chartH+24}px;padding:0 4px">
+          ${fsYears.map(yr=>{
+            const activeAmt=fsByYear[yr]||0;
+            const pipelineAmt=fsPipelineByYear[yr]||0;
+            const totalAmt=activeAmt+pipelineAmt;
+            const units=fsByYearUnits[yr]||0;
+            const activeH=totalAmt>0?Math.max(activeAmt>0?4:0,Math.round((activeAmt/maxFs)*chartH)):0;
+            const pipelineH=totalAmt>0?Math.max(pipelineAmt>0?4:0,Math.round((pipelineAmt/maxFs)*chartH)):0;
+            return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+              <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:2px">${fmtCurrency(totalAmt)}</div>
+              <div style="font-size:9px;color:var(--gray-mid);margin-bottom:4px">${units} unit${units!==1?'s':''}</div>
+              <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end">
+                ${pipelineAmt>0?`<div style="width:100%;height:${pipelineH}px;background:var(--blue-light);cursor:pointer;opacity:.85;transition:opacity .12s;${activeAmt>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'" onclick="showBarDrilldown('fs-pipeline-year',String(${yr}))" title="Pipeline ${yr}: ${fmtCurrency(pipelineAmt)} — click to see properties"></div>`:''}
+                ${activeAmt>0?`<div style="width:100%;height:${activeH}px;background:var(--teal);border-radius:4px 4px 0 0;cursor:pointer;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'" onclick="showBarDrilldown('fs-active-year',String(${yr}))" title="Active ${yr}: ${fmtCurrency(activeAmt)} — click to see properties"></div>`:''}
+              </div>
+              <div style="width:100%;height:3px;background:var(--border)"></div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="display:flex;gap:12px;padding:4px 4px 0">
+          ${fsYears.map(yr=>`<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${yr}</div>`).join('')}
+        </div>
+        <div style="margin-top:8px;font-size:10px;color:var(--gray-mid);font-style:italic">Click a segment to see the properties behind it</div>`;
     }
   }
 
@@ -7869,15 +7865,24 @@ function showBarDrilldown(type,value){
       });
     });
     title=`Completing ${value} — Properties (${props.length})`;
-  } else if(type==='fs-year'){
+  } else if(type==='fs-active-year'){
+    // Matches the exact bucketing logic used to build fsByYear above —
+    // latest phase planned/actual completion year determines which bar
+    // this property's remaining budget contributes to.
     props=filtered.filter(p=>{
+      if(!(p.budget>0))return false;
       const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
-      return phases.some(u=>{
-        const d=u.plannedCompletion||u.completionDate;
-        return d&&new Date(d+'T12:00:00').getFullYear()===parseInt(value);
-      });
+      let latest=null;
+      phases.forEach(ph=>{if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!latest||d>latest)latest=d;}});
+      return latest&&latest.getFullYear()===parseInt(value);
     });
-    title=`Forecasted Spend ${value} — Properties (${props.length})`;
+    title=`Forecasted Spend ${value} (Active) — Properties (${props.length})`;
+  } else if(type==='fs-pipeline-year'){
+    // Capital Plan properties haven't started — bucketed by Planned Year,
+    // not phase completion (they have no phases yet).
+    const allPortForFs=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+    props=allPortForFs.filter(p=>p.st==='Capital Plan'&&String(p.plannedYear)===String(value));
+    title=`Forecasted Spend ${value} (Pipeline) — Properties (${props.length})`;
   } else if(type==='budget-billed'){
     props=filtered.filter(p=>{
       const billed=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((a,b)=>a+(parseFloat(b.billedYTD)||0),0);
