@@ -841,6 +841,8 @@ async function loadAllData() {
         priority: r.fields['Draft Action Priority']||'Medium',
         due: r.fields['Draft Action Due']||'',
         published: !!r.fields['Draft Action Published'],
+        dismissed: !!r.fields['Draft Action Dismissed'],
+        dismissNote: r.fields['Draft Action Dismiss Note']||'',
       }:null,
     }));
     meetings = meets.map(r => ({
@@ -1132,7 +1134,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v21f · elevatorpulse.com</div>
+    <div class="login-version">PULSE v22a · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2413,7 +2415,7 @@ window.PROPERTIES_SEED = [
 
       <!-- MY UPDATES -->
       <div id="view-my-updates" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>My updates</h1><p>Submission history</p></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>My Updates</h1><p>Submission history</p></div></div>
         <div class="page-body"><div id="my-updates-container"><div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No Updates Submitted Yet</div></div></div></div>
       </div>
 
@@ -7205,14 +7207,13 @@ function renderCharts(){
       <div class="card-header">
         <div>
           <div class="card-title">Forecasted Spend</div>
-          <div class="card-sub">Active remaining budget + pipeline budget, by year</div>
         </div>
       </div>
-      <div id="fs-legend" style="display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--gray-mid)">
+      <div id="fs-chart" style="margin-top:10px"></div>
+      <div id="fs-legend" style="display:flex;justify-content:center;gap:16px;margin-top:8px;font-size:11px;color:var(--gray-mid)">
         <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--teal);display:inline-block"></span>Active — remaining budget</span>
         <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--blue-light);display:inline-block"></span>Pipeline — capital plan budget</span>
       </div>
-      <div id="fs-chart" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -7360,9 +7361,7 @@ function renderCharts(){
               const segments=['complete','onTrack','atRisk','notStarted'].map(k=>{
                 if(!d[k])return'';
                 const h=Math.max(4,Math.round((d[k]/maxTotal)*chartH));
-                return `<div style="width:100%;height:${h}px;background:${statusColors[k]};opacity:${isTBD?0.5:0.85};display:flex;align-items:center;justify-content:center;z-index:1" title="${statusLabels[k]}: ${d[k]}">
-                  ${d[k]>0?`<span style="font-size:9px;color:white;font-weight:700;line-height:1">${d[k]}</span>`:''}
-                </div>`;
+                return `<div style="width:100%;height:${h}px;background:${statusColors[k]};opacity:${isTBD?0.5:0.85};display:flex;align-items:center;justify-content:center;z-index:1" title="${statusLabels[k]}: ${d[k]}"></div>`;
               }).reverse().join('');
               const ecName=d.name;
               return `<div style="display:flex;flex-direction:column;align-items:center;width:${barW}px;flex-shrink:0;position:relative;z-index:1;cursor:pointer" onclick="showBarDrilldown('ec','${ecName.replace(/'/g,"\'")}')" title="Click to see properties">
@@ -10278,7 +10277,7 @@ function refreshQueue(){
     empty.classList.add('hidden');
     const subItems=pending.map(s=>`<div class="queue-item">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-        <div class="queue-item-title">${s.property} — Week of ${s.week}${s.draftAction&&!s.draftAction.published?` <i class="ti ti-flag" style="color:var(--amber);font-size:12px" title="Consultant flagged a follow-up action"></i>`:''}</div>
+        <div class="queue-item-title">${s.property} — Week of ${s.week}${s.draftAction&&!s.draftAction.published&&!s.draftAction.dismissed?` <i class="ti ti-flag" style="color:var(--red);font-size:12px" title="Consultant flagged a follow-up action"></i>`:''}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="badge b-pending">Pending</span>
           <button class="btn btn-icon" onclick="previewQueueItem('${s.id}')" title="Preview update"><i class="ti ti-eye" style="font-size:14px"></i></button>
@@ -10346,7 +10345,12 @@ function previewQueueItem(subId){
         <div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px">${s.draftAction.owner?`Owner: ${s.draftAction.owner} · `:''}Priority: ${s.draftAction.priority}${s.draftAction.due?` · Due ${s.draftAction.due}`:''}</div>
         ${s.draftAction.published?
           `<span style="font-size:11px;color:var(--green);font-weight:600"><i class="ti ti-circle-check"></i> Published to Action Items</span>`:
-          `<button class="btn btn-add" style="font-size:11px" onclick="publishDraftAction('${subId}')"><i class="ti ti-send"></i>Publish to Action Items</button>`}
+          s.draftAction.dismissed?
+          `<span style="font-size:11px;color:var(--gray-mid);font-weight:600"><i class="ti ti-eye-check"></i> Dismissed${s.draftAction.dismissNote?` — ${s.draftAction.dismissNote}`:''}</span>`:
+          `<div style="display:flex;gap:8px">
+            <button class="btn btn-add" style="font-size:11px" onclick="publishDraftAction('${subId}')"><i class="ti ti-send"></i>Publish to Action Items</button>
+            <button class="btn" style="font-size:11px" onclick="openDismissDraftAction('${subId}')"><i class="ti ti-eye-off"></i>Dismiss this Action</button>
+          </div>`}
       </div>`:''}
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px">
@@ -10380,6 +10384,49 @@ async function publishDraftAction(subId){
   document.getElementById('queue-preview-overlay')?.remove();
   previewQueueItem(subId);
   showToast('Action item published','success');
+}
+
+function openDismissDraftAction(subId){
+  // Small inline prompt for an optional internal note before dismissing a
+  // consultant-flagged draft action (v22a). The note is PM/Admin-only — it
+  // is never shown to the consultant. The consultant only ever sees a
+  // passive "Reviewed" status on their own My Updates history, satisfying
+  // "I was heard" without exposing PM-side reasoning (Misty, confirmed).
+  const overlay=document.createElement('div');
+  overlay.id='dismiss-draft-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:420px;box-shadow:var(--shadow-md)">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;color:var(--navy)">Dismiss this Action</div>
+    </div>
+    <div style="padding:20px">
+      <div style="font-size:12px;color:var(--gray-mid);margin-bottom:10px">Optional — internal note only. The consultant will not see this note; they'll see a passive "Reviewed" status.</div>
+      <textarea id="dismiss-draft-note" rows="3" placeholder="e.g. Already captured separately" style="width:100%;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;font-family:inherit;resize:vertical"></textarea>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('dismiss-draft-overlay').remove()">Cancel</button>
+      <button class="btn btn-warn" onclick="dismissDraftAction('${subId}')"><i class="ti ti-eye-off"></i>Dismiss</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function dismissDraftAction(subId){
+  const s=submissions.find(x=>x.id===subId);
+  if(!s||!s.draftAction)return;
+  if(s.draftAction.published||s.draftAction.dismissed){document.getElementById('dismiss-draft-overlay')?.remove();return;}
+  const noteEl=document.getElementById('dismiss-draft-note');
+  const note=noteEl?noteEl.value.trim():'';
+  s.draftAction.dismissed=true;
+  s.draftAction.dismissNote=note;
+  const updateFields={'Draft Action Dismissed':true};
+  if(note)updateFields['Draft Action Dismiss Note']=note;
+  if(s.atId)await atUpdate('Field Updates',s.atId,updateFields);
+  document.getElementById('dismiss-draft-overlay')?.remove();
+  document.getElementById('queue-preview-overlay')?.remove();
+  previewQueueItem(subId);
+  refreshMyUpdates();
+  showToast('Action dismissed','info');
 }
 
 async function approveSubmission(id){
@@ -10635,7 +10682,7 @@ function refreshMyUpdates(){
   if(visible.length===0){c.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No Updates Submitted Yet</div></div>`;updateMyUpdatesBadge();return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
   c.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Property</th><th>Week</th><th>Submitted</th><th>Status</th><th>Return note</th><th></th></tr></thead><tbody>`+
-    visible.slice().reverse().map(s=>`<tr><td>${s.property}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.week}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td style="white-space:nowrap">${s.reviewStatus!=='approved'?`<button class="btn btn-icon" onclick="editSubmission('${s.id}')" title="Edit &amp; Resubmit"><i class="ti ti-edit" style="font-size:13px"></i></button>`:''}<button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:13px"></i></button></td></tr>`).join('')+
+    visible.slice().reverse().map(s=>`<tr><td>${s.property}${s.draftAction&&s.draftAction.dismissed?` <i class="ti ti-flag-check" style="color:var(--gray-mid);font-size:12px" title="Your flagged follow-up was reviewed"></i>`:''}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.week}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td style="white-space:nowrap">${s.reviewStatus!=='approved'?`<button class="btn btn-icon" onclick="editSubmission('${s.id}')" title="Edit &amp; Resubmit"><i class="ti ti-edit" style="font-size:13px"></i></button>`:''}<button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:13px"></i></button></td></tr>`).join('')+
     `</tbody></table></div>`;
   updateMyUpdatesBadge();
 }
