@@ -833,6 +833,15 @@ async function loadAllData() {
       submittedAt: r.fields['Submitted Date']||'',
       reviewStatus: (r.fields['Review Status']||'Pending').toLowerCase(),
       returnNote: r.fields['Return Note']||'',
+      // Draft action — consultant-flagged follow-up attached to this
+      // submission, not yet a live Action Item until a PM publishes it.
+      draftAction: r.fields['Draft Action Description']?{
+        description: r.fields['Draft Action Description']||'',
+        owner: r.fields['Draft Action Owner']||'',
+        priority: r.fields['Draft Action Priority']||'Medium',
+        due: r.fields['Draft Action Due']||'',
+        published: !!r.fields['Draft Action Published'],
+      }:null,
     }));
     meetings = meets.map(r => ({
       id: r.id, atId: r.id,
@@ -1123,7 +1132,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v21b · elevatorpulse.com</div>
+    <div class="login-version">PULSE v21d · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2360,9 +2369,11 @@ window.PROPERTIES_SEED = [
 
       <!-- SUBMIT (Consultant) -->
       <div id="view-submit" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Submit weekly update</h1><p>Enters PM review queue before publishing to client</p></div></div>
+        <div class="page-header"><div class="page-header-left"><h1 id="submit-page-title">Submit weekly update</h1><p id="submit-page-sub">Enters PM review queue before publishing to client</p></div></div>
         <div class="page-body">
           <div id="submit-success" class="alert alert-success hidden" style="margin-bottom:1rem"><i class="ti ti-circle-check"></i><span id="submit-success-msg">Update submitted.</span></div>
+          <input type="hidden" id="f-editing-id" value="">
+          <div id="submit-return-note-banner" class="alert alert-warn" style="display:none;margin-bottom:1rem"><i class="ti ti-corner-up-left"></i><span id="submit-return-note-text"></span></div>
           <div class="card">
             <div class="form-row">
               <div class="form-group"><label class="form-label">Property</label>
@@ -2380,7 +2391,25 @@ window.PROPERTIES_SEED = [
               <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="f-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
               <div class="form-group"><label class="form-label">Issue status</label><select class="form-select" id="f-issue-status"><option>Open</option><option>Resolved</option><option>N/A</option></select></div>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="submitUpdate()"><i class="ti ti-upload"></i>Submit for review</button><button class="btn"><i class="ti ti-device-floppy"></i>Save draft</button></div>
+            <!-- Draft action item — attaches to this submission only. Does NOT
+                 create a live Action Item; a PM must explicitly publish it
+                 from the review/preview screen. -->
+            <div class="form-group" style="margin-top:8px;padding-top:12px;border-top:1px solid var(--border)">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:var(--navy)">
+                <input type="checkbox" id="f-draft-action-toggle" onchange="document.getElementById('f-draft-action-fields').style.display=this.checked?'block':'none'">
+                Flag a follow-up action for PM review
+              </label>
+              <div id="f-draft-action-fields" style="display:none;margin-top:10px">
+                <div class="form-group"><label class="form-label">Description</label><input class="form-input" type="text" id="f-draft-action-desc" placeholder="e.g. Schedule punch list walkthrough"></div>
+                <div class="form-row">
+                  <div class="form-group"><label class="form-label">Owner</label><input class="form-input" type="text" id="f-draft-action-owner" placeholder="e.g. Nick Nikolai"></div>
+                  <div class="form-group"><label class="form-label">Priority</label><select class="form-select" id="f-draft-action-priority"><option>Low</option><option selected>Medium</option><option>High</option></select></div>
+                </div>
+                <div class="form-group"><label class="form-label">Due date</label><input class="form-input" type="date" id="f-draft-action-due"></div>
+                <div style="font-size:11px;color:var(--gray-mid)">This won't appear in Action Items or the dashboard until your PM reviews and publishes it.</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn btn-primary" id="submit-btn-primary" onclick="submitUpdate()"><i class="ti ti-upload"></i>Submit for review</button><button class="btn" id="submit-btn-cancel" onclick="cancelEditSubmission()" style="display:none">Cancel</button></div>
           </div>
         </div>
       </div>
@@ -3053,7 +3082,13 @@ function openProperty(name){
   currentProp=prop;
   document.querySelectorAll('[id^="view-"]').forEach(v=>v.classList.add('hidden'));
   document.getElementById('view-property').classList.remove('hidden');
-  switchPropTab('overview',null);renderPropertyView(prop);
+  // Bug fix (v21c) — previously passed null for the button arg, so
+  // switchPropTab's `if(btn)btn.classList.add('active')` guard never fired:
+  // the Overview tab CONTENT showed correctly but no tab button in the
+  // ribbon was highlighted. Pass the actual Overview button so it's
+  // highlighted the same way clicking it manually would.
+  const overviewBtn=document.querySelector('.tab-btn[onclick*="overview"]');
+  switchPropTab('overview',overviewBtn);renderPropertyView(prop);
 }
 function goBack(){
   document.getElementById('view-property').classList.add('hidden');
@@ -5106,6 +5141,119 @@ async function sendCONotification(){
   if(sendBtn){sendBtn.disabled=false;sendBtn.innerHTML='<i class="ti ti-send"></i>Send Notification';}
 }
 
+function openBillingHistoryPopout(propName){
+  // Full history popout (v21d) — triggered by "Show all" once a property has
+  // more than the inline preview count. Same row data as the card, just
+  // unbounded and with a Print option (reuses the printFieldUpdate-style
+  // window.open + window.print pattern already established in PULSE).
+  const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
+  if(!p)return;
+  const canPM=role==='pm'||role==='admin';
+  const budget=p.budget||0;
+  const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+  const rows=propBilling.map(b=>`<tr id="billing-row-${b.id}">
+        <td style="font-size:12px">${b.entryDate}</td>
+        <td style="font-size:12px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
+        <td style="font-size:12px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
+        <td style="font-size:12px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
+        <td style="font-size:12px;color:var(--gray-mid)">${b.notes||'—'}</td>
+        ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
+          <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="closeHistoryPopout();editBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}');openBillingHistoryPopout('${propName.replace(/'/g,"\\'")}')">Remove</button>
+        </td>`:''}
+      </tr>`).join('');
+  const overlay=document.createElement('div');
+  overlay.id='history-popout-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:880px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:16px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div><div style="font-size:15px;font-weight:700;color:var(--navy)">Billing History — ${propName}</div><div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${propBilling.length} entries</div></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn" onclick="printBillingHistory('${propName.replace(/'/g,"\\'")}')"><i class="ti ti-printer"></i>Print</button>
+        <button onclick="closeHistoryPopout()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;padding:20px 24px;flex:1">
+      <table class="data-table" style="width:100%">
+        <thead><tr><th>Date</th><th>Current Through</th><th>Billed YTD</th><th>%</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+function openRetainageHistoryPopout(propName){
+  const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
+  if(!p)return;
+  const canPM=role==='pm'||role==='admin';
+  const propReleases=(window.RETAINAGE_RELEASES||[]).filter(r=>r.property===propName).sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate));
+  const rows=propReleases.map(rl=>`<tr id="retainage-row-${rl.id}">
+        <td style="font-size:12px">${rl.releaseDate||'—'}</td>
+        <td style="font-size:12px;font-weight:600">${fmtCurrencyFull(rl.amountReleased)}</td>
+        <td style="font-size:12px;color:var(--gray-mid)">${rl.notes||'—'}</td>
+        ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
+          <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="closeHistoryPopout();editRetainageRelease('${rl.id}','${propName.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteRetainageRelease('${rl.id}','${propName.replace(/'/g,"\\'")}');openRetainageHistoryPopout('${propName.replace(/'/g,"\\'")}')">Remove</button>
+        </td>`:''}
+      </tr>`).join('');
+  const overlay=document.createElement('div');
+  overlay.id='history-popout-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:880px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:16px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div><div style="font-size:15px;font-weight:700;color:var(--navy)">Retainage Releases — ${propName}</div><div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${propReleases.length} entries</div></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn" onclick="printRetainageHistory('${propName.replace(/'/g,"\\'")}')"><i class="ti ti-printer"></i>Print</button>
+        <button onclick="closeHistoryPopout()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;padding:20px 24px;flex:1">
+      <table class="data-table" style="width:100%">
+        <thead><tr><th>Date</th><th>Amount Released</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+function closeHistoryPopout(){
+  document.getElementById('history-popout-overlay')?.remove();
+}
+function printBillingHistory(propName){
+  const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
+  const budget=p?.budget||0;
+  const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+  const generated=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  const esc=t=>(t||'').toString().replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const rows=propBilling.map(b=>`<tr><td>${esc(b.entryDate)}</td><td>${esc(b.invoiceMonth||'—')}</td><td>${esc(fmtCurrencyFull(b.billedYTD))}</td><td>${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td><td>${esc(b.notes||'—')}</td></tr>`).join('');
+  const html=`<!DOCTYPE html><html><head><title>Billing History — ${esc(propName)}</title>
+  <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{font-size:18px;margin:0 0 4px;border-bottom:2px solid #185a9d;padding-bottom:8px}p.sub{font-size:12px;color:#888;margin:8px 0 20px}table{border-collapse:collapse;width:100%;font-size:12px}th{text-align:left;border-bottom:1px solid #ccc;padding:6px 8px;color:#5f6368}td{padding:6px 8px;border-bottom:1px solid #eee}</style>
+  </head><body>
+  <h1>${esc(propName)} — Billing History</h1>
+  <p class="sub">${propBilling.length} entries · Generated ${esc(generated)}</p>
+  <table><thead><tr><th>Date</th><th>Current Through</th><th>Billed YTD</th><th>%</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>
+  <hr style="margin-top:32px;border:none;border-top:1px solid #e0e0e0">
+  <p style="font-size:10px;color:#aaa">PULSE — Park Hotels &amp; Resorts — Confidential — Generated ${esc(generated)}</p>
+  <script>window.onload=function(){window.print();}<` + `/script>
+  </body></html>`;
+  const w=window.open('','_blank','width=900,height=700');if(w){w.document.write(html);w.document.close();}
+}
+function printRetainageHistory(propName){
+  const propReleases=(window.RETAINAGE_RELEASES||[]).filter(r=>r.property===propName).sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate));
+  const generated=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  const esc=t=>(t||'').toString().replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const rows=propReleases.map(rl=>`<tr><td>${esc(rl.releaseDate||'—')}</td><td>${esc(fmtCurrencyFull(rl.amountReleased))}</td><td>${esc(rl.notes||'—')}</td></tr>`).join('');
+  const html=`<!DOCTYPE html><html><head><title>Retainage Releases — ${esc(propName)}</title>
+  <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{font-size:18px;margin:0 0 4px;border-bottom:2px solid #185a9d;padding-bottom:8px}p.sub{font-size:12px;color:#888;margin:8px 0 20px}table{border-collapse:collapse;width:100%;font-size:12px}th{text-align:left;border-bottom:1px solid #ccc;padding:6px 8px;color:#5f6368}td{padding:6px 8px;border-bottom:1px solid #eee}</style>
+  </head><body>
+  <h1>${esc(propName)} — Retainage Releases</h1>
+  <p class="sub">${propReleases.length} entries · Generated ${esc(generated)}</p>
+  <table><thead><tr><th>Date</th><th>Amount Released</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>
+  <hr style="margin-top:32px;border:none;border-top:1px solid #e0e0e0">
+  <p style="font-size:10px;color:#aaa">PULSE — Park Hotels &amp; Resorts — Confidential — Generated ${esc(generated)}</p>
+  <script>window.onload=function(){window.print();}<` + `/script>
+  </body></html>`;
+  const w=window.open('','_blank','width=900,height=700');if(w){w.document.write(html);w.document.close();}
+}
+
 function refreshPendingReview(){
   // Re-render pending review queue to include pending COs
   const badge=document.getElementById('queue-badge');
@@ -5164,8 +5312,21 @@ function renderBudgetTab(p){
       <span>${variance>30?`Billing is significantly ahead of physical progress (${variance}%)`:variance>10?`Billing is ${variance}% ahead of physical progress`:variance<-10?`Work is ${Math.abs(variance)}% ahead of billing`:'Billing and physical progress are in sync'}</span>
     </div>`:'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Log a billing entry to see performance tracking.</div>'}`;
 
-  // Billing history
+  // Billing history — show last 6 by default; full history available via
+  // popout (also printable), so the card never grows unbounded over a
+  // multi-year project (v21d).
   const histEl=document.getElementById('billing-history-list');
+  const billingRow=(b,showActions)=>`<tr id="billing-row-${b.id}">
+        <td style="font-size:11px">${b.entryDate}</td>
+        <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
+        <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
+        <td style="font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
+        <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.notes||'—'}</td>
+        ${showActions&&canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
+          <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
+        </td>`:showActions?'<td></td>':''}
+      </tr>`;
+  const BILLING_PREVIEW_COUNT=6;
   histEl.innerHTML=propBilling.length===0?
     `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Billing Entries Yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
     `<table class="data-table" style="margin-top:0;table-layout:fixed;width:100%">
@@ -5177,17 +5338,9 @@ function renderBudgetTab(p){
         <th style="width:20%">Notes</th>
         ${canPM?'<th style="width:22%"></th>':''}
       </tr></thead>
-      <tbody>${propBilling.map((b,i)=>`<tr id="billing-row-${b.id}">
-        <td style="font-size:11px">${b.entryDate}</td>
-        <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
-        <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
-        <td style="font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
-        <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.notes||'—'}</td>
-        ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
-          <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
-        </td>`:''}
-      </tr>`).join('')}</tbody>
-    </table>`;
+      <tbody>${propBilling.slice(0,BILLING_PREVIEW_COUNT).map(b=>billingRow(b,true)).join('')}</tbody>
+    </table>
+    ${propBilling.length>BILLING_PREVIEW_COUNT?`<button class="btn" style="width:100%;margin-top:8px;font-size:12px" onclick="openBillingHistoryPopout('${p.n.replace(/'/g,"\\'")}')">Show all ${propBilling.length} entries</button>`:''}`;
 
   // Retainage tracking — derived from Billed YTD + property Retainage %.
   // Client withholds Retainage % from each invoice; releases reduce the net
@@ -5218,6 +5371,15 @@ function renderBudgetTab(p){
 
   const retHistEl=document.getElementById('retainage-history-list');
   if(retHistEl){
+    const retainageRow=(rl,showActions)=>`<tr id="retainage-row-${rl.id}">
+          <td style="font-size:11px">${rl.releaseDate||'—'}</td>
+          <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(rl.amountReleased)}</td>
+          <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${rl.notes||'—'}</td>
+          ${showActions&&canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
+            <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
+          </td>`:showActions?'<td></td>':''}
+        </tr>`;
+    const RETAINAGE_PREVIEW_COUNT=6;
     retHistEl.innerHTML=propReleases.length===0?
       `<div style="font-size:11px;color:var(--gray-mid);padding:4px 0">No retainage releases logged yet.</div>`:
       `<table class="data-table" style="margin-top:4px;table-layout:fixed;width:100%">
@@ -5227,15 +5389,9 @@ function renderBudgetTab(p){
           <th style="width:38%">Notes</th>
           ${canPM?'<th style="width:22%"></th>':''}
         </tr></thead>
-        <tbody>${propReleases.map(rl=>`<tr id="retainage-row-${rl.id}">
-          <td style="font-size:11px">${rl.releaseDate||'—'}</td>
-          <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(rl.amountReleased)}</td>
-          <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${rl.notes||'—'}</td>
-          ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
-            <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
-          </td>`:''}
-        </tr>`).join('')}</tbody>
-      </table>`;
+        <tbody>${propReleases.slice(0,RETAINAGE_PREVIEW_COUNT).map(rl=>retainageRow(rl,true)).join('')}</tbody>
+      </table>
+      ${propReleases.length>RETAINAGE_PREVIEW_COUNT?`<button class="btn" style="width:100%;margin-top:8px;font-size:12px" onclick="openRetainageHistoryPopout('${p.n.replace(/'/g,"\\'")}')">Show all ${propReleases.length} entries</button>`:''}`;
   }
 }
 
@@ -5609,6 +5765,28 @@ async function saveStepDates(phaseId){
   const propName=ph.property||ph.n||currentProp?.n||'';
   const phaseName=ph.phase||ph.phaseName||'';
   const rows=document.querySelectorAll('[data-step-idx]');
+  // Bug fix (v21c) — previously no validation existed comparing task Planned
+  // End dates against the phase's own Planned Completion, so a task's
+  // planned end could silently exceed the phase end with no signal anywhere.
+  // Purely informational: catches data entry error OR signals the phase's
+  // own Planned Completion may need adjusting — not a judgment on which one
+  // is wrong. Checked rows only, blank planned-end dates skipped, simple
+  // one-shot max-vs-phase-end comparison, non-blocking (mirrors the existing
+  // unit-name-mismatch confirm() pattern in saveNewPhase).
+  if(ph.plannedCompletion){
+    let latestPlannedEnd=null;
+    rows.forEach(row=>{
+      const checked=row.querySelector('.step-apply-check')?.checked!==false;
+      if(!checked)return;
+      const val=row.querySelector('.step-planned-end').value;
+      if(!val)return;
+      if(!latestPlannedEnd||new Date(val)>new Date(latestPlannedEnd))latestPlannedEnd=val;
+    });
+    if(latestPlannedEnd&&new Date(latestPlannedEnd)>new Date(ph.plannedCompletion)){
+      const proceed=confirm(`Warning: a task's Planned End (${latestPlannedEnd}) is later than this phase's Planned Completion (${ph.plannedCompletion}).\n\nThis may mean a task date needs review, or the phase's Planned Completion needs updating to reflect the tasks.\n\nClick OK to save anyway, or Cancel to review.`);
+      if(!proceed)return;
+    }
+  }
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
   for(const row of rows){
     const stepName=row.dataset.stepName||row.dataset.taskName;
@@ -5861,6 +6039,11 @@ async function saveNewPhase(){
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([newPhase]);
   // Write tasks to PHASE_STEPS locally so they render immediately
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
+  // Bug fix (v21c) — previously every task was created with blank Planned
+  // Start/End, forcing a separate trip into Edit Tasks immediately after
+  // every phase creation just to add dates. Now each selected task inherits
+  // the phase's own Planned Start/Planned Completion as a starting point,
+  // refined later in Edit Tasks as construction reality diverges.
   selectedMs.forEach((taskName,i)=>{
     const localId='pts-'+Date.now()+'-'+i;
     window.PHASE_STEPS.push({
@@ -5869,7 +6052,7 @@ async function saveNewPhase(){
       phaseName:name,
       taskName,
       taskOrder:i+1,
-      plannedStart:'',plannedEnd:'',
+      plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',
       actualStart:'',completionDate:'',
       status:'Not Started',notes:''
     });
@@ -5880,6 +6063,8 @@ async function saveNewPhase(){
         'Phase Name':name,
         'Task Name':taskName,
         'Task Order':i+1,
+        'Planned Start':plannedStart||null,
+        'Planned End':plannedEnd||null,
         'Status':'Not Started',
       });
     }
@@ -10088,7 +10273,7 @@ function refreshQueue(){
     empty.classList.add('hidden');
     const subItems=pending.map(s=>`<div class="queue-item">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-        <div class="queue-item-title">${s.property} — Week of ${s.week}</div>
+        <div class="queue-item-title">${s.property} — Week of ${s.week}${s.draftAction&&!s.draftAction.published?` <i class="ti ti-flag" style="color:var(--amber);font-size:12px" title="Consultant flagged a follow-up action"></i>`:''}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="badge b-pending">Pending</span>
           <button class="btn btn-icon" onclick="previewQueueItem('${s.id}')" title="Preview update"><i class="ti ti-eye" style="font-size:14px"></i></button>
@@ -10106,7 +10291,7 @@ function refreshQueue(){
         <div class="queue-item-title"><i class="ti ti-file-invoice" style="font-size:12px;margin-right:4px"></i>${co.property} — Change Order</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="co-status-pending">Pending</span>
-          <button class="btn btn-icon" onclick="openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',null),300)" title="View Change Order"><i class="ti ti-eye" style="font-size:14px;color:var(--gray-mid)"></i></button>
+          <button class="btn btn-icon" onclick="openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',document.querySelector('.tab-btn[onclick*=\"changeorders\"]')),300)" title="View Change Order"><i class="ti ti-eye" style="font-size:14px;color:var(--gray-mid)"></i></button>
         </div>
       </div>
       <div class="queue-item-meta">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date||'—'}</div>
@@ -10117,7 +10302,7 @@ function refreshQueue(){
         <span style="color:var(--gray-mid)">Savings: <strong style="color:var(--green)">${co.savings>0?fmtCurrency(co.savings):'—'}</strong></span>
       </div>
       <div class="queue-actions">
-        <button class="btn btn-success" style="font-size:11px" onclick="updateCOStatus('${co.id}','Approved');openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',null),300)"><i class="ti ti-check"></i>Approve</button>
+        <button class="btn btn-success" style="font-size:11px" onclick="updateCOStatus('${co.id}','Approved');openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',document.querySelector('.tab-btn[onclick*=\"changeorders\"]')),300)"><i class="ti ti-check"></i>Approve</button>
         <button class="btn btn-delete" style="font-size:11px" onclick="updateCOStatus('${co.id}','Rejected')">Reject</button>
       </div>
     </div>`).join('');
@@ -10150,6 +10335,14 @@ function previewQueueItem(subId){
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
       <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${s.notes||'—'}</div>
       ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Previous Return Note:</strong> ${s.returnNote}</div>`:''}
+      ${s.draftAction?`<div style="margin-top:12px;padding:12px;background:var(--blue-xpale);border:1px solid var(--blue-pale);border-radius:6px">
+        <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px"><i class="ti ti-flag" style="margin-right:4px"></i>Consultant-flagged follow-up</div>
+        <div style="font-size:12px;margin-bottom:4px"><strong>${s.draftAction.description}</strong></div>
+        <div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px">${s.draftAction.owner?`Owner: ${s.draftAction.owner} · `:''}Priority: ${s.draftAction.priority}${s.draftAction.due?` · Due ${s.draftAction.due}`:''}</div>
+        ${s.draftAction.published?
+          `<span style="font-size:11px;color:var(--green);font-weight:600"><i class="ti ti-circle-check"></i> Published to Action Items</span>`:
+          `<button class="btn btn-add" style="font-size:11px" onclick="publishDraftAction('${subId}')"><i class="ti ti-send"></i>Publish to Action Items</button>`}
+      </div>`:''}
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px">
       <button class="btn btn-success" onclick="document.getElementById('queue-preview-overlay').remove();approveSubmission('${subId}')"><i class="ti ti-check"></i>Approve</button>
@@ -10158,6 +10351,30 @@ function previewQueueItem(subId){
     </div>
   </div>`;
   document.body.appendChild(overlay);
+}
+
+async function publishDraftAction(subId){
+  // PM-initiated publish of a consultant-flagged draft action (v21c). Creates
+  // a real, live Action Item via the same atCreate('Action Items',...)
+  // pattern used everywhere else in PULSE, then marks the draft as published
+  // so it shows as resolved rather than disappearing or being publishable
+  // twice. Distinct from M4's silent auto-action — this one is a judgment
+  // call requiring explicit PM confirmation.
+  const s=submissions.find(x=>x.id===subId);
+  if(!s||!s.draftAction)return;
+  if(s.draftAction.published){showToast('Already published','info');return;}
+  const d=s.draftAction;
+  const fields={'Property Name':s.property,'Description':d.description,'Owner':d.owner||'','Due Date':d.due||null,'Priority':d.priority||'Medium','Status':'Open'};
+  const res=demoMode?null:await atCreate('Action Items',fields);
+  const newId=res?.records?.[0]?.id||'ai_'+Date.now();
+  actionItems.push({id:newId,property:s.property,description:d.description,owner:d.owner||'',due:d.due||'TBD',priority:d.priority||'Medium',status:'Open',meetingId:null});
+  s.draftAction.published=true;
+  if(s.atId)await atUpdate('Field Updates',s.atId,{'Draft Action Published':true});
+  refreshDashActions();
+  if(currentProp&&currentProp.n===s.property)renderPropertyView(currentProp);
+  document.getElementById('queue-preview-overlay')?.remove();
+  previewQueueItem(subId);
+  showToast('Action item published','success');
 }
 
 async function approveSubmission(id){
@@ -10236,12 +10453,88 @@ function populateSubmitDropdown(){
   if(!sel)return;
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   // Consultants only see their assigned properties; PM/Admin see all
-  const filtered=role==='consultant'
+  let filtered=role==='consultant'
     ? port.filter(p=>(p.v||'').trim().toLowerCase()===(currentConsultantName||'').trim().toLowerCase())
     : port;
+  // Property is locked (disabled) during edit/resubmit — if the consultant's
+  // assignment changed since the original submission, the original property
+  // could otherwise drop out of the filtered list, leaving the disabled
+  // select unable to display the correct value at all (native <select>
+  // behavior: .value silently fails if no matching <option> exists). Always
+  // include the property currently being edited as a guaranteed option.
+  const editingId=document.getElementById('f-editing-id')?.value||'';
+  if(editingId){
+    const editing=submissions.find(s=>s.id===editingId);
+    if(editing&&!filtered.some(p=>p.n===editing.property)){
+      const match=port.find(p=>p.n===editing.property);
+      filtered=filtered.concat([match||{n:editing.property}]);
+    }
+  }
   const current=sel.value;
   sel.innerHTML='<option value="">Select a property...</option>'+
     filtered.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===current?' selected':''}>${p.n}</option>`).join('');
+}
+function resetSubmitForm(){
+  ['f-property','f-units','f-notes','f-draft-action-desc','f-draft-action-owner','f-draft-action-due'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('f-editing-id').value='';
+  document.getElementById('f-property').disabled=false;
+  document.getElementById('f-week').disabled=false;
+  document.getElementById('f-draft-action-toggle').checked=false;
+  document.getElementById('f-draft-action-fields').style.display='none';
+  document.getElementById('f-draft-action-priority').value='Medium';
+  document.getElementById('submit-return-note-banner').style.display='none';
+  document.getElementById('submit-page-title').textContent='Submit weekly update';
+  document.getElementById('submit-page-sub').textContent='Enters PM review queue before publishing to client';
+  document.getElementById('submit-btn-primary').innerHTML='<i class="ti ti-upload"></i>Submit for review';
+  document.getElementById('submit-btn-cancel').style.display='none';
+}
+function cancelEditSubmission(){
+  resetSubmitForm();
+  gotoView('my-updates',null);
+}
+function editSubmission(id){
+  // Edit/resubmit (v21c) — reuses the Submit Update form pre-filled with the
+  // original submission's values, per confirmed design. Editable for
+  // Pending and Returned submissions only (not Approved — that's a
+  // permanent record). Property and Report Week are locked since they
+  // identify which submission this is; everything else is editable. The
+  // original Return Note (if any) stays visible while editing.
+  const s=submissions.find(x=>x.id===id);
+  if(!s)return;
+  if(s.reviewStatus==='approved'){showToast('Approved updates cannot be edited','warn');return;}
+  populateSubmitDropdown();
+  document.getElementById('f-editing-id').value=id;
+  document.getElementById('f-property').value=s.property;
+  document.getElementById('f-property').disabled=true;
+  document.getElementById('f-week').value=s.week;
+  document.getElementById('f-week').disabled=true;
+  document.getElementById('f-units').value=s.units||'';
+  document.getElementById('f-phase').value=s.phase||'Construction';
+  document.getElementById('f-status').value=s.status||'In Progress';
+  document.getElementById('f-notes').value=s.notes||'';
+  document.getElementById('f-comment-type').value=s.commentType||'General';
+  document.getElementById('f-issue-status').value=s.issueStatus||'N/A';
+  const hasDraft=!!s.draftAction;
+  document.getElementById('f-draft-action-toggle').checked=hasDraft;
+  document.getElementById('f-draft-action-fields').style.display=hasDraft?'block':'none';
+  if(hasDraft){
+    document.getElementById('f-draft-action-desc').value=s.draftAction.description||'';
+    document.getElementById('f-draft-action-owner').value=s.draftAction.owner||'';
+    document.getElementById('f-draft-action-priority').value=s.draftAction.priority||'Medium';
+    document.getElementById('f-draft-action-due').value=s.draftAction.due||'';
+  }
+  const banner=document.getElementById('submit-return-note-banner');
+  if(s.reviewStatus==='returned'&&s.returnNote){
+    document.getElementById('submit-return-note-text').textContent=`Returned by PM: ${s.returnNote}`;
+    banner.style.display='flex';
+  }else{
+    banner.style.display='none';
+  }
+  document.getElementById('submit-page-title').textContent='Edit & resubmit update';
+  document.getElementById('submit-page-sub').textContent=`Editing your ${s.week} update for ${s.property}`;
+  document.getElementById('submit-btn-primary').innerHTML='<i class="ti ti-upload"></i>Resubmit for review';
+  document.getElementById('submit-btn-cancel').style.display='inline-flex';
+  gotoView('submit',null);
 }
 async function submitUpdate(){
   const property=document.getElementById('f-property').value;if(!property){alert('Please select a property.');return;}
@@ -10254,8 +10547,20 @@ async function submitUpdate(){
   const commentType=document.getElementById('f-comment-type').value;
   const issueStatus=document.getElementById('f-issue-status').value;
   const consultantName=currentConsultantName||'VDA Consultant';
-  // Write to Airtable first
-  const res=await atCreate('Field Updates',{
+  const editingId=document.getElementById('f-editing-id').value||'';
+  // Draft action — attaches to this submission only; does not create a live
+  // Action Item. A PM must explicitly publish it from the review/preview
+  // screen (see publishDraftAction()).
+  const hasDraftAction=document.getElementById('f-draft-action-toggle').checked;
+  const draftAction=hasDraftAction?{
+    description:document.getElementById('f-draft-action-desc').value.trim(),
+    owner:document.getElementById('f-draft-action-owner').value.trim(),
+    priority:document.getElementById('f-draft-action-priority').value,
+    due:document.getElementById('f-draft-action-due').value,
+    published:false,
+  }:null;
+  if(hasDraftAction&&!draftAction.description){showToast('Please enter a description for the follow-up action, or uncheck the flag','warn');return;}
+  const fields={
     'Property Name':property,
     'Report Week':week,
     'Units Updated':units,
@@ -10264,16 +10569,50 @@ async function submitUpdate(){
     'Weekly Notes':notes,
     'Comment Type':commentType,
     'Issue Status':issueStatus,
+    'Consultant Name':consultantName,
+    'Draft Action Description':draftAction?draftAction.description:null,
+    'Draft Action Owner':draftAction&&draftAction.owner?draftAction.owner:null,
+    'Draft Action Priority':draftAction?draftAction.priority:null,
+    'Draft Action Due':draftAction&&draftAction.due?draftAction.due:null,
+  };
+  // Draft Action Published is a checkbox field — Airtable checkbox semantics
+  // for null aren't documented in our landmines list, so omit entirely
+  // rather than risk an invalid write; only set explicitly to false when a
+  // draft action is newly being created on this submission.
+  if(draftAction)fields['Draft Action Published']=false;
+  if(editingId){
+    // Edit/resubmit — update the original record in place rather than
+    // creating a duplicate. Property and Report Week are locked in the UI
+    // (read-only inputs) since they identify which submission this is, but
+    // are still included in the write for consistency with a fresh record.
+    const existing=submissions.find(s=>s.id===editingId);
+    if(!existing){showToast('Original submission not found','error');return;}
+    fields['Review Status']='Pending';
+    fields['Submitted Date']=dateStr;
+    if(existing.atId)await atUpdate('Field Updates',existing.atId,fields);
+    Object.assign(existing,{units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',draftAction});
+    updateQueueBadge();
+    const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} resubmitted. You'll be notified once reviewed.`;
+    se.classList.remove('hidden');
+    setTimeout(()=>se.classList.add('hidden'),5000);
+    resetSubmitForm();
+    showToast('Update resubmitted','success');
+    gotoView('my-updates',null);
+    return;
+  }
+  // Write to Airtable first
+  const res=await atCreate('Field Updates',{
+    ...fields,
     'Submitted Date':dateStr,
     'Review Status':'Pending',
-    'Consultant Name':consultantName,
   });
   const atId=res?.records?.[0]?.id||null;
-  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName});
+  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName,draftAction});
   updateQueueBadge();
   const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
-  se.classList.remove('hidden');['f-property','f-units','f-notes'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  se.classList.remove('hidden');
   setTimeout(()=>se.classList.add('hidden'),5000);
+  resetSubmitForm();
   if(!atId)showToast('Warning: submission saved locally but Airtable write failed','warn');
 }
 function refreshMyUpdates(){
@@ -10291,7 +10630,7 @@ function refreshMyUpdates(){
   if(visible.length===0){c.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No Updates Submitted Yet</div></div>`;updateMyUpdatesBadge();return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
   c.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Property</th><th>Week</th><th>Submitted</th><th>Status</th><th>Return note</th><th></th></tr></thead><tbody>`+
-    visible.slice().reverse().map(s=>`<tr><td>${s.property}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.week}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td><button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:13px"></i></button></td></tr>`).join('')+
+    visible.slice().reverse().map(s=>`<tr><td>${s.property}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.week}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td style="white-space:nowrap">${s.reviewStatus!=='approved'?`<button class="btn btn-icon" onclick="editSubmission('${s.id}')" title="Edit &amp; Resubmit"><i class="ti ti-edit" style="font-size:13px"></i></button>`:''}<button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:13px"></i></button></td></tr>`).join('')+
     `</tbody></table></div>`;
   updateMyUpdatesBadge();
 }
