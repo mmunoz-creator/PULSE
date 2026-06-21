@@ -141,6 +141,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .nav-item.active{color:white;background:rgba(55,138,221,.15);border-left-color:var(--blue-mid)}
 .nav-item.tour-highlight{color:white;background:rgba(83,74,183,.25)!important;border-left-color:var(--purple)!important;box-shadow:inset 0 0 0 1px rgba(83,74,183,.4)}
 .tab-row.tour-highlight{box-shadow:0 0 0 2px var(--purple);border-radius:6px}
+.tab-btn.tour-highlight{background:var(--purple-pale)!important;border-radius:6px 6px 0 0;box-shadow:inset 0 0 0 1px rgba(83,74,183,.4)}
 .nav-badge{margin-left:auto;background:var(--blue-dark);color:white;font-size:10px;padding:1px 6px;border-radius:10px;font-family:'Plus Jakarta Sans',sans-serif}
 .sidebar-footer{margin-top:auto;padding:1rem 1.25rem;border-top:1px solid rgba(255,255,255,.07)}
 .sidebar-user{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -582,6 +583,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
     <input type="text" id="consultant-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box" onkeydown="if(event.key==='Enter')confirmConsultant()">
     <div id="consultant-pin-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:10px"></div>
     <button onclick="confirmConsultant()" style="width:100%;padding:10px;background:#0F6E56;color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer">Continue to portal</button>
+    <div style="text-align:center;margin-top:10px"><button onclick="cancelConsultantPicker()" style="background:none;border:none;color:#B4B2A9;font-size:12px;cursor:pointer">← Back to login</button></div>
   </div>
 </div>
 
@@ -669,6 +671,10 @@ function showConsultantPicker(callback) {
     const nameEl = document.getElementById('consultant-name-input');
     if(nameEl)nameEl.value = currentConsultantName;
   }
+}
+function cancelConsultantPicker() {
+  document.getElementById('consultant-screen').style.display = 'none';
+  const err=document.getElementById('consultant-pin-error');if(err)err.style.display='none';
 }
 async function confirmConsultant() {
   const nameEl=document.getElementById('consultant-name-input');
@@ -1194,7 +1200,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v23i · elevatorpulse.com</div>
+    <div class="login-version">PULSE v23l · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2165,7 +2171,25 @@ window.PROPERTIES_SEED = [
 
       <!-- QUEUE -->
       <div id="view-queue" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Pending Review</h1><p>Review and approve consultant field updates before publishing</p></div></div>
+        <div class="page-header">
+          <div class="page-header-left"><h1>Pending Review</h1><p>Review and approve consultant field updates before publishing</p></div>
+          <div class="header-actions no-print">
+            <div class="field-wrap" style="margin:0;min-width:170px">
+              <label class="field-label" style="font-size:10px">Reports due by</label>
+              <select class="styled" id="due-day-select" style="font-size:12px;padding:6px 10px" onchange="saveDueDay(this.value)">
+                <option value="" id="due-day-placeholder">Not set</option>
+                <option value="Monday">Monday</option>
+                <option value="Tuesday">Tuesday</option>
+                <option value="Wednesday">Wednesday</option>
+                <option value="Thursday">Thursday</option>
+                <option value="Friday">Friday</option>
+                <option value="Saturday">Saturday</option>
+                <option value="Sunday">Sunday</option>
+              </select>
+            </div>
+            <button class="btn" id="send-reminder-btn" onclick="sendWeeklyReminders()" disabled title="Set a due day to enable reminders"><i class="ti ti-mail"></i>Send Reminder</button>
+          </div>
+        </div>
         <div class="page-body">
           <div id="queue-dynamic-list"></div>
           <div id="queue-empty" class="empty-state hidden"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">Queue is clear</div><div class="empty-state-sub">All updates reviewed</div></div>
@@ -3158,7 +3182,7 @@ function gotoView(viewId,btn){
   const el=document.getElementById('view-'+viewId);if(el)el.classList.remove('hidden');
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(btn)btn.classList.add('active');
-  if(viewId==='queue')refreshQueue();
+  if(viewId==='queue'){refreshQueue();loadDueDaySetting();}
   if(viewId==='my-updates')refreshMyUpdates();
   if(viewId==='report')renderReportLibrary();
   if(viewId==='documents'){docNavLevel=0;docNavProperty='';docNavSubfolder='';docSearchQuery='';renderDocFolders();}
@@ -10437,6 +10461,127 @@ function refreshQueue(){
   }
   updateQueueBadge();
 }
+
+// ── WEEKLY UPDATE REMINDER ────────────────────────────────────────
+// Reads/writes the single "Weekly Update Due Day" row in the Portfolio
+// Settings table. The Send Reminder button stays disabled until a PM has
+// explicitly set this at least once — see Build discussion: no default,
+// no assumption, the PM must set it themselves.
+let _portfolioSettingsRecordId=null;
+async function loadDueDaySetting(){
+  const sel=document.getElementById('due-day-select');
+  const btn=document.getElementById('send-reminder-btn');
+  if(!sel||!btn)return;
+  if(demoMode){
+    // No Portfolio Settings table in demo mode — leave unset, button stays disabled.
+    sel.value='';btn.disabled=true;
+    return;
+  }
+  try{
+    const recs=await atGet('Portfolio Settings');
+    const row=recs.find(r=>r.fields['Setting']==='Weekly Update Due Day');
+    _portfolioSettingsRecordId=row?row.id:null;
+    const val=row?(row.fields['Value']||''):'';
+    sel.value=val;
+    btn.disabled=!val;
+    btn.title=val?'Reminds consultants to submit their weekly update':'Set a due day to enable reminders';
+  }catch(e){
+    console.error('loadDueDaySetting error:',e);
+    sel.value='';btn.disabled=true;
+  }
+}
+async function saveDueDay(value){
+  const btn=document.getElementById('send-reminder-btn');
+  if(!value){if(btn){btn.disabled=true;btn.title='Set a due day to enable reminders';}return;}
+  if(demoMode){
+    showToast('Due day setting is not available in demo mode','warn');
+    return;
+  }
+  try{
+    if(!_portfolioSettingsRecordId){
+      // Row should already exist (created in Airtable), but guard just in case.
+      const recs=await atGet('Portfolio Settings');
+      const row=recs.find(r=>r.fields['Setting']==='Weekly Update Due Day');
+      _portfolioSettingsRecordId=row?row.id:null;
+    }
+    if(_portfolioSettingsRecordId){
+      await atUpdate('Portfolio Settings',_portfolioSettingsRecordId,{'Value':value});
+    }else{
+      await atCreate('Portfolio Settings',{'Setting':'Weekly Update Due Day','Value':value});
+    }
+    if(btn){btn.disabled=false;btn.title='Reminds consultants to submit their weekly update';}
+    showToast(`Reports due by ${value}`,'success');
+  }catch(e){
+    console.error('saveDueDay error:',e);
+    showToast('Could not save due day setting','error');
+  }
+}
+// Monday of the current week, midnight local time.
+function _currentWeekMonday(){
+  const d=new Date();d.setHours(0,0,0,0);
+  const day=d.getDay(); // 0=Sun..6=Sat
+  const diff=(day===0?-6:1-day); // shift to Monday
+  d.setDate(d.getDate()+diff);
+  return d;
+}
+async function sendWeeklyReminders(){
+  const sel=document.getElementById('due-day-select');
+  const dueDay=sel?sel.value:'';
+  if(!dueDay){showToast('Set a due day first','warn');return;}
+  const btn=document.getElementById('send-reminder-btn');
+  if(btn)btn.disabled=true;
+  try{
+    const monday=_currentWeekMonday();
+    // Consultants who already have a submission dated Monday-or-later this week are caught up.
+    const submittedThisWeek=new Set(
+      submissions
+        .filter(s=>{
+          const d=new Date(s.submittedAt);
+          return !isNaN(d)&&d>=monday;
+        })
+        .map(s=>(s.consultant||'').trim().toLowerCase())
+    );
+    let consultants=[];
+    if(demoMode){
+      consultants=[{name:'Nick Nikolai',email:'nick@vdassoc.com'},{name:'Paul Parios',email:'paul@vdassoc.com'}];
+    }else{
+      const recs=await atGet('Access PINs');
+      consultants=recs
+        .filter(r=>r.fields['Role']==='Consultant'&&r.fields['Active']&&r.fields['Email'])
+        .map(r=>({name:r.fields['Name']||'',email:r.fields['Email']}));
+    }
+    const missing=consultants.filter(c=>!submittedThisWeek.has(c.name.trim().toLowerCase()));
+    if(missing.length===0){
+      showToast('All consultants are caught up — no reminders needed','success');
+      if(btn)btn.disabled=false;
+      return;
+    }
+    const htmlBody=buildPulseEmail({
+      title:'Weekly Update Reminder',
+      subtitle:{property:'Weekly Field Update',detail:`This is a reminder to submit your weekly field update by ${dueDay}.`},
+      rows:[['Due by',dueDay],['Submit at','elevatorpulse.com']],
+    });
+    let sentCount=0;
+    for(const c of missing){
+      if(demoMode){sentCount++;continue;}
+      try{
+        const resp=await fetch('https://pulse-api.misty-munoz.workers.dev/send-email',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({to:c.email,subject:'Reminder: Weekly Field Update Due',html:htmlBody})
+        });
+        if(resp.ok)sentCount++;
+      }catch(e){console.error('Reminder email error:',e);}
+    }
+    showToast(`Reminder sent to ${sentCount} consultant${sentCount!==1?'s':''}${demoMode?' (demo mode)':''}`,'success');
+  }catch(e){
+    console.error('sendWeeklyReminders error:',e);
+    showToast('Could not send reminders — check connection and try again','error');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+
 function previewQueueItem(subId){
   const s=submissions.find(x=>x.id===subId);
   if(!s)return;
@@ -11967,10 +12112,15 @@ const TOUR_STEPS = {
     {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Help.']},
     {target:'#nav-pm [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — a snapshot of portfolio health, open actions, and recent activity across all your properties.']},
     {target:'#nav-pm [onclick*="\'portfolio\'"]',view:'portfolio',title:'Portfolio View',body:['Every property in one list. Click into any property for its full detail — milestones, billing, documents, and more.']},
-    {target:'.tab-row',title:'Property Detail',isPropertyDetail:true,body:[
+    {target:'.tab-row',title:'Property Detail',isPropertyDetail:true,propTab:'overview',body:[
       'Step 1: Opening any property gives you a full detail view, organized into tabs across the top.',
       'Step 2: Overview summarizes the property at a glance. Budget Performance tracks billing, retainage, and contract rates. Change Orders, Milestones, and Unit Phases track schedule and scope. Meetings & Actions, Field Updates, and Documents archive everything tied to this property.',
       'Step 3: Click any tab to dig into that area — we\u2019ll come back to a few of these (like Capital Plan and Schedule) in their own steps.'
+    ]},
+    {target:'.tab-btn[onclick*="milestones"]',title:'Milestones',isPropertyDetail:true,propTab:'milestones',body:[
+      'Step 1: Milestones outline the end-to-end project lifecycle — 14 checkpoints from initial survey through closeout, overseen by your VDA project team.',
+      'Step 2: Some milestones are dates you enter directly. Others — like construction progress checkpoints — calculate themselves automatically from the work tracked in Unit Phases, so they\u2019re always a true reflection of what\u2019s actually happening on site.',
+      'Step 3: Planned vs. Actual is shown side-by-side for every milestone, so you can see at a glance whether a property is on schedule, ahead, or falling behind.'
     ]},
     {target:'#nav-pm [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:[
       'Step 1: Capital Plan shows budget by year across your portfolio, organized into year bands.',
@@ -12024,6 +12174,16 @@ const TOUR_STEPS = {
     {target:'#nav-client [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — a snapshot of progress across your properties.']},
     {target:'#nav-client [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:['Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.']},
     {target:'#nav-client [onclick*="\'portfolio\'"]',view:'portfolio',title:'Portfolio View',body:['Every property in your portfolio, in one list. Click into any property for its full detail.']},
+    {target:'.tab-row',title:'Property Detail',isPropertyDetail:true,propTab:'overview',body:[
+      'Step 1: Opening any property gives you the same full detail view your VDA project team works from — organized into tabs across the top.',
+      'Step 2: Overview summarizes the property at a glance. Milestones and Unit Phases track progress against schedule. Budget Performance, Change Orders, Meetings & Actions, Field Updates, and Documents give you the same record-keeping visibility your project team has.',
+      'Step 3: Click any tab to explore — we\u2019ll look closer at Milestones next.'
+    ]},
+    {target:'.tab-btn[onclick*="milestones"]',title:'Milestones',isPropertyDetail:true,propTab:'milestones',body:[
+      'Step 1: Milestones outline the end-to-end project lifecycle — 14 checkpoints from initial survey through closeout, overseen by your VDA project team.',
+      'Step 2: Some milestones are calendar dates your project team enters directly. Others — like construction progress checkpoints — update themselves automatically as work is tracked in Unit Phases, so what you see always reflects what\u2019s actually happening on site.',
+      'Step 3: Planned vs. Actual is shown side-by-side for every milestone, so you can see at a glance whether a property is on schedule, ahead, or falling behind — no need to ask for a status update.'
+    ]},
     {target:'#nav-client [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:['View budget and capital planning by year across your portfolio.']},
     {target:'#nav-client [onclick*="\'schedule\'"]',view:'schedule',title:'Schedule',body:['A timeline view of milestones and phase progress across properties.']},
     {target:'#nav-client [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:['A working view of recent activity across your portfolio.']},
@@ -12054,6 +12214,7 @@ function _tourSteps(){return TOUR_STEPS[_tourRole]||[];}
 
 function _tourEnterPropertyDetailIfNeeded(step){
   if(!step.isPropertyDetail)return;
+  if(_tourPropertyOpened)return; // already open from a prior consecutive isPropertyDetail step
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const firstProp=port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed')[0];
   if(firstProp){
@@ -12062,8 +12223,10 @@ function _tourEnterPropertyDetailIfNeeded(step){
     _tourPropertyOpened=true;
   }
 }
-function _tourExitPropertyDetailIfNeeded(step){
+// nextStep is the step about to be shown — if it's also isPropertyDetail, stay open.
+function _tourExitPropertyDetailIfNeeded(step,nextStep){
   if(!step||!step.isPropertyDetail||!_tourPropertyOpened)return;
+  if(nextStep&&nextStep.isPropertyDetail)return; // staying on the same open property
   document.querySelectorAll('[id^="view-"]').forEach(v=>v.classList.add('hidden'));
   const t=document.getElementById('view-'+(_tourPrevView||'portfolio'));if(t)t.classList.remove('hidden');
   _tourPropertyOpened=false;
@@ -12072,6 +12235,7 @@ function _tourExitPropertyDetailIfNeeded(step){
 function _tourRenderStep(){
   const steps=_tourSteps();
   const step=steps[_tourIdx];if(!step)return _tourEnd();
+  _tourEnterPropertyDetailIfNeeded(step);
   let anchor=null;
   if(step.target){
     anchor=document.querySelector(step.target);
@@ -12079,15 +12243,19 @@ function _tourRenderStep(){
   if(step.view&&anchor){
     gotoView(step.view,anchor);
   }
-  _tourEnterPropertyDetailIfNeeded(step);
+  if(step.propTab){
+    const tabBtn=document.querySelector(`.tab-btn[onclick*="${step.propTab}"]`)||anchor;
+    switchPropTab(step.propTab,tabBtn);
+  }
   _tourShowPopover(step,anchor);
 }
 
 function _tourAdvance(delta){
   const steps=_tourSteps();
   const prevStep=steps[_tourIdx];
-  _tourExitPropertyDetailIfNeeded(prevStep);
-  _tourIdx+=delta;
+  const nextIdx=_tourIdx+delta;
+  _tourExitPropertyDetailIfNeeded(prevStep,steps[nextIdx]);
+  _tourIdx=nextIdx;
   if(_tourIdx<0)_tourIdx=0;
   if(_tourIdx>=steps.length)return _tourEnd();
   _tourRenderStep();
