@@ -580,7 +580,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
     <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">First and last name</label>
     <input type="text" id="consultant-name-input" placeholder="First and last name" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box">
     <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">PIN</label>
-    <input type="text" id="consultant-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box" onkeydown="if(event.key==='Enter')confirmConsultant()">
+    <input type="password" id="consultant-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box" onkeydown="if(event.key==='Enter')confirmConsultant()">
     <div id="consultant-pin-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:10px"></div>
     <button onclick="confirmConsultant()" style="width:100%;padding:10px;background:#0F6E56;color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer">Continue to portal</button>
     <div style="text-align:center;margin-top:10px"><button onclick="cancelConsultantPicker()" style="background:none;border:none;color:#B4B2A9;font-size:12px;cursor:pointer">← Back to login</button></div>
@@ -657,7 +657,28 @@ async function verifyPinLogin(roleKey,nameInput,pinInput){
     return {ok:false,message:'Incorrect PIN.'};
   }
   _pinAttempts=0;
-  return {ok:true,name:match.fields['Name']||name};
+  return {ok:true,name:match.fields['Name']||name,tourCompleted:match.fields['Tour Completed']||null,recordId:match.id};
+}
+
+// Build 2 — auto-launch Orientation Tour on first login only.
+// "Tour Completed" blank -> launch tour now, then stamp today's date.
+// "Tour Completed" populated -> skip; manual Orientation nav button still always works.
+// Writing happens at TOUR START, not tour completion (see Section 27 addendum).
+// This write must ONLY ever happen here — PIN rotation/Force Regenerate must
+// never touch "Tour Completed", so a returning person who already saw the
+// tour never sees it again just because their PIN changed.
+async function maybeAutoStartTour(roleKey,loginResult){
+  if(!loginResult||!loginResult.ok)return;
+  if(loginResult.tourCompleted)return; // already seen — never re-trigger
+  if(!loginResult.recordId)return;
+  const todayStr=new Date().toISOString().split('T')[0];
+  const writeResult=await atUpdate('Access PINs',loginResult.recordId,{'Tour Completed':todayStr});
+  if(!writeResult){
+    console.error('Failed to stamp Tour Completed for record:',loginResult.recordId);
+    // Proceed with the tour even if the write fails — better to show it
+    // once more than to silently never show it due to a transient error.
+  }
+  startTour(roleKey);
 }
 
 // Consultant picker
@@ -689,6 +710,7 @@ async function confirmConsultant() {
   errEl.style.display='none';
   currentConsultantName = result.name;
   window._userName = result.name;
+  window._lastLoginResult = result;
   sessionStorage.setItem('pulse_consultant', result.name);
   document.getElementById('consultant-screen').style.display = 'none';
   // Update sidebar display
@@ -1192,7 +1214,7 @@ window.PROPERTIES_SEED = [
         <label class="field-label">Your name</label>
         <input type="text" class="styled" id="login-name-input" placeholder="First and last name" autocomplete="off" style="margin-bottom:10px">
         <label class="field-label">PIN</label>
-        <input type="text" class="styled" id="login-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" onkeydown="if(event.key==='Enter')doLogin()">
+        <input type="password" class="styled" id="login-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" onkeydown="if(event.key==='Enter')doLogin()">
         <div id="login-pin-error" style="display:none;color:var(--red);font-size:12px;margin-top:8px"></div>
       </div>
       <button class="login-btn" onclick="doLogin()"><i class="ti ti-login"></i>Enter portal</button>
@@ -1200,7 +1222,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v24a · elevatorpulse.com</div>
+    <div class="login-version">PULSE v25b · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -3038,6 +3060,7 @@ async function doLogin(){
     }
     errEl.style.display='none';
     window._userName=result.name;
+    window._lastLoginResult=result;
   }
   _finishLogin();
 }
@@ -3069,6 +3092,13 @@ async function _finishLogin(){
   setFirstNavActive(role==='consultant'?'submit':'dashboard');updateQueueBadge();refreshDashActions();
   document.getElementById('login-screen').style.display='none';
   pushHistoryState();
+  // Build 2 — auto-launch Orientation Tour on first real login only.
+  // Demo mode and the back-button session-restore path never set
+  // window._lastLoginResult, so this is a no-op for both.
+  if(window._lastLoginResult){
+    maybeAutoStartTour(role,window._lastLoginResult);
+    window._lastLoginResult=null;
+  }
   if(client==='park') {
     loadAllData().then(() => {
       if(AT_CONNECTED) {
