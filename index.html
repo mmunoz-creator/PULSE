@@ -612,7 +612,7 @@ function skipToken() {
 
 // ── PIN AUTH ──────────────────────────────────────────────────────
 // Role keys (internal) -> Access PINs "Role" field values (Airtable single select)
-const PIN_ROLE_LABELS = {pm:'Project Manager',consultant:'Consultant',client:'Client'};
+const PIN_ROLE_LABELS = {pm:'Project Manager',consultant:'Consultant',client:'Client',admin:'IT Admin'};
 // In-memory lockout — resets on page reload by design (lightweight speed-bump,
 // not a durable security boundary; pilot user base is small and known).
 let _pinAttempts = 0;
@@ -622,14 +622,21 @@ function _pinLockoutRemaining(){
 }
 // Returns {ok:true,name} on success, or {ok:false,message} on failure.
 // Does not mutate any UI — callers handle their own error display.
+// Admin is a single shared role-level PIN (no per-person Name) — pass
+// nameInput as null/empty for roleKey==='admin'; matching is on Role+PIN only.
 async function verifyPinLogin(roleKey,nameInput,pinInput){
   const remaining=_pinLockoutRemaining();
   if(remaining>0){
     return {ok:false,message:`Too many attempts. Try again in ${remaining} minute${remaining===1?'':'s'}.`};
   }
+  const isAdmin=(roleKey==='admin');
   const name=(nameInput||'').trim();
   const pin=(pinInput||'').trim();
-  if(!name||!pin){
+  if(isAdmin){
+    if(!pin){
+      return {ok:false,message:'Enter the Admin PIN to continue.'};
+    }
+  }else if(!name||!pin){
     return {ok:false,message:'Enter your name and PIN to continue.'};
   }
   const roleLabel=PIN_ROLE_LABELS[roleKey];
@@ -640,8 +647,31 @@ async function verifyPinLogin(roleKey,nameInput,pinInput){
     console.error('PIN lookup failed:',e);
     return {ok:false,message:'Could not verify PIN — check your connection and try again.'};
   }
+  let match;
+  if(isAdmin){
+    // Role+PIN only — no Name field on this credential. If multiple active
+    // IT Admin rows exist (e.g. mid-rotation of the shared PIN), accept a
+    // match against any of them.
+    match=recs.find(r=>
+      (r.fields['Role']||'')===roleLabel &&
+      !!r.fields['Active'] &&
+      (r.fields['PIN']||'')===pin
+    );
+    if(!match){
+      const anyAdminConfigured=recs.some(r=>(r.fields['Role']||'')===roleLabel&&!!r.fields['Active']);
+      _pinAttempts++;
+      if(_pinAttempts>=3){_pinLockedUntil=Date.now()+10*60000;_pinAttempts=0;
+        return {ok:false,message:'Too many attempts. Try again in 10 minutes.'};}
+      if(!anyAdminConfigured){
+        return {ok:false,message:'Admin PIN not configured — contact IT.'};
+      }
+      return {ok:false,message:'Incorrect PIN.'};
+    }
+    _pinAttempts=0;
+    return {ok:true,name:'IT Admin',tourCompleted:match.fields['Tour Completed']||null,recordId:match.id};
+  }
   const nameLower=name.toLowerCase();
-  const match=recs.find(r=>
+  match=recs.find(r=>
     (r.fields['Role']||'')===roleLabel &&
     (r.fields['Name']||'').trim().toLowerCase()===nameLower
   );
@@ -1219,9 +1249,11 @@ window.PROPERTIES_SEED = [
           <button class="role-btn" onclick="selectRole('client',this)"><i class="ti ti-building"></i>Client</button>
         </div>
       </div>
-      <div class="field-wrap" id="login-name-pin-wrap" style="display:none">
-        <label class="field-label">Your name</label>
-        <input type="text" class="styled" id="login-name-input" placeholder="First and last name" autocomplete="off" style="margin-bottom:10px">
+      <div class="field-wrap" id="login-name-pin-wrap" style="display:block">
+        <div id="login-name-field-group" style="display:none">
+          <label class="field-label">Your name</label>
+          <input type="text" class="styled" id="login-name-input" placeholder="First and last name" autocomplete="off" style="margin-bottom:10px">
+        </div>
         <label class="field-label">PIN</label>
         <div style="position:relative">
           <input type="password" class="styled" id="login-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" style="padding-right:36px" onkeydown="if(event.key==='Enter')doLogin()">
@@ -1234,7 +1266,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v25d · elevatorpulse.com</div>
+    <div class="login-version">PULSE v25h · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2475,7 +2507,7 @@ window.PROPERTIES_SEED = [
           <div id="chatbot-blocked" class="hidden" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4rem 2rem;color:var(--gray-mid)">
             <i class="ti ti-lock" style="font-size:32px;margin-bottom:1rem;color:var(--gray-light)"></i>
             <div style="font-size:15px;font-weight:600;color:var(--gray-dark);margin-bottom:6px">Not available without authentication</div>
-            <div style="font-size:13px;max-width:360px">MARLI requires a verified PIN login. This role currently signs in without one.</div>
+            <div style="font-size:13px;max-width:360px">MARLI isn't available for the IT Admin role.</div>
           </div>
           <div class="chat-wrap" id="chatbot-active">
             <div class="chat-head"><div class="chat-head-icon"><i class="ti ti-robot"></i></div><div><div class="chat-head-title">MARLI — Portfolio Assistant</div><div class="chat-head-sub" id="chat-head-sub">44 properties · Live data · Smart responses</div></div><div class="chat-status"></div></div>
@@ -2805,16 +2837,14 @@ function enterDemo(){
   showToast('Demo mode — fictional data only','info');
   // Update chatbot for demo
   const chatMsgs=document.getElementById('chat-messages');
-  if(chatMsgs)chatMsgs.innerHTML=`<div class="chat-msg"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — I have visibility into this 15-store Demo Retail Portfolio. Ask me about any store, schedule status, budget, elevator company assignments, or consultant performance.</div></div>`;
+  if(chatMsgs)chatMsgs.innerHTML=`<div class="chat-msg"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — this is a demo preview of MARLI with a few sample questions wired up. Try one of the suggestions below to see how she responds.</div></div>`;
   const chatSub=document.getElementById('chat-head-sub');
-  if(chatSub)chatSub.textContent='15 stores · Demo data · Live AI';
+  if(chatSub)chatSub.textContent='15 stores · Demo preview';
   const chips=document.getElementById('chat-chips');
   if(chips)chips.innerHTML=`
     <span class="chip" onclick="askQ('Which stores are behind schedule?')">Behind schedule?</span>
-    <span class="chip" onclick="askQ('What is the total portfolio budget?')">Total budget?</span>
-    <span class="chip" onclick="askQ('Which stores are currently in construction?')">Active construction</span>
-    <span class="chip" onclick="askQ('Who are the VDA consultants?')">Consultants</span>
-    <span class="chip" onclick="askQ('Which elevator companies are on this portfolio?')">Elevator companies</span>
+    <span class="chip" onclick="askQ('What is a Cat 5 test?')">VT Glossary: Cat 5 test</span>
+    <span class="chip" onclick="askQ('How do I submit a field update?')">How do I submit an update?</span>
   `;
 }
 function setupDemoPortal(){
@@ -2848,33 +2878,6 @@ function setupDemoPortal(){
   document.getElementById('prop-meeting-btn').style.display=role==='pm'?'':'none';
   document.getElementById('at-label').textContent='Demo mode';
   document.getElementById('at-dot').style.background='var(--purple)';
-}
-
-async function sendDemoChat(msg){
-  const msgs=document.getElementById('chat-messages');
-  const typId='t'+Date.now();
-  msgs.innerHTML+=`<div class="chat-msg" id="${typId}"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble"><span style="color:var(--gray-light);font-style:italic" class="typing">Analyzing portfolio</span></div></div>`;
-  msgs.scrollTop=msgs.scrollHeight;
-  try{
-    const response=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system:DEMO_AI_CONTEXT,
-        messages:[{role:'user',content:msg}]
-      })
-    });
-    const data=await response.json();
-    const reply=data.content?.[0]?.text||'I encountered an error. Please try again.';
-    const el=document.getElementById(typId);
-    if(el)el.querySelector('.msg-bubble').textContent=reply;
-  }catch(e){
-    const el=document.getElementById(typId);
-    if(el)el.querySelector('.msg-bubble').textContent='Connection error — please try again.';
-  }
-  msgs.scrollTop=msgs.scrollHeight;
 }
 
 const PORTFOLIO=[
@@ -3040,8 +3043,10 @@ function selectRole(r,btn){
   document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   const wrap=document.getElementById('login-name-pin-wrap');
+  const nameGroup=document.getElementById('login-name-field-group');
   if(wrap){
-    wrap.style.display=(r==='pm'||r==='client')?'block':'none';
+    wrap.style.display=(r==='pm'||r==='client'||r==='admin')?'block':'none';
+    if(nameGroup)nameGroup.style.display=(r==='admin')?'none':'block';
     const err=document.getElementById('login-pin-error');if(err)err.style.display='none';
   }
 }
@@ -3077,12 +3082,13 @@ async function doLogin(){
     showConsultantPicker(()=>_finishLogin());
     return;
   }
-  // PM and Client verify name+PIN on the main login screen. Admin is PIN-free.
-  if(role==='pm'||role==='client'){
+  // PM, Client, and Admin verify PIN on the main login screen.
+  // Admin has no Name field — pass null; verifyPinLogin matches Role+PIN only.
+  if(role==='pm'||role==='client'||role==='admin'){
     const nameEl=document.getElementById('login-name-input');
     const pinEl=document.getElementById('login-pin-input');
     const errEl=document.getElementById('login-pin-error');
-    const result=await verifyPinLogin(role,nameEl.value,pinEl.value);
+    const result=await verifyPinLogin(role,role==='admin'?null:nameEl.value,pinEl.value);
     if(!result.ok){
       errEl.textContent=result.message;errEl.style.display='block';
       return;
@@ -3125,6 +3131,11 @@ async function _finishLogin(){
   // Demo mode and the back-button session-restore path never set
   // window._lastLoginResult, so this is a no-op for both.
   if(window._lastLoginResult){
+    // MARLI needs this person's Access PINs recordId for the lifetime of the
+    // session (rate limiting, daily cap, snapshot cache key) — stash it
+    // separately from window._lastLoginResult, which is a one-time signal
+    // consumed and cleared right below for the tour auto-trigger only.
+    window._marliRecordId=window._lastLoginResult.recordId||null;
     maybeAutoStartTour(role,window._lastLoginResult);
     window._lastLoginResult=null;
   }
@@ -11527,63 +11538,87 @@ function renderReport(){renderReportLibrary();}
 
 // CHATBOT
 function askQ(q){document.getElementById('chat-input').value=q;sendChat();}
+// Demo mode MARLI — 3 fixed, hand-written Q&A pairs. No live API call at
+// all, by design: demo mode must run reliably with zero dependency on real
+// Airtable data, KV state, or API keys. Matching is keyword-based against
+// the demo retail portfolio (DEMO_PORTFOLIO), NOT the real Park Hotels
+// dataset — confirmed this is the correct scope for demo mode.
+const DEMO_MARLI_QA = [
+  {
+    keywords: ['behind', 'schedule', 'delayed', 'late'],
+    answer: "Two stores are currently behind schedule: Store #142 in Chicago, delayed due to permit issues from the city, and Store #531 in Atlanta, where a labor shortage has pushed the timeline back — a recovery plan has already been submitted for that one."
+  },
+  {
+    keywords: ['cat 5', 'category 5', 'cat5'],
+    answer: "A Cat 5 test, or Category 5 Test, is a full-load safety test required under ASME A17.1 on a longer cycle, typically every five years. It tests car safeties under actual overspeed and free-fall conditions, making it the most comprehensive and demanding of the required periodic safety tests."
+  },
+  {
+    keywords: ['submit', 'field update', 'how do i'],
+    answer: "I don't walk through individual PULSE features myself, but the Orientation Tour has a topic called \"Submit Update\" that covers exactly this — you can open it any time from the sidebar."
+  },
+];
+const DEMO_MARLI_FALLBACK = "This is a demo preview of MARLI with a few sample questions wired up. In the live portal, MARLI answers from your actual current portfolio data. Try one of the suggested questions below to see how she responds.";
+
+function getDemoMarliAnswer(msg){
+  const lower=msg.toLowerCase();
+  for(const qa of DEMO_MARLI_QA){
+    if(qa.keywords.some(k=>lower.includes(k)))return qa.answer;
+  }
+  return DEMO_MARLI_FALLBACK;
+}
+
 function sendChat(){
   const input=document.getElementById('chat-input');const msg=input.value.trim();if(!msg)return;input.value='';
   const msgs=document.getElementById('chat-messages');
   msgs.innerHTML+=`<div class="chat-msg user-msg"><div class="msg-av u-av">U</div><div class="msg-bubble u-bubble">${msg}</div></div>`;
   msgs.scrollTop=msgs.scrollHeight;
-  sendLiveChat(msg);
+  if(demoMode){
+    sendDemoChat(msg);
+  }else{
+    sendLiveChat(msg);
+  }
 }
 
-function buildParkContext(){
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
-  const active=port.filter(p=>['In Progress'].includes(p.st));
-  const behind=active.filter(p=>p.r==='Behind');
-  const totalBudget=port.reduce((a,p)=>a+(p.budget||0),0);
-  const openActions=actionItems.filter(a=>a.status==='Open');
-  const recentMeetings=meetings.slice(-5);
-  return `You are the AI assistant for the PULSE portal — a project management platform for VDA, an elevator modernization consulting firm.
-
-CLIENT: Park Hotels & Resorts
-PROGRAM: Elevator Modernization Program
-PORTFOLIO: ${port.length} properties
-
-PORTFOLIO SUMMARY:
-- Active/CIP/Awarded: ${active.length}
-- Behind schedule: ${behind.length} (${behind.map(p=>p.n).join(', ')||'none'})
-- Total forecasted budget: ${fmtBudget(totalBudget)}
-
-ACTIVE PROPERTIES:
-${active.map(p=>`- ${p.n} | ${p.s} | ${p.ec} | ${p.units} units | Schedule: ${p.r||'—'} | Consultant: ${p.v} | Budget: ${p.budget?fmtBudget(p.budget):'TBD'} | Notes: ${p.comment}`).join('\n')}
-
-ALL PROPERTIES:
-${port.map(p=>`- ${p.n} (${p.s}): ${p.st} | ${p.ec} | Consultant: ${p.v}`).join('\n')}
-
-OPEN ACTION ITEMS (${openActions.length}):
-${openActions.slice(0,10).map(a=>`- ${a.property}: ${a.description} | Owner: ${a.owner} | Due: ${a.due}`).join('\n')||'None'}
-
-RECENT MEETINGS:
-${recentMeetings.map(m=>`- ${m.property} | ${m.date} | ${m.type} | ${(m.notes||'').slice(0,80)}`).join('\n')||'None logged yet'}
-
-Answer questions about the portfolio clearly and concisely. Be professional and direct. If asked about something not in the data, say so.`;
+function sendDemoChat(msg){
+  const msgs=document.getElementById('chat-messages');
+  const typId='t'+Date.now();
+  msgs.innerHTML+=`<div class="chat-msg" id="${typId}"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble"><span style="color:var(--gray-light);font-style:italic">Analyzing portfolio...</span></div></div>`;
+  msgs.scrollTop=msgs.scrollHeight;
+  // Small artificial delay so it reads like a real response rather than an
+  // instant canned reply — purely cosmetic, no real async work happening.
+  setTimeout(()=>{
+    const el=document.getElementById(typId);
+    if(el)el.querySelector('.msg-bubble').textContent=getDemoMarliAnswer(msg);
+    msgs.scrollTop=msgs.scrollHeight;
+  },600);
 }
 
+// Real MARLI — calls the Worker's /marli endpoint (Build, this session).
+// recordId comes from window._marliRecordId, stashed at login from
+// verifyPinLogin's result. role is the same short key used everywhere else
+// ('pm'/'consultant'/'client') — the Worker selects the matching Orientation
+// Tour topic list for that role's redirect behavior.
 async function sendLiveChat(msg){
   const msgs=document.getElementById('chat-messages');
   const typId='t'+Date.now();
   msgs.innerHTML+=`<div class="chat-msg" id="${typId}"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble"><span style="color:var(--gray-light);font-style:italic">Analyzing portfolio...</span></div></div>`;
   msgs.scrollTop=msgs.scrollHeight;
-  const systemPrompt=demoMode?DEMO_AI_CONTEXT:buildParkContext();
+  const recordId=window._marliRecordId||null;
   try{
-    const response=await fetch('https://api.anthropic.com/v1/messages',{
+    const response=await fetch(`${WORKER_URL}/marli`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,system:systemPrompt,messages:[{role:'user',content:msg}]})
+      body:JSON.stringify({recordId,query:msg,role})
     });
     const data=await response.json();
-    const reply=data.content?.[0]?.text||'I encountered an error. Please try again.';
     const el=document.getElementById(typId);
-    if(el)el.querySelector('.msg-bubble').textContent=reply;
+    if(el){
+      if(data.ok){
+        el.querySelector('.msg-bubble').textContent=data.answer;
+      }else{
+        el.querySelector('.msg-bubble').textContent=data.message||'MARLI could not generate a response — please try again.';
+      }
+    }
   }catch(e){
     const el=document.getElementById(typId);
     if(el)el.querySelector('.msg-bubble').textContent='Connection error — please try again.';
@@ -12198,7 +12233,7 @@ const TOUR_STEPS = {
     ]},
     {target:'#nav-pm [onclick*="\'comments\'"]',view:'comments',title:'Client Comments',body:['Where client-raised questions and flags show up for your response.']},
     {target:'#nav-pm [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates in one calendar view.']},
-    {target:'#nav-pm [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask it questions about your portfolio in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it itself — so this tour is always the best place to come back to.']},
+    {target:'#nav-pm [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your portfolio in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself — so this tour is always the best place to come back to.']},
     {target:'#nav-pm [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:['Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.']},
     {target:'#nav-pm [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
       'Step 1: Generate a report anytime, on demand, for any property or your full portfolio.',
@@ -12226,7 +12261,7 @@ const TOUR_STEPS = {
       'Step 3: Submit sends it to your PM for review. You\u2019ll see its status in My Updates.'
     ]},
     {target:'#nav-consultant [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates for your properties.']},
-    {target:'#nav-consultant [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask it questions about your properties in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it itself.']},
+    {target:'#nav-consultant [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your properties in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself.']},
     {target:'#nav-consultant [onclick*="\'glossary\'"]',view:'glossary',title:'VT Glossary',body:['A searchable glossary of vertical transportation terms and abbreviations.']},
   ],
   client: [
@@ -12254,7 +12289,7 @@ const TOUR_STEPS = {
     ]},
     {target:'#nav-client [onclick*="\'documents\'"]',view:'documents',title:'Documents',body:['Field updates, meeting minutes, and reports relevant to your properties are archived here automatically.']},
     {target:'#nav-client [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates across your portfolio.']},
-    {target:'#nav-client [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask it questions about your portfolio in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it itself.']},
+    {target:'#nav-client [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your portfolio in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself.']},
     {target:'#nav-client [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
       'Step 1: Generate a report anytime, on demand, for any property or your full portfolio.',
       'Step 2: Your report includes the underlying data, but not a written summary.',
