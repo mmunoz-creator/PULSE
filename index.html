@@ -574,25 +574,13 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 <div id="consultant-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem">
   <div style="width:44px;height:44px;background:#0F6E56;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1.25rem"><i class="ti ti-hard-hat" style="color:white;font-size:24px"></i></div>
   <div style="font-size:20px;font-weight:600;color:white;margin-bottom:6px;letter-spacing:-.3px">Who are you?</div>
-  <div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:2rem;text-align:center">Select your name — it will be attached to all updates you submit this session.</div>
+  <div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:2rem;text-align:center">Enter your name and PIN — it will be attached to all updates you submit this session.</div>
   <div style="background:white;border-radius:12px;padding:1.5rem;width:100%;max-width:380px">
-    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">Your name</label>
-    <select id="consultant-name-select" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A">
-      <option value="">Select your name...</option>
-      <option>Paul Parios</option>
-      <option>Nick Nikolai</option>
-      <option>Jim Himes</option>
-      <option>Ron Welts</option>
-      <option>Ken Donner</option>
-      <option>Dane Carollo</option>
-      <option>Jeff Sena</option>
-      <option>Jeff Hart</option>
-      <option>Rob Campbell</option>
-      <option>Robb Parks</option>
-      <option>Mike Loefler</option>
-      <option>Chris Shields</option>
-      <option>Jake Seibert</option>
-    </select>
+    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">First and last name</label>
+    <input type="text" id="consultant-name-input" placeholder="First and last name" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box">
+    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">PIN</label>
+    <input type="text" id="consultant-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box" onkeydown="if(event.key==='Enter')confirmConsultant()">
+    <div id="consultant-pin-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:10px"></div>
     <button onclick="confirmConsultant()" style="width:100%;padding:10px;background:#0F6E56;color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer">Continue to portal</button>
   </div>
 </div>
@@ -617,26 +605,89 @@ function skipToken() {
   document.getElementById('token-screen').style.display = 'none';
 }
 
+// ── PIN AUTH ──────────────────────────────────────────────────────
+// Role keys (internal) -> Access PINs "Role" field values (Airtable single select)
+const PIN_ROLE_LABELS = {pm:'Project Manager',consultant:'Consultant',client:'Client'};
+// In-memory lockout — resets on page reload by design (lightweight speed-bump,
+// not a durable security boundary; pilot user base is small and known).
+let _pinAttempts = 0;
+let _pinLockedUntil = 0;
+function _pinLockoutRemaining(){
+  return _pinLockedUntil>Date.now() ? Math.ceil((_pinLockedUntil-Date.now())/60000) : 0;
+}
+// Returns {ok:true,name} on success, or {ok:false,message} on failure.
+// Does not mutate any UI — callers handle their own error display.
+async function verifyPinLogin(roleKey,nameInput,pinInput){
+  const remaining=_pinLockoutRemaining();
+  if(remaining>0){
+    return {ok:false,message:`Too many attempts. Try again in ${remaining} minute${remaining===1?'':'s'}.`};
+  }
+  const name=(nameInput||'').trim();
+  const pin=(pinInput||'').trim();
+  if(!name||!pin){
+    return {ok:false,message:'Enter your name and PIN to continue.'};
+  }
+  const roleLabel=PIN_ROLE_LABELS[roleKey];
+  let recs=[];
+  try{
+    recs=await atGet('Access PINs');
+  }catch(e){
+    console.error('PIN lookup failed:',e);
+    return {ok:false,message:'Could not verify PIN — check your connection and try again.'};
+  }
+  const nameLower=name.toLowerCase();
+  const match=recs.find(r=>
+    (r.fields['Role']||'')===roleLabel &&
+    (r.fields['Name']||'').trim().toLowerCase()===nameLower
+  );
+  if(!match){
+    _pinAttempts++;
+    if(_pinAttempts>=3){_pinLockedUntil=Date.now()+10*60000;_pinAttempts=0;
+      return {ok:false,message:'Too many attempts. Try again in 10 minutes.'};}
+    return {ok:false,message:'Name not found.'};
+  }
+  const pinOk=(match.fields['PIN']||'')===pin;
+  const activeOk=!!match.fields['Active'];
+  if(!pinOk||!activeOk){
+    _pinAttempts++;
+    if(_pinAttempts>=3){_pinLockedUntil=Date.now()+10*60000;_pinAttempts=0;
+      return {ok:false,message:'Too many attempts. Try again in 10 minutes.'};}
+    return {ok:false,message:'Incorrect PIN.'};
+  }
+  _pinAttempts=0;
+  return {ok:true,name:match.fields['Name']||name};
+}
+
 // Consultant picker
 function showConsultantPicker(callback) {
   const screen = document.getElementById('consultant-screen');
   screen.style.display = 'flex';
   window._consultantCallback = callback;
-  // Pre-select if already set this session
+  const err=document.getElementById('consultant-pin-error');if(err)err.style.display='none';
+  // Pre-fill if already set this session
   if (currentConsultantName) {
-    const sel = document.getElementById('consultant-name-select');
-    sel.value = currentConsultantName;
+    const nameEl = document.getElementById('consultant-name-input');
+    if(nameEl)nameEl.value = currentConsultantName;
   }
 }
 async function confirmConsultant() {
-  const name = document.getElementById('consultant-name-select').value;
-  if (!name) { alert('Please select your name to continue.'); return; }
-  currentConsultantName = name;
-  sessionStorage.setItem('pulse_consultant', name);
+  const nameEl=document.getElementById('consultant-name-input');
+  const pinEl=document.getElementById('consultant-pin-input');
+  const errEl=document.getElementById('consultant-pin-error');
+  const name=nameEl.value;
+  const result=await verifyPinLogin('consultant',name,pinEl.value);
+  if(!result.ok){
+    errEl.textContent=result.message;errEl.style.display='block';
+    return;
+  }
+  errEl.style.display='none';
+  currentConsultantName = result.name;
+  window._userName = result.name;
+  sessionStorage.setItem('pulse_consultant', result.name);
   document.getElementById('consultant-screen').style.display = 'none';
   // Update sidebar display
-  document.getElementById('sb-username').textContent = name;
-  document.getElementById('sb-avatar').textContent = name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  document.getElementById('sb-username').textContent = result.name;
+  document.getElementById('sb-avatar').textContent = result.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   if (window._consultantCallback) window._consultantCallback();
 }
 
@@ -1131,12 +1182,19 @@ window.PROPERTIES_SEED = [
           <button class="role-btn" onclick="selectRole('client',this)"><i class="ti ti-building"></i>Client</button>
         </div>
       </div>
+      <div class="field-wrap" id="login-name-pin-wrap" style="display:none">
+        <label class="field-label">Your name</label>
+        <input type="text" class="styled" id="login-name-input" placeholder="First and last name" autocomplete="off" style="margin-bottom:10px">
+        <label class="field-label">PIN</label>
+        <input type="text" class="styled" id="login-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" onkeydown="if(event.key==='Enter')doLogin()">
+        <div id="login-pin-error" style="display:none;color:var(--red);font-size:12px;margin-top:8px"></div>
+      </div>
       <button class="login-btn" onclick="doLogin()"><i class="ti ti-login"></i>Enter portal</button>
       <div style="text-align:center;margin-top:14px">
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v23e · elevatorpulse.com</div>
+    <div class="login-version">PULSE v23g · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2356,7 +2414,12 @@ window.PROPERTIES_SEED = [
       <div id="view-chatbot" class="hidden">
         <div class="page-header"><div class="page-header-left"><h1>MARLI</h1><p>Modernization Advisory, Resources &amp; Lifecycle Intelligence</p></div></div>
         <div class="page-body">
-          <div class="chat-wrap">
+          <div id="chatbot-blocked" class="hidden" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4rem 2rem;color:var(--gray-mid)">
+            <i class="ti ti-lock" style="font-size:32px;margin-bottom:1rem;color:var(--gray-light)"></i>
+            <div style="font-size:15px;font-weight:600;color:var(--gray-dark);margin-bottom:6px">Not available without authentication</div>
+            <div style="font-size:13px;max-width:360px">MARLI requires a verified PIN login. This role currently signs in without one.</div>
+          </div>
+          <div class="chat-wrap" id="chatbot-active">
             <div class="chat-head"><div class="chat-head-icon"><i class="ti ti-robot"></i></div><div><div class="chat-head-title">MARLI — Portfolio Assistant</div><div class="chat-head-sub" id="chat-head-sub">44 properties · Live data · Smart responses</div></div><div class="chat-status"></div></div>
             <div class="chat-messages" id="chat-messages"><div class="chat-msg"><div class="msg-av ai-av">AI</div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — I'm MARLI, your Modernization Advisory assistant. I have full visibility into the 44-property Park Hotels &amp; Resorts portfolio. Ask me about any property, schedule risk, budget, milestones, or elevator company performance.</div></div></div>
             <div class="chat-chips" id="chat-chips">
@@ -2914,9 +2977,18 @@ window.CO_SAVINGS=window.CO_SAVINGS||[];
 PORTFOLIO.sort((a,b)=>a.n.localeCompare(b.n));
 const PARK_PORTFOLIO=PORTFOLIO;
 
-function selectRole(r,btn){role=r;document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}
+function selectRole(r,btn){
+  role=r;
+  document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const wrap=document.getElementById('login-name-pin-wrap');
+  if(wrap){
+    wrap.style.display=(r==='pm'||r==='client')?'block':'none';
+    const err=document.getElementById('login-pin-error');if(err)err.style.display='none';
+  }
+}
 
-function doLogin(){
+async function doLogin(){
   client=document.getElementById('client-select').value;
   console.log('doLogin: role='+role+', client='+client);
   // Non-Park clients — show under construction
@@ -2925,10 +2997,23 @@ function doLogin(){
     document.getElementById('under-construction-screen').style.display='flex';
     return;
   }
-  // If consultant role, show name picker first
+  // If consultant role, show name+PIN picker first
   if(role==='consultant' && !currentConsultantName) {
     showConsultantPicker(()=>_finishLogin());
     return;
+  }
+  // PM and Client verify name+PIN on the main login screen. Admin is PIN-free.
+  if(role==='pm'||role==='client'){
+    const nameEl=document.getElementById('login-name-input');
+    const pinEl=document.getElementById('login-pin-input');
+    const errEl=document.getElementById('login-pin-error');
+    const result=await verifyPinLogin(role,nameEl.value,pinEl.value);
+    if(!result.ok){
+      errEl.textContent=result.message;errEl.style.display='block';
+      return;
+    }
+    errEl.style.display='none';
+    window._userName=result.name;
   }
   _finishLogin();
 }
@@ -3037,13 +3122,13 @@ function setupPortal(){
   document.getElementById('nav-'+role).classList.remove('hidden');
   const cfgs={
     admin:{tag:'tag-admin',label:'IT Admin',av:'IT',name:'System Admin',roleLabel:'IT Admin',commTitle:'Client Comments'},
-    pm:{tag:'tag-pm',label:'Project Manager',av:'PM',name:'PM User',roleLabel:'VDA Project Manager',commTitle:'Client Comments'},
-    consultant:{tag:'tag-consultant',label:'Consultant',av:'VC',name:'VDA Consultant',roleLabel:'Field Consultant',commTitle:'Comments'},
-    client:{tag:'tag-client',label:'Client',av:'DA',name:'David Abraham',roleLabel:'Park Hotels Capital Projects',commTitle:'Comments & flags'},
+    pm:{tag:'tag-pm',label:'Project Manager',av:'PM',name:window._userName||'PM User',roleLabel:'VDA Project Manager',commTitle:'Client Comments'},
+    consultant:{tag:'tag-consultant',label:'Consultant',av:'VC',name:currentConsultantName||'VDA Consultant',roleLabel:'Field Consultant',commTitle:'Comments'},
+    client:{tag:'tag-client',label:'Client',av:'DA',name:window._userName||'David Abraham',roleLabel:'Park Hotels Capital Projects',commTitle:'Comments & flags'},
   };
   const c=cfgs[role];
   const tag=document.getElementById('sb-role-tag');tag.className='sidebar-role-tag '+c.tag;tag.textContent=c.label;
-  document.getElementById('sb-avatar').textContent=c.av;
+  document.getElementById('sb-avatar').textContent=(c.name||'').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()||c.av;
   document.getElementById('sb-username').textContent=c.name;
   document.getElementById('sb-userrole').textContent=c.roleLabel;
   document.getElementById('comments-h1').textContent=c.commTitle;
@@ -3073,6 +3158,15 @@ function gotoView(viewId,btn){
     renderAllMeetings();
   }
   if(viewId==='sitevisits')renderAllSiteVisits();
+  if(viewId==='chatbot'){
+    const blocked=document.getElementById('chatbot-blocked');
+    const active=document.getElementById('chatbot-active');
+    if(blocked&&active){
+      const isAdmin=role==='admin';
+      blocked.style.display=isAdmin?'flex':'none';
+      active.style.display=isAdmin?'none':'flex';
+    }
+  }
   if(viewId==='comments'){
     renderCommentsView();
   }
@@ -12065,7 +12159,7 @@ function _tourShowPopover(step,anchor){
   const stepNum=_tourIdx+1,totalSteps=steps.length;
   const isLinear=_tourMode==='linear';
   const bodyHtml=step.body.map(line=>`<div style="margin-bottom:8px;line-height:1.6">${line}</div>`).join('');
-  pop.style.cssText='position:fixed;width:320px;max-width:90vw;max-height:85vh;background:white;border-radius:10px;border-top:4px solid var(--purple);box-shadow:0 10px 36px rgba(83,74,183,.28);z-index:3000;font-family:\'Plus Jakarta Sans\',sans-serif;overflow:hidden;display:flex;flex-direction:column';
+  pop.style.cssText='position:fixed;width:360px;max-width:90vw;max-height:85vh;background:white;border-radius:10px;border-top:4px solid var(--purple);box-shadow:0 10px 36px rgba(83,74,183,.28);z-index:3000;font-family:\'Plus Jakarta Sans\',sans-serif;overflow:hidden;display:flex;flex-direction:column';
   pop.innerHTML=`
     <div style="background:var(--purple-pale);padding:.85rem 1.1rem;display:flex;align-items:center;gap:8px;flex-shrink:0">
       <i class="ti ti-route" style="color:var(--purple);font-size:15px"></i>
@@ -12073,7 +12167,7 @@ function _tourShowPopover(step,anchor){
       <button onclick="_tourSkip()" style="background:none;border:none;cursor:pointer;color:var(--purple);opacity:.6;font-size:15px;line-height:1"><i class="ti ti-x"></i></button>
     </div>
     <div style="padding:1.1rem 1.25rem;overflow-y:auto">
-    <div style="font-size:12.5px;color:var(--gray-dark)">${bodyHtml}</div>
+    <div style="font-size:13.5px;color:var(--gray-dark)">${bodyHtml}</div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:.85rem;padding-top:.75rem;border-top:1px solid var(--border)">
       ${isLinear?`<div style="font-size:11px;color:var(--gray-mid)">${stepNum} of ${totalSteps}</div>`:`<button onclick="_tourBackToMenu()" style="background:none;border:none;color:var(--blue-mid);font-size:11px;cursor:pointer;font-weight:500">&larr; Topics</button>`}
       <div style="display:flex;gap:6px">
