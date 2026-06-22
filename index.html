@@ -933,6 +933,14 @@ async function loadAllData() {
         // retainage). Airtable Percent field, same decimal convention as the
         // CO markups above (0.10 = 10%).
         retainagePct: r.fields['Retainage %']!=null?Number(r.fields['Retainage %'])*100:null,
+        // Build v26a — Contract Award Value. Captured alongside Contract
+        // Rates at/after M4 (Contract Award), entered manually (not auto-
+        // snapshotted from Project Budget — see continuity brief). Distinct
+        // from the still-freely-editable Project Budget field above; this
+        // is the locked "original budget" baseline used by the Scorecard's
+        // Budget Variance KPI. Optional/not required for the pilot — blank
+        // means Budget Variance shows N/A for that property until filled in.
+        contractAwardValue: r.fields['Contract Award Value']!=null?Number(r.fields['Contract Award Value']):null,
         ms: [], // milestones now from MILESTONES table
       })).filter(p=>p.n).sort((a,b)=>a.n.localeCompare(b.n));
       window.PORTFOLIO = livePortfolio;
@@ -993,6 +1001,12 @@ async function loadAllData() {
       due: r.fields['Due Date']||'TBD',
       priority: r.fields['Priority']||'Medium',
       status: r.fields['Status']||'Open',
+      // Build v26a fix: Closed Date was written to Airtable on close
+      // (closeAction()) but never read back here — so any item closed in
+      // a past session reloaded with closedDate=undefined, silently
+      // breaking Action Item Closure Rate's "closed within expected
+      // timeframe" check for historical data. Read it back now.
+      closedDate: r.fields['Closed Date']||'',
     }));
     siteVisits = visits.map(r => ({
       id: r.id,
@@ -1266,7 +1280,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v25k · elevatorpulse.com</div>
+    <div class="login-version">PULSE v26b · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -1666,6 +1680,8 @@ window.PROPERTIES_SEED = [
       <div class="form-group"><label class="form-label">O&amp;P Markup</label><div style="position:relative"><input class="form-input" type="number" id="ep-co-op-markup" placeholder="e.g. 10" min="0" max="100" step="0.1" style="padding-right:24px"><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:13px">%</span></div></div>
       <div class="form-group" style="grid-column:1/-1;margin-top:8px;padding-top:12px;border-top:1px solid var(--border)"><div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Retainage <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">- % client withholds from contractor invoices</span></div></div>
       <div class="form-group"><label class="form-label">Retainage %</label><div style="position:relative"><input class="form-input" type="number" id="ep-retainage-pct" placeholder="e.g. 10" min="0" max="100" step="0.1" style="padding-right:24px"><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:13px">%</span></div></div>
+      <div class="form-group" style="grid-column:1/-1;margin-top:8px;padding-top:12px;border-top:1px solid var(--border)"><div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Contract Award Value <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">- locked baseline for Budget Variance scoring, optional</span></div></div>
+      <div class="form-group"><label class="form-label">Contract Award Value</label><div style="position:relative"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--gray-mid);font-size:13px">$</span><input class="form-input" type="text" inputmode="numeric" id="ep-contract-award" placeholder="e.g. 1,950,000" style="padding-left:22px"></div></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Comments / Status Notes</label><textarea class="form-textarea" id="ep-notes" placeholder="Any notes about this property..." rows="3"></textarea></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
@@ -1688,6 +1704,7 @@ window.PROPERTIES_SEED = [
       <div class="nav-section">
         <div class="nav-section-label">Program</div>
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
+        <button class="nav-item" onclick="gotoView('scorecard',this)"><i class="ti ti-trophy"></i>Scorecard</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('schedule',this)"><i class="ti ti-timeline"></i>Schedule</button>
@@ -1703,6 +1720,7 @@ window.PROPERTIES_SEED = [
       <div class="nav-section">
         <div class="nav-section-label">Intelligence</div>
         <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
+        <button class="nav-item" onclick="gotoView('marliinsights',this)"><i class="ti ti-shield-check"></i>MARLI Insights</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Reports</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
@@ -1809,6 +1827,49 @@ window.PROPERTIES_SEED = [
         </div>
         <div class="page-body" id="dashboard-body">
           <!-- Populated by renderDashboard() -->
+        </div>
+      </div>
+
+      <!-- SCORECARD (Build v26a) — Admin-only. On-Time Performance Scoring:
+           5 KPIs (Modernization Delivery, Construction On-Time Delivery,
+           Action Item Closure Rate, Budget Variance, Change Order Impact)
+           + Top 3/Bottom 3 consultant rankings per KPI. Date-range filter
+           defaults to all-time. See renderScorecard(). -->
+      <div id="view-scorecard" class="hidden">
+        <div class="page-header">
+          <div class="page-header-left"><h1>Scorecard</h1><p>On-Time Performance Scoring · Park Hotels &amp; Resorts</p></div>
+          <div class="header-actions no-print">
+            <select class="styled" id="scorecard-range" style="font-size:12px;padding:6px 10px" onchange="renderScorecard()">
+              <option value="all" selected>All time</option>
+              <option value="12m">Trailing 12 months</option>
+              <option value="6m">Trailing 6 months</option>
+              <option value="ytd">Year to date</option>
+            </select>
+            <button class="btn btn-primary" onclick="printScorecard()"><i class="ti ti-printer"></i><span>Print / PDF</span></button>
+          </div>
+        </div>
+        <div class="page-body" id="scorecard-body">
+          <!-- Populated by renderScorecard() -->
+        </div>
+      </div>
+
+      <!-- MARLI INSIGHTS (Build v26b) — Admin-only. Usage stats, question
+           category breakdown, and the hallucination-safety-net review
+           queue, all sourced from the Worker's /marli-insights endpoint.
+           Date window defaults to Trailing 30 days. See renderMarliInsights(). -->
+      <div id="view-marliinsights" class="hidden">
+        <div class="page-header">
+          <div class="page-header-left"><h1>MARLI Insights</h1><p>Usage, coverage, and response monitoring · Admin only</p></div>
+          <div class="header-actions no-print">
+            <select class="styled" id="marli-insights-range" style="font-size:12px;padding:6px 10px" onchange="renderMarliInsights()">
+              <option value="30" selected>Trailing 30 days</option>
+              <option value="7">Trailing 7 days</option>
+              <option value="90">Trailing 90 days</option>
+            </select>
+          </div>
+        </div>
+        <div class="page-body" id="marli-insights-body">
+          <!-- Populated by renderMarliInsights() -->
         </div>
       </div>
 
@@ -3092,6 +3153,18 @@ async function _finishLogin(){
         // post-load refreshes, fixes it regardless of which page happened
         // to be open when the data finished loading.
         populateSubmitDropdown();
+        // Bug fix (v26a): loadDueDaySetting() previously only ran when
+        // gotoView('queue') fired — never as part of this post-load refresh
+        // chain. The "Weekly Update Due Day" <select> has no value until
+        // something explicitly populates it, so any session where the PM
+        // didn't freshly re-trigger gotoView('queue') after this promise
+        // resolved would show the dropdown reverted to "Not set", even
+        // though the value was saved correctly in Airtable all along. Same
+        // root cause shape as the v22b populateSubmitDropdown bug above —
+        // a real missing refresh call, not a timing race. Calling it here
+        // guarantees the dropdown reflects current Airtable data regardless
+        // of which view happens to be open when load completes.
+        loadDueDaySetting();
         if(!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
         showToast('Live data connected ✓','success');
       }
@@ -3187,6 +3260,8 @@ function gotoView(viewId,btn){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(btn)btn.classList.add('active');
   if(viewId==='queue'){refreshQueue();loadDueDaySetting();}
+  if(viewId==='scorecard')renderScorecard();
+  if(viewId==='marliinsights')renderMarliInsights();
   if(viewId==='my-updates')refreshMyUpdates();
   if(viewId==='report')renderReportLibrary();
   if(viewId==='documents'){docNavLevel=0;docNavProperty='';docNavSubfolder='';docSearchQuery='';renderDocFolders();}
@@ -8940,6 +9015,530 @@ function printDashboard(){
   setTimeout(()=>el?.classList.remove('print-active'),1000);
 }
 
+function printScorecard(){
+  const el=document.getElementById('view-scorecard');
+  if(el)el.classList.add('print-active');
+  window.print();
+  setTimeout(()=>el?.classList.remove('print-active'),1000);
+}
+
+// ── SCORECARD / ON-TIME PERFORMANCE SCORING (Build v26a) ───────────────
+// 5 locked KPIs, Admin-only view. All "on time" checks use a 2-week
+// (14-day) tolerance window, per spec. Sign conventions (locked):
+//   - KPIs 1,2,3,5: higher % is always better (Top = best, Bottom = worst)
+//   - KPI 4 (Budget Variance): lower/less-positive is better — "Bottom 3"
+//     means most OVER budget, "Top 3" means least over/most under.
+// Date-range filter scopes which completed projects count, based on each
+// project's relevant completion date (M14 actual date for KPI 1, M13
+// actual date for KPI 2). KPIs 3-5 are not inherently date-anchored in
+// the same way (ongoing action items, current budget/CO state), so the
+// date filter only affects KPIs 1 and 2 — documented in the UI via the
+// "as of" note rather than silently applying an inconsistent filter.
+const SCORECARD_TOLERANCE_DAYS=14;
+
+function _scorecardRangeStart(rangeVal){
+  const now=new Date();
+  if(rangeVal==='12m'){const d=new Date(now);d.setMonth(d.getMonth()-12);return d;}
+  if(rangeVal==='6m'){const d=new Date(now);d.setMonth(d.getMonth()-6);return d;}
+  if(rangeVal==='ytd'){return new Date(now.getFullYear(),0,1);}
+  return null; // 'all' — no lower bound
+}
+
+function _scorecardPort(){
+  return window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+}
+
+// KPI 1 & 2 share logic: % of properties whose given milestone (14 or 13)
+// is Complete with actualDate within SCORECARD_TOLERANCE_DAYS of plannedDate.
+// rangeStart, if set, filters to projects whose actualDate falls in-range.
+function _scorecardMilestoneOnTimeStats(milestoneNum,rangeStart){
+  const port=_scorecardPort();
+  let completed=0,onTime=0;
+  const perConsultant={}; // name -> {completed, onTime}
+  port.forEach(p=>{
+    const ms=getMilestonesForProp(p.n).find(m=>m.milestoneNumber===milestoneNum);
+    if(!ms||ms.status!=='Complete'||!ms.actualDate)return;
+    const actual=new Date(ms.actualDate+'T12:00:00');
+    if(rangeStart&&actual<rangeStart)return;
+    completed++;
+    const consultant=p.v||'Unassigned';
+    if(!perConsultant[consultant])perConsultant[consultant]={completed:0,onTime:0};
+    perConsultant[consultant].completed++;
+    let isOnTime=false;
+    if(ms.plannedDate){
+      const planned=new Date(ms.plannedDate+'T12:00:00');
+      const diffDays=Math.abs((actual-planned)/(1000*60*60*24));
+      isOnTime=diffDays<=SCORECARD_TOLERANCE_DAYS;
+    }
+    if(isOnTime){onTime++;perConsultant[consultant].onTime++;}
+  });
+  return {completed,onTime,pct:completed>0?Math.round(onTime/completed*100):null,perConsultant};
+}
+
+// KPI 3 — Action Item Closure Rate. Attribution: Action Item -> Property ->
+// that property's currently-assigned VDA Consultant (the Owner free-text
+// field on Action Items has no reliable tie to consultant identity, so
+// property assignment is the consistent attribution path used elsewhere
+// in PULSE). "Expected timeframe" = closed on/before the item's Due Date;
+// SCORECARD_TOLERANCE_DAYS is not applied here since Action Items already
+// carry an explicit due date — closing late is closing late, no grace
+// window beyond what the due date itself represents.
+function _scorecardActionItemStats(rangeStart){
+  const port=_scorecardPort();
+  const propToConsultant={};
+  port.forEach(p=>{propToConsultant[p.n]=p.v||'Unassigned';});
+  let closed=0,onTime=0;
+  const perConsultant={};
+  (actionItems||[]).forEach(a=>{
+    if(a.status!=='Closed'||!a.closedDate||!a.due||a.due==='TBD')return;
+    const closedDate=new Date(a.closedDate+'T12:00:00');
+    if(rangeStart&&closedDate<rangeStart)return;
+    closed++;
+    const consultant=propToConsultant[a.property]||'Unassigned';
+    if(!perConsultant[consultant])perConsultant[consultant]={closed:0,onTime:0};
+    perConsultant[consultant].closed++;
+    const dueDate=new Date(a.due+'T12:00:00');
+    const isOnTime=closedDate<=dueDate;
+    if(isOnTime){onTime++;perConsultant[consultant].onTime++;}
+  });
+  return {closed,onTime,pct:closed>0?Math.round(onTime/closed*100):null,perConsultant};
+}
+
+// KPI 4 — Budget Variance. (live Project Budget - Contract Award Value) /
+// Contract Award Value, signed, as a %. Properties with no Contract Award
+// Value entered are excluded entirely (not zero, not assumed) — see
+// continuity brief: no backfill push, organic fill-in only during pilot.
+function _scorecardBudgetVarianceStats(){
+  const port=_scorecardPort();
+  const perConsultant={}; // name -> array of variance %
+  const missing=[];
+  let withData=0;
+  port.forEach(p=>{
+    if(p.contractAwardValue==null||p.contractAwardValue===0){
+      // Only flag properties that have actually reached Contract Award
+      // (M4 Complete) — properties still upstream of award aren't "missing"
+      // data, they simply haven't gotten there yet.
+      const m4=getMilestonesForProp(p.n).find(m=>m.milestoneNumber===4);
+      if(m4&&m4.status==='Complete')missing.push(p);
+      return;
+    }
+    withData++;
+    const variance=((p.budget||0)-p.contractAwardValue)/p.contractAwardValue*100;
+    const consultant=p.v||'Unassigned';
+    if(!perConsultant[consultant])perConsultant[consultant]=[];
+    perConsultant[consultant].push(variance);
+  });
+  const allVariances=Object.values(perConsultant).flat();
+  const avgVariance=allVariances.length>0?allVariances.reduce((a,b)=>a+b,0)/allVariances.length:null;
+  const perConsultantAvg={};
+  Object.keys(perConsultant).forEach(c=>{
+    const arr=perConsultant[c];
+    perConsultantAvg[c]=arr.reduce((a,b)=>a+b,0)/arr.length;
+  });
+  return {withData,avgVariance,perConsultantAvg,missing};
+}
+
+// KPI 5 — Change Order Impact. Net negotiated CO savings as % of original
+// project budget (Contract Award Value). Uses the existing Change Order
+// Savings Log (originalAmount/negotiatedAmount per CO). Same exclusion
+// rule as KPI 4 — properties without a Contract Award Value are excluded,
+// not assumed zero.
+function _scorecardChangeOrderStats(){
+  const port=_scorecardPort();
+  const coLog=window.CO_SAVINGS||[];
+  const perConsultant={};
+  const missing=[];
+  port.forEach(p=>{
+    if(p.contractAwardValue==null||p.contractAwardValue===0){
+      const m4=getMilestonesForProp(p.n).find(m=>m.milestoneNumber===4);
+      if(m4&&m4.status==='Complete'&&!missing.includes(p))missing.push(p);
+      return;
+    }
+    // Same status filter used elsewhere (renderChangeOrders, property mini-
+    // cards) — only Approved/Client Approved COs count toward realized
+    // savings. Pending/rejected COs aren't a negotiated outcome yet.
+    const propCOs=(coLog||[]).filter(c=>c.property===p.n&&(c.status==='Approved'||c.status==='Client Approved'));
+    if(propCOs.length===0)return; // no realized COs — not a ranking input either way
+    const netSavings=propCOs.reduce((a,c)=>a+((c.originalAmount||0)-(c.negotiatedAmount||0)),0);
+    const savingsPct=netSavings/p.contractAwardValue*100;
+    const consultant=p.v||'Unassigned';
+    if(!perConsultant[consultant])perConsultant[consultant]=[];
+    perConsultant[consultant].push(savingsPct);
+  });
+  const perConsultantAvg={};
+  Object.keys(perConsultant).forEach(c=>{
+    const arr=perConsultant[c];
+    perConsultantAvg[c]=arr.reduce((a,b)=>a+b,0)/arr.length;
+  });
+  const allPcts=Object.values(perConsultantAvg);
+  const avgPct=allPcts.length>0?allPcts.reduce((a,b)=>a+b,0)/allPcts.length:null;
+  return {avgPct,perConsultantAvg,missing};
+}
+
+// Builds Top 3 / Bottom 3 rows from a {consultant: value} map. higherIsBetter
+// controls sort direction — see KPI sign convention note above.
+function _scorecardRankRows(valueMap,higherIsBetter,minSampleNote){
+  const entries=Object.entries(valueMap).filter(([,v])=>v!=null&&!isNaN(v));
+  const sorted=entries.sort((a,b)=>higherIsBetter?b[1]-a[1]:a[1]-b[1]);
+  return {top:sorted.slice(0,3),bottom:sorted.slice(-3).reverse(),hasData:sorted.length>0};
+}
+
+function _scorecardRankPctMap(perConsultant,onTimeKey,totalKey){
+  const map={};
+  Object.entries(perConsultant).forEach(([name,v])=>{
+    const total=v[totalKey];
+    if(total>0)map[name]=Math.round(v[onTimeKey]/total*100);
+  });
+  return map;
+}
+
+function renderScorecard(){
+  const body=document.getElementById('scorecard-body');
+  if(!body)return;
+  const rangeSel=document.getElementById('scorecard-range');
+  const rangeVal=rangeSel?rangeSel.value:'all';
+  const rangeStart=_scorecardRangeStart(rangeVal);
+
+  const k1=_scorecardMilestoneOnTimeStats(14,rangeStart);
+  const k2=_scorecardMilestoneOnTimeStats(13,rangeStart);
+  const k3=_scorecardActionItemStats(rangeStart);
+  const k4=_scorecardBudgetVarianceStats();
+  const k5=_scorecardChangeOrderStats();
+
+  const missingProps=[...new Map([...k4.missing,...k5.missing].map(p=>[p.n,p])).values()];
+
+  const fmtPct=v=>v==null?'—':v+'%';
+  const fmtSignedPct=v=>v==null?'—':(v>0?'+':'')+v.toFixed(1)+'%';
+
+  const cards=[
+    {label:'Modernization delivery',val:fmtPct(k1.pct),sub:`${k1.onTime} of ${k1.completed} closed on time`,color:'var(--blue-dark)'},
+    {label:'Construction on-time',val:fmtPct(k2.pct),sub:`${k2.onTime} of ${k2.completed} closed on time`,color:'var(--blue-mid)'},
+    {label:'Action item closure',val:fmtPct(k3.pct),sub:`${k3.onTime} of ${k3.closed} closed on time`,color:'var(--green)'},
+    {label:'Budget variance',val:fmtSignedPct(k4.avgVariance!=null?Math.round(k4.avgVariance*10)/10:null),sub:`avg vs. award value · ${k4.withData} properties`,color:'var(--amber)'},
+    {label:'CO impact',val:k5.avgPct!=null?Math.round(k5.avgPct*10)/10+'%':'—',sub:'avg net savings vs. award value',color:'var(--green)'},
+  ];
+
+  const cardsHtml=cards.map(c=>`
+    <div class="stat-card" style="border-top:3px solid ${c.color};text-align:left;align-items:stretch;justify-content:flex-start;display:block">
+      <div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px">${c.label}</div>
+      <div style="font-size:26px;font-weight:700;color:var(--navy)">${c.val}</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-top:4px">${c.sub}</div>
+    </div>`).join('');
+
+  const gapHtml=missingProps.length>0?`
+    <div onclick="showScorecardGapDrilldown()" style="cursor:pointer;background:var(--red-pale);border:1px solid #f0c4c4;border-radius:8px;padding:10px 14px;margin-bottom:24px;font-size:12px;color:#791F1F;display:flex;align-items:center;gap:8px">
+      <i class="ti ti-info-circle" style="font-size:15px"></i>
+      Budget Variance and CO Impact exclude ${missingProps.length} ${missingProps.length===1?'property':'properties'} with no Contract Award Value entered yet. Click to view.
+    </div>`:'';
+
+  const k1RankMap=_scorecardRankPctMap(k1.perConsultant,'onTime','completed');
+  const k2RankMap=_scorecardRankPctMap(k2.perConsultant,'onTime','completed');
+  const k3RankMap=_scorecardRankPctMap(k3.perConsultant,'onTime','closed');
+  const k4RankMap=k4.perConsultantAvg;
+  const k5RankMap=k5.perConsultantAvg;
+
+  const rankPairs=[
+    {title:'construction on-time',map:k2RankMap,higherBetter:true,fmt:v=>v+'%'},
+    {title:'action item closure',map:k3RankMap,higherBetter:true,fmt:v=>v+'%'},
+    {title:'budget variance (least over)',map:k4RankMap,higherBetter:false,fmt:v=>fmtSignedPct(Math.round(v*10)/10),bottomLabel:'most over'},
+    {title:'change order impact',map:k5RankMap,higherBetter:true,fmt:v=>(v>=0?'+':'')+(Math.round(v*10)/10)+'%'},
+  ];
+
+  const rankCardsHtml=rankPairs.map(rp=>{
+    const r=_scorecardRankRows(rp.map,rp.higherBetter);
+    if(!r.hasData){
+      return `<div class="stat-card" style="grid-column:span 2;text-align:center;display:block"><div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Not enough data yet for ${rp.title} rankings</div></div>`;
+    }
+    const topRows=r.top.map(([name,v],i)=>`<tr ${i>0?'style="border-top:1px solid var(--gray-pale)"':''}><td style="padding:6px 0;font-size:13px">${i+1}. ${name}</td><td style="padding:6px 0;text-align:right;font-weight:700;font-size:13px;color:var(--green)">${rp.fmt(v)}</td></tr>`).join('');
+    const bottomRows=r.bottom.map(([name,v],i)=>`<tr ${i>0?'style="border-top:1px solid var(--gray-pale)"':''}><td style="padding:6px 0;font-size:13px">${i+1}. ${name}</td><td style="padding:6px 0;text-align:right;font-weight:700;font-size:13px;color:var(--red)">${rp.fmt(v)}</td></tr>`).join('');
+    return `
+    <div class="stat-card" style="text-align:left;align-items:stretch;display:block">
+      <div style="font-size:12px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.03em;margin-bottom:10px;display:flex;align-items:center;gap:6px"><i class="ti ti-trending-up" style="font-size:14px"></i>Top 3 — ${rp.title}</div>
+      <table style="width:100%;border-collapse:collapse">${topRows}</table>
+    </div>
+    <div class="stat-card" style="text-align:left;align-items:stretch;display:block">
+      <div style="font-size:12px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.03em;margin-bottom:10px;display:flex;align-items:center;gap:6px"><i class="ti ti-trending-down" style="font-size:14px"></i>Bottom 3 — ${rp.title}${rp.bottomLabel?' ('+rp.bottomLabel+')':''}</div>
+      <table style="width:100%;border-collapse:collapse">${bottomRows}</table>
+    </div>`;
+  }).join('');
+
+  const rangeLabel={all:'All time',6:'Trailing 6 months','12m':'Trailing 12 months','6m':'Trailing 6 months',ytd:'Year to date'}[rangeVal]||'All time';
+
+  body.innerHTML=`
+    <div style="font-size:11px;color:var(--gray-mid);margin-bottom:12px">Showing: ${rangeLabel} · Modernization &amp; Construction Delivery scoped to projects closing in this range. Action Item, Budget Variance, and CO Impact reflect current portfolio state.</div>
+    <div class="stat-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px">${cardsHtml}</div>
+    ${gapHtml}
+    <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:12px">Consultant rankings</div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px">${rankCardsHtml}</div>
+  `;
+}
+
+// Click-through from the missing-data callout — reuses the same drilldown
+// overlay pattern as showBarDrilldown() in Analytics (same markup, same
+// close button, same click-row-to-open-property behavior).
+function showScorecardGapDrilldown(){
+  const port=_scorecardPort();
+  const props=port.filter(p=>{
+    if(p.contractAwardValue!=null&&p.contractAwardValue!==0)return false;
+    const m4=getMilestonesForProp(p.n).find(m=>m.milestoneNumber===4);
+    return m4&&m4.status==='Complete';
+  });
+  if(props.length===0)return;
+  const overlay=document.createElement('div');
+  overlay.id='bar-drill-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const rows=props.map(p=>{
+    const health=derivePropertyStatusFromPhases(p.n);
+    const healthColor=health==='At Risk'?'var(--red)':health==='Ahead'?'var(--green)':health==='Complete'?'#3DAA7A':'var(--blue-dark)';
+    return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
+      <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
+      <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
+      <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
+      <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${p.v||'—'}</td>
+    </tr>`;
+  }).join('');
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:620px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:14px;font-weight:600;color:var(--navy)">Missing Contract Award Value (${props.length})</div>
+      <button onclick="document.getElementById('bar-drill-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="overflow-y:auto;flex:1">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--gray-xpale)">
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Property</th>
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">State</th>
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Health</th>
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Consultant</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="padding:10px 20px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">Click any row to open the property and enter its Contract Award Value</div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+// ── MARLI INSIGHTS (Build v26b) ─────────────────────────────────────
+// Admin-only. Usage stats, question-category breakdown, and the
+// hallucination-safety-net review queue — all sourced live from the
+// Worker's /marli-insights endpoint (GET to read, POST to dismiss a flag).
+// Privacy note (see continuity brief): full question/answer/snapshot
+// content is retained ONLY for flagged responses, not all conversations —
+// a narrow, justified exception, not blanket transcript logging.
+
+const MARLI_INSIGHTS_CATEGORY_LABELS = {
+  vt_glossary: 'VT Glossary lookup',
+  schedule_status: 'Schedule / status',
+  budget_financial: 'Budget / financial',
+  tour_redirect: 'Tour redirect',
+  off_topic: 'Off-topic / declined',
+  other: 'Other',
+};
+
+let _marliInsightsCache = null; // last successful fetch, for the detail drilldown
+
+async function fetchMarliInsights(days){
+  try{
+    const res = await fetch(`${WORKER_URL}/marli-insights?days=${encodeURIComponent(days)}`);
+    if(!res.ok)return null;
+    return await res.json();
+  }catch(e){
+    console.error('fetchMarliInsights failed:',e);
+    return null;
+  }
+}
+
+function _miFmtRole(role){
+  return ({pm:'PM',consultant:'Consultant',client:'Client'})[role]||'Other';
+}
+
+function _miFmtDate(ts){
+  return new Date(ts).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+
+async function renderMarliInsights(){
+  const body=document.getElementById('marli-insights-body');
+  if(!body)return;
+  body.innerHTML=`<div style="padding:2rem;text-align:center;color:var(--gray-mid);font-size:13px">Loading MARLI Insights...</div>`;
+
+  const rangeSel=document.getElementById('marli-insights-range');
+  const days=rangeSel?parseInt(rangeSel.value,10):30;
+
+  const data=await fetchMarliInsights(days);
+  if(!data){
+    body.innerHTML=`<div style="padding:2rem;text-align:center;color:var(--red);font-size:13px">Could not load MARLI Insights — check connection and try again.</div>`;
+    return;
+  }
+  _marliInsightsCache=data;
+
+  // --- Stat cards ---
+  const cards=[
+    {label:'Total queries',val:data.totalQueries,sub:`last ${data.windowDays} days`,color:'var(--blue-dark)'},
+    {label:'Unique users',val:data.uniqueUsers,sub:'asked MARLI a question',color:'var(--blue-mid)'},
+    {label:'Avg per active user',val:data.avgPerActiveUser,sub:`queries / ${data.windowDays} days`,color:'var(--green)'},
+    {label:'Flagged responses',val:data.flaggedPendingCount,sub:'awaiting review',color:'var(--red)'},
+  ];
+  const cardsHtml=cards.map(c=>`
+    <div class="stat-card" style="border-top:3px solid ${c.color};text-align:left;align-items:stretch;justify-content:flex-start;display:block">
+      <div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px">${c.label}</div>
+      <div style="font-size:26px;font-weight:700;color:${c.label==='Flagged responses'&&c.val>0?'var(--red)':'var(--navy)'}">${c.val}</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-top:4px">${c.sub}</div>
+    </div>`).join('');
+
+  // --- Usage trend chart (bar by day, stacked by role) ---
+  const dayKeys=Object.keys(data.dailyByRole).sort();
+  let chartHtml='';
+  if(dayKeys.length===0){
+    chartHtml=`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:30px 0">No MARLI queries in this window yet</div>`;
+  }else{
+    const maxTotal=Math.max(...dayKeys.map(d=>{
+      const r=data.dailyByRole[d];
+      return r.pm+r.consultant+r.client+r.other;
+    }),1);
+    const bars=dayKeys.map(d=>{
+      const r=data.dailyByRole[d];
+      const total=r.pm+r.consultant+r.client+r.other;
+      const h=Math.max(2,Math.round((total/maxTotal)*100));
+      // Stack proportionally within the bar height — pm darkest, then
+      // consultant, then client, lightest. 'other' folded into client
+      // shade to avoid a 4th color for a near-zero bucket in practice.
+      const pmPct=total>0?Math.round((r.pm/total)*100):0;
+      const conPct=total>0?Math.round((r.consultant/total)*100):0;
+      const cliPct=Math.max(0,100-pmPct-conPct);
+      return `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:120px" title="${_miFmtDate(new Date(d).getTime())}: ${total} queries">
+        <div style="width:100%;border-radius:2px 2px 0 0;overflow:hidden;display:flex;flex-direction:column;height:${h}%">
+          ${pmPct>0?`<div style="background:var(--blue-dark);height:${pmPct}%"></div>`:''}
+          ${conPct>0?`<div style="background:var(--blue-mid);height:${conPct}%"></div>`:''}
+          ${cliPct>0?`<div style="background:var(--blue-light);height:${cliPct}%"></div>`:''}
+        </div>
+      </div>`;
+    }).join('');
+    chartHtml=`
+      <div style="height:120px;display:flex;align-items:flex-end;gap:3px;padding:0 2px">${bars}</div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-top:6px">
+        <span>${_miFmtDate(new Date(dayKeys[0]).getTime())}</span><span>${_miFmtDate(new Date(dayKeys[dayKeys.length-1]).getTime())}</span>
+      </div>
+      <div style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--gray-mid)">
+        <span><span style="display:inline-block;width:8px;height:8px;background:var(--blue-dark);border-radius:2px;margin-right:4px"></span>PM</span>
+        <span><span style="display:inline-block;width:8px;height:8px;background:var(--blue-mid);border-radius:2px;margin-right:4px"></span>Consultant</span>
+        <span><span style="display:inline-block;width:8px;height:8px;background:var(--blue-light);border-radius:2px;margin-right:4px"></span>Client</span>
+      </div>`;
+  }
+
+  // --- Category breakdown ---
+  const offTopic=data.categoryBreakdown.find(c=>c.category==='off_topic');
+  const catRows=data.categoryBreakdown.map(c=>{
+    const isOffTopic=c.category==='off_topic';
+    return `<tr style="border-top:1px solid var(--gray-pale)">
+      <td style="padding:6px 0;font-size:12px;${isOffTopic?'color:var(--red);font-weight:600':''}">${MARLI_INSIGHTS_CATEGORY_LABELS[c.category]||c.category}</td>
+      <td style="padding:6px 0;font-size:12px;text-align:right;font-weight:700;${isOffTopic?'color:var(--red)':''}">${c.pct}%</td>
+    </tr>`;
+  }).join('');
+
+  // --- Flagged for review table ---
+  const flagRows=data.flags.length===0?
+    `<tr><td colspan="5" style="padding:16px;text-align:center;font-size:12px;color:var(--gray-mid)">No flagged responses in this window</td></tr>`:
+    data.flags.map(f=>`
+      <tr style="border-top:1px solid var(--gray-pale);cursor:pointer" onclick="showMarliFlagDetail('${f.flagId}')">
+        <td style="padding:9px 12px;font-size:12px">${_miFmtDate(f.ts)}</td>
+        <td style="padding:9px 12px;font-size:12px">${_miFmtRole(f.role)}</td>
+        <td style="padding:9px 12px;font-size:12px">${(f.reasons&&f.reasons[0])||'Flagged'}${f.reasons&&f.reasons.length>1?` (+${f.reasons.length-1} more)`:''}</td>
+        <td style="padding:9px 12px;font-size:11px">${f.status==='pending'?'<span style="background:var(--amber-pale);color:var(--amber);font-weight:600;padding:2px 8px;border-radius:4px">Pending</span>':'<span style="background:var(--green-pale);color:var(--green);font-weight:600;padding:2px 8px;border-radius:4px">Reviewed — OK</span>'}</td>
+        <td style="padding:9px 12px;font-size:12px;text-align:right;color:var(--blue-dark);font-weight:600">View</td>
+      </tr>`).join('');
+
+  body.innerHTML=`
+    <div class="stat-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px">${cardsHtml}</div>
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:24px">
+      <div class="stat-card" style="text-align:left;align-items:stretch;display:block">
+        <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:12px">Query volume</div>
+        ${chartHtml}
+      </div>
+      <div class="stat-card" style="text-align:left;align-items:stretch;display:block">
+        <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:12px">Question categories</div>
+        <table style="width:100%;border-collapse:collapse">${catRows}</table>
+        ${offTopic&&offTopic.count>0?`<div style="margin-top:10px;font-size:10.5px;color:var(--gray-mid)">${offTopic.pct}% of questions this window were off-topic or declined</div>`:''}
+      </div>
+    </div>
+    <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:12px;display:flex;align-items:center;gap:6px"><i class="ti ti-alert-triangle" style="font-size:16px;color:var(--red)"></i>Flagged for review</div>
+    <div class="stat-card" style="text-align:left;align-items:stretch;display:block;padding:0;overflow:hidden">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--gray-xpale)">
+          <th style="padding:8px 12px;text-align:left;font-size:10px;color:var(--gray-mid);text-transform:uppercase">Date</th>
+          <th style="padding:8px 12px;text-align:left;font-size:10px;color:var(--gray-mid);text-transform:uppercase">Role</th>
+          <th style="padding:8px 12px;text-align:left;font-size:10px;color:var(--gray-mid);text-transform:uppercase">Flag reason</th>
+          <th style="padding:8px 12px;text-align:left;font-size:10px;color:var(--gray-mid);text-transform:uppercase">Status</th>
+          <th style="padding:8px 12px"></th>
+        </tr></thead>
+        <tbody>${flagRows}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--gray-mid)">Click a row to see the full question, MARLI's response, and the portfolio snapshot she was given — so you can judge for yourself whether the flag is a real problem.</div>
+  `;
+}
+
+// Detail drilldown for a single flagged item — reuses the same overlay
+// pattern as showBarDrilldown/showScorecardGapDrilldown. Reads from the
+// in-memory cache from the last successful fetch rather than re-fetching,
+// since the flag content was already returned in the list call.
+function showMarliFlagDetail(flagId){
+  if(!_marliInsightsCache)return;
+  const f=_marliInsightsCache.flags.find(x=>x.flagId===flagId);
+  if(!f)return;
+  const overlay=document.createElement('div');
+  overlay.id='marli-flag-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const reasonsHtml=(f.reasons||[]).map(r=>`<div style="font-size:12px;color:var(--red);margin-bottom:4px">• ${r}</div>`).join('');
+  const dismissBtn=f.status==='pending'?
+    `<button class="btn btn-primary" onclick="dismissMarliFlagAndClose('${f.flagId}')"><i class="ti ti-check"></i>Mark Reviewed — OK</button>`:
+    `<span style="font-size:12px;color:var(--green);font-weight:600">Already reviewed</span>`;
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:680px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:14px;font-weight:600;color:var(--navy)">Flagged response — ${_miFmtDate(f.ts)} · ${_miFmtRole(f.role)}</div>
+        <div style="margin-top:4px">${reasonsHtml}</div>
+      </div>
+      <button onclick="document.getElementById('marli-flag-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="overflow-y:auto;flex:1;padding:20px">
+      <div style="margin-bottom:16px">
+        <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;margin-bottom:6px">Question</div>
+        <div style="font-size:13px;color:var(--navy);background:var(--gray-xpale);border-radius:8px;padding:10px 12px">${f.question}</div>
+      </div>
+      <div style="margin-bottom:16px">
+        <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;margin-bottom:6px">MARLI's response</div>
+        <div style="font-size:13px;color:var(--navy);background:var(--gray-xpale);border-radius:8px;padding:10px 12px;white-space:pre-wrap">${f.answer}</div>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;margin-bottom:6px">Portfolio snapshot given this turn</div>
+        <pre style="font-size:10.5px;color:var(--gray-dark);background:var(--gray-xpale);border-radius:8px;padding:10px 12px;overflow-x:auto;max-height:240px;white-space:pre-wrap">${JSON.stringify(f.snapshot,null,2)}</pre>
+      </div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+      ${dismissBtn}
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function dismissMarliFlagAndClose(flagId){
+  try{
+    await fetch(`${WORKER_URL}/marli-insights`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({flagId})
+    });
+  }catch(e){
+    console.error('dismissMarliFlagAndClose failed:',e);
+  }
+  const overlay=document.getElementById('marli-flag-overlay');
+  if(overlay)overlay.remove();
+  showToast('Marked reviewed','success');
+  renderMarliInsights();
+}
+
+
+
 function printCharts(){
   const el=document.getElementById('view-charts');
   if(el)el.classList.add('print-active');
@@ -9982,7 +10581,7 @@ function closeAddPropertyModal(){
 }
 
 function openEditPropertyPanel(){
-  setTimeout(()=>{initCurrencyInput('ep-budget');},50);
+  setTimeout(()=>{initCurrencyInput('ep-budget');initCurrencyInput('ep-contract-award');},50);
   const p=currentProp;if(!p)return;
   const panel=document.getElementById('edit-prop-panel');
   const overlay=document.getElementById('edit-prop-overlay');
@@ -10006,6 +10605,7 @@ function openEditPropertyPanel(){
   document.getElementById('ep-co-material-markup').value=p.coMaterialMarkup!=null?p.coMaterialMarkup:'';
   document.getElementById('ep-co-op-markup').value=p.coOPMarkup!=null?p.coOPMarkup:'';
   document.getElementById('ep-retainage-pct').value=p.retainagePct!=null?p.retainagePct:'';
+  document.getElementById('ep-contract-award').value=p.contractAwardValue?Number(p.contractAwardValue).toLocaleString('en-US'):'';
   document.getElementById('ep-notes').value=p.comment||'';
   overlay.style.display='block';
   panel.style.display='block';
@@ -10161,6 +10761,13 @@ async function saveEditProperty(){
   const retainagePctRaw=document.getElementById('ep-retainage-pct').value.trim();
   const retainagePct=retainagePctRaw!==''?parseFloat(retainagePctRaw):null;
   fields['Retainage %']=retainagePct!=null?retainagePct/100:null;
+  // Contract Award Value — manually entered, not auto-snapshotted. Same
+  // currency-input + blank-means-null pattern as Project Budget above.
+  // Not required for the pilot (see continuity brief) — left blank simply
+  // means Budget Variance shows N/A for this property until filled in.
+  const contractAwardRaw=document.getElementById('ep-contract-award').value.replace(/[^0-9.]/g,'');
+  const contractAwardValue=contractAwardRaw!==''?parseFloat(contractAwardRaw):null;
+  fields['Contract Award Value']=contractAwardValue;
   // Update local prop object
   p.n=name;p.addr=fields['Address'];p.s=fields['State'];
   if(fields['Asset Type'])p.type=fields['Asset Type'];
@@ -10178,6 +10785,7 @@ async function saveEditProperty(){
   p.coMaterialMarkup=coMaterialMarkup;
   p.coOPMarkup=coOPMarkup;
   p.retainagePct=retainagePct;
+  p.contractAwardValue=contractAwardValue;
   // Write to Airtable
   if(p.id){
     try{await atUpdate('Properties',p.id,fields);showToast('Property updated','success');}
