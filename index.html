@@ -1280,7 +1280,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v26b · elevatorpulse.com</div>
+    <div class="login-version">PULSE v26e · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2703,6 +2703,7 @@ function enterDemo(){
   demoMode=true;
   role=demoRole;
   client='demo';
+  if(role==='consultant')currentConsultantName='Sarah Chen';
   document.getElementById('demo-screen').style.display='none';
   document.getElementById('portal-screen').classList.add('active');
   pushHistoryState();
@@ -2849,7 +2850,9 @@ function setupDemoPortal(){
   // Demo PM gets full PM nav
   document.getElementById('nav-'+role).classList.remove('hidden');
   const cfgs={
+    admin:{tag:'tag-admin',label:'IT Admin',av:'IT',name:'System Admin',roleLabel:'IT Admin',commTitle:'Client Comments'},
     pm:{tag:'tag-pm',label:'Project Manager',av:'PM',name:'PM User',roleLabel:'Project Manager',commTitle:'Client Comments'},
+    consultant:{tag:'tag-consultant',label:'Consultant',av:'VC',name:currentConsultantName||'VDA Consultant',roleLabel:'Field Consultant',commTitle:'Comments'},
     client:{tag:'tag-client',label:'Client',av:'DR',name:'Demo Client',roleLabel:'Demo Retail Capital Projects',commTitle:'Comments & flags'},
   };
   const c=cfgs[role]||cfgs.pm;
@@ -3390,7 +3393,8 @@ function renderPropertyView(p){
   const unitsInProgress=propUnits.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
   const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProgress);
   const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
-  const pctBilled=p.budget&&p.budget>0?Math.round((billedYTD/p.budget)*100):0;
+  const billingBasis=getBillingBasis(p);
+  const pctBilled=billingBasis.amount>0?Math.round((billedYTD/billingBasis.amount)*100):0;
   const variance=pctBilled-pctComplete;
 
   // Product mix
@@ -3408,7 +3412,7 @@ function renderPropertyView(p){
     <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount} of ${MILESTONES_DEF.length} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Project Phases</div><div class="prop-mini-val" style="color:var(--blue-dark)">${phasesTotal>0?Math.round((phasesComplete/phasesTotal)*100)+'%':'—'}</div><div class="prop-mini-sub">${phasesComplete} of ${phasesTotal||0} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Open Actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val">${p.budget?fmtCurrency(p.budget):'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed':'No billing logged'}</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">Project Budget</div><div class="prop-mini-val">${p.budget?fmtCurrency(p.budget):'TBD'}</div><div class="prop-mini-sub">${billedYTD?pctBilled+'% billed'+(billingBasis.source==='award'?' (vs. award)':billingBasis.source==='budget'?' (vs. budget)':''):'No billing logged'}</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Project Savings</div><div class="prop-mini-val" style="color:var(--teal)">${propSavings>0?fmtCurrency(propSavings):'—'}</div><div class="prop-mini-sub">Negotiated savings</div></div>`;
 
   // Product mix display
@@ -4816,6 +4820,23 @@ function fmtCurrency(val){
   if(n>=1000)return '$'+(n/1000).toFixed(0)+'K';
   return '$'+n.toLocaleString();
 }
+// Build v26c — billing percentage basis. Billing is against the awarded
+// contract amount, not the still-editable planning-stage Project Budget
+// (which can keep drifting after award for reasons unrelated to billing
+// progress — see continuity brief). Prefers Contract Award Value when a
+// property has one on file; falls back to Project Budget otherwise, since
+// that's the only number a PM has during the pilot's backfill period and
+// showing nothing at all would be a real regression from today's behavior.
+// Returns {amount, source} so callers can label which basis was used.
+function getBillingBasis(p){
+  if(p.contractAwardValue!=null&&p.contractAwardValue>0){
+    return {amount:p.contractAwardValue,source:'award'};
+  }
+  if(p.budget&&p.budget>0){
+    return {amount:p.budget,source:'budget'};
+  }
+  return {amount:0,source:'none'};
+}
 function fmtBudget(val){
   if(!val||isNaN(val))return 'TBD';
   const n=Number(val);
@@ -5374,7 +5395,7 @@ function openBillingHistoryPopout(propName){
   const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
   if(!p)return;
   const canPM=role==='pm'||role==='admin';
-  const budget=p.budget||0;
+  const budget=getBillingBasis(p).amount;
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const rows=propBilling.map(b=>`<tr id="billing-row-${b.id}">
         <td style="font-size:12px">${b.entryDate}</td>
@@ -5444,7 +5465,7 @@ function closeHistoryPopout(){
 }
 function printBillingHistory(propName){
   const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
-  const budget=p?.budget||0;
+  const budget=p?getBillingBasis(p).amount:0;
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const generated=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
   const esc=t=>(t||'').toString().replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -5502,7 +5523,9 @@ function renderBudgetTab(p){
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const latest=propBilling[0]||null;
   const billedYTD=latest?Number(latest.billedYTD):0;
-  const budget=p.budget||0;
+  const billingBasis=getBillingBasis(p);
+  const budget=billingBasis.amount;
+  const budgetLabel=billingBasis.source==='award'?'Contract Award Value':'Project Budget';
   const pctBilled=budget>0?Math.round((billedYTD/budget)*100):0;
 
   // Unit groups
@@ -5519,7 +5542,7 @@ function renderBudgetTab(p){
   // Budget performance card
   document.getElementById('budget-perf-detail').innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
-      <div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:4px">Project Budget</div>
+      <div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:4px">${budgetLabel}</div>
         <div style="font-size:20px;font-weight:700;color:var(--navy)">${budget?fmtCurrency(budget):'TBD'}</div></div>
       <div><div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;margin-bottom:4px">Billed YTD</div>
         <div style="font-size:20px;font-weight:700;color:var(--blue-dark)">${billedYTD?fmtCurrency(billedYTD):'—'}</div>
@@ -7241,11 +7264,12 @@ function renderCharts(){
 
   // 1. Budget vs Billed
   const budgetSource=chartFiltered; // Capital Plan excluded from billing chart unless filter is set
-  const budgetData=budgetSource.filter(p=>p.budget>0).map(p=>{
+  const budgetData=budgetSource.filter(p=>getBillingBasis(p).amount>0).map(p=>{
     const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
     const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
     const savings=(window.CO_SAVINGS||[]).filter(s=>s.property===p.n&&(s.status==='Approved'||s.status==='Client Approved')).reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
-    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:p.budget,billedYTD,savings,pctBilled:Math.round((billedYTD/p.budget)*100)};
+    const billingBasis=getBillingBasis(p);
+    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:billingBasis.amount,billedYTD,savings,pctBilled:Math.round((billedYTD/billingBasis.amount)*100)};
   }).sort((a,b)=>b.budget-a.budget).slice(0,12);
 
   // 2. Elevator Company Performance
@@ -7293,13 +7317,13 @@ function renderCharts(){
 
   // 5. Forecasted Spend — active remaining budget by year (monthly
   // breakdown removed in v21e; see note above showBarDrilldown's fs- cases)
-  const fsSource=filtered.filter(p=>p.st!=='Removed'&&p.budget>0);
+  const fsSource=filtered.filter(p=>p.st!=='Removed'&&getBillingBasis(p).amount>0);
   const fsByYear={};
   const fsByYearUnits={};
   fsSource.forEach(p=>{
     const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
     const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
-    const remaining=Math.max(0,p.budget-billedYTD);
+    const remaining=Math.max(0,getBillingBasis(p).amount-billedYTD);
     const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
     let latest=null;
     phases.forEach(ph=>{if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!latest||d>latest)latest=d;}});
@@ -10639,13 +10663,17 @@ async function confirmDeleteProperty(){
   if(!name)return;
   document.getElementById('delete-prop-overlay')?.remove();
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===name);
+  console.log('[deleteProperty] starting delete for:',name,'propId:',prop?.id);
 
   if(!demoMode){
     showToast(`Deleting ${name} and all associated records...`,'info');
     // Delete property record
     if(prop?.id){
-      try{await atDelete('Properties',prop.id);}
-      catch(e){console.warn('Property delete failed',e);}
+      try{
+        await atDelete('Properties',prop.id);
+        console.log('[deleteProperty] Properties record deleted OK:',prop.id);
+      }
+      catch(e){console.warn('Property delete failed',e);console.log('[deleteProperty] Properties delete FAILED — see warning above');}
     }
     // Cascade delete all related Airtable records
     const cascadeTargets=[
@@ -10659,14 +10687,17 @@ async function confirmDeleteProperty(){
       {arr:actionItems,             table:'Action Items',    field:'property'},
       {arr:meetings,                table:'Meetings',        field:'property'},
       {arr:siteVisits,              table:'Site Visits',     field:'property'},
+      {arr:submissions,             table:'Field Updates',   field:'property'},
     ];
     for(const {arr,table,field} of cascadeTargets){
       const toDelete=arr.filter(r=>r[field]===name&&r.id&&r.id.startsWith('rec'));
+      console.log(`[deleteProperty] ${table}: ${toDelete.length} record(s) to delete`);
       for(const r of toDelete){
         try{await atDelete(table,r.id);}
-        catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);}
+        catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);console.log(`[deleteProperty] ${table} record ${r.id} delete FAILED`);}
       }
     }
+    console.log('[deleteProperty] cascade delete sequence complete');
   }
 
   // Cascade: remove all related in-memory data
@@ -10681,9 +10712,12 @@ async function confirmDeleteProperty(){
   actionItems=actionItems.filter(a=>a.property!==name);
   meetings=meetings.filter(m=>m.property!==name);
   siteVisits=siteVisits.filter(v=>v.property!==name);
+  submissions=submissions.filter(s=>s.property!==name);
+  console.log('[deleteProperty] in-memory cleanup done. PORTFOLIO now has',window.PORTFOLIO.length,'properties. Still present?',window.PORTFOLIO.some(p=>p.n===name));
   if(currentProp?.n===name){currentProp=null;gotoView('portfolio');}
   showToast(`${name} and all associated records deleted`,'success');
   populatePortfolio();
+  console.log('[deleteProperty] populatePortfolio() called — check portfolio table now');
   updateClientCommentsBadge();
   updateQueueBadge();
 }
@@ -11122,10 +11156,28 @@ async function saveDueDay(value){
       const row=recs.find(r=>r.fields['Setting']==='Weekly Update Due Day');
       _portfolioSettingsRecordId=row?row.id:null;
     }
+    // Bug fix (v26c): this previously called atUpdate/atCreate without
+    // checking the result, so a failed Airtable write (bad record ID,
+    // network error, Airtable rejecting the request) was indistinguishable
+    // from success — the dropdown updated visually and a "Reports due by..."
+    // success toast fired regardless, so the setting could silently fail to
+    // persist while looking like it worked. Now checks the actual result
+    // and only confirms success when the write is confirmed.
+    let result;
     if(_portfolioSettingsRecordId){
-      await atUpdate('Portfolio Settings',_portfolioSettingsRecordId,{'Value':value});
+      result=await atUpdate('Portfolio Settings',_portfolioSettingsRecordId,{'Value':value});
     }else{
-      await atCreate('Portfolio Settings',{'Setting':'Weekly Update Due Day','Value':value});
+      result=await atCreate('Portfolio Settings',{'Setting':'Weekly Update Due Day','Value':value});
+      // A fresh create gives us a brand new record ID — capture it so any
+      // saves later in the same session update this row instead of trying
+      // (and failing) to create a second one.
+      const newId=result?.records?.[0]?.id||result?.id;
+      if(newId)_portfolioSettingsRecordId=newId;
+    }
+    if(!result){
+      console.error('saveDueDay: Airtable write returned no result for value', value);
+      showToast('Could not save due day setting — check connection and try again','error');
+      return;
     }
     if(btn){btn.disabled=false;btn.classList.add('btn-primary');btn.title='Reminds consultants to submit their weekly update';}
     showToast(`Reports due by ${value}`,'success');
@@ -11988,7 +12040,7 @@ function buildReportHTML(filter,periodDays,isWeekly){
     ...highActions.map(a=>({level:'high',property:a.property,ec:'—',type:'Action Item',desc:a.description})),
     ...medActions.map(a=>({level:'medium',property:a.property,ec:'—',type:'Action Item',desc:a.description})),
   ].slice(0,6);
-  const rptBudget=activeProps.reduce((a,p)=>a+(p.budget||0),0);
+  const rptBudget=activeProps.reduce((a,p)=>a+getBillingBasis(p).amount,0);
   const rptBilled=activeProps.reduce((a,p)=>a+(p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((x,b)=>Math.max(x,b.billedYTD||0),0)),0);
   const rptRemain=rptBudget-rptBilled;
   const rptSavings=(window.CO_SAVINGS||[]).filter(c=>c.status==='Client Approved').reduce((a,c)=>a+(c.originalAmount-c.negotiatedAmount),0);
@@ -12025,9 +12077,9 @@ function buildReportHTML(filter,periodDays,isWeekly){
           <div class="score-card"><div class="score-label">Milestones at risk</div><div class="score-value" style="color:${msAtRisk>0?'var(--amber)':'var(--green)'}">${msAtRisk}</div><div class="score-sub">Across Portfolio</div></div>
         </div>
         <div class="report-scorecard" style="margin-top:10px;margin-bottom:0">
-          <div class="score-card"><div class="score-label">Total program budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?fmtBudget(rptBudget):'--'}</div><div class="score-sub">Active Properties</div></div>
-          <div class="score-card"><div class="score-label">Total billed YTD</div><div class="score-value" style="font-size:1.25rem;color:var(--blue-dark)">${rptBilled?fmtBudget(rptBilled):'--'}</div><div class="score-sub">${rptBudget?Math.round(rptBilled/rptBudget*100)+'% of Budget':'--'}</div></div>
-          <div class="score-card"><div class="score-label">Remaining budget</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?fmtBudget(rptRemain):'--'}</div><div class="score-sub">Budget Minus Billed</div></div>
+          <div class="score-card"><div class="score-label">Total program value</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?fmtBudget(rptBudget):'--'}</div><div class="score-sub">Active Properties</div></div>
+          <div class="score-card"><div class="score-label">Total billed YTD</div><div class="score-value" style="font-size:1.25rem;color:var(--blue-dark)">${rptBilled?fmtBudget(rptBilled):'--'}</div><div class="score-sub">${rptBudget?Math.round(rptBilled/rptBudget*100)+'% of Value':'--'}</div></div>
+          <div class="score-card"><div class="score-label">Remaining value</div><div class="score-value" style="font-size:1.25rem;color:var(--navy)">${rptBudget?fmtBudget(rptRemain):'--'}</div><div class="score-sub">Value Minus Billed</div></div>
           <div class="score-card"><div class="score-label">CO savings captured</div><div class="score-value" style="font-size:1.25rem;color:var(--green)">${rptSavings>0?fmtCurrency(rptSavings):'--'}</div><div class="score-sub">Approved Change Orders</div></div>
         </div>
       </div>
@@ -12043,7 +12095,8 @@ function buildReportHTML(filter,periodDays,isWeekly){
                 const health=derivePropertyStatusFromPhases(p.n);
                 const healthBadge=health==='At Risk'?'<span class="badge b-behind">At Risk</span>':health==='Ahead'?'<span class="badge b-health-ahead">Ahead</span>':health==='Complete'?'<span class="badge b-done">Complete</span>':'<span class="badge b-nip">On Track</span>';
                 const billedYTD=p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((a,b)=>Math.max(a,b.billedYTD||0),0);
-                const pctSpent=p.budget&&billedYTD?Math.round(billedYTD/p.budget*100):null;
+                const rowBillingBasis=getBillingBasis(p);
+                const pctSpent=rowBillingBasis.amount&&billedYTD?Math.round(billedYTD/rowBillingBasis.amount*100):null;
                 const pctComplete=Math.round(msC/MILESTONES_DEF.length*100);
                 return `<tr>
                   <td style="font-weight:500;color:var(--blue-dark)">${p.n}</td>
@@ -12052,7 +12105,7 @@ function buildReportHTML(filter,periodDays,isWeekly){
                   <td style="font-family:'Plus Jakarta Sans',sans-serif">${p.units||'—'}</td>
                   <td>${renderStatusBadge(p.st)}</td>
                   <td>${healthBadge}</td>
-                  <td style="font-size:10px">${p.budget?fmtBudget(p.budget):'TBD'}</td>
+                  <td style="font-size:10px">${rowBillingBasis.amount?fmtBudget(rowBillingBasis.amount):'TBD'}</td>
                   <td style="font-size:10px;color:${pctSpent!==null&&pctSpent>90?'var(--red)':pctSpent!==null&&pctSpent>75?'var(--amber)':'inherit'}">${pctSpent!==null?pctSpent+'%':'--'}</td>
                   <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:10px">${pctComplete}%</td>
                 </tr>`;
@@ -12755,7 +12808,7 @@ function _renderGlossaryRows(items){
 
 const TOUR_STEPS = {
   pm: [
-    {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Help.']},
+    {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
     {target:'#nav-pm [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — a snapshot of portfolio health, open actions, and recent activity across all your properties.']},
     {target:'#nav-pm [onclick*="\'portfolio\'"]',view:'portfolio',title:'Portfolio View',body:['Every property in one list. Click into any property for its full detail — milestones, billing, documents, and more.']},
     {target:'.tab-row',title:'Property Detail',isPropertyDetail:true,propTab:'overview',body:[
@@ -12771,7 +12824,8 @@ const TOUR_STEPS = {
     {target:'#nav-pm [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:[
       'Step 1: Capital Plan shows budget by year across your portfolio, organized into year bands.',
       'Step 2: Click a year band to expand it and see individual line items.',
-      'Step 3: Use Print/PDF to export a year\u2019s view for sharing outside PULSE.'
+      'Step 3: Use Print/PDF to export a year\u2019s view for sharing outside PULSE.',
+      'Step 4: A property graduates out of Capital Plan automatically once you enter its Modernization Survey (M1) date on the property\u2019s Milestones tab \u2014 it then moves into your active portfolio with a Planned status. There\u2019s no separate toggle; the M1 date is what does it.'
     ]},
     {target:'#nav-pm [onclick*="\'schedule\'"]',view:'schedule',title:'Schedule',body:['A timeline view of milestones and phase progress across properties.']},
     {target:'#nav-pm [onclick*="\'documents\'"]',view:'documents',title:'Documents',body:['All field updates, meeting minutes, and closed actions are archived here automatically — nothing to upload manually.']},
@@ -12794,7 +12848,7 @@ const TOUR_STEPS = {
     {target:'#nav-pm [onclick*="\'glossary\'"]',view:'glossary',title:'VT Glossary',body:['A searchable glossary of vertical transportation terms and abbreviations — handy if you run into unfamiliar industry language.']},
   ],
   consultant: [
-    {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Help.']},
+    {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
     {target:'#nav-consultant [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — a snapshot of the properties you\u2019re working on and recent activity.']},
     {target:'#nav-consultant [onclick*="\'portfolio\'"]',view:'portfolio',title:'Portfolio View',body:['Every property you have access to, in one list. Click into any property for its full detail.']},
     {target:'#nav-consultant [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:['View budget and capital planning by year across your properties.']},
@@ -12816,7 +12870,7 @@ const TOUR_STEPS = {
     {target:'#nav-consultant [onclick*="\'glossary\'"]',view:'glossary',title:'VT Glossary',body:['A searchable glossary of vertical transportation terms and abbreviations.']},
   ],
   client: [
-    {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Help.']},
+    {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
     {target:'#nav-client [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — a snapshot of progress across your properties.']},
     {target:'#nav-client [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:['Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.']},
     {target:'#nav-client [onclick*="\'portfolio\'"]',view:'portfolio',title:'Portfolio View',body:['Every property in your portfolio, in one list. Click into any property for its full detail.']},
