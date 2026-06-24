@@ -1280,7 +1280,7 @@ window.PROPERTIES_SEED = [
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
     </div>
-    <div class="login-version">PULSE v26e · elevatorpulse.com</div>
+    <div class="login-version">PULSE v26f · elevatorpulse.com</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -2300,7 +2300,7 @@ window.PROPERTIES_SEED = [
       <div id="view-queue" class="hidden">
         <div class="page-header">
           <div class="page-header-left"><h1>Pending Review</h1><p>Review and approve consultant field updates before publishing</p></div>
-          <div class="header-actions no-print">
+          <div class="header-actions no-print" style="align-items:flex-end">
             <div class="field-wrap" style="margin:0;min-width:170px">
               <label class="field-label" style="font-size:10px">Reports due by</label>
               <select class="styled" id="due-day-select" style="font-size:12px;padding:6px 10px" onchange="saveDueDay(this.value)">
@@ -7251,16 +7251,30 @@ function renderCharts(){
     if(a==='TBD')return 1;if(b==='TBD')return-1;return parseInt(a)-parseInt(b);
   });
 
-  // Active portfolio totals (for program summary)
-  const activeProps=allPort.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed');
-  const inProgressProps=allPort.filter(p=>p.st==='In Progress');
+  // Active portfolio totals (for program summary) — always portfolio-wide,
+  // used for Total Program Value and Pipeline tiles, which don't have a
+  // clean per-consultant interpretation since Capital Plan properties have
+  // no assigned field consultant yet.
   const activeBudget=allPort.filter(p=>p.st!=='Capital Plan').reduce((a,p)=>a+(p.budget||0),0);
   const totalProgramValue=activeBudget+capitalBudgetTotal;
+  // Portfolio-wide CO savings total, kept separate from totalSavingsFiltered
+  // below in case a future "vs. portfolio" comparison needs it. Not used
+  // directly in the tile anymore now that the tile is filter-aware.
   const totalSavingsAll=(window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
 
   // Exclude Capital Plan from active charts unless specifically filtered
   const chartFiltered=CF.status==='Capital Plan'?filtered:filtered.filter(p=>p.st!=='Capital Plan');
   const active=chartFiltered.filter(p=>p.st==='In Progress'||p.st==='Complete'||p.st==='Planned');
+
+  // Filtered counterparts for the Program Summary tiles that DO have a
+  // clean per-consultant meaning (Active Properties, Active Units, CO
+  // Savings Captured). Built from the same 'active' dataset the charts
+  // below already use, so the headline tiles and the charts always agree.
+  const activeUnitsFiltered=active.reduce((a,p)=>a+(parseInt(p.units)||0),0);
+  const activePropNames=new Set(active.map(p=>p.n));
+  const totalSavingsFiltered=(window.CO_SAVINGS||[]).filter(s=>(s.status==='Approved'||s.status==='Client Approved')&&activePropNames.has(s.property)).reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
+  const filtersActive=CF.property.length>0||CF.status||CF.sched||CF.type||CF.ec||CF.state||CF.mscat||CF.priority||CF.consultant||CF.health;
+
 
   // 1. Budget vs Billed
   const budgetSource=chartFiltered; // Capital Plan excluded from billing chart unless filter is set
@@ -7391,8 +7405,8 @@ function renderCharts(){
     </div>
     <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
       <div class="stat-label">Active Properties</div>
-      <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${activeProps.length}</div>
-      <div class="stat-sub">${inProgressProps.length>0?inProgressProps.length+' in Construction':'In Active Program'}</div>
+      <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${active.length}</div>
+      <div class="stat-sub">${filtersActive?'Filtered':inProgCount>0?inProgCount+' in Construction':'In Active Program'}</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--indigo)">
       <div class="stat-label">Pipeline Properties</div>
@@ -7401,8 +7415,8 @@ function renderCharts(){
     </div>
     <div class="stat-card" style="border-top:3px solid var(--teal)">
       <div class="stat-label">Active Units</div>
-      <div class="stat-value" style="font-size:20px;color:var(--teal)">${allPort.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').reduce((a,p)=>a+(parseInt(p.units)||0),0)}</div>
-      <div class="stat-sub">In Modernization</div>
+      <div class="stat-value" style="font-size:20px;color:var(--teal)">${activeUnitsFiltered}</div>
+      <div class="stat-sub">${filtersActive?'Filtered':'In Modernization'}</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--purple)">
       <div class="stat-label">Pipeline Units</div>
@@ -7411,8 +7425,8 @@ function renderCharts(){
     </div>
     <div class="stat-card" style="border-top:3px solid var(--green)">
       <div class="stat-label">CO Savings Captured</div>
-      <div class="stat-value" style="font-size:20px;color:var(--green)">${totalSavingsAll?fmtCurrency(totalSavingsAll):'—'}</div>
-      <div class="stat-sub">Approved Change Orders</div>
+      <div class="stat-value" style="font-size:20px;color:var(--green)">${totalSavingsFiltered?fmtCurrency(totalSavingsFiltered):'—'}</div>
+      <div class="stat-sub">${filtersActive?'Filtered':'Approved Change Orders'}</div>
     </div>
   </div>
 
@@ -11075,7 +11089,7 @@ function refreshQueue(){
     empty.classList.add('hidden');
     const subItems=pending.map(s=>`<div class="queue-item">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-        <div class="queue-item-title">${s.property} — Week of ${s.week}${s.draftAction&&!s.draftAction.published&&!s.draftAction.dismissed?` <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--red)" stroke="var(--red)" stroke-width="0" style="vertical-align:-1px" title="Consultant flagged a follow-up action"><path d="M5 3a1 1 0 0 1 1 -1h13.5a.5 .5 0 0 1 .5 .5v.038a.5 .5 0 0 1 -.106 .307l-3.5 4.5a.5 .5 0 0 0 0 .61l3.5 4.5a.5 .5 0 0 1 .106 .307v.238a.5 .5 0 0 1 -.5 .5h-13.5v8a1 1 0 1 1 -2 0v-17a1 1 0 0 1 1 -1z"></path></svg>`:''}</div>
+        <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--blue-dark);text-transform:uppercase;display:block;margin-bottom:2px">Field Update</span>${s.property} — Week of ${s.week}${s.draftAction&&!s.draftAction.published&&!s.draftAction.dismissed?` <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--red)" stroke="var(--red)" stroke-width="0" style="vertical-align:-1px" title="Consultant flagged a follow-up action"><path d="M5 3a1 1 0 0 1 1 -1h13.5a.5 .5 0 0 1 .5 .5v.038a.5 .5 0 0 1 -.106 .307l-3.5 4.5a.5 .5 0 0 0 0 .61l3.5 4.5a.5 .5 0 0 1 .106 .307v.238a.5 .5 0 0 1 -.5 .5h-13.5v8a1 1 0 1 1 -2 0v-17a1 1 0 0 1 1 -1z"></path></svg>`:''}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="badge b-pending">Pending</span>
           <button class="btn btn-icon" onclick="previewQueueItem('${s.id}')" title="Preview update"><i class="ti ti-eye" style="font-size:14px"></i></button>
@@ -11090,7 +11104,7 @@ function refreshQueue(){
     </div>`).join('');
     const coItems=pendingCOs.map(co=>`<div class="queue-item" style="border-left:3px solid var(--amber)">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-        <div class="queue-item-title"><i class="ti ti-file-invoice" style="font-size:12px;margin-right:4px"></i>${co.property} — Change Order</div>
+        <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--amber);text-transform:uppercase;display:block;margin-bottom:2px">Change Order</span><i class="ti ti-file-invoice" style="font-size:12px;margin-right:4px"></i>${co.property}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="co-status-pending">Pending</span>
           <button class="btn btn-icon" onclick="openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',document.querySelector('.tab-btn[onclick*=\"changeorders\"]')),300)" title="View Change Order"><i class="ti ti-eye" style="font-size:14px;color:var(--gray-mid)"></i></button>
@@ -12825,7 +12839,7 @@ const TOUR_STEPS = {
       'Step 1: Capital Plan shows budget by year across your portfolio, organized into year bands.',
       'Step 2: Click a year band to expand it and see individual line items.',
       'Step 3: Use Print/PDF to export a year\u2019s view for sharing outside PULSE.',
-      'Step 4: A property graduates out of Capital Plan automatically once you enter its Modernization Survey (M1) date on the property\u2019s Milestones tab \u2014 it then moves into your active portfolio with a Planned status. There\u2019s no separate toggle; the M1 date is what does it.'
+      'Step 4: A property graduates out of Capital Plan automatically once you enter its Modernization Survey Date directly on the Capital Plan entry itself \u2014 it then moves into your active portfolio with a Planned status, where the full Milestones tab becomes available. There\u2019s no separate toggle; the Modernization Survey Date is what does it.'
     ]},
     {target:'#nav-pm [onclick*="\'schedule\'"]',view:'schedule',title:'Schedule',body:['A timeline view of milestones and phase progress across properties.']},
     {target:'#nav-pm [onclick*="\'documents\'"]',view:'documents',title:'Documents',body:['All field updates, meeting minutes, and closed actions are archived here automatically — nothing to upload manually.']},
@@ -12834,7 +12848,8 @@ const TOUR_STEPS = {
       'Step 1: Consultants submit weekly field updates here for your review.',
       'Step 2: Approve publishes the update and archives it to Documents automatically.',
       'Step 3: Return with Note sends it back to the consultant with your feedback for revision.',
-      'Step 4: If a consultant flags a follow-up action, you\u2019ll see a flag icon. Open the submission to either Publish it as a real Action Item, or Dismiss it if it\u2019s already being handled — you can add a private note explaining why.'
+      'Step 4: If a consultant flags a follow-up action, you\u2019ll see a flag icon. Open the submission to either Publish it as a real Action Item, or Dismiss it if it\u2019s already being handled — you can add a private note explaining why.',
+      'Step 5: Pending Change Orders also appear here, marked separately from field updates. Approve moves the change order forward in the property\u2019s Change Order log; Reject returns it to that status without affecting the rest of the submission queue.'
     ]},
     {target:'#nav-pm [onclick*="\'comments\'"]',view:'comments',title:'Client Comments',body:['Where client-raised questions and flags show up for your response.']},
     {target:'#nav-pm [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates in one calendar view.']},
@@ -13067,10 +13082,18 @@ function _tourShowPopover(step,anchor){
 }
 
 function _tourPositionPopover(pop,anchor){
-  // Popover always centers in the viewport — keeps it from covering the
-  // sidebar nav item or the property tab ribbon at any step. The anchor is
-  // still used for the highlight (see _tourSetHighlight), just not for layout.
-  pop.style.top='50%';pop.style.left='50%';pop.style.transform='translate(-50%,-50%)';
+  // Centers within the visible content area, not the full window — the
+  // sidebar is a fixed 235px on screens wide enough to show it, so centering
+  // on 50% of the whole viewport visually skews the popover left of the
+  // content the person is actually looking at. Below 768px the sidebar is
+  // hidden and .main has no left margin, so full-viewport centering is
+  // correct there. The anchor is still used for the highlight (see
+  // _tourSetHighlight), just not for layout.
+  const sidebarOffset=window.innerWidth>768?235:0;
+  const contentWidth=window.innerWidth-sidebarOffset;
+  pop.style.left=(sidebarOffset+contentWidth/2)+'px';
+  pop.style.top='50%';
+  pop.style.transform='translate(-50%,-50%)';
 }
 </script>
 <script>
