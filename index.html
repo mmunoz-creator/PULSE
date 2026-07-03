@@ -223,7 +223,6 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .data-table th{text-align:left;padding:8px 12px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);background:var(--gray-xpale);font-family:'Plus Jakarta Sans',sans-serif;white-space:nowrap}
 .data-table td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--gray-dark);vertical-align:middle}
 .data-table tr:last-child td{border-bottom:none}
-.data-table tbody tr:nth-child(even) td{background:rgba(0,0,0,.018)}
 .data-table tbody tr:hover td{background:var(--blue-xpale);cursor:pointer}
 .table-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;overflow-x:auto}
 /* LAYOUT */
@@ -1880,7 +1879,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31q</div>
     </div>
   </nav>
 
@@ -2307,6 +2306,7 @@ window.PROPERTIES_SEED = [
         <div class="page-header">
           <div class="page-header-left"><h1>Capital Plan</h1><p>Lifecycle Pipeline &amp; Multi-Year Budget Outlook</p></div>
           <div class="header-actions" id="capital-header-actions">
+            <button class="btn btn-delete no-print" id="capital-delete-prop-btn" onclick="deleteProperty()" style="display:none"><i class="ti ti-trash"></i>Delete Property</button>
             <button class="btn btn-primary no-print" onclick="printCapitalPlan()"><i class="ti ti-printer"></i>Print / PDF</button>
             <button class="btn btn-add no-print" id="capital-add-btn" onclick="openCapitalPlanEntry()"><i class="ti ti-building-skyscraper" style="font-size:14px"></i>+ Capital Plan</button>
           </div>
@@ -3415,7 +3415,7 @@ function setupPortal(){
 }
 
 // Views that have help content -- show the global help button
-const HELP_ENABLED_VIEWS = new Set(['dashboard','charts','portfolio']);
+const HELP_ENABLED_VIEWS = new Set(['dashboard','charts','portfolio','capital']);
 
 function updateGlobalHelpBtn(viewId) {
   const btn = document.getElementById('global-help-btn');
@@ -3428,6 +3428,7 @@ function updateGlobalHelpBtn(viewId) {
   const topicMap = {
     dashboard: 'dashboard',
     charts: 'analytics',
+    capital: 'capital',
     portfolio: window._inPropertyView ? (window._currentPropHelpTopic || 'property-overview') : null,
   };
   window._helpActiveView = topicMap[viewId] || null;
@@ -8978,6 +8979,8 @@ function renderCapitalPlan(){
   const canEdit=role==='pm'||role==='admin';
   const addBtn=document.getElementById('capital-add-btn');
   if(addBtn)addBtn.style.display=canEdit?'':'none';
+  const delPropBtn=document.getElementById('capital-delete-prop-btn');
+  if(delPropBtn)delPropBtn.style.display=canEdit?'':'none';
 
   let groupSeq=0;
   let html='';
@@ -9013,7 +9016,7 @@ function renderCapitalPlan(){
           ${canEdit?'<th style="width:11%"></th>':''}
         </tr></thead>
         <tbody>
-        ${yrGroups.map(g=>{
+        ${yrGroups.map((g,gIdx)=>{
           const p=g._prop;
           if(g.totalScopeCount===1){
             // Single-Scope property — unchanged row format from before.
@@ -9035,7 +9038,7 @@ function renderCapitalPlan(){
               <td>${budgetStatusBadge(s.budgetStatus)}</td>
               <td style="font-size:12px">${p.v||'—'}</td>
               <td style="font-size:12px">${m1Date||'<span style="color:var(--gray-mid)">Not set</span>'}</td>
-              ${canEdit?`<td style="display:flex;gap:4px"><button class="btn btn-icon" title="Split into Scopes" style="color:var(--blue-dark);border-color:var(--blue-dark)" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork" style="font-size:13px"></i></button><button class="btn btn-icon" onclick="openCapitalPlanEdit('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:13px"></i></button><button class="btn btn-icon" style="color:var(--red)" onclick="deleteCapitalEntry('${p.id||''}','${p.n.replace(/'/g,"\\'")}')"><i class="ti ti-trash" style="font-size:13px"></i></button></td>`:''}
+              ${canEdit?`<td><div style="display:flex;gap:4px"><button class="btn btn-icon" title="Split into Scopes" style="color:var(--blue-dark);border-color:var(--blue-dark)" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork" style="font-size:13px"></i></button><button class="btn btn-icon" onclick="openCapitalPlanEdit('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:13px"></i></button></div></td>`:''}
             </tr>`;
           }
           // Multi-Scope property — collapsed summary row + expandable sub-table.
@@ -9081,8 +9084,8 @@ function renderCapitalPlan(){
             <td style="font-size:12px;font-weight:600;color:var(--navy)">${g.totalBudget?fmtCurrency(g.totalBudget):'TBD'}</td>
             <td>${bsDisplay}</td>
             <td style="font-size:12px">${p.v||'—'}</td>
-            <td style="font-size:11px;color:var(--gray-mid)">—</td>
-            ${canEdit?`<td onclick="event.stopPropagation()" style="display:flex;gap:4px"><button class="btn btn-icon" title="Split into Scopes" style="color:var(--blue-dark);border-color:var(--blue-dark)" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork" style="font-size:13px"></i></button></td>`:''}
+            <td style="font-size:11px;color:var(--gray-mid)">See scopes</td>
+            ${canEdit?`<td onclick="event.stopPropagation()"><div style="display:flex;gap:4px"><button class="btn btn-icon" title="Split into Scopes" style="color:var(--blue-dark);border-color:var(--blue-dark)" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork" style="font-size:13px"></i></button></div></td>`:''}
           </tr>
           <tr id="${groupId}" style="display:none"><td colspan="${canEdit?10:9}" style="padding:0">
             <table class="data-table" style="table-layout:fixed;background:var(--gray-xpale)">
@@ -9093,15 +9096,15 @@ function renderCapitalPlan(){
                 const graduating=m1Date&&m1Date!=='';
                 return `<tr style="${graduating?'background:var(--green-xpale,#f0faf4)':''}">
                   <td style="width:20%;padding-left:30px;font-size:12px;color:var(--gray-mid)">${graduating?`<span style="color:var(--green);font-weight:600"><i class="ti ti-arrow-up-right" style="font-size:10px"></i> Activating</span>`:''}</td>
-                  <td style="width:13%;font-size:12px;color:var(--navy)">${s.name||'—'}</td>
+                  <td style="width:13%;font-size:12px;color:#1D9E75;font-weight:500">${s.name||'—'}</td>
                   <td style="width:6%"></td>
                   <td style="width:6%"><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
-                  <td style="width:7%;font-size:12px">${(()=>{const u=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return u||s.unitList||'—';})()}</td>
-                  <td style="width:11%;font-size:12px;font-weight:600;color:var(--navy)">${s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD'}</td>
+                  <td style="width:7%;font-size:12px;color:#1D9E75">${(()=>{const u=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return u||s.unitList||'—';})()}</td>
+                  <td style="width:11%;font-size:12px;font-weight:600;color:#1D9E75">${s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD'}</td>
                   <td style="width:9%">${budgetStatusBadge(s.budgetStatus)}</td>
                   <td style="width:9%"></td>
-                  <td style="width:8%;font-size:12px">${m1Date||'<span style="color:var(--gray-mid)">Not set</span>'}</td>
-                  ${canEdit?`<td style="width:11%"><button class="btn btn-icon" title="Split into Scopes" onclick="event.stopPropagation();openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:12px"></i></button></td>`:''}
+                  <td style="width:8%;font-size:12px;color:#1D9E75">${m1Date||'Not set'}</td>
+                  ${canEdit?`<td style="width:11%"><div style="display:flex;gap:4px"><button class="btn btn-icon" title="Edit Scopes" onclick="event.stopPropagation();openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:12px"></i></button><button class="btn btn-icon" title="Delete Scope" style="color:var(--red)" onclick="event.stopPropagation();deleteCapitalScope('${s.id}','${s.name.replace(/'/g,"\\'")}','${p.n.replace(/'/g,"\\'")}')"><i class="ti ti-trash" style="font-size:12px"></i></button></div></td>`:''}
                 </tr>`;
               }).join('')}
               </tbody>
@@ -9285,6 +9288,65 @@ async function confirmDeleteCapitalEntry(propId, propName){
 
 function openCapitalPlanEdit(propId){
   openCapitalPlanEntry(propId);
+}
+
+async function deleteCapitalScope(scopeId, scopeName, propName){
+  // Count records that will be cascade-deleted for this scope
+  const msCnt=(window.MILESTONES||[]).filter(m=>m.scopeId===scopeId).length;
+  const ugCnt=(window.UNIT_GROUPS||[]).filter(u=>u.scopeId===scopeId).length;
+  const blCnt=(window.BILLING_LOG||[]).filter(b=>b.scopeId===scopeId).length;
+  const cosCnt=(window.CO_SAVINGS||[]).filter(c=>c.scopeId===scopeId).length;
+  const totalCascade=msCnt+ugCnt+blCnt+cosCnt;
+  const cascadeNote=totalCascade>0
+    ?`<div style="font-size:11px;color:var(--red);margin-top:8px;padding:8px 10px;background:#fdecea;border-radius:6px">This will also permanently delete: ${[msCnt?msCnt+' milestone record'+(msCnt>1?'s':''):'',ugCnt?ugCnt+' unit phase'+(ugCnt>1?'s':''):'',blCnt?blCnt+' billing entr'+(blCnt>1?'ies':'y'):'',cosCnt?cosCnt+' change order record'+(cosCnt>1?'s':''):''].filter(Boolean).join(', ')}.</div>`
+    :'';
+  const overlay=document.createElement('div');
+  overlay.id='delete-scope-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:440px;box-shadow:var(--shadow-md);padding:24px">
+    <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:6px"><i class="ti ti-trash" style="color:var(--red);margin-right:6px"></i>Delete Scope</div>
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:4px">Permanently delete <strong>${scopeName}</strong> from <strong>${propName}</strong>? This cannot be undone.${cascadeNote}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" onclick="document.getElementById('delete-scope-overlay').remove()">Cancel</button>
+      <button class="btn btn-delete" onclick="confirmDeleteCapitalScope('${scopeId}','${scopeName.replace(/'/g,"\\'")}','${propName.replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i>Delete Scope</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function confirmDeleteCapitalScope(scopeId, scopeName, propName){
+  document.getElementById('delete-scope-overlay')?.remove();
+  if(!demoMode){
+    showToast(`Deleting scope ${scopeName}...`,'info');
+    // Cascade delete child records for this scope
+    const cascadeTargets=[
+      {arr:window.MILESTONES||[], table:'Milestones',              keyField:'scopeId'},
+      {arr:window.UNIT_GROUPS||[], table:'Unit Groups',            keyField:'scopeId'},
+      {arr:window.BILLING_LOG||[], table:'Billing Log',            keyField:'scopeId'},
+      {arr:window.CO_SAVINGS||[],  table:'Change Order Savings Log',keyField:'scopeId'},
+    ];
+    for(const {arr,table,keyField} of cascadeTargets){
+      const toDelete=arr.filter(r=>r[keyField]===scopeId&&r.id&&r.id.startsWith('rec'));
+      for(const r of toDelete){
+        try{await atDelete(table,r.id);}
+        catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);}
+      }
+    }
+    // Delete the scope record itself
+    if(scopeId&&scopeId.startsWith('rec')){
+      try{await atDelete('Scopes',scopeId);}
+      catch(e){console.warn('Scope delete failed',scopeId,e);}
+    }
+  }
+  // Update in-memory
+  window.SCOPES=(window.SCOPES||[]).filter(s=>s.id!==scopeId);
+  window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.scopeId!==scopeId);
+  window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).filter(u=>u.scopeId!==scopeId);
+  window.BILLING_LOG=(window.BILLING_LOG||[]).filter(b=>b.scopeId!==scopeId);
+  window.CO_SAVINGS=(window.CO_SAVINGS||[]).filter(c=>c.scopeId!==scopeId);
+  showToast(`${scopeName} deleted`,'success');
+  renderCapitalPlan();
+  renderCharts();
 }
 
 async function saveCapitalPlanEntry(){
