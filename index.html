@@ -223,6 +223,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .data-table th{text-align:left;padding:8px 12px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);background:var(--gray-xpale);font-family:'Plus Jakarta Sans',sans-serif;white-space:nowrap}
 .data-table td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--gray-dark);vertical-align:middle}
 .data-table tr:last-child td{border-bottom:none}
+.data-table tbody tr:nth-child(even) td{background:rgba(0,0,0,.018)}
 .data-table tbody tr:hover td{background:var(--blue-xpale);cursor:pointer}
 .table-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;overflow-x:auto}
 /* LAYOUT */
@@ -1879,7 +1880,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31k</div>
     </div>
   </nav>
 
@@ -8846,21 +8847,16 @@ function renderCapitalPlan(){
   // in the same year band.
   const scopeRows=getCapitalPlanScopes();
   const totalBudget=scopeRows.reduce((a,s)=>a+(s.plannedBudget||0),0);
-  // v29c Bug 1 fix: deduplicate by property before summing units — a property
-  // with 2 scopes was contributing p.units twice (once per scope row).
-  // v30d: sum scope-level unit counts (elevator+escalator+lift+other) per Capital Plan scope;
-  // fall back to property-level p.units only when scope counts are all zero.
+  // v31k: always use p.units (Properties.Unit Count) as the authoritative total.
+  // Scope-level breakdown counts are unreliable as a unit total — they may be
+  // partially entered. Deduplicate by property so multi-scope properties count once.
   const totalUnits=(()=>{
-    const byProp=new Map();
-    scopeRows.forEach(s=>{
-      const key=s.property;
-      const u=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);
-      byProp.set(key,(byProp.get(key)||0)+u);
-    });
+    const seen=new Set();
     let sum=0;
-    byProp.forEach((u,propName)=>{
-      if(u>0){sum+=u;}else{
-        const p=(window.PORTFOLIO||[]).find(x=>x.n===propName);
+    scopeRows.forEach(s=>{
+      if(!seen.has(s.property)){
+        seen.add(s.property);
+        const p=(window.PORTFOLIO||[]).find(x=>x.n===s.property);
         sum+=(p?.units||0);
       }
     });
@@ -8926,10 +8922,22 @@ function renderCapitalPlan(){
       const otherYears=[...(allCapPlanYearsByProp[propName]||new Set())]
         .filter(y=>y!==parseInt(yr)&&y!==yr)
         .sort();
+      // v31k: use p.units as authoritative unit total; compute scope breakdown
+      // sum separately for mismatch detection only.
+      const _p=propScopes[0]._prop;
+      const scopeUnitSum=propScopes.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
+      // All scopes for this property (not just this band) for full mismatch check
+      const allPropScopes=(window.SCOPES||[]).filter(s=>s.property===propName);
+      const allScopeUnitSum=allPropScopes.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
+      const propUnits=_p?.units||0;
+      // Flag mismatch only when scope counts are non-zero and don't match property total
+      const unitMismatch=allScopeUnitSum>0&&allScopeUnitSum!==propUnits;
       return {
-        property:propName,_prop:propScopes[0]._prop,scopes:propScopes,
+        property:propName,_prop:_p,scopes:propScopes,
         sortPriority:minPriorityNum,
-        totalUnits:propScopes.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0)||propScopes[0]._prop.units||0,
+        totalUnits:propUnits,
+        scopeUnitSum:allScopeUnitSum,
+        unitMismatch,
         totalBudget:propScopes.reduce((a,s)=>a+(s.plannedBudget||0),0),
         totalScopeCount,
         totalCapPlanScopeCount,
@@ -8977,7 +8985,7 @@ function renderCapitalPlan(){
     const yrGroups=byYear[yr].sort((a,b)=>a.sortPriority-b.sortPriority);
     const yrScopeCount=yrGroups.reduce((a,g)=>a+g.scopes.length,0);
     const yrBudget=yrGroups.reduce((a,g)=>a+g.totalBudget,0);
-    const yrUnits=yrGroups.reduce((a,g)=>a+g.totalUnits,0);
+    const yrUnits=yrGroups.reduce((a,g)=>a+(g._prop?.units||0),0);
     const bandId='yr-band-'+yr;
     html+=`<div style="margin-bottom:20px">
       <div onclick="toggleYearBand('${bandId}')" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:8px;border-bottom:2px solid var(--border);cursor:pointer;user-select:none">
@@ -9022,7 +9030,7 @@ function renderCapitalPlan(){
               <td style="font-size:12px;color:var(--navy)">${s.name||'—'}</td>
               <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
               <td><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
-              <td style="font-size:12px">${(()=>{const u=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return u||s.unitList||p.units||'—';})()}</td>
+              <td style="font-size:12px">${p.units||s.unitList||'—'}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
               <td style="font-size:12px;font-weight:600;color:var(--navy)">${s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD'}</td>
               <td>${budgetStatusBadge(s.budgetStatus)}</td>
               <td style="font-size:12px">${p.v||'—'}</td>
@@ -9069,7 +9077,7 @@ function renderCapitalPlan(){
             <td style="font-size:12px;color:var(--gray-mid)">${scopeLabel}</td>
             <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
             <td><span class="badge" style="background:${priBg(topPriority)};color:${priColor(topPriority)};border:none;font-size:10px">${(topPriority||'—').split(':')[0]}</span></td>
-            <td style="font-size:12px">${g.totalUnits||'—'}</td>
+            <td style="font-size:12px">${p.units||'—'}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
             <td style="font-size:12px;font-weight:600;color:var(--navy)">${g.totalBudget?fmtCurrency(g.totalBudget):'TBD'}</td>
             <td>${bsDisplay}</td>
             <td style="font-size:12px">${p.v||'—'}</td>
