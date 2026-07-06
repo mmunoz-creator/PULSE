@@ -1918,7 +1918,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31s</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31t</div>
     </div>
   </nav>
 
@@ -3313,9 +3313,10 @@ async function _finishLogin(){
   }
   populatePortfolio();
   renderDashboard(); // will show loading state if no data
-  if(role==='consultant')gotoView('submit',null);
-  else gotoView('dashboard',null);
-  setFirstNavActive(role==='consultant'?'submit':'dashboard');updateQueueBadge();refreshDashActions();
+  // v31t: Consultant now lands on Dashboard, same as PM/Admin/Client —
+  // previously routed straight to the Submit/Field Update view.
+  gotoView('dashboard',null);
+  setFirstNavActive('dashboard');updateQueueBadge();refreshDashActions();
   document.getElementById('login-screen').style.display='none';
   pushHistoryState();
   // Build 2 — auto-launch Orientation Tour on first real login only.
@@ -8879,8 +8880,20 @@ function getCapitalPlanScopes(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const scopes=window.SCOPES||[];
   const allPropNames=new Set(port.filter(p=>p.st!=='Removed').map(p=>p.n));
+  // v31t: Consultant visibility is PROPERTY-level, not Scope-level. If a
+  // Consultant has any Scope assigned on a property, they see the whole
+  // property in Capital Plan — every Scope on it, including scopes
+  // assigned to other consultants. This is deliberate: if James Smith and
+  // Nick Nikolai each own a different Scope at the same property, both
+  // should see the full property picture (all scopes), since either of
+  // them may end up owning the whole property down the line. Filtering
+  // out a co-assigned property's other scopes would hide exactly the
+  // context a consultant needs.
+  const visiblePropNames=role==='consultant'
+    ? new Set([...allPropNames].filter(n=>propertyHasConsultant(n,currentConsultantName)))
+    : allPropNames;
   return scopes
-    .filter(s=>s.status==='Capital Plan'&&allPropNames.has(s.property))
+    .filter(s=>s.status==='Capital Plan'&&visiblePropNames.has(s.property))
     .map(s=>{
       const prop=port.find(p=>p.n===s.property)||{};
       return {...s,priority:scopePriorityDisplay(s.priority),_prop:prop};
