@@ -626,6 +626,16 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 // ── AIRTABLE VIA CLOUDFLARE WORKER ───────────────────────────────────
 const WORKER_URL = 'https://pulse-api.misty-munoz.workers.dev';
 let AT_CONNECTED = false;
+// v31r: bumped on every _finishLogin call and on doLogout. Each in-flight
+// loadAllData() closure captures the token value at the moment it was
+// kicked off; if a newer login (or a logout) happens before that
+// particular loadAllData() resolves, the token it captured no longer
+// matches the current one, so its render/state-mutation block is skipped.
+// Fixes the race where two doLogin calls in quick succession (e.g. Admin
+// then Consultant) each fire their own loadAllData(), and whichever one
+// resolves last silently overwrites the other's session state even if it
+// was the earlier, now-superseded login.
+let _loginSeq = 0;
 let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
 window.UNIT_GROUPS = window.UNIT_GROUPS || [];
 window.BILLING_LOG = window.BILLING_LOG || [];
@@ -1879,7 +1889,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31q</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31r</div>
     </div>
   </nav>
 
@@ -3248,6 +3258,10 @@ async function doLogin(){
   _finishLogin();
 }
 async function _finishLogin(){
+  // v31r: this login's own token. Any loadAllData() resolution that fires
+  // after a *newer* login (or a logout) has bumped _loginSeq belongs to a
+  // superseded session and must not touch shared state.
+  const _mySeq = ++_loginSeq;
   try{
   document.getElementById('portal-screen').classList.add('active');
   setupPortal();
@@ -3289,6 +3303,13 @@ async function _finishLogin(){
   }
   if(client==='park') {
     loadAllData().then(() => {
+      // v31r: a newer login (or a logout) superseded this one while
+      // loadAllData() was in flight — drop this stale resolution instead
+      // of letting it overwrite the current session's state or dashboard.
+      if(_mySeq !== _loginSeq) {
+        console.log('loadAllData: stale resolution for seq '+_mySeq+' (current '+_loginSeq+') — skipping');
+        return;
+      }
       if(AT_CONNECTED) {
         // Cache portfolio for next login
         try{sessionStorage.setItem('pulse_portfolio',JSON.stringify(window.PORTFOLIO));}catch(e){}
@@ -3322,6 +3343,10 @@ async function _finishLogin(){
         showToast('Live data connected ✓','success');
       }
     }).catch(e => {
+      if(_mySeq !== _loginSeq) {
+        console.log('loadAllData: stale failure for seq '+_mySeq+' (current '+_loginSeq+') — skipping');
+        return;
+      }
       console.error('Background load failed:', e);
       showToast('Using cached data — check connection','warn');
     });
@@ -3334,6 +3359,10 @@ async function _finishLogin(){
 }
 
 function doLogout(){
+  // v31r: invalidate any loadAllData() still in flight from this session —
+  // otherwise it can resolve after the login screen is back and silently
+  // repopulate state for a session that no longer exists.
+  _loginSeq++;
   // End the Orientation Tour if it's open — otherwise the popover/menu
   // persists on top of the login screen after sign-out.
   if(typeof _tourEnd==='function' && _tourRole){_tourEnd();}
