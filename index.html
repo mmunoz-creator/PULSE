@@ -647,6 +647,35 @@ window.RETAINAGE_RELEASES = window.RETAINAGE_RELEASES || [];
 // (not record ID), matching the property-name-keyed convention used by
 // every other table in this file (Milestones, Billing Log, etc).
 window.SCOPES = window.SCOPES || [];
+// v31r — Consultant-to-property assignment now lives at the Scope level
+// (window.SCOPES[].v), not the Properties table's single VDA Consultant
+// field. A property can have multiple Scopes, each with its own
+// consultant, so "is this property mine" must check across all of that
+// property's Scopes rather than one flat field. Falls back to the
+// Properties-level field only for properties with no Scope records yet
+// (e.g. still in Capital Plan, pre-scope-build), so nothing regresses for
+// data that hasn't been migrated into Scopes.
+function propertyConsultants(propName){
+  const scopeConsultants=(window.SCOPES||[])
+    .filter(s=>s.property===propName&&s.v)
+    .map(s=>s.v.trim());
+  if(scopeConsultants.length>0) return [...new Set(scopeConsultants)];
+  const prop=(window.PORTFOLIO||[]).find(p=>p.n===propName);
+  return (prop&&prop.v&&prop.v!=='TBD')?[prop.v.trim()]:[];
+}
+function propertyHasConsultant(propName,consultantName){
+  if(!consultantName)return false;
+  const target=consultantName.trim().toLowerCase();
+  return propertyConsultants(propName).some(c=>c.toLowerCase()===target);
+}
+// v31r — dropdown lists of "all consultants" must include names that only
+// exist on Scope records now, not just the legacy Properties field, or a
+// consultant with scope-only assignments won't appear as a filter option.
+function allKnownConsultants(port){
+  const fromScopes=(window.SCOPES||[]).map(s=>s.v).filter(Boolean);
+  const fromProps=(port||[]).map(p=>p.v).filter(v=>v&&v!=='TBD');
+  return [...new Set(fromScopes.concat(fromProps).map(c=>c.trim()))].sort();
+}
 
 // No token needed in browser - Worker holds it securely
 function saveToken() {
@@ -1889,7 +1918,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31r</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31s</div>
     </div>
   </nav>
 
@@ -8671,7 +8700,7 @@ function cfInit(){
   }
   const conSel=document.getElementById('cf-consultant');
   if(conSel){
-    const cons=[...new Set(port.map(p=>p.v).filter(Boolean))].sort();
+    const cons=allKnownConsultants(port);
     conSel.innerHTML='<option value="">All Consultants</option>'+cons.map(c=>`<option value="${c}"${CF.consultant===c?' selected':''}>${c}</option>`).join('');
   }
   // Restore dropdown values
@@ -8702,7 +8731,7 @@ function cfGetFiltered(){
     if(p.st==='Capital Plan')return false;
     // v29b — consultant role pre-scoping: same pattern as renderDashboard.
     // Without this, consultants see the full portfolio in Analytics/Charts.
-    if(role==='consultant'&&p.v!==currentConsultantName)return false;
+    if(role==='consultant'&&!propertyHasConsultant(p.n,currentConsultantName))return false;
     if(inp&&CF.property.length===0&&!p.n.toLowerCase().includes(inp))return false;
     if(CF.property.length&&!CF.property.includes(p.n))return false;
     if(CF.status&&p.st!==CF.status)return false;
@@ -8710,7 +8739,7 @@ function cfGetFiltered(){
     if(CF.type&&p.type!==CF.type)return false;
     if(CF.ec&&p.ec!==CF.ec)return false;
     if(CF.state&&p.s!==CF.state)return false;
-    if(CF.consultant&&p.v!==CF.consultant)return false;
+    if(CF.consultant&&!propertyHasConsultant(p.n,CF.consultant))return false;
     if(CF.health){
       const h=derivePropertyStatusFromPhases(p.n);
       const hLabel=h==='In Progress'?'On Track':h||'Not Started';
@@ -11447,9 +11476,10 @@ function renderAnalytics(){
 
 function renderDashboard(){
   const _allPort=window.PORTFOLIO||[];
-  // Consultant scoping: consultants only see properties assigned to them (p.v = consultant name).
-  // Same pattern applied in Portfolio View and Documents.
-  const port=role==='consultant'?_allPort.filter(p=>p.v===currentConsultantName):_allPort;
+  // Consultant scoping: consultants only see properties where they're
+  // assigned to at least one Scope (or, for un-scoped properties, the
+  // legacy Properties-level VDA Consultant field). See propertyHasConsultant().
+  const port=role==='consultant'?_allPort.filter(p=>propertyHasConsultant(p.n,currentConsultantName)):_allPort;
   if(port.length===0&&!demoMode){
     document.getElementById('dashboard-body').innerHTML=`
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem;gap:12px">
@@ -13035,7 +13065,7 @@ function renderDocFolders(){
   let docs=window.DOCUMENTS_LIVE||[];
   if(role==='client')docs=docs.filter(d=>d.visibility==='Public');
   if(role==='consultant'){
-    const myProps=port.filter(p=>p.v===currentConsultantName).map(p=>p.n);
+    const myProps=port.filter(p=>propertyHasConsultant(p.n,currentConsultantName)).map(p=>p.n);
     docs=docs.filter(d=>myProps.includes(d.property));
   }
   if(docSearchQuery){
@@ -13314,7 +13344,7 @@ function populatePortfolio(){
   // Consultants only see their assigned properties; PM/Admin/Client see all —
   // matches the same scoping already applied to the Submit Update dropdown.
   const port=role==='consultant'
-    ? allPort.filter(p=>(p.v||'').trim().toLowerCase()===(currentConsultantName||'').trim().toLowerCase())
+    ? allPort.filter(p=>propertyHasConsultant(p.n,currentConsultantName))
     : allPort;
   const tbody=document.getElementById('portfolio-tbody');if(!tbody)return;
   const sub=document.getElementById('portfolio-sub');
@@ -13705,7 +13735,7 @@ function pfPopulateDropdowns(){
     ecSel.innerHTML=`<option value="all">All Companies</option>${ecs.map(e=>`<option value="${e}"${PF.ec===e?' selected':''}>${e}</option>`).join('')}`;
   }
   if(conSel){
-    const cons=[...new Set(port.map(p=>p.v).filter(Boolean))].sort();
+    const cons=allKnownConsultants(port);
     conSel.innerHTML=`<option value="all">All Consultants</option>${cons.map(c=>`<option value="${c}"${PF.consultant===c?' selected':''}>${c}</option>`).join('')}`;
   }
 }
@@ -13728,7 +13758,7 @@ function pfApply(){
     if(PF.type!=='all')show=show&&p.type===PF.type;
     if(PF.state!=='all')show=show&&p.s===PF.state;
     if(PF.ec!=='all')show=show&&p.ec===PF.ec;
-    if(PF.consultant!=='all')show=show&&p.v===PF.consultant;
+    if(PF.consultant!=='all')show=show&&propertyHasConsultant(p.n,PF.consultant);
     if(PF.priority!=='all'){
       if(PF.priority==='none')show=show&&!p.priority;
       else show=show&&(p.priority||'').startsWith(PF.priority);
@@ -14242,7 +14272,7 @@ function populateSubmitDropdown(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   // Consultants only see their assigned properties; PM/Admin see all
   let filtered=role==='consultant'
-    ? port.filter(p=>(p.v||'').trim().toLowerCase()===(currentConsultantName||'').trim().toLowerCase())
+    ? port.filter(p=>propertyHasConsultant(p.n,currentConsultantName))
     : port;
   // Property is locked (disabled) during edit/resubmit — if the consultant's
   // assignment changed since the original submission, the original property
@@ -15410,7 +15440,7 @@ function renderOpsCenter(){
   // Consultant filtering — only show items for assigned properties
   const isConsultant=role==='consultant';
   const consultantProps=isConsultant
-    ? new Set(port.filter(p=>(p.v||'').trim().toLowerCase()===(currentConsultantName||'').trim().toLowerCase()).map(p=>p.n))
+    ? new Set(port.filter(p=>propertyHasConsultant(p.n,currentConsultantName)).map(p=>p.n))
     : null;
   const propFilter=prop=>!isConsultant||consultantProps.has(prop);
 
