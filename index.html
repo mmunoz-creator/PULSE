@@ -894,6 +894,30 @@ async function atUpdate(table, id, fields) {
   } catch(e) { console.error('atUpdate error:', e); return null; }
 }
 
+// v32b — Property Name converted from free text to an Airtable Link field
+// across all non-Properties tables (Milestones, Meetings, Action Items,
+// Field Updates, Billing Log, Retainage Releases, Phase Tasks, Documents,
+// Site Visits, Client Comments, Access PINs) to prevent typo-driven
+// property mismatches during bulk data entry (see continuity brief —
+// Hilton Hawaiian Village Modernization Survey bug). A Link field returns
+// an array of linked record IDs from the Airtable API, not a name string,
+// so every read of "Property Name" on those tables must resolve through
+// window.PORTFOLIO (keyed by Airtable record id), and every write must
+// send an array containing the property's record ID rather than its name.
+// The Properties table's own "Property Name" field is unaffected — it
+// remains the primary text field that IS the name (nothing for it to link to).
+function resolvePropertyLink(fieldVal){
+  if(!fieldVal)return '';
+  const id=Array.isArray(fieldVal)?fieldVal[0]:fieldVal;
+  if(!id)return '';
+  const p=(window.PORTFOLIO||[]).find(x=>x.id===id);
+  return p?p.n:'';
+}
+function propertyNameToLink(name){
+  const p=(window.PORTFOLIO||[]).find(x=>x.n===name);
+  return p&&p.id?[p.id]:[];
+}
+
 async function atDelete(table, id) {
   if(demoMode){console.log('[DEMO] atDelete blocked:',table,id);return null;}
   if (!id) return null;
@@ -1024,7 +1048,7 @@ async function loadAllData() {
     }
     submissions = subs.map(r => ({
       id: r.id, atId: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       consultant: r.fields['Consultant Name']||'',
       units: r.fields['Units Updated']||'',
       phase: r.fields['Project Phase']||'',
@@ -1051,7 +1075,7 @@ async function loadAllData() {
     }));
     meetings = meets.map(r => ({
       id: r.id, atId: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       date: r.fields['Meeting Date']||'',
       type: r.fields['Meeting Type']||'',
       format: '',
@@ -1071,7 +1095,7 @@ async function loadAllData() {
     }));
     actionItems = actions.map(r => ({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       meetingId: r.fields['Meeting ID']||'',
       description: r.fields['Description']||'',
       owner: r.fields['Owner']||'',
@@ -1088,7 +1112,7 @@ async function loadAllData() {
     }));
     siteVisits = visits.map(r => ({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       date: r.fields['Visit Date']||'',
       consultant: r.fields['Consultant Name']||'',
       purpose: r.fields['Purpose']||'',
@@ -1098,7 +1122,7 @@ async function loadAllData() {
       window.DOCUMENTS_LIVE = docs.map(r => ({
         id: r.id,
         name: r.fields['Document Name'] || '',
-        property: r.fields['Property Name'] || '',
+        property: resolvePropertyLink(r.fields['Property Name']),
         type: r.fields['Document Type'] || 'Other',
         subfolder: r.fields['Subfolder'] || '',
         uploaded: r.fields['Upload Date'] || r.fields['Uploaded Date'] || '',
@@ -1136,7 +1160,7 @@ async function loadAllData() {
     // Phase Steps
     window.PHASE_STEPS = phaseSteps.map(r=>({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       phaseName: r.fields['Phase Name']||'',
       taskName: r.fields['Task Name']||'',
@@ -1151,7 +1175,7 @@ async function loadAllData() {
     // Billing Log — YTD snapshots per property
     window.BILLING_LOG = billingLog.map(r=>({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       billedYTD: r.fields['Billed YTD']||r.fields['$ Amount']||0,
       entryDate: r.fields['Entry Date']||r.fields['Billing date']||'',
@@ -1166,7 +1190,7 @@ async function loadAllData() {
     // these are release transactions, not gross invoiced amounts.
     window.RETAINAGE_RELEASES = retainageReleases.map(r=>({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       releaseDate: r.fields['Release Date']||'',
       amountReleased: r.fields['Amount Released']!=null?Number(r.fields['Amount Released']):0,
@@ -1177,7 +1201,7 @@ async function loadAllData() {
     // Milestones — one record per milestone per property
     window.MILESTONES = milestones.map(r=>({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       milestoneNumber: parseInt(r.fields['Milestone Number'])||0,
       milestoneName: r.fields['Milestone Name']||'',
@@ -1230,7 +1254,7 @@ async function loadAllData() {
     // Client Comments — flags and replies
     window.CLIENT_COMMENTS = clientComments.map(r=>({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       threadId: r.fields['Thread ID']||'',
       authorRole: r.fields['Author Role']||'',
       authorName: r.fields['Author Name']||'',
@@ -1247,7 +1271,7 @@ async function loadAllData() {
     // Change Order Savings Log
     window.CO_SAVINGS = coSavings.map(r=>({
       id: r.id,
-      property: r.fields['Property Name']||'',
+      property: resolvePropertyLink(r.fields['Property Name']),
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       description: r.fields['Change Order Description']||'',
       originalAmount: parseFloat(r.fields['Original CO Amount'])||0,
@@ -1402,7 +1426,7 @@ window.PROPERTIES_SEED = [
         </div>
         <div id="login-pin-error" style="display:none;color:var(--red);font-size:12px;margin-top:8px"></div>
       </div>
-      <button class="login-btn" onclick="doLogin()"><i class="ti ti-login"></i>Enter portal</button>
+      <button class="login-btn" onclick="doLogin()"><i class="ti ti-login"></i>Enter Portal</button>
       <div style="text-align:center;margin-top:14px">
         <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
       </div>
@@ -1918,7 +1942,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v32a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v32b</div>
     </div>
   </nav>
 
@@ -4137,7 +4161,7 @@ async function autoPopulateMilestones(propName,scopeId){
       // Skip if this milestone number already exists for this property+Scope
       if((window.MILESTONES||[]).find(m=>m.property===propName&&(!scopeId||m.scopeId===scopeId)&&m.milestoneNumber===msNum))continue;
       const fields={
-        'Property Name':propName,
+        'Property Name':propertyNameToLink(propName),
         'Milestone Number':msNum,
         'Milestone Name':MILESTONES_DEF[i],
         'Status':'Not Started',
@@ -4838,7 +4862,7 @@ async function autoCreateContractRatesAction(propName){
   if(exists)return;
   const due=new Date();due.setDate(due.getDate()+14);
   const dueStr=due.toISOString().split('T')[0];
-  const fields={'Property Name':propName,'Description':description,'Owner':'','Due Date':dueStr,'Priority':'Medium','Status':'Open'};
+  const fields={'Property Name':propertyNameToLink(propName),'Description':description,'Owner':'','Due Date':dueStr,'Priority':'Medium','Status':'Open'};
   const res=demoMode?null:await atCreate('Action Items',fields);
   if(res?.error){console.error('autoCreateContractRatesAction Airtable error:',res);}
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
@@ -4857,7 +4881,7 @@ async function saveActionItem(){
   if(!property){showToast('Please select a property','warn');return;}
   if(!description){showToast('Please enter a description','warn');return;}
   const aiScopeId=document.getElementById('ai-scope')?.value||'';
-  const fields={'Property Name':property,'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Status':'Open'};
+  const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Status':'Open'};
   if(aiScopeId)fields['Linked Scope']=[aiScopeId];
   const res=demoMode?null:await atCreate('Action Items',fields);
   if(res?.error){console.error('saveActionItem Airtable error:',res);}
@@ -4958,7 +4982,7 @@ async function saveMeetingDraft(){
   const agenda=document.getElementById('m-agenda').value;
   const notes=document.getElementById('m-notes').value;
   const fields={
-    'Property Name':propName,
+    'Property Name':propertyNameToLink(propName),
     'Meeting Date':meetingDate,
     'Meeting Type':meetingType,
     'Elevator Company':elevco,
@@ -4991,7 +5015,7 @@ async function saveMeetingDraft(){
     const owner=row.querySelector('[id$="-owner"]')?.value||'PM';
     const due=row.querySelector('[id$="-due"]')?.value||'TBD';
     const priority=row.querySelector('[id$="-priority"]')?.value||'Medium';
-    await atCreate('Action Items',{'Property Name':propName,'Meeting ID':atId||'','Description':desc,'Owner':owner,'Due Date':due,'Priority':priority,'Status':'Open'});
+    await atCreate('Action Items',{'Property Name':propertyNameToLink(propName),'Meeting ID':atId||'','Description':desc,'Owner':owner,'Due Date':due,'Priority':priority,'Status':'Open'});
   }
   closePanel(false); // keep draft ID so re-opening panel updates same record
   renderAllMeetings();
@@ -5066,7 +5090,7 @@ async function saveMeeting(){
   const agenda=document.getElementById('m-agenda').value;
   const mScopeId=document.getElementById('m-scope')?.value||'';
   const fields={
-    'Property Name':propName,
+    'Property Name':propertyNameToLink(propName),
     'Meeting Date':meetingDate,
     'Meeting Type':meetingType,
     'Elevator Company':elevco,
@@ -5111,7 +5135,7 @@ async function saveMeeting(){
     const due=row.querySelector('[id$="-due"]')?.value||'TBD';
     const priority=row.querySelector('[id$="-priority"]')?.value||'Medium';
     const aRes=await atCreate('Action Items',{
-      'Property Name':propName,
+      'Property Name':propertyNameToLink(propName),
       'Meeting ID':atId||'',
       'Description':desc,
       'Owner':owner,
@@ -5227,7 +5251,7 @@ async function archiveMeetingToDocuments(m){
   const vis=m.published?'Public':'Internal';
   const res=await atCreate('Documents',{
     'Document Name':docName,
-    'Property Name':m.property,
+    'Property Name':propertyNameToLink(m.property),
     'Document Type':'Meeting Minutes',
     'Subfolder':'Meeting Minutes',
     'Visibility':vis,
@@ -5262,7 +5286,7 @@ async function closeAction(id){
     const docName=`${a.property} — Closed Action: ${a.description.slice(0,50)}`;
     const res=await atCreate('Documents',{
       'Document Name':docName,
-      'Property Name':a.property,
+      'Property Name':propertyNameToLink(a.property),
       'Document Type':'Closed Actions Report',
       'Subfolder':'Closed Actions',
       'Visibility':'Public',
@@ -7117,7 +7141,7 @@ async function saveCO(){
     showToast(editId?'Change order updated':'Change order logged','success');
   }else{
     const fields={
-      'Property Name':propName,
+      'Property Name':propertyNameToLink(propName),
       'Change Order Description':desc,
       'Original CO Amount':orig,
       'Negotiated Amount':neg,
@@ -7149,7 +7173,7 @@ async function saveCO(){
       const refreshed=await atGet('Change Order Savings Log');
       if(refreshed&&refreshed.length>0){
         window.CO_SAVINGS=refreshed.map(r=>({
-          id:r.id,property:r.fields['Property Name']||'',scopeId:(r.fields['Linked Scope']||[])[0]||'',
+          id:r.id,property:resolvePropertyLink(r.fields['Property Name']),scopeId:(r.fields['Linked Scope']||[])[0]||'',
           description:r.fields['Change Order Description']||'',
           originalAmount:parseFloat(r.fields['Original CO Amount'])||0,negotiatedAmount:parseFloat(r.fields['Negotiated Amount'])||0,
           savings:parseFloat(r.fields['Savings Captured'])||0,status:r.fields['Status']||'Pending',
@@ -7239,7 +7263,7 @@ async function clientApproveCO(coId){
       const recs=await atGet('Access PINs');
       recipients=recs.filter(r=>r.fields['Active']&&r.fields['Email']&&
         (r.fields['Role']==='Project Manager'||r.fields['Role']==='IT Admin'||
-         (r.fields['Role']==='Consultant'&&(!r.fields['Property Name']||r.fields['Property Name']===co.property))))
+         (r.fields['Role']==='Consultant'&&(!r.fields['Property Name']||resolvePropertyLink(r.fields['Property Name'])===co.property))))
         .map(r=>({name:r.fields['Name']||'',email:r.fields['Email']}));
     }catch(e){console.error('Client approval notify error:',e);}
   }else{
@@ -7304,7 +7328,7 @@ async function notifyClientCO(coId){
     try{
       const recs=await atGet('Access PINs');
       clients=recs.filter(r=>r.fields['Role']==='Client'&&r.fields['Active']&&r.fields['Email'])
-        .map(r=>({name:r.fields['Name']||'Client',email:r.fields['Email'],property:r.fields['Property Name']||''}));
+        .map(r=>({name:r.fields['Name']||'Client',email:r.fields['Email'],property:resolvePropertyLink(r.fields['Property Name'])}));
       // Filter by property if set
       clients=clients.filter(c=>!c.property||c.property===co.property);
     }catch(e){showToast('Could not load client contacts','error');return;}
@@ -8128,7 +8152,7 @@ async function saveStepDates(phaseId){
     const actualEnd=row.querySelector('.step-actual-end').value||null;
     const status=row.querySelector('.step-status').value;
     const notes=row.querySelector('.step-notes')?.value.trim()||'';
-    const fields={'Property Name':propName,'Phase Name':phaseName,'Task Name':stepName,'Task Order':stepOrder,'Planned Start':plannedStart,'Planned End':plannedEnd,'Actual Start':actualStart,'Completion Date':actualEnd,'Status':status,'Notes':notes};
+    const fields={'Property Name':propertyNameToLink(propName),'Phase Name':phaseName,'Task Name':stepName,'Task Order':stepOrder,'Planned Start':plannedStart,'Planned End':plannedEnd,'Actual Start':actualStart,'Completion Date':actualEnd,'Status':status,'Notes':notes};
     if(existingId){
       if(!demoMode)await atUpdate('Phase Tasks',existingId,fields);
       const ex=window.PHASE_STEPS.find(x=>x.id===existingId);
@@ -8171,7 +8195,7 @@ async function saveBillingEntry(){
   const loggedBy=role==='pm'?'PM User':role==='admin'?'Admin':'PM User';
   const scopeId=currentScope?.id||'';
   const fields={
-    'Property Name':currentProp.n,
+    'Property Name':propertyNameToLink(currentProp.n),
     'Billed YTD':ytd,
     'Entry Date':date,
     'Notes':notes||'',
@@ -8247,7 +8271,7 @@ async function saveRetainageRelease(){
   }else{
     const scopeId=currentScope?.id||'';
     const retFields={
-      'Property Name':currentProp.n,
+      'Property Name':propertyNameToLink(currentProp.n),
       'Amount Released':amount,
       'Release Date':date,
       'Notes':notes||'',
@@ -8361,7 +8385,7 @@ async function saveNewPhase(){
   const existingPhasesForScope=(window.UNIT_GROUPS||[]).filter(u=>u.property===currentProp.n&&(!scopeId||u.scopeId===scopeId));
   const nextPhaseOrder=existingPhasesForScope.length+1;
   const ugFields={
-    'Property Name':currentProp.n,
+    'Property Name':propertyNameToLink(currentProp.n),
     'Phase Name':name,
     'Units in Phase':units,
     'Status':'Not Started',
@@ -8409,7 +8433,7 @@ async function saveNewPhase(){
     // Also write to Airtable if not demo mode
     if(!demoMode){
       const taskFields={
-        'Property Name':currentProp.n,
+        'Property Name':propertyNameToLink(currentProp.n),
         'Phase Name':name,
         'Task Name':taskName,
         'Task Order':i+1,
@@ -8722,7 +8746,7 @@ async function saveBillingModal(){
       const newEntry={id:'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,invoiceMonth,notes,loggedBy:'PM User'};
       if(!demoMode){
         const res=await atCreate('Billing Log',{
-          'Property Name':currentProp.n,
+          'Property Name':propertyNameToLink(currentProp.n),
           'Billed YTD':ytd,
           'Entry Date':date,
           'Invoice Month':invoiceMonth||'',
@@ -9906,7 +9930,7 @@ async function saveSplitIntoScopes(){
         let newM1Id='ms-'+Date.now();
         if(!demoMode){
           const newMs=await atCreate('Milestones',{
-            'Property Name':prop.n,
+            'Property Name':propertyNameToLink(prop.n),
             'Linked Scope':[scopeId],
             'Milestone Number':1,
             'Milestone Name':'Modernization Survey',
@@ -11418,7 +11442,7 @@ async function saveEditCalEvent(type,id){
     record.consultant=document.getElementById('caledit-consultant')?.value||record.consultant;
     record.purpose=document.getElementById('caledit-purpose')?.value||record.purpose;
     if(!demoMode&&record.atId){
-      try{await atUpdate('Site Visits',record.atId,{'Property Name':record.property,'Visit Date':record.date,'Consultant':record.consultant,'Purpose':record.purpose});}
+      try{await atUpdate('Site Visits',record.atId,{'Property Name':propertyNameToLink(record.property),'Visit Date':record.date,'Consultant':record.consultant,'Purpose':record.purpose});}
       catch(e){console.error('Site visit update error:',e);}
     }
   } else {
@@ -11433,7 +11457,7 @@ async function saveEditCalEvent(type,id){
     const notifyClient=document.getElementById('caledit-notify-client')?.value.trim()||'';
     if(!demoMode&&record.atId){
       try{await atUpdate('Meetings',record.atId,{
-        'Property Name':record.property,
+        'Property Name':propertyNameToLink(record.property),
         'Meeting Date':record.date,
         'Meeting Type':record.type,
         'Agenda':record.agenda,
@@ -12732,7 +12756,7 @@ async function saveScheduledMeeting(){
   const consultantName=(role==='consultant'?currentConsultantName:null)||'PM User';
   const smtgScopeId=document.getElementById('smtg-scope')?.value||'';
   const fields={
-    'Property Name':propName,
+    'Property Name':propertyNameToLink(propName),
     'Meeting Date':date,
     'Meeting Type':type,
     'Agenda':agendaStr,
@@ -12952,7 +12976,7 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
   if(!demoMode){
     try{
       const res=await atCreate('Site Visits',{
-        'Property Name':propName,
+        'Property Name':propertyNameToLink(propName),
         'Visit Date':date,
         'Consultant':consultant,
         'Purpose':purpose,
@@ -14304,7 +14328,7 @@ async function publishDraftAction(subId){
   if(!s||!s.draftAction)return;
   if(s.draftAction.published){showToast('Already published','info');return;}
   const d=s.draftAction;
-  const fields={'Property Name':s.property,'Description':d.description,'Owner':d.owner||'','Due Date':d.due||null,'Priority':d.priority||'Medium','Status':'Open'};
+  const fields={'Property Name':propertyNameToLink(s.property),'Description':d.description,'Owner':d.owner||'','Due Date':d.due||null,'Priority':d.priority||'Medium','Status':'Open'};
   const res=demoMode?null:await atCreate('Action Items',fields);
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
   actionItems.push({id:newId,property:s.property,description:d.description,owner:d.owner||'',due:d.due||'TBD',priority:d.priority||'Medium',status:'Open',meetingId:null});
@@ -14373,7 +14397,7 @@ async function approveSubmission(id){
   // Archive to Documents table → Field Updates subfolder
   const docRes=await atCreate('Documents',{
     'Document Name':docName,
-    'Property Name':s.property,
+    'Property Name':propertyNameToLink(s.property),
     'Document Type':'Field Update',
     'Subfolder':'Field Updates',
     'Visibility':'Public',
@@ -14557,7 +14581,7 @@ async function submitUpdate(){
   }:null;
   if(hasDraftAction&&!draftAction.description){showToast('Please enter a description for the follow-up action, or uncheck the flag','warn');return;}
   const fields={
-    'Property Name':property,
+    'Property Name':propertyNameToLink(property),
     'Report Week':week,
     'Units Updated':units,
     'Project Phase':phase,
@@ -14675,7 +14699,7 @@ async function submitFlag(){
   const clientLabel=demoMode?'Demo Retail — Capital Projects':'Park Hotels — Capital Projects';
   const record={id:'cc-'+Date.now(),property:prop,threadId,authorRole:'client',authorName:clientLabel,message:msg,flagType:type,status:'Open',visibility,created:dateStr};
   if(!demoMode){
-    const res=await atCreate('Client Comments',{'Property Name':prop,'Thread ID':threadId,'Author Role':'client','Author Name':clientLabel,'Message':msg,'Flag Type':type,'Status':'Open','Visibility':visibility,'Created':dateStr});
+    const res=await atCreate('Client Comments',{'Property Name':propertyNameToLink(prop),'Thread ID':threadId,'Author Role':'client','Author Name':clientLabel,'Message':msg,'Flag Type':type,'Status':'Open','Visibility':visibility,'Created':dateStr});
     record.id=res?.records?.[0]?.id||record.id;
   }
   window.CLIENT_COMMENTS=(window.CLIENT_COMMENTS||[]).concat([record]);
@@ -14715,7 +14739,7 @@ async function addReply(threadId){
   const flagRecord=thread[0];
   const record={id:'cc-'+Date.now(),property:flagRecord?.property||'',threadId,authorRole:isClient?'client':'pm',authorName:isClient?clientLabel:'Pulse — Project Manager',message:text,flagType:flagRecord?.flagType||'General',status:flagRecord?.status||'Open',visibility:flagRecord?.visibility||'PM Only',created:now};
   if(!demoMode){
-    const res=await atCreate('Client Comments',{'Property Name':record.property,'Thread ID':threadId,'Author Role':record.authorRole,'Author Name':record.authorName,'Message':text,'Flag Type':record.flagType,'Status':record.status,'Visibility':record.visibility,'Created':now});
+    const res=await atCreate('Client Comments',{'Property Name':propertyNameToLink(record.property),'Thread ID':threadId,'Author Role':record.authorRole,'Author Name':record.authorName,'Message':text,'Flag Type':record.flagType,'Status':record.status,'Visibility':record.visibility,'Created':now});
     record.id=res?.records?.[0]?.id||record.id;
   }
   // Flip the other party's read state to unread on all thread records
