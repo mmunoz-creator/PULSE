@@ -638,6 +638,7 @@ let AT_CONNECTED = false;
 let _loginSeq = 0;
 let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
 window.UNIT_GROUPS = window.UNIT_GROUPS || [];
+window.SCOPE_BUDGET_ALLOCATIONS = window.SCOPE_BUDGET_ALLOCATIONS || [];
 window.BILLING_LOG = window.BILLING_LOG || [];
 window.MILESTONES = window.MILESTONES || [];
 window.CLIENT_COMMENTS = window.CLIENT_COMMENTS || [];
@@ -987,11 +988,11 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, budgetAllocations] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
-      atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes')
+      atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes'), atGet('Scope Budget Allocations')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     if (props.length > 0) {
@@ -1251,6 +1252,37 @@ async function loadAllData() {
         otherCount: parseInt(r.fields['Other Count'])||0,
       };
     });
+    // v33a — Scope Budget Allocations: per-year $ amounts per Scope,
+    // entered directly on the Scope Card (replaces the old single lump
+    // "Budget" input). A Scope's total budget is now DERIVED as the sum
+    // of its allocation rows, not typed — see rollup below. Linked Unit
+    // Groups/Notes fields exist on the Airtable table as future
+    // infrastructure (tying allocations to phase progression/end dates
+    // at enterprise scale) but are unused by the app for now.
+    window.SCOPE_BUDGET_ALLOCATIONS = budgetAllocations.map(r=>({
+      id: r.id,
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      year: r.fields['Year']!=null?parseInt(r.fields['Year']):null,
+      amount: r.fields['Amount']!=null?Number(r.fields['Amount']):0,
+    })).filter(a=>a.scopeId);
+    // Roll each Scope's allocations up into a single total, then assign
+    // that total to whichever field the rest of the app already reads:
+    // Contract Award Value once a scope has left Capital Plan (i.e. its
+    // budget is committed), Planned Budget always (the pipeline/estimate
+    // figure). This is the ONLY place these two fields get written from
+    // allocations — Scope Card no longer accepts a typed lump sum.
+    {
+      const allocTotals={};
+      window.SCOPE_BUDGET_ALLOCATIONS.forEach(a=>{
+        allocTotals[a.scopeId]=(allocTotals[a.scopeId]||0)+a.amount;
+      });
+      window.SCOPES.forEach(sc=>{
+        if(allocTotals[sc.id]!=null){
+          sc.plannedBudget=allocTotals[sc.id];
+          sc.contractAwardValue=sc.status!=='Capital Plan'?allocTotals[sc.id]:null;
+        }
+      });
+    }
     // Client Comments — flags and replies
     window.CLIENT_COMMENTS = clientComments.map(r=>({
       id: r.id,
@@ -1942,7 +1974,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v32c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v33b</div>
     </div>
   </nav>
 
@@ -2367,17 +2399,53 @@ window.PROPERTIES_SEED = [
 
       <!-- MILESTONES VIEW -->
       <div id="view-capital" class="hidden">
-        <div class="page-header">
-          <div class="page-header-left"><h1>Capital Plan</h1><p>Lifecycle Pipeline &amp; Multi-Year Budget Outlook</p></div>
-          <div class="header-actions" id="capital-header-actions">
-            <button class="btn btn-delete no-print" id="capital-delete-prop-btn" onclick="deleteProperty()" style="display:none"><i class="ti ti-trash"></i>Delete Property</button>
-            <button class="btn btn-primary no-print" onclick="printCapitalPlan()"><i class="ti ti-printer"></i>Print / PDF</button>
-            <button class="btn btn-add no-print" id="capital-add-btn" onclick="openCapitalPlanEntry()"><i class="ti ti-building-skyscraper" style="font-size:14px"></i>+ Capital Plan</button>
+        <div id="capital-plan-library-view">
+          <div class="page-header no-print">
+            <div class="page-header-left"><h1>Capital Plan</h1><p>Lifecycle Pipeline &amp; Multi-Year Budget Outlook</p></div>
+            <div class="header-actions" id="capital-header-actions">
+              <button class="btn btn-delete no-print" id="capital-delete-prop-btn" onclick="deleteProperty()" style="display:none"><i class="ti ti-trash"></i>Delete Property</button>
+              <button class="btn no-print" onclick="showBudgetOutlook()"><i class="ti ti-chart-bar"></i>Budget Outlook</button>
+              <button class="btn btn-primary no-print" onclick="printCapitalPlan()"><i class="ti ti-printer"></i>Print / PDF</button>
+              <button class="btn btn-add no-print" id="capital-add-btn" onclick="openCapitalPlanEntry()"><i class="ti ti-building-skyscraper" style="font-size:14px"></i>+ Capital Plan</button>
+            </div>
+          </div>
+          <div class="page-body">
+            <div id="capital-summary-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
+            <div id="capital-plan-body"></div>
           </div>
         </div>
-        <div class="page-body">
-          <div id="capital-summary-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
-          <div id="capital-plan-body"></div>
+        <!-- BUDGET OUTLOOK — v33a. Live-pulled rollup of Scope Budget
+             Allocations across every Scope on the property (or portfolio,
+             from this nav entry), grouped by year. Committed = Allocations
+             belonging to a non-Capital-Plan-status Scope; Planned =
+             Allocations belonging to a Capital Plan Scope. Not a saved
+             document — always reflects current Allocations at open time,
+             same convention as the Milestone Report. -->
+        <div id="budget-outlook-view" style="display:none">
+          <div class="page-header no-print">
+            <div class="page-header-left"><h1>Budget Outlook</h1><p>Committed and Planned Spend by Year, Across Every Scope</p></div>
+            <div class="header-actions">
+              <button class="btn no-print" onclick="closeBudgetOutlook()"><i class="ti ti-arrow-left"></i>Back to Capital Plan</button>
+              <button class="btn btn-primary no-print" onclick="window.print()"><i class="ti ti-printer"></i>Print / PDF</button>
+            </div>
+          </div>
+          <div class="page-body">
+            <div class="no-print" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
+              <div style="display:flex;gap:6px" id="bo-filter-pills"></div>
+              <div style="display:flex;gap:14px;font-size:12px;color:var(--gray-mid)">
+                <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue-dark);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Committed</span>
+                <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue-light);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Planned</span>
+              </div>
+            </div>
+            <div id="bo-summary-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
+            <div id="bo-chart" style="margin-bottom:24px"></div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th style="width:24px"></th><th>Year</th><th style="text-align:right">Committed</th><th style="text-align:right">Planned</th><th style="text-align:right">Total</th><th style="text-align:right">Scopes</th></tr></thead>
+                <tbody id="bo-tbody"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3483,7 +3551,7 @@ function doLogout(){
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.SCOPE_BUDGET_ALLOCATIONS=[];
   clientFlags=[];flagIdCounter=0;
   window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
   // Reset chatbot to Park Hotels context
@@ -4098,7 +4166,11 @@ function getMsExpectedTotal(propName){
 // Returns risk assessment for a property based on today vs planned dates
 function calcScheduleRisk(propName){
   const today=new Date();today.setHours(0,0,0,0);
-  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
+  // v33a — On Hold scopes (manual override on the Scope Card) pause
+  // schedule risk entirely: exclude their Phase Steps/Unit Groups from
+  // the calculation so an on-hold project stops surfacing as "behind."
+  const onHoldScopeIds=new Set((window.SCOPES||[]).filter(s=>s.property===propName&&s.status==='On Hold').map(s=>s.id));
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName&&!onHoldScopeIds.has(u.scopeId));
   let daysLate=0;
   let overdueCount=0;
   let atRiskCount=0;
@@ -4106,7 +4178,7 @@ function calcScheduleRisk(propName){
   let projectedEnd=null;
 
   // Primary: check phase STEPS schedule health
-  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.checked!==false);
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.checked!==false&&!onHoldScopeIds.has(s.scopeId));
   steps.forEach(s=>{
     if(s.status==='Complete')return;
     if(s.status==='At Risk')atRiskCount++;
@@ -4250,10 +4322,18 @@ async function updateMilestone(msId,fields,propName){
 // multiple Scopes graduating independently reflects the most-advanced
 // (or, if any Scope is still mid-construction, the property as a whole
 // is "In Progress" rather than jumping to Complete on one Scope finishing).
-async function deriveAndWriteScopeStatus(scopeId){
+async function deriveAndWriteScopeStatus(scopeId,opts){
   if(!scopeId)return;
   const scope=(window.SCOPES||[]).find(s=>s.id===scopeId);
   if(!scope)return;
+  // v33a — On Hold is a manual override set from the Scope Card, not a
+  // derived state. While a scope is On Hold, this function must not
+  // overwrite it — derivation still runs invisibly underneath (milestone
+  // completion keeps recording normally), but the displayed/written
+  // Status stays frozen at "On Hold" until explicitly un-held via
+  // setScopeOnHold(scopeId,false), which passes force:true to bypass
+  // this guard and immediately reveal wherever real progress landed.
+  if(scope.status==='On Hold'&&!(opts&&opts.force))return;
   const msData=(window.MILESTONES||[]).filter(m=>m.scopeId===scopeId);
   if(msData.length===0)return;
   const ms1=msData.find(m=>m.milestoneNumber===1);
@@ -4279,6 +4359,23 @@ async function deriveAndWriteScopeStatus(scopeId){
   await deriveAndWritePropertyStatus(scope.property);
 }
 
+// v33a — Manual On Hold toggle, set from the Scope Card. Setting On Hold
+// writes the override directly and skips derivation. Clearing it forces
+// an immediate derivation pass (force:true) so the scope snaps to
+// wherever its real milestone progress actually is, rather than sitting
+// at a stale value until the next milestone save.
+async function setScopeOnHold(scopeId,onHold){
+  const scope=(window.SCOPES||[]).find(s=>s.id===scopeId);
+  if(!scope)return;
+  if(onHold){
+    scope.status='On Hold';
+    if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':'On Hold'});
+    await deriveAndWritePropertyStatus(scope.property);
+  }else{
+    await deriveAndWriteScopeStatus(scopeId,{force:true});
+  }
+}
+
 async function deriveAndWritePropertyStatus(propName){
   const propScopes=(window.SCOPES||[]).filter(s=>s.property===propName);
   if(propScopes.length===0)return;
@@ -4288,10 +4385,23 @@ async function deriveAndWritePropertyStatus(propName){
   // - Planned if any scope is Planned and none are In Progress
   // - Capital Plan only if ALL scopes are still Capital Plan
   // - Complete only if ALL scopes are Complete
+  // v33a — On Hold scopes are excluded from the rollup inputs above (an
+  // on-hold scope shouldn't itself pull the property into a status), UNLESS
+  // every scope on the property is On Hold, in which case the property
+  // rolls up to On Hold too rather than falling through to Capital Plan.
+  const activeStatuses=statuses.filter(s=>s!=='On Hold');
+  if(activeStatuses.length===0){
+    const prop2=(window.PORTFOLIO||[]).find(p=>p.n===propName);
+    if(prop2&&prop2.st!=='On Hold'){
+      prop2.st='On Hold';
+      if(!demoMode&&prop2.id)await atUpdate('Properties',prop2.id,{'Status':'On Hold'});
+    }
+    return;
+  }
   let newStatus='Capital Plan';
-  if(statuses.some(s=>s==='In Progress'))newStatus='In Progress';
-  else if(statuses.some(s=>s==='Planned'))newStatus='Planned';
-  else if(statuses.every(s=>s==='Complete'))newStatus='Complete';
+  if(activeStatuses.some(s=>s==='In Progress'))newStatus='In Progress';
+  else if(activeStatuses.some(s=>s==='Planned'))newStatus='Planned';
+  else if(activeStatuses.every(s=>s==='Complete'))newStatus='Complete';
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===propName);
   if(!prop)return;
   if(prop.st!==newStatus){
@@ -4377,7 +4487,7 @@ function renderScopeCards(p){
   const canEdit=role==='pm'||role==='admin';
   const manageBtn=canEdit?`<button class="btn btn-edit" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork"></i>Manage scopes</button>`:'';
   const statusBadge=st=>{
-    const cfg={'Capital Plan':{bg:'var(--gray-pale)',c:'var(--gray-mid)'},'Planned':{bg:'var(--blue-xpale)',c:'var(--blue-dark)'},'In Progress':{bg:'#dcfce7',c:'#15803d'},'Complete':{bg:'var(--green-pale)',c:'var(--green)'}};
+    const cfg={'Capital Plan':{bg:'var(--gray-pale)',c:'var(--gray-mid)'},'Planned':{bg:'var(--blue-xpale)',c:'var(--blue-dark)'},'In Progress':{bg:'#dcfce7',c:'#15803d'},'Complete':{bg:'var(--green-pale)',c:'var(--green)'},'On Hold':{bg:'#fff7ed',c:'#b45309'}};
     const s=cfg[st]||cfg['Capital Plan'];
     return `<span style="font-size:10px;font-weight:600;background:${s.bg};color:${s.c};border-radius:6px;padding:2px 8px">${st}</span>`;
   };
@@ -4434,11 +4544,20 @@ function renderScopeCards(p){
       :`<span style="font-size:11px;color:var(--gray-light)">Not set</span>`;
     const awardVal=s.contractAwardValue>0?fmtCurrency(s.contractAwardValue):null;
     const budgetVal=s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD';
+    const scopeAllocs=(window.SCOPE_BUDGET_ALLOCATIONS||[]).filter(a=>a.scopeId===s.id).sort((a,b)=>(a.year||0)-(b.year||0));
+    const allocYearsLabel=scopeAllocs.length>1
+      ?`${scopeAllocs[0].year}–${scopeAllocs[scopeAllocs.length-1].year}`
+      :scopeAllocs.length===1?String(scopeAllocs[0].year):'';
+    const onHoldToggle=(canEdit&&s.status!=='Complete'&&s.status!=='Capital Plan')
+      ?(s.status==='On Hold'
+        ?`<button onclick="event.stopPropagation();setScopeOnHold('${s.id}',false).then(()=>renderScopeCards(currentProp));" style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;white-space:nowrap">Resume</button>`
+        :`<button onclick="event.stopPropagation();setScopeOnHold('${s.id}',true).then(()=>renderScopeCards(currentProp));" style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;white-space:nowrap">Put On Hold</button>`)
+      :'';
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <span style="font-size:14px;font-weight:600;color:var(--navy)">${s.name||'Property Modernization'}</span>
-          ${statusBadge(s.status||'Capital Plan')}
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+          <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${s.name||'Property Modernization'}</span>
+          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${onHoldToggle}</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           ${coreBadge}
@@ -4463,7 +4582,7 @@ function renderScopeCards(p){
           </div>
           <div>
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${awardVal?'Contract Award':'Planned Budget'}</div>
-            <div style="font-size:13px;font-weight:500;color:var(--navy)">${awardVal||budgetVal}</div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">${awardVal||budgetVal}${allocYearsLabel?` <span style="font-size:10px;font-weight:400;color:var(--gray-mid)">· ${allocYearsLabel}</span>`:''}</div>
           </div>
           ${awardVal?`<div style="grid-column:1/-1">
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Budget</div>
@@ -9450,6 +9569,127 @@ function printCapitalPlan(){
   window.print();
   setTimeout(()=>el?.classList.remove('print-active'),1000);
 }
+
+// v33a — Budget Outlook. Rolls up Scope Budget Allocations by year across
+// every Scope in the portfolio (not just Capital Plan ones, unlike the
+// old capitalByYear section this supplements). "Committed" = allocations
+// belonging to a Scope that has left Capital Plan status (its budget is a
+// real Contract Award, not an estimate); "Planned" = allocations still on
+// a Capital Plan Scope. Filter and expand state persist for the session
+// (not saved) so Print/PDF mirrors whatever's currently shown, per
+// Misty's explicit call.
+let boFilter='all';
+let boExpandedYear=null;
+
+function showBudgetOutlook(){
+  document.getElementById('capital-plan-library-view').style.display='none';
+  document.getElementById('budget-outlook-view').style.display='';
+  renderBudgetOutlook();
+}
+function closeBudgetOutlook(){
+  document.getElementById('budget-outlook-view').style.display='none';
+  document.getElementById('capital-plan-library-view').style.display='';
+}
+function setBoFilter(f){
+  boFilter=f;
+  boExpandedYear=null;
+  renderBudgetOutlook();
+}
+function toggleBoYear(year){
+  boExpandedYear=boExpandedYear===year?null:year;
+  renderBudgetOutlook();
+}
+window.setBoFilter=setBoFilter;
+window.toggleBoYear=toggleBoYear;
+
+function renderBudgetOutlook(){
+  const pillsEl=document.getElementById('bo-filter-pills');
+  if(!pillsEl)return;
+  const pills=[['all','All properties'],['capital','Capital plan only'],['active','Active properties']];
+  pillsEl.innerHTML=pills.map(([val,label])=>{
+    const active=boFilter===val;
+    return `<button onclick="setBoFilter('${val}')" style="font-size:13px;padding:6px 14px;border-radius:var(--radius,8px);border:0.5px solid ${active?'var(--blue-dark)':'var(--border)'};background:${active?'var(--blue-xpale)':'transparent'};color:${active?'var(--blue-dark)':'var(--gray-mid)'};cursor:pointer">${label}</button>`;
+  }).join('');
+
+  const allScopes=window.SCOPES||[];
+  const allocs=(window.SCOPE_BUDGET_ALLOCATIONS||[]).map(a=>{
+    const sc=allScopes.find(s=>s.id===a.scopeId);
+    if(!sc)return null;
+    const isCommitted=sc.status!=='Capital Plan';
+    return {year:a.year,amount:a.amount,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted};
+  }).filter(Boolean).filter(a=>{
+    if(boFilter==='capital')return !a.isCommitted;
+    if(boFilter==='active')return a.isCommitted;
+    return true;
+  });
+
+  const byYear={};
+  allocs.forEach(a=>{
+    if(!byYear[a.year])byYear[a.year]={committed:0,planned:0,items:[]};
+    if(a.isCommitted)byYear[a.year].committed+=a.amount;else byYear[a.year].planned+=a.amount;
+    byYear[a.year].items.push(a);
+  });
+  const years=Object.keys(byYear).map(Number).sort((a,b)=>a-b);
+
+  const totalCommitted=allocs.filter(a=>a.isCommitted).reduce((s,a)=>s+a.amount,0);
+  const totalPlanned=allocs.filter(a=>!a.isCommitted).reduce((s,a)=>s+a.amount,0);
+  const propCount=new Set(allocs.map(a=>a.property)).size;
+
+  document.getElementById('bo-summary-cards').innerHTML=`
+    <div class="stat-card"><div class="stat-label">Total outlook</div><div class="stat-value">${fmtBudget(totalCommitted+totalPlanned)}</div></div>
+    <div class="stat-card"><div class="stat-label">Committed</div><div class="stat-value" style="color:var(--blue-dark)">${fmtBudget(totalCommitted)}</div></div>
+    <div class="stat-card"><div class="stat-label">Planned</div><div class="stat-value" style="color:var(--blue-light)">${fmtBudget(totalPlanned)}</div></div>
+    <div class="stat-card"><div class="stat-label">Properties</div><div class="stat-value">${propCount}</div></div>`;
+
+  const chartEl=document.getElementById('bo-chart');
+  if(years.length===0){
+    chartEl.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-chart-bar-off"></i><div class="empty-state-title">No budget allocations entered yet</div><div class="empty-state-sub">Add per-year amounts from a Scope's Manage Scopes panel.</div></div>`;
+  }else{
+    const maxTotal=Math.max(...years.map(y=>byYear[y].committed+byYear[y].planned));
+    chartEl.innerHTML=`<div style="display:flex;align-items:flex-end;gap:20px;height:200px;padding:0 8px;border-bottom:0.5px solid var(--border)">
+      ${years.map(y=>{
+        const d=byYear[y];
+        const total=d.committed+d.planned;
+        const h=maxTotal>0?Math.round((total/maxTotal)*180):0;
+        const hc=total>0?Math.round((d.committed/total)*h):0;
+        const hp=h-hc;
+        return `<div style="display:flex;flex-direction:column;align-items:center;flex:1">
+          <div style="font-size:11px;color:var(--gray-mid);margin-bottom:4px">${fmtBudget(total)}</div>
+          <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:180px">
+            <div style="width:100%;background:var(--blue-light);height:${hp}px;border-radius:3px 3px 0 0"></div>
+            <div style="width:100%;background:var(--blue-dark);height:${hc}px"></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:20px;padding:6px 8px 0;font-size:12px;color:var(--gray-mid)">
+      ${years.map(y=>`<div style="flex:1;text-align:center">${y}</div>`).join('')}
+    </div>`;
+  }
+
+  const cell=v=>v>0?fmtCurrency(v):'<span style="color:var(--gray-light)">—</span>';
+  document.getElementById('bo-tbody').innerHTML=years.map(y=>{
+    const d=byYear[y];
+    const isOpen=boExpandedYear===y;
+    const detailRows=isOpen?d.items.slice().sort((a,b)=>(b.committed||b.amount)-(a.committed||a.amount)).map(it=>`
+      <tr style="background:var(--gray-pale)">
+        <td></td>
+        <td colspan="1" style="font-size:12px;color:var(--gray-mid);padding-left:20px">${it.property} — ${it.scopeName}</td>
+        <td style="text-align:right;font-size:12px;color:var(--blue-dark)">${it.isCommitted?fmtCurrency(it.amount):'<span style="color:var(--gray-light)">—</span>'}</td>
+        <td style="text-align:right;font-size:12px;color:var(--blue-light)">${!it.isCommitted?fmtCurrency(it.amount):'<span style="color:var(--gray-light)">—</span>'}</td>
+        <td style="text-align:right;font-size:12px;font-weight:500">${fmtCurrency(it.amount)}</td>
+        <td></td>
+      </tr>`).join(''):'';
+    return `<tr style="cursor:pointer" onclick="toggleBoYear(${y})">
+      <td class="no-print"><i class="ti ti-chevron-${isOpen?'down':'right'}" style="font-size:14px;color:var(--gray-mid)"></i></td>
+      <td style="font-weight:600">${y}</td>
+      <td style="text-align:right;color:var(--blue-dark)">${cell(d.committed)}</td>
+      <td style="text-align:right;color:var(--blue-light)">${cell(d.planned)}</td>
+      <td style="text-align:right;font-weight:600">${fmtCurrency(d.committed+d.planned)}</td>
+      <td style="text-align:right;color:var(--gray-mid)">${d.items.length}</td>
+    </tr>${detailRows}`;
+  }).join('')||`<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--gray-mid)">No allocations for this filter</td></tr>`;
+}
 function deleteCapitalEntry(propId, propName){
   const overlay=document.createElement('div');
   overlay.id='delete-capital-overlay';
@@ -9810,11 +10050,16 @@ function addSplitScopeBlock(scope){
   block.innerHTML=`
     <button onclick="document.getElementById('${id}').remove();updateSplitScopesReconcile()" style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px" title="Remove this scope"><i class="ti ti-x"></i></button>
     <div class="form-group"><label class="form-label">Scope Name</label><input class="form-input split-sc-name" type="text" value="${(s.name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Elevators, Escalators"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
       <div class="form-group"><label class="form-label">Year</label><input class="form-input split-sc-year" type="number" value="${defaultYear||''}" min="2024" max="2040" placeholder="2026"></div>
-      <div class="form-group"><label class="form-label">Budget ($)</label><input class="form-input split-sc-budget" type="text" inputmode="numeric" value="${s.plannedBudget||''}" placeholder="0" oninput="initCurrencyInputEl(this);updateSplitScopesReconcile()"></div>
       <div class="form-group"><label class="form-label">Priority</label><select class="form-input split-sc-priority">${priOptions}</select></div>
       <div class="form-group"><label class="form-label">Budget Status</label><select class="form-input split-sc-budgetstatus">${bsOptions}</select></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Budget by year <span style="font-weight:400;color:var(--gray-light)">(total is calculated, not typed)</span></label>
+      <div id="${id}-alloc-rows" class="split-sc-alloc-rows"></div>
+      <button type="button" class="btn" style="font-size:11px;padding:4px 10px;margin-top:2px" onclick="addAllocRow('${id}-alloc-rows')"><i class="ti ti-plus" style="font-size:11px"></i>Add year</button>
+      <div id="${id}-alloc-total" style="font-size:11px;color:var(--gray-mid);margin-top:6px"></div>
     </div>
     <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:12px 0 6px">Units <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--gray-light)">(property total: <span style="color:var(--blue-light)">${prop?(()=>{const e=prop.elevatorCount||0,es=prop.escalatorCount||0,l=prop.liftCount||0,o=prop.otherCount||0,t=e+es+l+o;return t?[e?e+' Elev':'',es?es+' Esc':'',l?l+' WC Lift':'',o?o+' Other':''].filter(Boolean).join(' / '):'not entered';})():'—'}</span>)</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
@@ -9827,8 +10072,37 @@ function addSplitScopeBlock(scope){
     <div class="form-group" style="margin-bottom:0"><label class="form-label">Mod. Survey Date <span style="font-weight:400;color:var(--gray-mid)">(graduates this scope)</span></label><input class="form-input split-sc-m1date" type="date" value="${m1dateVal}"></div>
   `;
   document.getElementById('split-scopes-blocks').appendChild(block);
-  block.querySelector('.split-sc-budget')?.addEventListener('input',updateSplitScopesReconcile);
+  // Pre-populate allocation rows: real per-year rows if this scope already
+  // has them, otherwise one row seeded from the legacy flat plannedBudget
+  // (pre-v33a scopes) so existing budget data isn't silently dropped the
+  // first time this modal is reopened after the upgrade.
+  const existingAllocs=s.id?(window.SCOPE_BUDGET_ALLOCATIONS||[]).filter(a=>a.scopeId===s.id).sort((a,b)=>(a.year||0)-(b.year||0)):[];
+  if(existingAllocs.length>0){
+    existingAllocs.forEach(a=>addAllocRow(id+'-alloc-rows',a.year,a.amount));
+  }else if(s.plannedBudget){
+    addAllocRow(id+'-alloc-rows',defaultYear||'',s.plannedBudget);
+  }else{
+    addAllocRow(id+'-alloc-rows',defaultYear||'','');
+  }
   updateSplitScopesReconcile();
+}
+
+let allocRowSeq=0;
+function addAllocRow(containerId,year,amount){
+  const container=document.getElementById(containerId);
+  if(!container)return;
+  const rowId='alloc-row-'+(allocRowSeq++);
+  const row=document.createElement('div');
+  row.id=rowId;
+  row.className='split-sc-alloc-row';
+  row.style.cssText='display:flex;gap:8px;align-items:center;margin-bottom:6px';
+  row.innerHTML=`
+    <input class="form-input alloc-year" type="number" value="${year||''}" min="2024" max="2045" placeholder="Year" style="width:90px">
+    <input class="form-input alloc-amount" type="text" inputmode="numeric" value="${amount?Number(amount).toLocaleString('en-US'):''}" placeholder="$0" style="flex:1" oninput="initCurrencyInputEl(this);updateSplitScopesReconcile()">
+    <button type="button" onclick="document.getElementById('${rowId}').remove();updateSplitScopesReconcile()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid)" title="Remove year"><i class="ti ti-x"></i></button>
+  `;
+  container.appendChild(row);
+  row.querySelector('.alloc-year')?.addEventListener('input',updateSplitScopesReconcile);
 }
 
 function initCurrencyInputEl(el){
@@ -9854,10 +10128,17 @@ function updateSplitScopesReconcile(){
     ? existingScopes.reduce((a,s)=>a+(s.plannedBudget||0),0)
     : (prop.budget||0);
   const blocks=[...document.querySelectorAll('.split-scope-block')];
-  const sum=blocks.reduce((a,b)=>{
-    const v=(b.querySelector('.split-sc-budget')?.value||'').replace(/[^0-9]/g,'');
-    return a+(parseInt(v)||0);
-  },0);
+  let sum=0;
+  blocks.forEach(b=>{
+    const rowsContainer=b.querySelector('.split-sc-alloc-rows');
+    const blockSum=rowsContainer?[...rowsContainer.querySelectorAll('.split-sc-alloc-row')].reduce((a,row)=>{
+      const v=(row.querySelector('.alloc-amount')?.value||'').replace(/[^0-9]/g,'');
+      return a+(parseInt(v)||0);
+    },0):0;
+    sum+=blockSum;
+    const totalEl=b.id?document.getElementById(b.id+'-alloc-total'):null;
+    if(totalEl)totalEl.textContent=blockSum>0?`Total: ${fmtCurrency(blockSum)}`:'';
+  });
   const el=document.getElementById('split-scopes-reconcile');
   if(!el)return;
   if(baseline===0&&sum===0){el.innerHTML='';return;}
@@ -9886,11 +10167,18 @@ async function saveSplitIntoScopes(){
     const other=parseInt(b.querySelector('.split-sc-other')?.value)||0;
     const totalUnits=elevators+escalators+lifts+other;
     const unitDesc=[elevators?`${elevators} Elev`:'',escalators?`${escalators} Esc`:'',lifts?`${lifts} WC Lift`:'',other?`${other} Other`:''].filter(Boolean).join(' / ');
+    const rowsContainer=b.querySelector('.split-sc-alloc-rows');
+    const allocations=rowsContainer?[...rowsContainer.querySelectorAll('.split-sc-alloc-row')].map(row=>({
+      year:parseInt(row.querySelector('.alloc-year')?.value)||null,
+      amount:parseInt((row.querySelector('.alloc-amount')?.value||'').replace(/[^0-9]/g,''))||0,
+    })).filter(a=>a.year!=null&&a.amount>0):[];
+    const plannedBudget=allocations.reduce((a,al)=>a+al.amount,0);
     return {
       scopeId:b.dataset.scopeId||'',
       name:b.querySelector('.split-sc-name')?.value.trim()||'Property Modernization',
       year:parseInt(b.querySelector('.split-sc-year')?.value)||null,
-      plannedBudget:parseInt((b.querySelector('.split-sc-budget')?.value||'').replace(/[^0-9]/g,''))||0,
+      plannedBudget,
+      allocations,
       priority:b.querySelector('.split-sc-priority')?.value||'4: Standard',
       budgetStatus:b.querySelector('.split-sc-budgetstatus')?.value||'TBD',
       unitList:b.querySelector('.split-sc-units')?.value.trim()||'',
@@ -9933,7 +10221,7 @@ async function saveSplitIntoScopes(){
     if(scopeId){
       if(!demoMode) await atUpdate('Scopes',scopeId,fields);
       const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
-      if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.unitList=r.unitList;sc.elevatorCount=r.elevators;sc.escalatorCount=r.escalators;sc.liftCount=r.lifts;sc.otherCount=r.other;sc.v=r.consultant||sc.v||'';}
+      if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.unitList=r.unitList;sc.elevatorCount=r.elevators;sc.escalatorCount=r.escalators;sc.liftCount=r.lifts;sc.otherCount=r.other;sc.v=r.consultant||sc.v||'';if(sc.status!=='Capital Plan')sc.contractAwardValue=r.plannedBudget;}
     } else {
       const createFields={...fields,'Property':[prop.id],'Status':'Capital Plan'};
       let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
@@ -9949,6 +10237,40 @@ async function saveSplitIntoScopes(){
         elevatorCount:r.elevators,escalatorCount:r.escalators,liftCount:r.lifts,otherCount:r.other,
         v:r.consultant||'',
       }]);
+    }
+
+    // v33a — Sync this scope's per-year allocation rows to Airtable: diff
+    // against what's already stored, delete rows for removed years,
+    // update rows whose amount changed, create rows for new years. This
+    // is the write side of the "Budget by year" editor — Planned
+    // Budget/Contract Award Value on the Scope itself are derived sums,
+    // never written to directly (handled above via r.plannedBudget, which
+    // is already the sum of r.allocations).
+    {
+      const existingAllocs=(window.SCOPE_BUDGET_ALLOCATIONS||[]).filter(a=>a.scopeId===scopeId);
+      const newYears=new Set(r.allocations.map(a=>a.year));
+      const toDelete=existingAllocs.filter(a=>!newYears.has(a.year));
+      for(const a of toDelete){
+        if(!demoMode&&a.id) await atDelete('Scope Budget Allocations',a.id);
+      }
+      const keptAllocs=[];
+      for(const a of r.allocations){
+        const existing=existingAllocs.find(e=>e.year===a.year);
+        if(existing){
+          if(existing.amount!==a.amount){
+            if(!demoMode&&existing.id) await atUpdate('Scope Budget Allocations',existing.id,{'Amount':a.amount});
+          }
+          keptAllocs.push({id:existing.id,scopeId,year:a.year,amount:a.amount});
+        }else{
+          let newAllocId='demo_alloc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+          if(!demoMode){
+            const res=await atCreate('Scope Budget Allocations',{'Linked Scope':[scopeId],'Year':a.year,'Amount':a.amount});
+            newAllocId=res?.records?.[0]?.id||newAllocId;
+          }
+          keptAllocs.push({id:newAllocId,scopeId,year:a.year,amount:a.amount});
+        }
+      }
+      window.SCOPE_BUDGET_ALLOCATIONS=(window.SCOPE_BUDGET_ALLOCATIONS||[]).filter(a=>a.scopeId!==scopeId).concat(keptAllocs);
     }
 
     // v28b — Mod Survey Date is the graduation trigger, now scoped to
