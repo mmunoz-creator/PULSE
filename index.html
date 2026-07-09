@@ -1918,7 +1918,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31u</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v31v</div>
     </div>
   </nav>
 
@@ -3399,6 +3399,15 @@ async function _finishLogin(){
         // of which view happens to be open when load completes.
         loadDueDaySetting();
         loadPriorityDisplaySetting();
+        // v31v — reconcile every Scope's status against its Milestones on
+        // every load, not just when a Milestone is saved through the app
+        // UI. deriveAndWriteScopeStatus() only ever fired from in-app
+        // milestone saves, so Scopes/Milestones entered directly in
+        // Airtable (bulk import) never triggered graduation even after
+        // the v31u guard-clause fix — the fixed logic was correct but
+        // never got called for that data. This runs it for every Scope,
+        // every load, regardless of how the underlying data arrived.
+        reconcileAllScopeStatuses();
         if(!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
         showToast('Live data connected ✓','success');
       }
@@ -4228,6 +4237,28 @@ async function deriveAndWritePropertyStatus(propName){
   }
   refreshDashActions();
   if(!demoMode)populateMilestonesTable();
+}
+
+// v31v — Reconciliation pass. Runs deriveAndWriteScopeStatus() against
+// every Scope in the portfolio, every load. deriveAndWriteScopeStatus
+// only ever fires automatically from in-app Milestone saves, so this
+// is the catch-up path for Scopes/Milestones entered directly in
+// Airtable (bulk import) that never triggered graduation any other
+// way. Sequential (not Promise.all) to avoid hammering Airtable with
+// concurrent writes on every login — fine at pilot scale (dozens of
+// scopes); revisit if the portfolio grows much larger. Silent unless
+// something actually changes — deriveAndWriteScopeStatus already
+// no-ops and logs nothing when a scope's status is already correct.
+async function reconcileAllScopeStatuses(){
+  if(demoMode)return;
+  const scopeIds=(window.SCOPES||[]).map(s=>s.id).filter(Boolean);
+  for(const id of scopeIds){
+    try{
+      await deriveAndWriteScopeStatus(id);
+    }catch(e){
+      console.error('reconcileAllScopeStatuses: failed for scope',id,e.message);
+    }
+  }
 }
 
 // renderScopeTabs — shared scope-switcher row used by Milestones, Phases,
