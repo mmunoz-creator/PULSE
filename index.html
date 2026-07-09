@@ -1942,7 +1942,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v32b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v32c</div>
     </div>
   </nav>
 
@@ -3759,7 +3759,8 @@ function renderPropertyView(p){
 
   const propUpdates=submissions.filter(s=>s.property===p.n);
   const msCompleteCount=getMsComplete(p.n);
-  const msCompletePct=Math.round(msCompleteCount/MILESTONES_DEF.length*100);
+  const msExpectedTotal=getMsExpectedTotal(p.n);
+  const msCompletePct=Math.round(msCompleteCount/msExpectedTotal*100);
   const propVisits=siteVisits.filter(v=>v.property===p.n);
   const openAIs=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
 
@@ -3807,7 +3808,7 @@ function renderPropertyView(p){
 
   document.getElementById('prop-mini-grid').innerHTML=`
     <div class="prop-mini-card"><div class="prop-mini-label">VT Units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${unitsComplete} of ${totalUnits} complete</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount} of ${MILESTONES_DEF.length} complete</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount} of ${msExpectedTotal} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Project Phases</div><div class="prop-mini-val" style="color:var(--blue-dark)">${phasesTotal>0?Math.round((phasesComplete/phasesTotal)*100)+'%':'0%'}</div><div class="prop-mini-sub">${phasesComplete} of ${phasesTotal||0} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Open Actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">${budgetTileLabel}</div><div class="prop-mini-val">${budgetTileValue}</div><div class="prop-mini-sub">${budgetTileSub}</div></div>
@@ -4037,6 +4038,22 @@ function getMilestonesForProp(propName,scopeId){
   // At-Risk widget, Capital Plan M1 check, populateMilestonesTable).
   const allLive=(window.MILESTONES||[]).filter(m=>m.property===propName);
   const live=scopeId?allLive.filter(m=>m.scopeId===scopeId):allLive;
+  // v32b — when scoped to a single Scope, always return all 14 milestone
+  // slots: real Airtable records where they exist, "Not Started"
+  // placeholders for milestone numbers that don't have a record yet. A
+  // scope populated by direct Airtable bulk entry (Property Name Link
+  // fix) may only have the milestones someone actually typed in (e.g.
+  // just M1), unlike the app's own auto-populate flow which always
+  // creates all 14 at once — without this fill-in, the Milestones tab
+  // would only show however many rows happen to exist in Airtable.
+  if(scopeId){
+    const byNum={};
+    live.forEach(m=>{byNum[m.milestoneNumber]=m;});
+    return MILESTONES_DEF.map((name,i)=>byNum[i+1]||{
+      id:null,property:propName,scopeId,milestoneNumber:i+1,milestoneName:name,
+      status:'Not Started',plannedDate:'',actualDate:'',completionDate:'',variance:null,notes:''
+    });
+  }
   if(live.length>0) return live.sort((a,b)=>a.milestoneNumber-b.milestoneNumber);
   // In demo mode only — fall back to embedded p.ms seed data. Un-seeded
   // demo properties (13 of 15, see continuity brief 1O) intentionally have
@@ -4063,6 +4080,18 @@ function getMilestonesForProp(propName,scopeId){
 // Get ms % complete from live data
 function getMsComplete(propName){
   const ms=getMilestonesForProp(propName);  return ms.filter(m=>m.status==='Complete').length;
+}
+// v32b — property-wide milestone totals must account for every Scope on
+// that property, not a flat 14. A property with 5 Scopes has 5*14=70
+// possible milestones, not 14 — dividing complete-count by a flat
+// MILESTONES_DEF.length badly overstates % complete once a property has
+// more than one Scope (e.g. 3 complete out of 5 scopes' worth showed as
+// "3 of 14 / 21%" instead of the correct "3 of 70 / 4%"). Scope-specific
+// views (the Milestones tab itself) are unaffected — they already pass
+// scopeId and correctly use MILESTONES_DEF.length directly.
+function getMsExpectedTotal(propName){
+  const scopeCount=(window.SCOPES||[]).filter(s=>s.property===propName).length;
+  return MILESTONES_DEF.length*(scopeCount>0?scopeCount:1);
 }
 
 // SCHEDULE RISK ENGINE
@@ -4204,7 +4233,7 @@ async function updateMilestone(msId,fields,propName){
     const msCompleteCount=getMsComplete(propName);
     // v29d Bug 4 fix: was nth-child(3) which targets Project Phases card, not VDA Milestones.
     const msCard=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
-    if(msCard)msCard.textContent=Math.round(msCompleteCount/MILESTONES_DEF.length*100)+'%';
+    if(msCard)msCard.textContent=Math.round(msCompleteCount/getMsExpectedTotal(propName)*100)+'%';
   }
   // Auto-derive and write Scope status (which rolls up to Property status)
   // from milestone data — v28b, was deriveAndWritePropertyStatus(propName)
@@ -4499,11 +4528,12 @@ function renderMilestones(p){
         // in demo mode, so it showed 0%. Now that milestones are populated
         // update it to reflect the real count.
         const msCompleteCount=getMsComplete(p.n);
-        const pct=Math.round(msCompleteCount/MILESTONES_DEF.length*100);
+        const msExpectedTotal=getMsExpectedTotal(p.n);
+        const pct=Math.round(msCompleteCount/msExpectedTotal*100);
         const statVal=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
         const statSub=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-sub');
         if(statVal)statVal.textContent=pct+'%';
-        if(statSub)statSub.textContent=`${msCompleteCount} of ${MILESTONES_DEF.length} complete`;
+        if(statSub)statSub.textContent=`${msCompleteCount} of ${msExpectedTotal} complete`;
       });
       msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:12px"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Initializing milestones...</div>`;
       return;
@@ -4656,17 +4686,23 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
       }
     }
   }
-  // Refresh progress badge
-  const msData=getMilestonesForProp(propName);
+  // Refresh progress badge — scope-tab badge is scope-specific (denominator
+  // is always a flat 14 for one scope); the Overview mini card is
+  // property-wide and must divide by every scope's 14, via getMsExpectedTotal.
+  const scopeIdForBadge=currentScope?.id;
+  const msData=getMilestonesForProp(propName,scopeIdForBadge);
   const complete=msData.filter(m=>m.status==='Complete').length;
   const pct=Math.round(complete/MILESTONES_DEF.length*100);
   const badge=document.getElementById('ms-progress-badge');
   if(badge)badge.textContent=`${pct}% · ${complete} / ${MILESTONES_DEF.length}`;
   // Update mini card — nth-child(2) = VDA Milestones (not 3 which is Project Phases)
+  const propMsComplete=getMsComplete(propName);
+  const propMsExpected=getMsExpectedTotal(propName);
+  const propMsPct=Math.round(propMsComplete/propMsExpected*100);
   const miniVal=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
   const miniSub=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-sub');
-  if(miniVal)miniVal.textContent=pct+'%';
-  if(miniSub)miniSub.textContent=`${complete} of ${MILESTONES_DEF.length} complete`;
+  if(miniVal)miniVal.textContent=propMsPct+'%';
+  if(miniSub)miniSub.textContent=`${propMsComplete} of ${propMsExpected} complete`;
 }
 
 function populateMilestonesTable(){
@@ -11646,7 +11682,7 @@ function renderDashboard(){
     const propStatus=derivePropertyStatusFromPhases(p.n);
     const propSteps=(window.PHASE_STEPS||[]).filter(s=>s.property===p.n&&s.checked!==false);
     const stepsComplete=propSteps.filter(s=>s.status==='Complete').length;
-    const pct=propSteps.length>0?Math.round(stepsComplete/propSteps.length*100):Math.round(getMsComplete(p.n)/MILESTONES_DEF.length*100);
+    const pct=propSteps.length>0?Math.round(stepsComplete/propSteps.length*100):Math.round(getMsComplete(p.n)/getMsExpectedTotal(p.n)*100);
     const riskLevel=propStatus==='At Risk'?'High':propStatus==='Complete'?'None':risk.daysLate>0?'Medium':'Low';
     return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,riskLevel,propStatus,daysLate:risk.daysLate,overdueCount:risk.overdueCount};
   });
@@ -15188,7 +15224,7 @@ function buildReportHTML(filter,periodDays,isWeekly){
                 const billedYTD=p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((a,b)=>Math.max(a,b.billedYTD||0),0);
                 const rowBillingBasis=getBillingBasis(p);
                 const pctSpent=rowBillingBasis.amount&&billedYTD?Math.round(billedYTD/rowBillingBasis.amount*100):null;
-                const pctComplete=Math.round(msC/MILESTONES_DEF.length*100);
+                const pctComplete=Math.round(msC/getMsExpectedTotal(p.n)*100);
                 return `<tr>
                   <td style="font-weight:500;color:var(--blue-dark)">${p.n}</td>
                   <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
