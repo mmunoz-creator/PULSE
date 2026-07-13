@@ -2005,7 +2005,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v34f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v34g</div>
     </div>
   </nav>
 
@@ -9404,10 +9404,19 @@ function renderCapitalPlan(){
       const propUnits=_p?.units||0;
       // Flag mismatch only when scope counts are non-zero and don't match property total
       const unitMismatch=allScopeUnitSum>0&&allScopeUnitSum!==propUnits;
+      // v34g fix: totalUnits here was ALWAYS the whole property's unit
+      // count (propUnits), even though scopeUnitSum (computed right above,
+      // from propScopes — the scopes actually in THIS year band) was
+      // sitting right there unused. That's why 2027 showed 64 units when
+      // Kalia Convention Elevators, the only scope in that band, is only
+      // 13 — the band was displaying the property's full total instead of
+      // this band's actual scope(s). Use the band-specific sum when
+      // scopes have their own unit counts entered; fall back to the
+      // property total only when they don't (scopeUnitSum would be 0).
       return {
         property:propName,_prop:_p,scopes:propScopes,
         sortPriority:minPriorityNum,
-        totalUnits:propUnits,
+        totalUnits:(scopeUnitSum>0?scopeUnitSum:propUnits),
         scopeUnitSum:allScopeUnitSum,
         unitMismatch,
         totalBudget:propScopes.reduce((a,s)=>a+(s.plannedBudget||0),0),
@@ -9459,7 +9468,7 @@ function renderCapitalPlan(){
     const yrGroups=byYear[yr].sort((a,b)=>a.sortPriority-b.sortPriority);
     const yrScopeCount=yrGroups.reduce((a,g)=>a+g.scopes.length,0);
     const yrBudget=yrGroups.reduce((a,g)=>a+g.totalBudget,0);
-    const yrUnits=yrGroups.reduce((a,g)=>a+(g._prop?.units||0),0);
+    const yrUnits=yrGroups.reduce((a,g)=>a+(g.totalUnits||0),0);
     const bandId='yr-band-'+yr;
     html+=`<div style="margin-bottom:20px">
       <div onclick="toggleYearBand('${bandId}')" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:8px;border-bottom:2px solid var(--border);cursor:pointer;user-select:none">
@@ -9504,7 +9513,7 @@ function renderCapitalPlan(){
               <td style="font-size:12px;color:var(--navy)">${s.name||'—'}</td>
               <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
               <td><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
-              <td style="font-size:12px">${p.units||s.unitList||'—'}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
+              <td style="font-size:12px">${(()=>{const scU=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return scU>0?scU:(p.units||s.unitList||'—');})()}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
               <td style="font-size:12px;font-weight:600;color:var(--navy)">${s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD'}</td>
               <td>${budgetStatusBadge(s.budgetStatus)}</td>
               <td style="font-size:12px">${p.v||'—'}</td>
