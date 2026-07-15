@@ -654,7 +654,13 @@ let AT_CONNECTED = false;
 let _loginSeq = 0;
 let currentConsultantName = sessionStorage.getItem('pulse_consultant') || '';
 window.UNIT_GROUPS = window.UNIT_GROUPS || [];
-window.UNIT_BUDGET_ALLOCATIONS = window.UNIT_BUDGET_ALLOCATIONS || [];
+// v35g — Unit Budget Allocations removed as a data source. Table was
+// already confirmed dead code (zero reads anywhere in the app since the
+// v34p Budget Outlook rebuild moved everything to Unit Inventory List).
+// Misty renamed the live Airtable table to "Unit Budget Allocations (Old)"
+// as a backup, which made the leftover atGet() call below throw a loud
+// 403 on every login even though nothing used its result. Removed here,
+// at the Promise.all fetch, and at the logout/demo reset block.
 window.UNIT_INVENTORY = window.UNIT_INVENTORY || [];
 window.BILLING_LOG = window.BILLING_LOG || [];
 window.MILESTONES = window.MILESTONES || [];
@@ -1005,11 +1011,11 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, budgetAllocations, unitInventory] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
-      atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes'), atGet('Unit Budget Allocations'), atGet('Unit Inventory List')
+      atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes'), atGet('Unit Inventory List')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     if (props.length > 0) {
@@ -1345,23 +1351,9 @@ async function loadAllData() {
       contingencyEst: r.fields['Contingency Fee Est.']!=null?Number(r.fields['Contingency Fee Est.']):0,
       totalWorkEst: r.fields['Total Work Est.']!=null?Number(r.fields['Total Work Est.']):0,
     })).filter(u=>u.property);
-    const unitIdToName={};
-    window.UNIT_INVENTORY.forEach(u=>{unitIdToName[u.id]=u.name;});
-    window.UNIT_BUDGET_ALLOCATIONS = budgetAllocations.map(r=>{
-      const propLink=r.fields['Property Name']||[];
-      const propId=Array.isArray(propLink)?propLink[0]:propLink;
-      const unitIds=(r.fields['Linked Units']||[]);
-      return {
-        id: r.id,
-        property: propIdToName[propId]||'',
-        year: r.fields['Year']!=null?parseInt(r.fields['Year']):null,
-        amount: r.fields['Amount']!=null?Number(r.fields['Amount']):0,
-        status: r.fields['Status']||'Planned',
-        linkedScopeIds: normalizeLookupIds(r.fields['Linked Scope (via Units)']),
-        unitCount: unitIds.length,
-        unitNames: unitIds.map(id=>unitIdToName[id]).filter(Boolean),
-      };
-    }).filter(a=>a.property);
+    // v35g — Unit Budget Allocations mapping removed (dead code, see note
+    // near the window.UNIT_INVENTORY initializer above). unitIdToName was
+    // only ever used by this block, so it's removed too.
     // Client Comments — flags and replies
     window.CLIENT_COMMENTS = clientComments.map(r=>({
       id: r.id,
@@ -2094,7 +2086,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35g</div>
     </div>
   </nav>
 
@@ -3676,7 +3668,7 @@ function doLogout(){
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.UNIT_BUDGET_ALLOCATIONS=[];window.UNIT_INVENTORY=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.UNIT_INVENTORY=[];
   clientFlags=[];flagIdCounter=0;
   window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
   // Reset chatbot to Park Hotels context
@@ -10263,37 +10255,25 @@ function renderCapitalPlan(){
   const pipelineScopeIds=new Set(scopeRows.map(s=>s.id));
   const pipelineUnits=(window.UNIT_INVENTORY||[]).filter(u=>pipelineScopeIds.has(u.scopeId));
   const totalBudget=pipelineUnits.reduce((a,u)=>a+(u.totalWorkEst||0),0);
-  // v31k: always use p.units (Properties.Unit Count) as the authoritative total.
-  // v34e fix (partial): excluded split properties to stop double-counting
-  // against Dashboard's Active Units.
-  // v34h fix: this card's total must match the sum of the year bands below
-  // it, which now use scope-level unit counts (fixed in v34g) — this card
-  // was still using the OLD property-level-dedup method, so it disagreed
-  // with its own bands (124 here vs. 196 summed from 2027+2028+TBD).
-  // Rewritten to group scopeRows by property and sum each property-group's
-  // scope-level unit total (own unit breakdown per scope, falling back to
-  // the property's total once per property only if no scope has one) —
-  // identical method to what each year band already computes per group,
-  // so this card's total now equals the sum of every band beneath it.
+  // v35g fix — this card was summing stale typed scope fields
+  // (elevatorCount+escalatorCount+liftCount+otherCount) with a p.units
+  // fallback, same disease as the year-band totals fixed just below (in
+  // the byYear-building block). Confirmed live via console this session:
+  // this showed 170 while the true live count of units linked to a
+  // Capital-Plan-status scope was 234. Now uses live window.UNIT_INVENTORY
+  // via pipelineUnits (already computed above), while preserving the
+  // split-property exclusion (v34e/v34b — a property with both an active
+  // scope and a Capital Plan scope counts toward Dashboard's Active Units,
+  // not here, to avoid double-counting) and keeping this card in sync with
+  // the year bands below it (v34h requirement — both now derive from the
+  // same live per-scope unit counts, see the byYear block for the bands'
+  // matching fix).
   const totalUnits=(()=>{
-    const byProp={};
-    scopeRows.forEach(s=>{
-      if(!byProp[s.property])byProp[s.property]=[];
-      byProp[s.property].push(s);
-    });
-    let sum=0;
-    Object.entries(byProp).forEach(([propName,sc])=>{
-      const p=(window.PORTFOLIO||[]).find(x=>x.n===propName);
-      if(!p)return;
-      const propScopes=(window.SCOPES||[]).filter(scope=>scope.property===propName);
-      // v34p — Complete (historical or graduated) must never count as
-      // "real active work" here; only Planned/In Progress/On Hold do.
-      const isSplit=propScopes.some(scope=>isRealActiveScopeStatus(scope.status))&&propScopes.some(scope=>scope.status==='Capital Plan');
-      if(isSplit)return;
-      const scUnits=sc.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
-      sum+=(scUnits>0?scUnits:(p.units||0));
-    });
-    return sum;
+    const splitPropNames=new Set((window.PORTFOLIO||[]).filter(p=>{
+      const propScopes=(window.SCOPES||[]).filter(scope=>scope.property===p.n);
+      return propScopes.some(scope=>isRealActiveScopeStatus(scope.status))&&propScopes.some(scope=>scope.status==='Capital Plan');
+    }).map(p=>p.n));
+    return pipelineUnits.filter(u=>!splitPropNames.has(u.property)).length;
   })();
   const approvedCount=scopeRows.filter(s=>s.budgetStatus==='Approved').length;
   const propCount=new Set(scopeRows.map(s=>s.property)).size;
@@ -10360,26 +10340,28 @@ function renderCapitalPlan(){
       // v31k: use p.units as authoritative unit total; compute scope breakdown
       // sum separately for mismatch detection only.
       const _p=propScopes[0]._prop;
-      const scopeUnitSum=propScopes.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
+      // v35g fix — this whole block (band-level unit totals) was reading
+      // stale typed scope fields (elevatorCount+escalatorCount+liftCount+
+      // otherCount) with a p.units fallback, same staleness pattern as the
+      // page's own "Units in Pipeline" summary card (fixed a few lines up
+      // in this function). That card and these bands must agree with each
+      // other, so both now derive from the same live source:
+      // window.UNIT_INVENTORY filtered by scopeId, matching pipelineUnits.
+      const unitsForScopeIds=ids=>(window.UNIT_INVENTORY||[]).filter(u=>ids.has(u.scopeId)).length;
+      const scopeUnitSum=unitsForScopeIds(new Set(propScopes.map(s=>s.id)));
       // All scopes for this property (not just this band) for full mismatch check
       const allPropScopes=(window.SCOPES||[]).filter(s=>s.property===propName);
-      const allScopeUnitSum=allPropScopes.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
-      const propUnits=_p?.units||0;
-      // Flag mismatch only when scope counts are non-zero and don't match property total
+      const allScopeUnitSum=unitsForScopeIds(new Set(allPropScopes.map(s=>s.id)));
+      const propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).length;
+      // Flag mismatch when a unit is linked to this property but not
+      // linked to any of its scopes — a real data gap worth surfacing,
+      // now comparing two live counts instead of two independently-stale
+      // typed fields.
       const unitMismatch=allScopeUnitSum>0&&allScopeUnitSum!==propUnits;
-      // v34g fix: totalUnits here was ALWAYS the whole property's unit
-      // count (propUnits), even though scopeUnitSum (computed right above,
-      // from propScopes — the scopes actually in THIS year band) was
-      // sitting right there unused. That's why 2027 showed 64 units when
-      // Kalia Convention Elevators, the only scope in that band, is only
-      // 13 — the band was displaying the property's full total instead of
-      // this band's actual scope(s). Use the band-specific sum when
-      // scopes have their own unit counts entered; fall back to the
-      // property total only when they don't (scopeUnitSum would be 0).
       return {
         property:propName,_prop:_p,scopes:propScopes,
         sortPriority:minPriorityNum,
-        totalUnits:(scopeUnitSum>0?scopeUnitSum:propUnits),
+        totalUnits:scopeUnitSum,
         scopeUnitSum:allScopeUnitSum,
         unitMismatch,
         totalBudget:propScopes.reduce((a,s)=>a+scopeUnitBudgetTotal(s.id),0),
@@ -10476,7 +10458,7 @@ function renderCapitalPlan(){
               <td style="font-size:12px;color:var(--navy)">${s.name||'—'}</td>
               <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
               <td><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
-              <td style="font-size:12px">${(()=>{const scU=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return scU>0?scU:(p.units||s.unitList||'—');})()}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
+              <td style="font-size:12px">${(()=>{const scU=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id).length;return scU>0?scU:(s.unitList||'—');})()}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total"></i>`:''}</td>
               <td style="font-size:12px;font-weight:600;color:var(--navy)">${(()=>{const b=scopeUnitBudgetTotal(s.id);return b?fmtCurrency(b):'TBD';})()}</td>
               <td>${budgetStatusBadge(s.budgetStatus)}</td>
               <td style="font-size:12px">${p.v||'—'}</td>
@@ -10542,7 +10524,7 @@ function renderCapitalPlan(){
                   <td style="width:13%;font-size:12px;color:#1D9E75;font-weight:500">${s.name||'—'}</td>
                   <td style="width:6%"></td>
                   <td style="width:6%"><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
-                  <td style="width:7%;font-size:12px;color:#1D9E75">${(()=>{const u=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return u||s.unitList||'—';})()}</td>
+                  <td style="width:7%;font-size:12px;color:#1D9E75">${(()=>{const u=(window.UNIT_INVENTORY||[]).filter(inv=>inv.scopeId===s.id).length;return u||s.unitList||'—';})()}</td>
                   <td style="width:11%;font-size:12px;font-weight:600;color:#1D9E75">${(()=>{const b=scopeUnitBudgetTotal(s.id);return b?fmtCurrency(b):'TBD';})()}</td>
                   <td style="width:9%">${budgetStatusBadge(s.budgetStatus)}</td>
                   <td style="width:9%"></td>
@@ -10815,7 +10797,16 @@ window.toggleBoYear=toggleBoYear;
 function renderBudgetOutlook(){
   const pillsEl=document.getElementById('bo-filter-pills');
   if(!pillsEl)return;
-  const pills=[['all','All properties'],['capital','Capital plan only'],['active','Active properties']];
+  // v35g — relabeled "All properties" → "All scheduled". This pill was
+  // never a true portfolio-wide view — items (below) deliberately excludes
+  // Complete-status scopes and no-year/TBD scopes by design (v34p: a
+  // forward year-based spend forecast has nothing to plot for finished
+  // work or unscheduled units). That's correct behavior for this page, but
+  // "All properties" implied full-portfolio coverage and didn't match the
+  // real 31-property/452-unit portfolio total shown elsewhere in the app —
+  // confirmed via live console this session. Filtering logic unchanged,
+  // label only.
+  const pills=[['all','All scheduled'],['capital','Capital plan only'],['active','Active properties']];
   pillsEl.innerHTML=pills.map(([val,label])=>{
     const active=boFilter===val;
     return `<button onclick="setBoFilter('${val}')" style="font-size:13px;padding:6px 14px;border-radius:var(--radius,8px);border:0.5px solid ${active?'var(--blue-dark)':'var(--border)'};background:${active?'var(--blue-xpale)':'transparent'};color:${active?'var(--blue-dark)':'var(--gray-mid)'};cursor:pointer">${label}</button>`;
