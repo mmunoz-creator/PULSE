@@ -12019,7 +12019,7 @@ function renderCharts(){
     <div class="stat-card" style="border-top:3px solid var(--indigo)">
       <div class="stat-label">Pipeline Properties</div>
       <div class="stat-value" style="font-size:20px;color:var(--indigo)">${capitalProps.length}</div>
-      <div class="stat-sub">${capitalBudgetTotal?fmtBudget(capitalBudgetTotal)+' Estimated':'Budget TBD'}${hasSplitProps&&!filtersActive?'*':''}</div>
+      <div class="stat-sub">${(capitalBudgetTotal+splitCpBudget)?fmtBudget(capitalBudgetTotal+splitCpBudget)+' Est.'+(hasSplitProps&&!filtersActive?' (incl. '+splitProps.length+' split propert'+(splitProps.length===1?'y':'ies')+')':''):'Budget TBD'}</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--green)">
       <div class="stat-label">CO Savings Captured</div>
@@ -12047,13 +12047,6 @@ function renderCharts(){
       <div class="stat-sub">Scope or Unit Complete</div>
     </div>
   </div>
-  ${hasSplitProps&&!filtersActive?`
-  <div style="display:flex;gap:0;margin-bottom:20px;margin-top:-8px">
-    <div style="width:3px;border-radius:2px;background:var(--blue-dark);flex-shrink:0"></div>
-    <div style="padding:10px 14px;font-size:12px;color:var(--gray-mid);line-height:1.5">
-      * ${splitProps.length} propert${splitProps.length===1?'y has':'ies have'} both an active scope and a Capital Plan scope — counted as active only. Their pipeline budgets are included in Total Program Value.
-    </div>
-  </div>`:''}
 
   <!-- ROW 1b: Capital Outlook — full width -->
   ${capitalProps.length>0?`
@@ -13551,27 +13544,27 @@ function renderDashboard(){
       });
       const _coSav=(window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
       const _hasSplit=_splitProps.length>0;
-      // v35i — footnote total now sums directly from the four buckets
-      // (guaranteed mutually exclusive and exhaustive by construction,
-      // since unitLifecycleBucket() returns exactly one of the four
-      // strings per unit) rather than a separate live-recount pass.
-      const _allUnitsPortfolio=_unitBuckets.active+_unitBuckets.onhold+_unitBuckets.pipeline+_unitBuckets.complete;
-      const _completeUnitsPct=_allUnitsPortfolio>0?Math.round((_completeUnitsPortfolio/_allUnitsPortfolio)*100):0;
-      const _unitsFootnote=`
-        <div style="display:flex;gap:0;margin-bottom:1.25rem">
-          <div style="width:3px;border-radius:2px;background:var(--teal);flex-shrink:0"></div>
-          <div style="padding:10px 14px;font-size:12px;color:var(--gray-mid);line-height:1.5">
-            ${_completeUnitsPortfolio} of ${_allUnitsPortfolio} total portfolio units complete (${_completeUnitsPct}%)
-          </div>
-        </div>`;
-      const _footnote=(_hasSplit?`
-        <div style="display:flex;gap:0;margin-bottom:10px">
-          <div style="width:3px;border-radius:2px;background:var(--blue-dark);flex-shrink:0"></div>
-          <div style="padding:10px 14px;font-size:12px;color:var(--gray-mid);line-height:1.5">
-            * ${_splitProps.length} propert${_splitProps.length===1?'y has':'ies have'} both an active scope and a Capital Plan scope — counted as active only. Their pipeline budgets are included in Total Program Value.
-          </div>
-        </div>`:'')+_unitsFootnote;
-      return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:${_hasSplit?'10px':'1.25rem'}">
+      // v35i — Total Program Value = _actBudget + _cpBudget + _splitCpBudget
+      // (three terms), but only two of those three ever had a visible tile
+      // (Active Properties, Pipeline Properties) — the split-property
+      // Capital Plan budget was folded silently into the total with no
+      // on-screen line of its own, so Active + Pipeline never visibly
+      // summed to Total Program Value even though the underlying math was
+      // correct (found live by Misty, brief v35i section 6d). Per Misty's
+      // direct choice (Option B): Pipeline Properties' displayed dollar
+      // figure now includes _splitCpBudget directly, with the subtitle
+      // spelling out why, so Active + Pipeline always visibly sums to the
+      // total with no separate footnote required. Pipeline Properties'
+      // COUNT (_pipelineProps.length) is intentionally unchanged — the
+      // split property itself is still counted under Active Properties,
+      // only its Capital Plan scope's dollar amount is added here.
+      const _cpBudgetDisplay=_cpBudget+_splitCpBudget;
+      // v35i — both the completed-units and split-property footnotes
+      // removed per Misty's direction: the Completed Units tile above
+      // already shows this number directly, and Option B's inline
+      // subtitle wording on Pipeline Properties replaces what the
+      // asterisk/footnote used to explain.
+      return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
         <div class="stat-card" style="border-top:3px solid var(--navy)">
           <div class="stat-label">Total Program Value</div>
           <div class="stat-value" style="font-size:20px">${_progVal?fmtBudget(_progVal):'—'}</div>
@@ -13585,7 +13578,7 @@ function renderDashboard(){
         <div class="stat-card" style="border-top:3px solid var(--indigo)">
           <div class="stat-label">Pipeline Properties</div>
           <div class="stat-value" style="font-size:20px;color:var(--indigo)">${_pipelineProps.length}</div>
-          <div class="stat-sub">${_cpBudget?fmtBudget(_cpBudget)+' Estimated':'Budget TBD'}${_hasSplit?'*':''}</div>
+          <div class="stat-sub">${_cpBudgetDisplay?fmtBudget(_cpBudgetDisplay)+' Est.'+(_hasSplit?' (incl. '+_splitProps.length+' split propert'+(_splitProps.length===1?'y':'ies')+')':''):'Budget TBD'}</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--green)">
           <div class="stat-label">CO Savings Captured</div>
@@ -13612,7 +13605,7 @@ function renderDashboard(){
           <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_completeUnitsPortfolio}</div>
           <div class="stat-sub">Scope or Unit Complete</div>
         </div>
-      </div>${_footnote}`;
+      </div>`;
     })()}
     <div id="dash-attention-section" style="margin-bottom:16px"></div>
     <div class="card" style="margin-bottom:16px">
