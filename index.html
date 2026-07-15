@@ -2527,6 +2527,7 @@ window.PROPERTIES_SEED = [
           </div>
           <div class="page-body">
             <div id="capital-summary-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
+            <div id="capital-reconciliation-banner"></div>
             <div id="capital-plan-body"></div>
           </div>
         </div>
@@ -10272,6 +10273,68 @@ function getCapitalPlanProperties(){
   return getCapitalPlanScopes().map(s=>s._prop);
 }
 
+// v35i — Capital Plan reconciliation banner. Built after Misty found (live,
+// twice in one session) that Capital Plan's Units in Pipeline count and
+// Dashboard's Pipeline Units count can legitimately disagree, because the
+// two pages answer different questions: Capital Plan only shows units
+// linked to a Capital-Plan-STATUS scope, while Dashboard's pipeline bucket
+// (unitLifecycleBucket()) is broader — it also includes Planned-status
+// scopes and units with no scope at all. With 452 units across 31
+// properties, a real number mismatch (a bug) and this expected, by-design
+// difference look identical to someone just eyeballing two stat cards —
+// Misty's own words: "impossible to understand these are not system
+// errors." This banner makes the gap self-explaining instead of requiring
+// a live console query (which is how the Hilton Hawaiian Village case
+// above was actually diagnosed this session) every time it comes up.
+let capReconcileExpanded=false;
+function toggleCapReconcile(){
+  capReconcileExpanded=!capReconcileExpanded;
+  renderCapitalPlan();
+}
+window.toggleCapReconcile=toggleCapReconcile;
+function renderCapitalReconciliationBanner(pipelineScopeIds){
+  const el=document.getElementById('capital-reconciliation-banner');
+  if(!el)return;
+  const gapByProp={};
+  (window.UNIT_INVENTORY||[]).forEach(u=>{
+    if(unitLifecycleBucket(u)!=='pipeline')return;
+    if(u.scopeId&&pipelineScopeIds.has(u.scopeId))return; // already shown on this page
+    if(!gapByProp[u.property])gapByProp[u.property]={count:0,reason:null};
+    gapByProp[u.property].count++;
+    const scope=u.scopeId?(window.SCOPES||[]).find(s=>s.id===u.scopeId):null;
+    gapByProp[u.property].reason=scope?scope.status+' scope':'Unscoped';
+  });
+  const propRows=Object.entries(gapByProp);
+  const gapTotal=propRows.reduce((a,[,v])=>a+v.count,0);
+  if(gapTotal===0){el.innerHTML='';el.style.marginBottom='0';return;}
+  el.style.marginBottom='16px';
+  el.innerHTML=`
+    <div style="background:var(--surface-2,#fff);border:0.5px solid var(--border);border-radius:12px;overflow:hidden">
+      <div onclick="toggleCapReconcile()" style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--amber-pale);cursor:pointer">
+        <i class="ti ti-info-circle" style="font-size:16px;color:var(--amber)"></i>
+        <div style="font-size:13px;color:var(--amber);flex:1">${gapTotal} unit${gapTotal===1?"":"s"} ${gapTotal===1?"isn't":"aren't"} shown here but count${gapTotal===1?"s":""} toward Dashboard's pipeline total.${capReconcileExpanded?'':' <span style="font-weight:500">See why</span>'}</div>
+        <i class="ti ti-chevron-${capReconcileExpanded?'up':'down'}" style="font-size:14px;color:var(--amber)"></i>
+      </div>
+      ${capReconcileExpanded?`
+      <div style="padding:14px 16px;border-top:0.5px solid var(--border)">
+        <div style="font-size:12px;color:var(--gray-mid);margin-bottom:10px;line-height:1.6">Capital Plan shows units with a Capital Plan status. Dashboard's pipeline count shows all units not yet active.</div>
+        <div style="border:0.5px solid var(--border);border-radius:var(--radius,8px);overflow:hidden">
+          <div style="display:flex;padding:8px 12px;background:var(--gray-pale);font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">
+            <div style="flex:2">Property</div>
+            <div style="flex:1">Units</div>
+            <div style="flex:1">Reason</div>
+          </div>
+          ${propRows.map(([prop,v])=>`
+          <div style="display:flex;align-items:center;padding:8px 12px;font-size:13px;border-top:0.5px solid var(--border)">
+            <div style="flex:2">${prop}</div>
+            <div style="flex:1;color:var(--gray-mid)">${v.count}</div>
+            <div style="flex:1"><span class="badge" style="background:var(--amber-pale);color:var(--amber);font-size:11px">${v.reason}</span></div>
+          </div>`).join('')}
+        </div>
+      </div>`:''}
+    </div>`;
+}
+
 function renderCapitalPlan(){
   // v28b — Option A grouping: table rows are per-PROPERTY, not per-Scope.
   // A single-Scope property renders exactly as before. A multi-Scope
@@ -10323,6 +10386,7 @@ function renderCapitalPlan(){
   const totalUnits=pipelineUnits.length;
   const approvedCount=scopeRows.filter(s=>s.budgetStatus==='Approved').length;
   const propCount=new Set(scopeRows.map(s=>s.property)).size;
+  renderCapitalReconciliationBanner(pipelineScopeIds);
 
   // Summary cards
   const cards=document.getElementById('capital-summary-cards');
