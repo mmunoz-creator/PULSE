@@ -13607,7 +13607,6 @@ function renderDashboard(){
         </div>
       </div>`;
     })()}
-    <div id="dash-attention-section" style="margin-bottom:16px"></div>
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
         <div><div class="card-title">Portfolio Heat Map</div><div class="card-sub">Construction Health by Property</div></div>
@@ -13621,6 +13620,7 @@ function renderDashboard(){
       <div id="dash-heat-grid" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
       ${active.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No active properties in progress</div>':''}
     </div>
+    <div id="dash-attention-section" style="margin-bottom:16px"></div>
     <div id="dash-action-horizon" style="margin-bottom:16px"></div>
     <div id="dash-activity-feed" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px"></div>`;
 
@@ -15740,6 +15740,29 @@ function pfPopulateDropdowns(){
   }
 }
 
+// v35i — Portfolio View's unit counts (per-row Units column + header
+// total) now switch definitions depending on whether the Status filter is
+// set to 'In Progress'. Unfiltered (or any other Status value), the Units
+// column/header show total property inventory — every unit ever linked to
+// that property, regardless of scope stage — which is a real, different,
+// still-useful fact (property size) unrelated to what work is currently
+// happening. Only when Status=In Progress is specifically applied does the
+// count switch to scope-level: units whose OWN scope status is 'In
+// Progress', via the same unitLifecycleBucket() classifier Dashboard and
+// Capital Plan already use. Confirmed with Misty this was the root cause
+// behind Portfolio View (305, filtered to In Progress) disagreeing with
+// Dashboard's Active Units (180) — same by-design-vs-drift pattern as the
+// Capital Plan gap (6a/6e) and traced the same way (console query, brief
+// v35i section 6j). Rather than add a third reconciliation banner, Misty's
+// direction was to make Portfolio View mean the same thing Dashboard does
+// once you're specifically asking "what's active" via this filter — "a
+// property is active because it has active scopes, and the units in those
+// scopes is what should render."
+function unitCountForPropertyRow(propName,useActiveScopeCount){
+  const allUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName);
+  if(!useActiveScopeCount)return allUnits.length;
+  return allUnits.filter(u=>unitLifecycleBucket(u)==='active').length;
+}
 function pfApply(){
   PF.status=document.getElementById('pf-status')?.value||'all';
   PF.health=document.getElementById('pf-health')?.value||'all';
@@ -15749,6 +15772,7 @@ function pfApply(){
   PF.ec=document.getElementById('pf-ec')?.value||'all';
   PF.consultant=document.getElementById('pf-consultant')?.value||'all';
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const useActiveScopeCount=PF.status==='In Progress';
   document.querySelectorAll('#portfolio-tbody tr').forEach(row=>{
     const propName=row.querySelector('td')?.textContent?.trim()||'';
     const p=port.find(x=>x.n===propName);
@@ -15768,6 +15792,16 @@ function pfApply(){
       show=show&&health===PF.health;
     }
     row.style.display=show?'':'none';
+    // v35i — Units column (6th <td>, index 5) recomputed per current
+    // filter state, not just left as the static total from
+    // populatePortfolio(). Column order: Property, State, Type, Priority,
+    // Elev. Company, Units, Status, Health, Project End, VDA Consultant,
+    // Budget.
+    const unitsCell=row.children[5];
+    if(unitsCell){
+      const count=unitCountForPropertyRow(propName,useActiveScopeCount);
+      unitsCell.textContent=count||'—';
+    }
   });
   pfUpdateBadge();
   pfRenderChips();
@@ -15785,7 +15819,10 @@ function pfUpdateSubheader(){
   if(!sub)return;
   const rows=[...document.querySelectorAll('#portfolio-tbody tr')].filter(r=>r.style.display!=='none');
   const visibleNames=new Set(rows.map(r=>r.querySelector('td')?.textContent?.trim()).filter(Boolean));
-  const visibleUnits=(window.UNIT_INVENTORY||[]).filter(u=>visibleNames.has(u.property)).length;
+  const useActiveScopeCount=PF.status==='In Progress';
+  const visibleUnits=useActiveScopeCount
+    ? (window.UNIT_INVENTORY||[]).filter(u=>visibleNames.has(u.property)&&unitLifecycleBucket(u)==='active').length
+    : (window.UNIT_INVENTORY||[]).filter(u=>visibleNames.has(u.property)).length;
   const noun=demoMode?'stores':'properties';
   sub.textContent=`${rows.length} ${noun} | ${visibleUnits} units · click any row to view details`;
 }
