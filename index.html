@@ -10261,20 +10261,27 @@ function renderCapitalPlan(){
   // the byYear-building block). Confirmed live via console this session:
   // this showed 170 while the true live count of units linked to a
   // Capital-Plan-status scope was 234. Now uses live window.UNIT_INVENTORY
-  // via pipelineUnits (already computed above), while preserving the
-  // split-property exclusion (v34e/v34b — a property with both an active
-  // scope and a Capital Plan scope counts toward Dashboard's Active Units,
-  // not here, to avoid double-counting) and keeping this card in sync with
-  // the year bands below it (v34h requirement — both now derive from the
-  // same live per-scope unit counts, see the byYear block for the bands'
-  // matching fix).
-  const totalUnits=(()=>{
-    const splitPropNames=new Set((window.PORTFOLIO||[]).filter(p=>{
-      const propScopes=(window.SCOPES||[]).filter(scope=>scope.property===p.n);
-      return propScopes.some(scope=>isRealActiveScopeStatus(scope.status))&&propScopes.some(scope=>scope.status==='Capital Plan');
-    }).map(p=>p.n));
-    return pipelineUnits.filter(u=>!splitPropNames.has(u.property)).length;
-  })();
+  // via pipelineUnits (already computed above).
+  //
+  // v35i fix — the split-property exclusion this card used to carry
+  // (v34e/v34b: drop units on a property that ALSO has a genuinely active
+  // scope elsewhere, to avoid double-counting against Dashboard's Active
+  // Units) went stale the moment yesterday's 1a-dash-2 fix changed what
+  // "active"/"split" means on Dashboard (p.st==='In Progress'-based, not
+  // scope-status-based). This card's splitPropNames filter still called
+  // the OLD isRealActiveScopeStatus-only definition, so it silently
+  // dropped units Dashboard's own Pipeline Units tile now includes —
+  // confirmed live this session: Capital Plan showed 170, Dashboard
+  // showed 212, a 42-unit gap traced directly to this filter.
+  //
+  // Rather than patch splitPropNames to match the new split definition
+  // (which would keep the two cards intentionally different by design),
+  // Misty chose to match Dashboard exactly: this card is now a straight
+  // count of pipelineUnits, no split-property exclusion at all. Dashboard
+  // no longer treats split-property Capital Plan scopes as anything
+  // special, so neither does this card — the two numbers should now
+  // always agree going forward.
+  const totalUnits=pipelineUnits.length;
   const approvedCount=scopeRows.filter(s=>s.budgetStatus==='Approved').length;
   const propCount=new Set(scopeRows.map(s=>s.property)).size;
 
