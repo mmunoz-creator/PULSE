@@ -224,6 +224,16 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .data-table td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--gray-dark);vertical-align:middle}
 .data-table tr:last-child td{border-bottom:none}
 .data-table tbody tr:hover td{background:var(--blue-xpale);cursor:pointer}
+/* v34i — Budget Outlook-scoped overrides only (never touch .stat-card/.data-table
+   globally — those are shared by Dashboard, Capital Plan, Scorecard, etc.).
+   Smaller stat cards so they read as portfolio totals, not tied to the bars
+   directly below them; visible column borders on this table specifically,
+   per Misty's request. */
+#bo-summary-cards .stat-card{padding:0.65rem 0.9rem}
+#bo-summary-cards .stat-value{font-size:19px}
+#bo-summary-cards .stat-label{margin-bottom:3px}
+#budget-outlook-view .data-table th,#budget-outlook-view .data-table td{border-right:1px solid var(--border)}
+#budget-outlook-view .data-table th:last-child,#budget-outlook-view .data-table td:last-child{border-right:none}
 .table-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;overflow-x:auto}
 /* LAYOUT */
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
@@ -518,6 +528,12 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   #analytics-body,#dashboard-body{overflow:visible!important;height:auto!important;max-height:none!important}
   /* Force SVG and canvas to print */
   svg,canvas{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid}
+  /* v34i bug fix — Budget Outlook's bar chart is plain inline-styled divs
+     (no canvas/svg, no .card/.stat-card class), so none of the existing
+     print-color-adjust rules covered it. Browsers skip background colors on
+     print by default without this, which is why the bars rendered as blank
+     space in the PDF/print preview despite the rest of the page printing fine. */
+  #bo-chart div{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   /* Side filter panel never prints */
   #cf-side-panel,#cf-panel-backdrop,#pf-side-panel,#pf-panel-backdrop{display:none!important}
   /* Heat map full width */
@@ -1258,6 +1274,19 @@ async function loadAllData() {
         escalatorCount: parseInt(r.fields['Escalator Count'])||0,
         liftCount: parseInt(r.fields['Wheelchair Lift Count'])||0,
         otherCount: parseInt(r.fields['Other Count'])||0,
+        // v34k — Scope Unit-Assignment Rework. Real Linked Units (multi-
+        // link to Unit Inventory List) replaces the typed elevator/
+        // escalator/lift/other counts and free-text Unit List as the
+        // source of truth for which units belong to this Scope. Those
+        // legacy fields stay in the data model (harmless, unused going
+        // forward) since the Scopes table isn't being schema-cleaned this
+        // build. isTbd marks the one Scope per property that catches units
+        // with no Client Capex Planning Year yet — distinguished from a
+        // real Scope with year left blank by name, since 'year' alone
+        // can't disambiguate the two once auto-derivation is creating
+        // Scopes on its own.
+        linkedUnitIds: [],
+        isTbd: (r.fields['Scope Name']||'')==='TBD Scope',
       };
     });
     // v34a — Unit Budget Allocations (renamed/reshaped from the old
@@ -1282,6 +1311,13 @@ async function loadAllData() {
       });
       return [...new Set(ids.filter(Boolean))];
     };
+    // v34k — Scope Unit-Assignment Rework. Resolve each Scope's real
+    // Linked Units (multi-link to Unit Inventory List) now that
+    // normalizeLookupIds is defined. Placed here (not immediately after
+    // the Scopes.map() above) since normalizeLookupIds isn't hoisted.
+    window.SCOPES.forEach((s,i)=>{
+      s.linkedUnitIds=normalizeLookupIds(scopes[i]?.fields?.['Linked Units']);
+    });
     // v34a — Unit Inventory List, now loaded properly (not just a
     // throwaway id->name map) so the Units tab can show which units on a
     // property still have no Linked Scope — the "remaining/unaccounted
@@ -1296,6 +1332,18 @@ async function loadAllData() {
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       deviceLocation: r.fields['Device Location']||'',
       unitType: r.fields['Unit Type']||'',
+      // v34j — Unit Inventory List creation/editing UI. These fields exist
+      // in Airtable (added this session) but were never read into the app.
+      // Total Work Est. is an Airtable formula field (blank-safe sum of the
+      // 4 cost estimates) — read-only here, never written back.
+      priority: r.fields['Priority']!=null?r.fields['Priority']:null,
+      status: r.fields['Status']||'',
+      capexYear: r.fields['Client Capex Planning Year']||'',
+      elevEst: r.fields['Elevator Mod Est.']!=null?Number(r.fields['Elevator Mod Est.']):0,
+      relatedEst: r.fields['Related Work Est.']!=null?Number(r.fields['Related Work Est.']):0,
+      cabEst: r.fields['Cab Interior Est.']!=null?Number(r.fields['Cab Interior Est.']):0,
+      contingencyEst: r.fields['Contingency Fee Est.']!=null?Number(r.fields['Contingency Fee Est.']):0,
+      totalWorkEst: r.fields['Total Work Est.']!=null?Number(r.fields['Total Work Est.']):0,
     })).filter(u=>u.property);
     const unitIdToName={};
     window.UNIT_INVENTORY.forEach(u=>{unitIdToName[u.id]=u.name;});
@@ -1353,9 +1401,50 @@ async function loadAllData() {
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings`);
     updateQueueBadge();
     updateClientCommentsBadge();
+    // v34n bug fix — backfillUnassignedUnits() was lazy/per-property, only
+    // triggered when a specific property's Units tab was opened. That's
+    // not good enough for portfolio-wide views like Capital Plan, which
+    // read window.SCOPES for every property at once. Run the backfill
+    // across the whole portfolio once, right after data loads.
+    // v34o CRITICAL FIX — the v34n version used `await` here, which made
+    // the ENTIRE app hang on the "Loading portfolio data..." screen until
+    // every single unassigned unit across all properties had a real,
+    // sequential Airtable write complete (portfolio-wide, one network
+    // round-trip per unit — can take minutes). Something downstream waits
+    // for loadAllData() itself to resolve before dismissing that loading
+    // screen, so the whole app was unusable until the full backfill
+    // finished. Fixed to fire-and-forget: the initial UI renders normally
+    // and stays fully interactive, while the backfill quietly catches up
+    // in the background. Trade-off: Capital Plan/Portfolio View may show
+    // slightly stale counts for a few seconds right after login until the
+    // backfill finishes — navigating away and back (or a manual refresh)
+    // picks up the fully-caught-up data. Cheap on every load after the
+    // first either way, since already-linked units are skipped.
+    backfillAllUnassignedUnits();
   } catch(e) { console.error('Load error:',e); showToast('Connection issue — retrying in background','warn'); }
   // Load complete
 }
+
+async function backfillAllUnassignedUnits(){
+  const propNames=[...new Set((window.UNIT_INVENTORY||[]).map(u=>u.property))].filter(Boolean);
+  let anyWork=false;
+  for(const propName of propNames){
+    const hadWork=(window.UNIT_INVENTORY||[]).some(u=>u.property===propName&&!u.scopeId);
+    if(hadWork)anyWork=true;
+    await backfillUnassignedUnits(propName);
+  }
+  // Whichever portfolio-wide view is currently open should reflect the
+  // freshly-backfilled Scopes without requiring a manual nav-away-and-back,
+  // since this runs silently in the background after the page already
+  // rendered once with pre-backfill data.
+  if(anyWork){
+    const activeView=document.querySelector('[id^="view-"]:not(.hidden)')?.id;
+    if(activeView==='view-capital'&&typeof renderCapitalPlan==='function')renderCapitalPlan();
+    if(activeView==='view-portfolio'&&typeof populatePortfolio==='function')populatePortfolio();
+    if(activeView==='view-dashboard'&&typeof renderDashboard==='function')renderDashboard();
+  }
+}
+window.backfillAllUnassignedUnits=backfillAllUnassignedUnits;
 
 function showLoadingOverlay(show, msg='Loading...') {
   let o = document.getElementById('loading-overlay');
@@ -2005,7 +2094,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v34g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v34p</div>
     </div>
   </nav>
 
@@ -2461,7 +2550,8 @@ window.PROPERTIES_SEED = [
             <div class="page-header-left"><h1>Budget Outlook</h1><p>Committed and Planned Spend by Year, Across Every Scope</p></div>
             <div class="header-actions">
               <button class="btn no-print" onclick="closeBudgetOutlook()"><i class="ti ti-arrow-left"></i>Back to Capital Plan</button>
-              <button class="btn btn-primary no-print" onclick="window.print()"><i class="ti ti-printer"></i>Print / PDF</button>
+              <button class="btn no-print" onclick="exportBudgetOutlookExcel()"><i class="ti ti-file-spreadsheet"></i>Export to Excel</button>
+              <button class="btn btn-primary no-print" onclick="printBudgetOutlook()"><i class="ti ti-printer"></i>Print / PDF</button>
             </div>
           </div>
           <div class="page-body">
@@ -2472,11 +2562,11 @@ window.PROPERTIES_SEED = [
                 <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue-mid);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Planned</span>
               </div>
             </div>
-            <div id="bo-summary-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
+            <div id="bo-summary-cards" style="display:grid;grid-template-columns:repeat(5,200px);justify-content:space-between;margin-bottom:64px"></div>
             <div id="bo-chart" style="margin-bottom:24px"></div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th style="width:24px"></th><th>Year</th><th style="text-align:right">Committed</th><th style="text-align:right">Planned</th><th style="text-align:right">Total</th><th style="text-align:right">Units</th><th style="text-align:left">Unit names</th></tr></thead>
+                <thead><tr><th style="width:24px"></th><th style="width:22%">Year</th><th style="text-align:right;width:11%">Committed</th><th style="text-align:right;width:11%">Planned</th><th style="text-align:right;width:11%">Total</th><th style="text-align:right;width:7%">Units</th><th style="text-align:left;width:34%">Unit names</th></tr></thead>
                 <tbody id="bo-tbody"></tbody>
               </table>
             </div>
@@ -3803,44 +3893,54 @@ const PROP_TAB_HELP_MAP={
 // Inventory List row's own Linked Scope field happens to be set. Only
 // units matching NEITHER a Unit Group's unit list NOR their own Linked
 // Scope field land in Remaining.
-let unitsTabOpen={complete:false,active:false,remaining:true};
+// v34n — GENERALIZED. The previous version (v34m) only backfilled units
+// with a blank Status, on the assumption the gap was "never touched
+// through the app." Real gap was broader: autoDeriveScopeForUnit() only
+// ever fires on an in-app onchange event for Capex Year — it never runs
+// retroactively against a Capex Year that was already sitting in Airtable
+// before that trigger existed (bulk-loaded data, or a year typed directly
+// in Airtable rather than through Manage Unit Inventory). Those units have
+// a real year AND still no Scope link. Backfill now catches ANY unit with
+// no scopeId at all — regardless of whether its Capex Year is a real year,
+// blank, or TBD — and groups it correctly (real year -> that year's
+// Scope, blank/TBD -> TBD Scope), same logic autoDeriveScopeForUnit uses.
+async function backfillUnassignedUnits(propName){
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const propObj=port.find(pp=>pp.n===propName);
+  if(!propObj)return;
+  const unassigned=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName&&!u.scopeId);
+  if(unassigned.length===0)return;
+  for(const u of unassigned){
+    const yearKey=scopeYearKeyFor(u);
+    let scope=findScopeForYearKey(propName,yearKey);
+    if(!scope)scope=await createScopeForYearKey(propName,propObj.id,yearKey);
+    if(scope)await linkUnitToScope(u,scope);
+  }
+}
+window.backfillUnassignedUnits=backfillUnassignedUnits;
+
+let unitsTabOpen={complete:false,active:false,planned:false,dormant:false};
 function toggleUnitsSection(section){
   unitsTabOpen[section]=!unitsTabOpen[section];
   renderUnitsTab(currentProp);
 }
 window.toggleUnitsSection=toggleUnitsSection;
-function renderUnitsTab(p){
+async function renderUnitsTab(p){
   const body=document.getElementById('units-tab-body');
   if(!body||!p)return;
+  await backfillUnassignedUnits(p.n);
   const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
-  const propGroups=(window.UNIT_GROUPS||[]).filter(g=>g.property===p.n);
-  // unitName -> {status, phase} from every Unit Group's comma-separated
-  // Unit Names field, so a unit already assigned to a phase is correctly
-  // recognized even if its own Unit Inventory List row was never
-  // separately linked to a Scope.
-  const nameToPhase={};
-  propGroups.forEach(g=>{
-    (g.unitNames||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(name=>{
-      nameToPhase[name]={status:g.status||'Not Started',phase:g.phase||''};
-    });
-  });
 
-  const complete=[],active=[],remaining=[];
+  const active=[],planned=[],complete=[],dormant=[];
   units.forEach(u=>{
-    const viaPhase=nameToPhase[u.name];
-    if(viaPhase){
-      if(viaPhase.status==='Complete')complete.push({...u,phase:viaPhase.phase});
-      else active.push({...u,phase:viaPhase.phase,phaseStatus:viaPhase.status});
-    }else if(u.scopeId){
-      active.push({...u,phase:'',phaseStatus:'Linked, no phase yet'});
-    }else{
-      remaining.push(u);
-    }
+    if(u.status==='Active')active.push(u);
+    else if(u.status==='Planned')planned.push(u);
+    else if(u.status==='Complete')complete.push(u);
+    else if(u.status==='Dormant')dormant.push(u);
+    // No else — after backfill, every unit has one of the 4 real values.
   });
-  const accountedFor=complete.length+active.length;
-  const pct=units.length>0?Math.round((accountedFor/units.length)*100):0;
 
-  const unitChip=(u,color)=>`<span style="font-size:12px;background:${color==='warn'?'var(--amber-pale,#fef3e2)':color==='ok'?'var(--green-pale)':'var(--blue-xpale)'};color:${color==='warn'?'var(--amber-dark,#92400e)':color==='ok'?'var(--green)':'var(--blue-dark)'};padding:5px 8px;border-radius:6px;text-align:center;display:inline-block" title="${[u.deviceLocation,u.unitType,u.phase||u.phaseStatus].filter(Boolean).join(' · ')}">${u.name||'(unnamed)'}</span>`;
+  const unitChip=(u,color)=>`<span style="font-size:12px;background:${color==='ok'?'var(--green-pale)':color==='dormant'?'var(--gray-pale)':'var(--blue-xpale)'};color:${color==='ok'?'var(--green)':color==='dormant'?'var(--gray-mid)':'var(--blue-dark)'};padding:5px 8px;border-radius:6px;text-align:center;display:inline-block" title="${[u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · ')}">${u.name||'(unnamed)'}</span>`;
 
   const section=(key,label,list,color,emptyMsg)=>{
     const isOpen=unitsTabOpen[key];
@@ -3853,18 +3953,552 @@ function renderUnitsTab(p){
   };
 
   body.innerHTML=`
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button class="btn btn-add" onclick="openUnitInventoryManager('${p.n.replace(/'/g,"\'")}')"><i class="ti ti-list-details"></i>Manage Unit Inventory</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px">
       <div class="prop-mini-card"><div class="prop-mini-label">Total Units</div><div class="prop-mini-val">${units.length}</div></div>
-      <div class="prop-mini-card"><div class="prop-mini-label">Accounted For</div><div class="prop-mini-val" style="color:var(--blue-dark)">${pct}%</div><div class="prop-mini-sub">${accountedFor} of ${units.length}</div></div>
+      <div class="prop-mini-card"><div class="prop-mini-label">Active</div><div class="prop-mini-val" style="color:var(--blue-dark)">${active.length}</div></div>
+      <div class="prop-mini-card"><div class="prop-mini-label">Planned</div><div class="prop-mini-val" style="color:var(--blue-dark)">${planned.length}</div></div>
       <div class="prop-mini-card"><div class="prop-mini-label">Complete</div><div class="prop-mini-val" style="color:var(--green)">${complete.length}</div></div>
-      <div class="prop-mini-card"><div class="prop-mini-label">Remaining</div><div class="prop-mini-val" style="color:${remaining.length>0?'var(--amber-dark,#92400e)':'var(--green)'}">${remaining.length}</div><div class="prop-mini-sub">Not yet on a scope or phase</div></div>
+      <div class="prop-mini-card"><div class="prop-mini-label">Dormant</div><div class="prop-mini-val" style="color:var(--gray-mid)">${dormant.length}</div></div>
     </div>
     ${units.length===0?`<div class="empty-state" style="padding:2rem"><i class="ti ti-building-skyscraper"></i><div class="empty-state-title">No units in Unit Inventory List yet</div><div class="empty-state-sub">Add rows for this property in Unit Inventory List to track them here.</div></div>`:`
-    ${section('active','Active',active,'default','No units currently in progress.')}
-    ${section('remaining','Remaining',remaining,'warn','Every unit at this property is accounted for.')}
+    ${section('active','Active',active,'default','No units currently Active.')}
+    ${section('planned','Planned',planned,'default','No units currently Planned.')}
+    ${section('dormant','Dormant',dormant,'dormant','No dormant units.')}
     ${section('complete','Complete',complete,'ok','No completed units yet.')}
     `}
   `;
+}
+
+// v34j — Unit Inventory List creation/editing UI. First real in-app surface
+// for this table (previously Airtable-only). Scope: attaches to EXISTING
+// properties only — property creation itself still goes through the old
+// Capital Plan entry flow for now; moving property creation to Portfolio
+// View is a separate, later build. Total Units drives row count: increasing
+// adds blank placeholder rows ("Unit N"), decreasing requires the person to
+// manually pick which row(s) to delete — no silent auto-delete, per Misty's
+// explicit call. Every field edit auto-saves on blur/change, matching the
+// inline-edit pattern used elsewhere in this file (e.g. Milestones).
+// Status here is fully manual for all 4 values for now — the auto-derived
+// Active/Planned-from-Scope-linkage model (Design Spec Section 1/1a) is a
+// later build; until that ships, Status stays editable exactly as it is on
+// the Unit Inventory List Airtable table today.
+const UNIT_TYPE_OPTIONS=['Elevator','Escalator','Wheelchair Lift','Other'];
+// v34l — UNIT_STATUS_OPTIONS removed: Active/Planned are now derived,
+// not selectable from a fixed list; see computeDerivedUnitStatus().
+let uimPendingDeleteIds=[];
+let uimDeleteMode=false;
+
+function openUnitInventoryManager(propName){
+  uimPendingDeleteIds=[];
+  uimDeleteMode=false;
+  renderUnitInventoryManagerModal(propName);
+}
+window.openUnitInventoryManager=openUnitInventoryManager;
+
+function closeUnitInventoryManager(){
+  document.getElementById('uim-overlay')?.remove();
+  // v34j bug fix — this only refreshed the Units tab's own mini-cards
+  // (Total Units, Accounted For, Complete, Remaining). The property hero's
+  // OWN stat cards above the tabs (VT Units, VDA Milestones %, Active
+  // Phases %, etc.) are rendered separately by renderPropertyView() and
+  // were staying stale after adding/removing units in the manager — e.g.
+  // VT Units still showed the old count until some unrelated action
+  // triggered a full property re-render. Both must refresh on close.
+  if(currentProp){renderPropertyView(currentProp);renderUnitsTab(currentProp);}
+}
+window.closeUnitInventoryManager=closeUnitInventoryManager;
+
+function renderUnitInventoryManagerModal(propName){
+  const existing=document.getElementById('uim-overlay');
+  if(existing)existing.remove();
+  const overlay=document.createElement('div');
+  overlay.id='uim-overlay';
+  overlay.dataset.propName=propName;
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:1200px;box-shadow:var(--shadow-md);margin:auto">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-list-details" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>Manage Unit Inventory</div>
+        <div style="font-size:12px;color:var(--gray-mid);margin-top:2px">${propName}</div>
+      </div>
+      <button onclick="closeUnitInventoryManager()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
+    </div>
+    <div style="padding:20px 22px">
+      <div id="uim-total-units-control" style="display:flex;align-items:center;gap:10px;margin-bottom:16px"></div>
+      <div id="uim-delete-banner"></div>
+      <div class="table-wrap" style="max-height:55vh;overflow-y:auto">
+        <table class="data-table" style="table-layout:auto">
+          <thead><tr>
+            <th style="width:24px" id="uim-th-check"></th>
+            <th>Unit Name</th><th>Device Location</th><th>Unit Type</th><th>Priority</th><th>Status</th><th>CapEx Year</th>
+            <th style="text-align:right">Elevator Mod Est.</th><th style="text-align:right">Related Work Est.</th><th style="text-align:right">Cab Interior Est.</th><th style="text-align:right">Contingency Fee Est.</th><th style="text-align:right">Total Work Est.</th>
+          </tr></thead>
+          <tbody id="uim-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div style="padding:12px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="closeUnitInventoryManager()">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  renderUimTotalUnitsControl(propName);
+  renderUimTable(propName);
+}
+
+function uimUnitsFor(propName){
+  return (window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+}
+
+function renderUimTotalUnitsControl(propName){
+  const el=document.getElementById('uim-total-units-control');
+  if(!el)return;
+  const count=uimUnitsFor(propName).length;
+  el.innerHTML=`
+    <label style="font-size:12px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em">Total Units</label>
+    <input id="uim-total-units-input" type="number" min="0" class="form-input" style="width:90px" value="${count}">
+    <button class="btn" onclick="uimApplyTotalUnits('${propName.replace(/'/g,"\\'")}')">Update</button>
+    <span style="font-size:12px;color:var(--gray-mid)">${count} unit${count===1?'':'s'} currently in inventory</span>
+  `;
+}
+
+async function uimApplyTotalUnits(propName){
+  const input=document.getElementById('uim-total-units-input');
+  const newTotal=parseInt(input.value);
+  if(isNaN(newTotal)||newTotal<0){showToast('Enter a valid number of units','error');return;}
+  const units=uimUnitsFor(propName);
+  const current=units.length;
+  if(newTotal===current){showToast('No change in unit count','info');return;}
+
+  if(newTotal>current){
+    // Increasing — add blank placeholder rows. Names are "Unit N" starting
+    // after the highest existing "Unit N"-style name, so re-running this
+    // after manual renames doesn't collide with real names already in use.
+    // v34m — every unit must ALWAYS have a real Status (Active/Planned/
+    // Complete/Dormant), never blank. Previously a brand-new unit sat with
+    // no Scope and no Status until someone later set a Capex Year — which
+    // is exactly what let a 5th "Remaining" pseudo-status exist in the UI.
+    // Fixed: link each new unit into that property's TBD Scope immediately
+    // at creation, which derives it to Planned right away (TBD Scope
+    // defaults to Capital Plan status). No blank window anymore.
+    const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+    const propObj=port.find(pp=>pp.n===propName);
+    const existingNums=units.map(u=>{const m=(u.name||'').match(/^Unit (\d+)$/);return m?parseInt(m[1]):0;});
+    let nextNum=(existingNums.length?Math.max(...existingNums):0)+1;
+    const toAdd=newTotal-current;
+    showToast(`Adding ${toAdd} unit${toAdd===1?'':'s'}...`,'info');
+    let tbdScope=findScopeForYearKey(propName,'TBD');
+    for(let i=0;i<toAdd;i++){
+      const fields={'Unit Name':`Unit ${nextNum}`,'Property Name':propertyNameToLink(propName)};
+      const res=await atCreate('Unit Inventory List',fields);
+      const newId=res?.records?.[0]?.id;
+      if(newId){
+        const newUnit={id:newId,name:`Unit ${nextNum}`,property:propName,scopeId:'',deviceLocation:'',unitType:'',priority:null,status:'',capexYear:'',elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0};
+        window.UNIT_INVENTORY.push(newUnit);
+        if(!tbdScope&&propObj)tbdScope=await createScopeForYearKey(propName,propObj.id,'TBD');
+        if(tbdScope)await linkUnitToScope(newUnit,tbdScope);
+      }
+      nextNum++;
+    }
+    showToast('Units added','success');
+    renderUimTotalUnitsControl(propName);
+    renderUimTable(propName);
+  }else{
+    // Decreasing — never silently delete. Switch the table into a
+    // check-to-delete mode; the person picks exactly which rows go.
+    uimDeleteMode=true;
+    uimPendingDeleteIds=[];
+    const toRemove=current-newTotal;
+    document.getElementById('uim-delete-banner').innerHTML=`<div class="alert alert-warn" style="margin-bottom:12px">Select ${toRemove} unit${toRemove===1?'':'s'} to delete from inventory below, then confirm. Nothing is deleted automatically.</div>`;
+    renderUimTable(propName);
+  }
+}
+window.uimApplyTotalUnits=uimApplyTotalUnits;
+
+function uimToggleDeleteSelect(id){
+  const idx=uimPendingDeleteIds.indexOf(id);
+  if(idx>=0)uimPendingDeleteIds.splice(idx,1);else uimPendingDeleteIds.push(id);
+  const propName=document.getElementById('uim-overlay')?.dataset.propName;
+  renderUimDeleteBannerCount(propName);
+}
+window.uimToggleDeleteSelect=uimToggleDeleteSelect;
+
+function renderUimDeleteBannerCount(propName){
+  const banner=document.getElementById('uim-delete-banner');
+  if(!banner||!uimDeleteMode)return;
+  banner.innerHTML=`<div class="alert alert-warn" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">
+    <span>${uimPendingDeleteIds.length} unit${uimPendingDeleteIds.length===1?'':'s'} selected for deletion.</span>
+    <span style="display:flex;gap:8px">
+      <button class="btn" style="padding:4px 10px;font-size:12px" onclick="uimCancelDeleteMode('${propName.replace(/'/g,"\\'")}')">Cancel</button>
+      <button class="btn btn-delete" style="padding:4px 10px;font-size:12px" onclick="uimConfirmDelete('${propName.replace(/'/g,"\\'")}')">Confirm Delete</button>
+    </span>
+  </div>`;
+}
+
+function uimCancelDeleteMode(propName){
+  uimDeleteMode=false;
+  uimPendingDeleteIds=[];
+  document.getElementById('uim-delete-banner').innerHTML='';
+  renderUimTotalUnitsControl(propName);
+  renderUimTable(propName);
+}
+window.uimCancelDeleteMode=uimCancelDeleteMode;
+
+async function uimConfirmDelete(propName){
+  if(uimPendingDeleteIds.length===0){showToast('No units selected','error');return;}
+  showToast(`Deleting ${uimPendingDeleteIds.length} unit(s)...`,'info');
+  for(const id of uimPendingDeleteIds){
+    await atDelete('Unit Inventory List',id);
+    window.UNIT_INVENTORY=(window.UNIT_INVENTORY||[]).filter(u=>u.id!==id);
+  }
+  uimDeleteMode=false;
+  uimPendingDeleteIds=[];
+  document.getElementById('uim-delete-banner').innerHTML='';
+  showToast('Units deleted','success');
+  renderUimTotalUnitsControl(propName);
+  renderUimTable(propName);
+}
+window.uimConfirmDelete=uimConfirmDelete;
+
+function uimFieldSaved(inputEl){
+  inputEl.style.transition='background .3s';
+  inputEl.style.background='var(--green-pale)';
+  setTimeout(()=>{inputEl.style.background='';},600);
+}
+
+async function uimSaveTextField(id,airtableField,localField,value){
+  const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
+  if(u)u[localField]=value;
+  await atUpdate('Unit Inventory List',id,{[airtableField]:value});
+  // v34k — Client Capex Planning Year is the trigger for Scope
+  // auto-derivation (Design Spec Section 4a, Option C — event-driven, not
+  // page-load, not a separate "Generate Scopes" button). Runs only when
+  // this specific field changes.
+  if(localField==='capexYear'&&u)await autoDeriveScopeForUnit(id);
+  // Bug fix — the past-year-not-Complete flag is computed at render time
+  // in renderUimTable(), so it previously only appeared after closing and
+  // reopening the modal (the next real render), not immediately after
+  // typing a year. Re-render the table now so the flag shows right away.
+  if(localField==='capexYear'&&u)renderUimTable(u.property);
+}
+window.uimSaveTextField=uimSaveTextField;
+
+// v34k — Scope Auto-Derivation. Confirmed design: one Scope per distinct
+// Client Capex Planning Year among a property's units ("[Year] Scope"),
+// plus one "TBD Scope" for units with no year yet — guarantees a property
+// always has >=1 Scope without a separate zero-Scope audit (Design Spec
+// Section 4a). Derived-but-editable: this function only runs on a capex
+// year change; manual reassignment happens through the reworked Manage
+// Scopes modal below. The missing-VDA-Project# flag stays purely visual,
+// not enforced here. The past-year-not-Complete flag is DIFFERENT: per
+// the original design (confirmed again by Misty after v34o), PULSE checks
+// a unit's Status BEFORE creating a real "[Year] Scope" band for a past
+// year — a past year is only legitimate grouping if the unit is already
+// Complete. A past-year unit that ISN'T Complete gets routed to TBD
+// instead of creating/joining a normal-looking pipeline-year Scope, since
+// that year is presumably stale/wrong data, not a real program. The
+// warning icon (still shown wherever the unit sits) is what prompts a
+// person to actually fix the year or the status — this just stops the
+// bad data from silently looking like a legitimate Capital Plan entry in
+// the meantime.
+function scopeYearKeyFor(unit){
+  // v34p — Completed band rework. Status now wins over year entirely: a
+  // Complete unit always routes to the single dedicated Completed bucket
+  // for its property, regardless of what sits in Client Capex Planning
+  // Year — blank (per Misty's new convention for units marked Complete
+  // now), a real past year, or an old placeholder far-future year (2047-
+  // style) from before this convention existed. This replaces the old
+  // per-past-year historical Scope behavior (v34p Option A) — Complete
+  // units no longer create/join a "2025 Scope" etc., they all share one
+  // Completed scope per property, same pattern as the TBD scope.
+  if(unit.status==='Complete')return 'COMPLETE';
+  const y=(unit.capexYear||'').toString().trim();
+  if(!y||y.toUpperCase()==='TBD')return 'TBD';
+  const yearNum=parseInt(y);
+  if(!isNaN(yearNum)&&yearNum<new Date().getFullYear())return 'TBD';
+  return y;
+}
+
+function findScopeForYearKey(propName,yearKey){
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===propName);
+  if(yearKey==='TBD')return scopes.find(s=>s.isTbd)||null;
+  if(yearKey==='COMPLETE')return scopes.find(s=>s.isCompleteBucket)||null;
+  const yearNum=parseInt(yearKey);
+  return scopes.find(s=>!s.isTbd&&!s.isCompleteBucket&&s.year===yearNum)||null;
+}
+
+async function createScopeForYearKey(propName,propId,yearKey){
+  // v34p — Completed band rework. A unit only ever reaches yearKey
+  // 'COMPLETE' because it's already Status:'Complete' (scopeYearKeyFor
+  // checks status before year), so this Scope is created already-
+  // graduated — same 'Complete' status Scopes normally reach via real
+  // milestone completion (deriveAndWriteScopeStatus), just starting there
+  // directly since there's no live construction history to derive from
+  // for historical/pre-existing units. One shared Completed scope per
+  // property, same pattern as the one shared TBD scope — no year attached,
+  // since Client Capex Planning Year may be blank or a placeholder for
+  // these units. getCompletedScopes() reads status==='Complete' for the
+  // dedicated Completed band; getCapitalPlanScopes() (status==='Capital
+  // Plan' only) never sees this Scope, so it's automatically out of every
+  // pipeline stat card and year band without touching either filter.
+  const isComplete=yearKey==='COMPLETE';
+  const yearNum=(yearKey==='TBD'||isComplete)?null:parseInt(yearKey);
+  const name=yearKey==='TBD'?'TBD Scope':isComplete?'Completed':`${yearKey} Scope`;
+  const initialStatus=isComplete?'Complete':'Capital Plan';
+  const fields={'Scope Name':name,'Year/Budget Cycle':yearNum,'Property':[propId],'Status':initialStatus};
+  let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+  if(!demoMode){
+    const res=await atCreate('Scopes',fields);
+    newId=res?.records?.[0]?.id||newId;
+  }
+  const newScope={id:newId,property:propName,propertyId:propId||'',name,year:yearNum,unitList:'',plannedBudget:0,approvedBudget:0,budgetStatus:'TBD',priority:'4: Standard',status:initialStatus,v:'',ec:'',vdaNum:'',elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,linkedUnitIds:[],isTbd:yearKey==='TBD',isCompleteBucket:isComplete};
+  window.SCOPES=(window.SCOPES||[]).concat([newScope]);
+  return newScope;
+}
+
+// v34k — bridge fix: several existing features elsewhere in this file
+// (Capital Plan year-band unit totals, the Hilton-Hawaiian-Village-style
+// unit-count mismatch flag) still read a Scope's typed Elevator/Escalator/
+// Wheelchair Lift/Other Count fields, not Linked Units. Rather than leave
+// every one of those consumers silently broken (showing 0 units) for
+// Scopes this build creates — and rather than rewrite all of them right
+// now, which is really the separate, later unit-count derivation rebuild —
+// these counts become a DERIVED CACHE recomputed from real Linked Units
+// every time linkage changes, and written back to Airtable too. Nobody
+// types into them anymore; they just stay in sync so existing downstream
+// readers keep working with real numbers in the meantime.
+function scopeUnitTypeBucket(t){
+  const s=(t||'').toLowerCase();
+  if(s.includes('escalator'))return 'esc';
+  if(s.includes('lift')||s.includes('wheelchair'))return 'lift';
+  if(s.includes('other'))return 'other';
+  return 'elev';
+}
+function recomputeScopeTypeCounts(scope){
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>(scope.linkedUnitIds||[]).includes(u.id));
+  scope.elevatorCount=units.filter(u=>scopeUnitTypeBucket(u.unitType)==='elev').length;
+  scope.escalatorCount=units.filter(u=>scopeUnitTypeBucket(u.unitType)==='esc').length;
+  scope.liftCount=units.filter(u=>scopeUnitTypeBucket(u.unitType)==='lift').length;
+  scope.otherCount=units.filter(u=>scopeUnitTypeBucket(u.unitType)==='other').length;
+  return {'Elevator Count':scope.elevatorCount||null,'Escalator Count':scope.escalatorCount||null,'Wheelchair Lift Count':scope.liftCount||null,'Other Count':scope.otherCount||null};
+}
+
+// v34l — Status Model Reconciliation. Active/Planned are ALWAYS auto-
+// derived from the unit's Scope status (Capital Plan -> Planned, anything
+// graduated -> Active) — never typed by a person. Complete and Dormant
+// are the two manual-override values; once set, they win and are never
+// silently overwritten by re-derivation. Dormant clears the moment a unit
+// gets linked into ANY Scope (including TBD) — "assigned to a Scope" per
+// the design spec, not gated on having a real (non-TBD) year specifically.
+function computeDerivedUnitStatus(unit){
+  const scope=(window.SCOPES||[]).find(s=>s.id===unit.scopeId);
+  if(!scope)return unit.status||''; // no scope yet — leave whatever it currently has
+  return scope.status==='Capital Plan'?'Planned':'Active';
+}
+async function recomputeUnitStatus(unit){
+  if(!unit)return;
+  if(unit.status==='Complete'||unit.status==='Dormant')return; // manual override wins, never auto-overwritten
+  const derived=computeDerivedUnitStatus(unit);
+  if(unit.status!==derived){
+    unit.status=derived;
+    if(!demoMode)await atUpdate('Unit Inventory List',unit.id,{'Status':derived});
+  }
+}
+async function recomputeStatusesForScope(scopeId){
+  const scope=(window.SCOPES||[]).find(s=>s.id===scopeId);
+  if(!scope)return;
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>(scope.linkedUnitIds||[]).includes(u.id));
+  for(const u of units)await recomputeUnitStatus(u);
+}
+window.computeDerivedUnitStatus=computeDerivedUnitStatus;
+window.recomputeStatusesForScope=recomputeStatusesForScope;
+
+async function linkUnitToScope(unit,scope){
+  scope.linkedUnitIds=[...new Set([...(scope.linkedUnitIds||[]),unit.id])];
+  unit.scopeId=scope.id;
+  const countFields=recomputeScopeTypeCounts(scope);
+  // Dormant clears only when a unit gets assigned a REAL year — landing
+  // in the generic TBD catch-all Scope does NOT clear it, since that's
+  // still "no real plan yet," exactly the situation Dormant is meant to
+  // flag. Confirmed with Misty: Dormant should clear when a real year is
+  // entered, not just any Scope link. This is the one case
+  // recomputeUnitStatus() deliberately won't touch on its own, since
+  // Dormant is normally a protected manual override.
+  if(unit.status==='Dormant'&&!scope.isTbd)unit.status='';
+  // Bug fix — computeDerivedUnitStatus() was being called and assigned
+  // unconditionally right after the line above, which overwrote Dormant
+  // back to Active/Planned even in the TBD case where we'd just decided
+  // NOT to clear it. Only derive/overwrite Status when it isn't a
+  // protected Dormant override.
+  // v34p CRITICAL FIX — Complete was never given the same protection as
+  // Dormant here, even though recomputeUnitStatus() (the sibling function)
+  // has always guarded both: `if(unit.status==='Complete'||unit.status
+  // ==='Dormant')return;`. Every new Scope is created with Status:'Capital
+  // Plan' (see createScopeForYearKey), so computeDerivedUnitStatus() always
+  // returns 'Planned' for a freshly (re)linked unit — silently overwriting
+  // a manually-set Complete status back to Planned the moment
+  // backfillUnassignedUnits()/autoDeriveScopeForUnit() links it into a
+  // scope. This is exactly the bug Misty caught live: pre-2026 units she'd
+  // just marked Complete were correctly routed to a real-year Scope by
+  // scopeYearKeyFor() (which does check unit.status!=='Complete'), then
+  // immediately stomped back to Planned by this function right after.
+  // Complete now wins here exactly like Dormant already did.
+  let statusFields={};
+  if(unit.status!=='Dormant'&&unit.status!=='Complete'){
+    const derivedStatus=computeDerivedUnitStatus(unit);
+    unit.status=derivedStatus;
+    statusFields={'Status':derivedStatus};
+  }
+  if(!demoMode){
+    await atUpdate('Scopes',scope.id,{'Linked Units':scope.linkedUnitIds,...countFields});
+    await atUpdate('Unit Inventory List',unit.id,{'Linked Scope':[scope.id],...statusFields});
+  }
+}
+
+async function unlinkUnitFromScope(unit,scope){
+  scope.linkedUnitIds=(scope.linkedUnitIds||[]).filter(id=>id!==unit.id);
+  const countFields=recomputeScopeTypeCounts(scope);
+  if(!demoMode)await atUpdate('Scopes',scope.id,{'Linked Units':scope.linkedUnitIds,...countFields});
+}
+
+async function autoDeriveScopeForUnit(unitId){
+  const unit=(window.UNIT_INVENTORY||[]).find(u=>u.id===unitId);
+  if(!unit)return;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const prop=port.find(p=>p.n===unit.property);
+  if(!prop)return;
+  const yearKey=scopeYearKeyFor(unit);
+  let targetScope=findScopeForYearKey(unit.property,yearKey);
+  const oldScope=unit.scopeId?(window.SCOPES||[]).find(s=>s.id===unit.scopeId):null;
+
+  if(oldScope&&targetScope&&oldScope.id===targetScope.id)return; // already correct, nothing to do
+
+  if(oldScope){
+    // Real move, not a first assignment — confirm, naming the consequence,
+    // per Design Spec Section 4a. Wording varies by direction: leaving an
+    // already-graduated (non-Capital-Plan) Scope reads differently than a
+    // Capital-Plan-to-Capital-Plan reshuffle.
+    const targetName=targetScope?targetScope.name:(yearKey==='TBD'?'TBD Scope':`${yearKey} Scope`);
+    const msg=(oldScope.status&&oldScope.status!=='Capital Plan')
+      ? `You're moving this unit out of an active scope ("${oldScope.name}") into a planned scope ("${targetName}"). Do you wish to continue?`
+      : `This will move the unit from "${oldScope.name}" to "${targetName}". Continue?`;
+    const confirmed=window.confirm(msg);
+    if(!confirmed){showToast('Capex year saved — scope assignment left unchanged','info');return;}
+    if(!targetScope)targetScope=await createScopeForYearKey(unit.property,prop.id,yearKey);
+    await unlinkUnitFromScope(unit,oldScope);
+    await linkUnitToScope(unit,targetScope);
+    showToast(`Moved to ${targetScope.name}`,'success');
+  }else{
+    // First assignment — no prior scope to warn about leaving.
+    if(!targetScope)targetScope=await createScopeForYearKey(unit.property,prop.id,yearKey);
+    await linkUnitToScope(unit,targetScope);
+    showToast(`Assigned to ${targetScope.name}`,'success');
+  }
+  if(currentProp){renderPropertyView(currentProp);renderUnitsTab(currentProp);}
+}
+window.autoDeriveScopeForUnit=autoDeriveScopeForUnit;
+
+async function uimSaveNumberField(id,airtableField,localField,value,inputEl){
+  const raw=String(value).replace(/[^0-9.]/g,'');
+  const num=raw===''?null:Number(raw);
+  const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
+  if(u){
+    u[localField]=num||0;
+    u.totalWorkEst=(u.elevEst||0)+(u.relatedEst||0)+(u.cabEst||0)+(u.contingencyEst||0);
+    const totalCell=document.getElementById('uim-total-'+id);
+    if(totalCell)totalCell.textContent=u.totalWorkEst?fmtCurrencyFull(u.totalWorkEst):'$0';
+  }
+  if(inputEl)uimFieldSaved(inputEl);
+  await atUpdate('Unit Inventory List',id,{[airtableField]:num});
+}
+window.uimSaveNumberField=uimSaveNumberField;
+
+async function uimSaveSelectField(id,airtableField,localField,value,selectEl){
+  const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
+  if(u)u[localField]=localField==='priority'?(value?parseInt(value):null):value;
+  if(selectEl)uimFieldSaved(selectEl);
+  await atUpdate('Unit Inventory List',id,{[airtableField]:localField==='priority'?(value?parseInt(value):null):value});
+  // Unit Type feeds the property hero's Elev/Esc/Lift/Other pills directly
+  // (Design Spec Section 1b) — refresh the underlying property view so that
+  // stays in sync without requiring the modal to close first.
+  if(airtableField==='Unit Type'&&currentProp)renderPropertyView(currentProp);
+  // Status also feeds the past-year-not-Complete flag — same immediate-
+  // refresh fix as capexYear above, so marking a unit Complete clears the
+  // flag right away instead of only on modal reopen.
+  if(airtableField==='Status'&&u)renderUimTable(u.property);
+}
+window.uimSaveSelectField=uimSaveSelectField;
+
+// v34l — the only manual write path left for Status: setting it directly
+// to Complete/Dormant, or clearing back to "" (Auto) which immediately
+// recomputes from the linked Scope's status rather than leaving a stale
+// value sitting in Airtable until some other event happens to trigger it.
+async function uimSaveManualStatus(id,value){
+  const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
+  if(!u)return;
+  if(value===''){
+    const derived=computeDerivedUnitStatus(u);
+    u.status=derived;
+    await atUpdate('Unit Inventory List',id,{'Status':derived});
+  }else{
+    u.status=value;
+    await atUpdate('Unit Inventory List',id,{'Status':value});
+  }
+  renderUimTable(u.property);
+  if(currentProp){renderPropertyView(currentProp);renderUnitsTab(currentProp);}
+}
+window.uimSaveManualStatus=uimSaveManualStatus;
+
+function renderUimTable(propName){
+  const tbody=document.getElementById('uim-tbody');
+  const thCheck=document.getElementById('uim-th-check');
+  if(!tbody)return;
+  const units=uimUnitsFor(propName);
+  if(thCheck)thCheck.innerHTML=uimDeleteMode?'':'';
+  if(units.length===0){
+    tbody.innerHTML=`<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-mid)">No units yet. Set Total Units above to add rows.</td></tr>`;
+    return;
+  }
+  const esc=s=>String(s==null?'':s).replace(/'/g,"\\'");
+  tbody.innerHTML=units.map(u=>{
+    const checkCell=uimDeleteMode?`<td><input type="checkbox" ${uimPendingDeleteIds.includes(u.id)?'checked':''} onchange="uimToggleDeleteSelect('${u.id}')"></td>`:'<td></td>';
+    const typeOpts=UNIT_TYPE_OPTIONS.map(t=>`<option value="${t}" ${u.unitType===t?'selected':''}>${t}</option>`).join('');
+    // v34l — Status Model Reconciliation. Active/Planned are auto-derived
+    // (never directly selectable); the dropdown's first option always
+    // reflects the current computed value and choosing it clears any
+    // manual override. Complete/Dormant remain the two selectable manual
+    // overrides.
+    const derivedStatus=computeDerivedUnitStatus(u);
+    const isOverridden=u.status==='Complete'||u.status==='Dormant';
+    const priOpts=[1,2,3,4].map(n=>`<option value="${n}" ${String(u.priority)===String(n)?'selected':''}>${n}</option>`).join('');
+    return `<tr>
+      ${checkCell}
+      <td><input class="form-input" style="min-width:120px" value="${esc(u.name)}" onchange="uimSaveTextField('${u.id}','Unit Name','name',this.value)"></td>
+      <td><input class="form-input" style="min-width:110px" value="${esc(u.deviceLocation)}" onchange="uimSaveTextField('${u.id}','Device Location','deviceLocation',this.value)"></td>
+      <td><select class="form-input" style="min-width:120px" onchange="uimSaveSelectField('${u.id}','Unit Type','unitType',this.value,this)"><option value="">—</option>${typeOpts}</select></td>
+      <td><select class="form-input" style="width:60px" onchange="uimSaveSelectField('${u.id}','Priority','priority',this.value,this)"><option value="">—</option>${priOpts}</select></td>
+      <td><select class="form-input" style="min-width:140px" onchange="uimSaveManualStatus('${u.id}',this.value)">
+        <option value="" ${!isOverridden?'selected':''}>Auto (${derivedStatus||'—'})</option>
+        <option value="Complete" ${u.status==='Complete'?'selected':''}>Complete</option>
+        <option value="Dormant" ${u.status==='Dormant'?'selected':''}>Dormant</option>
+      </select></td>
+      <td style="display:flex;align-items:center;gap:4px"><input class="form-input" style="width:80px" value="${esc(u.capexYear)}" onchange="uimSaveTextField('${u.id}','Client Capex Planning Year','capexYear',this.value)">${(()=>{const yr=parseInt(u.capexYear);return(yr&&yr<new Date().getFullYear()&&u.status!=='Complete')?'<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px;flex-shrink:0" title="Past CapEx year but not marked Complete — worth checking"></i>':'';})()}</td>
+      <td><input id="uim-elev-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.elevEst?Number(u.elevEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Elevator Mod Est.','elevEst',this.value,this)"></td>
+      <td><input id="uim-related-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.relatedEst?Number(u.relatedEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Related Work Est.','relatedEst',this.value,this)"></td>
+      <td><input id="uim-cab-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.cabEst?Number(u.cabEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Cab Interior Est.','cabEst',this.value,this)"></td>
+      <td><input id="uim-cont-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.contingencyEst?Number(u.contingencyEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Contingency Fee Est.','contingencyEst',this.value,this)"></td>
+      <td id="uim-total-${u.id}" style="text-align:right;font-weight:600">${u.totalWorkEst?fmtCurrencyFull(u.totalWorkEst):"$0"}</td>
+    </tr>`;
+  }).join('');
+  units.forEach(u=>{
+    ['uim-elev-'+u.id,'uim-related-'+u.id,'uim-cab-'+u.id,'uim-cont-'+u.id].forEach(initCurrencyInput);
+  });
+  if(uimDeleteMode){
+    renderUimDeleteBannerCount(propName);
+  }
 }
 
 function switchPropTab(tab,btn){
@@ -4483,13 +5117,19 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   let newStatus=scope.status==='Capital Plan'?'Capital Plan':'Planned';
   if(msFinal&&(msFinal.completionDate||msFinal.actualDate))newStatus='Complete';
   else if(ms1&&ms1.actualDate)newStatus='In Progress';
-  if(scope.status!==newStatus){
+  const statusChanged=scope.status!==newStatus;
+  if(statusChanged){
     scope.status=newStatus;
     // Only write to Airtable in live mode — demo mode still updates
     // the in-memory Scope so status badges and rollups reflect reality
     // without requiring a page reload or live Airtable connection.
     if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':newStatus});
   }
+  // v34l — a Scope's status change is exactly what flips its units between
+  // Active and Planned. Recompute regardless of whether newStatus actually
+  // differed, since this also catches drift (e.g. a unit linked after the
+  // scope's last status write).
+  await recomputeStatusesForScope(scopeId);
   await deriveAndWritePropertyStatus(scope.property);
 }
 
@@ -4504,6 +5144,11 @@ async function setScopeOnHold(scopeId,onHold){
   if(onHold){
     scope.status='On Hold';
     if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':'On Hold'});
+    // v34l — On Hold still counts as "not Capital Plan" for unit-status
+    // derivation purposes (units read Active, matching the Scope card's
+    // own On Hold display convention — a frozen display state, not a
+    // reversion to Planned).
+    await recomputeStatusesForScope(scopeId);
     await deriveAndWritePropertyStatus(scope.property);
   }else{
     await deriveAndWriteScopeStatus(scopeId,{force:true});
@@ -4683,10 +5328,18 @@ function renderScopeCards(p){
         ?`<button onclick="event.stopPropagation();setScopeOnHold('${s.id}',false).then(()=>renderScopeCards(currentProp));" style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;white-space:nowrap">Resume</button>`
         :`<button onclick="event.stopPropagation();setScopeOnHold('${s.id}',true).then(()=>renderScopeCards(currentProp));" style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;white-space:nowrap">Put On Hold</button>`)
       :'';
+    // v34k — past-year-not-Complete flag, surfaced on the Scope card too
+    // (not just buried in Manage Unit Inventory) since that's the place
+    // someone is actually likely to notice it. Checks this Scope's own
+    // linked units directly rather than re-deriving anything.
+    const staleUnits=(window.UNIT_INVENTORY||[]).filter(u=>(s.linkedUnitIds||[]).includes(u.id)&&(()=>{const yr=parseInt(u.capexYear);return yr&&yr<new Date().getFullYear()&&u.status!=='Complete';})());
+    const staleFlag=staleUnits.length>0
+      ?`<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px" title="${staleUnits.length} unit${staleUnits.length===1?'':'s'} with a past CapEx year not marked Complete — worth checking"></i>`
+      :'';
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
-          <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${s.name||'Property Modernization'}</span>
+          <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${s.name||'Property Modernization'} ${staleFlag}</span>
           <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${onHoldToggle}</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -9289,6 +9942,42 @@ function getCapitalPlanScopes(){
       return {...s,priority:scopePriorityDisplay(s.priority),_prop:prop};
     });
 }
+// v34p — Capital Plan's Est. Budget column (both per-scope and the
+// property-group totals rolled up from it) now derives from Unit
+// Inventory List's Total Work Est. per linked unit, not the Scope's
+// typed/cached plannedBudget field, per Misty's explicit directive.
+function scopeUnitBudgetTotal(scopeId){
+  return (window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId).reduce((a,u)=>a+(u.totalWorkEst||0),0);
+}
+// v34p — Completed band. Mirrors getCapitalPlanScopes()'s structure and
+// visibility scoping exactly, filtering status==='Complete' instead of
+// 'Capital Plan'. Feeds the dedicated Completed band on Capital Plan,
+// kept entirely separate from the pipeline stat cards and year bands.
+function getCompletedScopes(){
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const scopes=window.SCOPES||[];
+  const allPropNames=new Set(port.filter(p=>p.st!=='Removed').map(p=>p.n));
+  const visiblePropNames=role==='consultant'
+    ? new Set([...allPropNames].filter(n=>propertyHasConsultant(n,currentConsultantName)))
+    : allPropNames;
+  return scopes
+    .filter(s=>s.status==='Complete'&&visiblePropNames.has(s.property))
+    .map(s=>{
+      const prop=port.find(p=>p.n===s.property)||{};
+      return {...s,priority:scopePriorityDisplay(s.priority),_prop:prop};
+    });
+}
+// v34p — the only scope statuses that represent genuinely active
+// construction happening right now. Used everywhere a property's scopes
+// get checked for "is real work in progress here" (Capital Plan's split-
+// property exclusion, Analytics, Dashboard) — Complete must NEVER count
+// as active evidence here, whether a scope reached Complete through real
+// M14 graduation or through the Completed-band backfill: either way the
+// work isn't currently in progress, so it shouldn't make a property look
+// "split" between active construction and pending pipeline work.
+function isRealActiveScopeStatus(status){
+  return status==='Planned'||status==='In Progress'||status==='On Hold';
+}
 // Back-compat alias retained in case any other call site still expects
 // property-level Capital Plan rows — none found in v27j trace, but kept
 // as a thin pass-through rather than silently removed.
@@ -9308,29 +9997,45 @@ function renderCapitalPlan(){
   // which was getting visually congested with several split properties
   // in the same year band.
   const scopeRows=getCapitalPlanScopes();
-  const totalBudget=scopeRows.reduce((a,s)=>a+(s.plannedBudget||0),0);
+  // v34p — Total Pipeline Budget and Priority Breakdown (below) now derive
+  // from Unit Inventory List directly — each unit's own Total Work Est.
+  // and Priority — instead of Scopes' typed/cached plannedBudget and
+  // priority fields, per Misty's explicit directive. pipelineUnits is
+  // every Unit Inventory List record currently linked to a Capital-Plan-
+  // status Scope (same scopeRows set already used for this view, so
+  // consultant visibility scoping carries through unchanged).
+  const pipelineScopeIds=new Set(scopeRows.map(s=>s.id));
+  const pipelineUnits=(window.UNIT_INVENTORY||[]).filter(u=>pipelineScopeIds.has(u.scopeId));
+  const totalBudget=pipelineUnits.reduce((a,u)=>a+(u.totalWorkEst||0),0);
   // v31k: always use p.units (Properties.Unit Count) as the authoritative total.
-  // Scope-level breakdown counts are unreliable as a unit total — they may be
-  // partially entered. Deduplicate by property so multi-scope properties count once.
-  // v34e fix: this was double-counting split properties (an active scope AND
-  // a Capital Plan scope) — their full p.units was being added here as
-  // "pipeline" on top of already being counted as "active" on the Dashboard,
-  // since a property's unit count isn't divided per-scope. Confirmed by the
-  // math: Active Units + this pipeline total should equal the portfolio's
-  // real total unit count, and only does when split properties are excluded
-  // here — matching how Dashboard's Pipeline Units already excludes them.
+  // v34e fix (partial): excluded split properties to stop double-counting
+  // against Dashboard's Active Units.
+  // v34h fix: this card's total must match the sum of the year bands below
+  // it, which now use scope-level unit counts (fixed in v34g) — this card
+  // was still using the OLD property-level-dedup method, so it disagreed
+  // with its own bands (124 here vs. 196 summed from 2027+2028+TBD).
+  // Rewritten to group scopeRows by property and sum each property-group's
+  // scope-level unit total (own unit breakdown per scope, falling back to
+  // the property's total once per property only if no scope has one) —
+  // identical method to what each year band already computes per group,
+  // so this card's total now equals the sum of every band beneath it.
   const totalUnits=(()=>{
-    const seen=new Set();
-    let sum=0;
+    const byProp={};
     scopeRows.forEach(s=>{
-      if(!seen.has(s.property)){
-        seen.add(s.property);
-        const p=(window.PORTFOLIO||[]).find(x=>x.n===s.property);
-        if(!p)return;
-        const propScopes=(window.SCOPES||[]).filter(sc=>sc.property===p.n);
-        const isSplit=propScopes.some(sc=>sc.status!=='Capital Plan')&&propScopes.some(sc=>sc.status==='Capital Plan');
-        if(!isSplit)sum+=(p.units||0);
-      }
+      if(!byProp[s.property])byProp[s.property]=[];
+      byProp[s.property].push(s);
+    });
+    let sum=0;
+    Object.entries(byProp).forEach(([propName,sc])=>{
+      const p=(window.PORTFOLIO||[]).find(x=>x.n===propName);
+      if(!p)return;
+      const propScopes=(window.SCOPES||[]).filter(scope=>scope.property===propName);
+      // v34p — Complete (historical or graduated) must never count as
+      // "real active work" here; only Planned/In Progress/On Hold do.
+      const isSplit=propScopes.some(scope=>isRealActiveScopeStatus(scope.status))&&propScopes.some(scope=>scope.status==='Capital Plan');
+      if(isSplit)return;
+      const scUnits=sc.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
+      sum+=(scUnits>0?scUnits:(p.units||0));
     });
     return sum;
   })();
@@ -9340,11 +10045,13 @@ function renderCapitalPlan(){
   // Summary cards
   const cards=document.getElementById('capital-summary-cards');
   if(cards){
+    // v34p — bucket by each unit's own Unit Inventory List Priority field
+    // (plain integer 1-4), not the Scope's typed priority string.
     const priMap={'1':0,'2':0,'3':0,'4':0};
-    scopeRows.forEach(s=>{const k=(s.priority||'4').charAt(0);if(priMap[k]!==undefined)priMap[k]++;});
+    pipelineUnits.forEach(u=>{const k=String(parseInt(u.priority)||4);if(priMap[k]!==undefined)priMap[k]++;});
     cards.innerHTML=`
       <div class="stat-card"><div class="stat-label">Scopes in Pipeline</div><div class="stat-value">${scopeRows.length}</div><div class="stat-sub">${propCount} propert${propCount===1?'y':'ies'} · ${approvedCount} Budget Approved</div></div>
-      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${totalBudget?fmtBudget(totalBudget):'TBD'}</div><div class="stat-sub">${scopeRows.filter(s=>!s.plannedBudget).length} Budget TBD</div></div>
+      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${totalBudget?fmtBudget(totalBudget):'TBD'}</div><div class="stat-sub">${pipelineUnits.filter(u=>!u.totalWorkEst).length} Units Budget TBD</div></div>
       <div class="stat-card"><div class="stat-label">Units in Pipeline</div><div class="stat-value">${totalUnits}</div><div class="stat-sub">Elevators &amp; Escalators</div></div>
       <div class="stat-card"><div class="stat-label">Priority Breakdown</div><div class="stat-value" style="font-size:13px;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
         ${priMap['1']?`<span class="badge" style="background:#fdecea;color:var(--red);border:1px solid #f5c2c2">P1: ${priMap['1']}</span>`:''}
@@ -9419,7 +10126,7 @@ function renderCapitalPlan(){
         totalUnits:(scopeUnitSum>0?scopeUnitSum:propUnits),
         scopeUnitSum:allScopeUnitSum,
         unitMismatch,
-        totalBudget:propScopes.reduce((a,s)=>a+(s.plannedBudget||0),0),
+        totalBudget:propScopes.reduce((a,s)=>a+scopeUnitBudgetTotal(s.id),0),
         totalScopeCount,
         totalCapPlanScopeCount,
         otherYears,
@@ -9514,7 +10221,7 @@ function renderCapitalPlan(){
               <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
               <td><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
               <td style="font-size:12px">${(()=>{const scU=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return scU>0?scU:(p.units||s.unitList||'—');})()}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
-              <td style="font-size:12px;font-weight:600;color:var(--navy)">${s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD'}</td>
+              <td style="font-size:12px;font-weight:600;color:var(--navy)">${(()=>{const b=scopeUnitBudgetTotal(s.id);return b?fmtCurrency(b):'TBD';})()}</td>
               <td>${budgetStatusBadge(s.budgetStatus)}</td>
               <td style="font-size:12px">${p.v||'—'}</td>
               <td style="font-size:12px">${m1Date||'<span style="color:var(--gray-mid)">Not set</span>'}</td>
@@ -9580,7 +10287,7 @@ function renderCapitalPlan(){
                   <td style="width:6%"></td>
                   <td style="width:6%"><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
                   <td style="width:7%;font-size:12px;color:#1D9E75">${(()=>{const u=(s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0);return u||s.unitList||'—';})()}</td>
-                  <td style="width:11%;font-size:12px;font-weight:600;color:#1D9E75">${s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD'}</td>
+                  <td style="width:11%;font-size:12px;font-weight:600;color:#1D9E75">${(()=>{const b=scopeUnitBudgetTotal(s.id);return b?fmtCurrency(b):'TBD';})()}</td>
                   <td style="width:9%">${budgetStatusBadge(s.budgetStatus)}</td>
                   <td style="width:9%"></td>
                   <td style="width:8%;font-size:12px;color:#1D9E75">${m1Date||'Not set'}</td>
@@ -9596,6 +10303,65 @@ function renderCapitalPlan(){
     </div>`;
   });
 
+  // v34p — Completed band. Separate from the pipeline year bands above:
+  // units already known Complete (blank or placeholder Capex Year, per
+  // Misty's new convention) and units that graduate through real M14
+  // construction both land here, via the same status==='Complete' filter.
+  // Never folded into the stat cards above — those stay scoped to
+  // scopeRows/pipelineUnits, which only ever contain Capital-Plan-status
+  // scopes and never see a Complete-status scope in the first place.
+  const completedScopeRows=getCompletedScopes();
+  let completedHtml='';
+  if(completedScopeRows.length>0){
+    const compByProp={};
+    completedScopeRows.forEach(s=>{
+      if(!compByProp[s.property])compByProp[s.property]=[];
+      compByProp[s.property].push(s);
+    });
+    // v34p — per-property groups now also carry the actual linked unit
+    // records (not just a count), so each property row can expand to show
+    // real unit names, matching the mockup Misty approved.
+    let compIdx=0;
+    const compGroups=Object.values(compByProp).map(propScopes=>{
+      const propName=propScopes[0].property;
+      const _p=propScopes[0]._prop;
+      const scopeIds=new Set(propScopes.map(s=>s.id));
+      const units=(window.UNIT_INVENTORY||[]).filter(u=>scopeIds.has(u.scopeId));
+      const budget=propScopes.reduce((a,s)=>a+scopeUnitBudgetTotal(s.id),0);
+      return {property:propName,_prop:_p,units,budget,rowId:'comp-prop-'+(compIdx++)};
+    }).sort((a,b)=>a.property.localeCompare(b.property));
+    const compUnits=compGroups.reduce((a,g)=>a+g.units.length,0);
+    const compBudget=compGroups.reduce((a,g)=>a+g.budget,0);
+    completedHtml=`<div style="margin-bottom:20px">
+      <div onclick="toggleYearBand('yr-band-Completed')" style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-radius:var(--radius,8px);background:var(--green-pale);cursor:pointer;user-select:none;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <i id="yr-band-Completed-chevron" class="ti ti-chevron-down" style="font-size:14px;color:var(--green);transition:transform .2s;transform:rotate(-90deg)"></i>
+          <i class="ti ti-circle-check" style="font-size:15px;color:var(--green)"></i>
+          <div style="font-size:14px;font-weight:700;color:var(--green)">Completed</div>
+        </div>
+        <div style="display:flex;gap:16px;font-size:12px;color:var(--green)">
+          <span><strong>${compGroups.length}</strong> propert${compGroups.length===1?'y':'ies'}</span>
+          <span><strong>${compUnits}</strong> units</span>
+          ${compBudget?`<span><strong>${fmtBudget(compBudget)}</strong> estimated</span>`:''}
+        </div>
+      </div>
+      <div id="yr-band-Completed" style="display:none;border:0.5px solid var(--border);border-radius:8px;overflow:hidden">
+        ${compGroups.map((g,gi)=>`<div style="${gi>0?'border-top:0.5px solid var(--border)':''}">
+          <div onclick="toggleYearBand('${g.rowId}')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none">
+            <i id="${g.rowId}-chevron" class="ti ti-chevron-down" style="font-size:13px;color:var(--gray-mid);transition:transform .15s;transform:rotate(-90deg)"></i>
+            <span style="font-size:13px;font-weight:600;color:var(--navy)">${g.property}</span>
+            <span style="font-size:12px;color:var(--gray-mid)">(${g.units.length})</span>
+            <span style="margin-left:auto;font-size:12px;font-weight:600;color:var(--navy)">${g.budget?fmtCurrency(g.budget):'—'}</span>
+            <span style="font-size:12px;color:var(--gray-mid);min-width:100px;text-align:right">${g._prop?.v||'—'}</span>
+          </div>
+          <div id="${g.rowId}" style="display:none;padding:2px 14px 12px 36px">
+            ${g.units.map(u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;background:var(--gray-xpale);border-radius:4px;padding:3px 8px;color:var(--navy)">${u.name||'—'}</span>`).join('')}
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
   const body=document.getElementById('capital-plan-body');
   // Preserve which year bands are currently open so a re-render (e.g.
   // after saving Split into scopes) doesn't collapse everything the user
@@ -9605,9 +10371,9 @@ function renderCapitalPlan(){
   document.querySelectorAll('[id^="yr-band-"]').forEach(el=>{
     if(el.style.display!=='none')openBands.add(el.id);
   });
-  if(body)body.innerHTML=scopeRows.length===0?
+  if(body)body.innerHTML=(scopeRows.length===0&&completedScopeRows.length===0)?
     `<div class="empty-state" style="padding:3rem"><i class="ti ti-calendar-stats" style="font-size:2rem"></i><div class="empty-state-title">No properties in capital plan</div><div class="empty-state-sub">Add properties to begin pipeline planning</div></div>`:
-    html;
+    html+completedHtml;
   // Restore previously-open bands. If nothing was open before (first
   // render), open the first year band by default so the view isn't
   // entirely collapsed on initial load.
@@ -9718,6 +10484,22 @@ function printCapitalPlan(){
   window.print();
   setTimeout(()=>el?.classList.remove('print-active'),1000);
 }
+// v34i bug fix — Budget Outlook's Print/PDF button previously called plain
+// window.print() with no setup. Budget Outlook is nested inside #view-capital,
+// and the @media print stylesheet only unhides #view-capital when it carries
+// the 'print-active' class (see printCapitalPlan above) — without it, the
+// catch-all print rule hid the whole #view-capital container, producing a
+// blank print preview. Same fix pattern as printCapitalPlan: toggle the class
+// around the print call. capital-plan-library-view/budget-outlook-view's own
+// inline display:none/'' (set by showBudgetOutlook/closeBudgetOutlook) already
+// correctly shows only the Budget Outlook content once the container itself
+// is visible, so no separate CSS branch is needed.
+function printBudgetOutlook(){
+  const el=document.getElementById('view-capital');
+  if(el)el.classList.add('print-active');
+  window.print();
+  setTimeout(()=>el?.classList.remove('print-active'),1000);
+}
 
 // v34a — Budget Outlook. Merges real Scope Contract Award Values with
 // every Scope in the portfolio (not just Capital Plan ones, unlike the
@@ -9771,27 +10553,34 @@ function renderBudgetOutlook(){
     return `<button onclick="setBoFilter('${val}')" style="font-size:13px;padding:6px 14px;border-radius:var(--radius,8px);border:0.5px solid ${active?'var(--blue-dark)':'var(--border)'};background:${active?'var(--blue-xpale)':'transparent'};color:${active?'var(--blue-dark)':'var(--gray-mid)'};cursor:pointer">${label}</button>`;
   }).join('');
 
+  // v34p — Budget Outlook rebuilt to derive from Unit Inventory List,
+  // dropping Unit Budget Allocations entirely as a data source (confirmed
+  // unused anywhere else in the app). Committed = a Scope's real Contract
+  // Award Value, unchanged. Everything else that used to depend on a
+  // manually-entered, easily-stale Unit Budget Allocations row is now a
+  // live estimate via scopeUnitBudgetTotal() — the same Unit Inventory
+  // List-derived total Capital Plan's own Est. Budget column uses. This
+  // is what keeps a scope's budget visible in Budget Outlook once it
+  // graduates out of Capital Plan (Planned/In Progress/On Hold) but still
+  // has no real contract yet — previously its estimate had nowhere to
+  // live once it left Capital Plan unless someone had separately entered
+  // a matching allocation row. Complete-status scopes are excluded
+  // entirely — finished work isn't a forward budget ask anymore, and by
+  // that point a real Contract Award Value has almost always landed
+  // anyway. Scopes with no real year (the shared TBD and Completed
+  // buckets) are excluded too — nothing to plot on a year-based outlook.
   const allScopes=window.SCOPES||[];
-  const scopeById={};
-  allScopes.forEach(s=>{scopeById[s.id]=s;});
-
   const items=[];
   allScopes.forEach(sc=>{
+    if(sc.status==='Complete')return;
+    if(sc.year==null)return;
+    const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===sc.id);
+    const unitNames=units.map(u=>u.name).filter(Boolean);
     if(sc.contractAwardValue>0){
-      const scUnitTotal=(sc.elevatorCount||0)+(sc.escalatorCount||0)+(sc.liftCount||0)+(sc.otherCount||0);
-      items.push({year:sc.year,amount:sc.contractAwardValue,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:true,source:'scope',unitCount:scUnitTotal,unitNames:sc.unitList?sc.unitList.split(',').map(s=>s.trim()).filter(Boolean):[]});
-    }
-  });
-  (window.UNIT_BUDGET_ALLOCATIONS||[]).forEach(a=>{
-    const resolvedIds=a.linkedScopeIds||[];
-    if(resolvedIds.length===1){
-      const sc=scopeById[resolvedIds[0]];
-      if(sc&&sc.contractAwardValue>0)return; // superseded by the real Scope number above
-      items.push({year:a.year,amount:a.amount,property:a.property,scopeName:sc?sc.name:'Unresolved scope',isCommitted:a.status==='Committed',source:'allocation',unitCount:a.unitCount||0,unitNames:a.unitNames||[]});
-    }else if(resolvedIds.length===0){
-      items.push({year:a.year,amount:a.amount,property:a.property,scopeName:'Not yet linked to a scope',isCommitted:a.status==='Committed',source:'allocation',unitCount:a.unitCount||0,unitNames:a.unitNames||[]});
+      items.push({year:sc.year,amount:sc.contractAwardValue,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:true,source:'scope',unitCount:units.length,unitNames});
     }else{
-      items.push({year:a.year,amount:a.amount,property:a.property,scopeName:`Spans ${resolvedIds.length} scopes (unresolved)`,isCommitted:a.status==='Committed',source:'allocation',unitCount:a.unitCount||0,unitNames:a.unitNames||[]});
+      const est=scopeUnitBudgetTotal(sc.id);
+      if(est>0)items.push({year:sc.year,amount:est,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:false,source:'estimate',unitCount:units.length,unitNames});
     }
   });
 
@@ -9813,16 +10602,18 @@ function renderBudgetOutlook(){
   const totalCommitted=allocs.filter(a=>a.isCommitted).reduce((s,a)=>s+a.amount,0);
   const totalPlanned=allocs.filter(a=>!a.isCommitted).reduce((s,a)=>s+a.amount,0);
   const propCount=new Set(allocs.map(a=>a.property)).size;
+  const totalUnitsCard=years.reduce((s,y)=>s+(byYear[y].unitTotal||0),0);
 
   document.getElementById('bo-summary-cards').innerHTML=`
     <div class="stat-card"><div class="stat-label">Total outlook</div><div class="stat-value">${fmtBudget(totalCommitted+totalPlanned)}</div></div>
     <div class="stat-card"><div class="stat-label">Committed</div><div class="stat-value" style="color:var(--blue-dark)">${fmtBudget(totalCommitted)}</div></div>
     <div class="stat-card"><div class="stat-label">Planned</div><div class="stat-value" style="color:var(--blue-mid)">${fmtBudget(totalPlanned)}</div></div>
-    <div class="stat-card"><div class="stat-label">Properties</div><div class="stat-value">${propCount}</div></div>`;
+    <div class="stat-card"><div class="stat-label">Properties</div><div class="stat-value">${propCount}</div></div>
+    <div class="stat-card"><div class="stat-label">Units</div><div class="stat-value">${totalUnitsCard}</div></div>`;
 
   const chartEl=document.getElementById('bo-chart');
   if(years.length===0){
-    chartEl.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-chart-bar-off"></i><div class="empty-state-title">No budget data yet</div><div class="empty-state-sub">Add rows in Unit Budget Allocations, or enter a Contract Award Value on a Scope.</div></div>`;
+    chartEl.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-chart-bar-off"></i><div class="empty-state-title">No budget data yet</div><div class="empty-state-sub">Estimates appear once units are linked to a Scope with a real year, or enter a Contract Award Value on a Scope.</div></div>`;
   }else{
     const maxTotal=Math.max(...years.map(y=>byYear[y].committed+byYear[y].planned));
     chartEl.innerHTML=`<div style="display:flex;align-items:flex-end;gap:20px;height:200px;padding:0 8px;border-bottom:0.5px solid var(--border)">
@@ -9842,7 +10633,7 @@ function renderBudgetOutlook(){
       }).join('')}
     </div>
     <div style="display:flex;gap:20px;padding:6px 8px 0;font-size:12px;color:var(--gray-mid)">
-      ${years.map(y=>`<div style="flex:1;text-align:center">${y}</div>`).join('')}
+      ${years.map(y=>`<div style="flex:1;text-align:center;font-weight:600">${y}</div>`).join('')}
     </div>`;
   }
 
@@ -9872,6 +10663,41 @@ function renderBudgetOutlook(){
       <td></td>
     </tr>${detailRows}`;
   }).join('')||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--gray-mid)">No allocations for this filter</td></tr>`;
+  // v34i — cache what was just rendered so Export to Excel reads the exact
+  // same numbers on screen, rather than recomputing (and risking drift from)
+  // the aggregation logic a second time.
+  window._boData={years,byYear,totalCommitted,totalPlanned,propCount,filter:boFilter};
+}
+// v34i — Export to Excel. CSV, not a real .xlsx: this codebase has zero
+// external script dependencies today (no CDN libraries anywhere), and CSV
+// opens directly in Excel with no new dependency or library weight added.
+// Flagged to Misty as a deliberate choice, not a silent shortcut.
+function exportBudgetOutlookExcel(){
+  const d=window._boData;
+  if(!d||!d.years||d.years.length===0){showToast('No budget data to export','error');return;}
+  const esc=v=>{
+    const s=String(v==null?'':v);
+    return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
+  };
+  const rows=[['Year','Committed','Planned','Total','Units','Unit Names']];
+  d.years.forEach(y=>{
+    const yr=d.byYear[y];
+    const names=Array.from(new Set(yr.items.flatMap(it=>it.unitNames||[]))).join('; ');
+    rows.push([y,yr.committed||0,yr.planned||0,(yr.committed||0)+(yr.planned||0),yr.unitTotal||0,names]);
+  });
+  rows.push(['Total',d.totalCommitted||0,d.totalPlanned||0,(d.totalCommitted||0)+(d.totalPlanned||0),d.years.reduce((a,y)=>a+(d.byYear[y].unitTotal||0),0),'']);
+  const csv=rows.map(r=>r.map(esc).join(',')).join('\r\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const stamp=new Date().toISOString().slice(0,10);
+  a.href=url;
+  a.download=`PULSE_Budget_Outlook_${d.filter||'all'}_${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showToast('Budget Outlook exported','success');
 }
 function deleteCapitalEntry(propId, propName){
   const overlay=document.createElement('div');
@@ -10162,15 +10988,17 @@ function openSplitIntoScopes(propId){
   renderSplitIntoScopesModal(prop);
 }
 
+let splitUnitAssign={};
 function renderSplitIntoScopesModal(prop){
   const scopes=(window.SCOPES||[]).filter(s=>s.property===prop.n);
+  splitUnitAssign={};
   const existing=document.getElementById('split-scopes-overlay');
   if(existing)existing.remove();
   const overlay=document.createElement('div');
   overlay.id='split-scopes-overlay';
   overlay.dataset.propId=prop.id||prop.n;
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
-  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:640px;box-shadow:var(--shadow-md);margin:auto">
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:820px;box-shadow:var(--shadow-md);margin:auto">
     <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
       <div>
         <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-git-fork" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>Split Into Scopes</div>
@@ -10199,6 +11027,14 @@ function renderSplitIntoScopesModal(prop){
         plannedBudget:prop.budget||0,priority:prop.priority||'4: Standard',}];
   const container=document.getElementById('split-scopes-blocks');
   blocksToShow.forEach(s=>addSplitScopeBlock(s));
+  // Seed initial checklist state from each unit's real current Linked
+  // Scope, matched against the block created for that scope's id.
+  const scopeIdToBlockId={};
+  [...document.querySelectorAll('.split-scope-block')].forEach(b=>{if(b.dataset.scopeId)scopeIdToBlockId[b.dataset.scopeId]=b.id;});
+  (window.UNIT_INVENTORY||[]).filter(u=>u.property===prop.n).forEach(u=>{
+    if(u.scopeId&&scopeIdToBlockId[u.scopeId])splitUnitAssign[u.id]=scopeIdToBlockId[u.scopeId];
+  });
+  renderAllSplitScopeUnitLists();
   updateSplitScopesReconcile();
 }
 
@@ -10239,19 +11075,73 @@ function addSplitScopeBlock(scope){
       <div class="form-group"><label class="form-label">Priority</label><select class="form-input split-sc-priority">${priOptions}</select></div>
       <div class="form-group"><label class="form-label">Budget Status</label><select class="form-input split-sc-budgetstatus">${bsOptions}</select></div>
     </div>
-    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:12px 0 6px">Units <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--gray-light)">(property total: <span style="color:var(--blue-light)">${prop?(()=>{const e=prop.elevatorCount||0,es=prop.escalatorCount||0,l=prop.liftCount||0,o=prop.otherCount||0,t=e+es+l+o;return t?[e?e+' Elev':'',es?es+' Esc':'',l?l+' WC Lift':'',o?o+' Other':''].filter(Boolean).join(' / '):'not entered';})():'—'}</span>)</span></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
-      <div class="form-group"><label class="form-label">Elevators</label><input class="form-input split-sc-elevators" type="number" value="${s.elevatorCount||''}" min="0" placeholder="0"></div>
-      <div class="form-group"><label class="form-label">Escalators</label><input class="form-input split-sc-escalators" type="number" value="${s.escalatorCount||''}" min="0" placeholder="0"></div>
-      <div class="form-group"><label class="form-label">WC Lift</label><input class="form-input split-sc-lifts" type="number" value="${s.liftCount||''}" min="0" placeholder="0"></div>
-      <div class="form-group"><label class="form-label">Other</label><input class="form-input split-sc-other" type="number" value="${s.otherCount||''}" min="0" placeholder="0"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input split-sc-consultant" type="text" value="${(s.v||prop?.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
+      <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input split-sc-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
     </div>
-    <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input split-sc-consultant" type="text" value="${(s.v||prop?.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
-    <div class="form-group" style="margin-bottom:0"><label class="form-label">Mod. Survey Date <span style="font-weight:400;color:var(--gray-mid)">(graduates this scope)</span></label><input class="form-input split-sc-m1date" type="date" value="${m1dateVal}"></div>
+    <div class="form-group" style="margin-bottom:12px"><label class="form-label">Mod. Survey Date <span style="font-weight:400;color:var(--gray-mid)">(graduates this scope)</span></label><input class="form-input split-sc-m1date" type="date" value="${m1dateVal}"></div>
+    <div id="${id}-units-header" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:12px 0 6px;display:flex;align-items:center;gap:6px"></div>
+    <div id="${id}-units-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border-light,var(--border));border-radius:6px;padding:8px"></div>
   `;
   document.getElementById('split-scopes-blocks').appendChild(block);
   block.querySelector('.split-sc-budget')?.addEventListener('input',updateSplitScopesReconcile);
+  block.querySelector('.split-sc-year')?.addEventListener('input',renderAllSplitScopeUnitLists);
+  block.querySelector('.split-sc-vdanum')?.addEventListener('input',renderAllSplitScopeUnitLists);
   updateSplitScopesReconcile();
+  renderAllSplitScopeUnitLists();
+}
+
+// v34k — Scope Unit-Assignment Rework. Real Linked Units checklist,
+// replacing the old typed elevator/escalator/lift/other count fields and
+// free-text unit list. A unit can only be checked into ONE block at a
+// time in this modal session — checking it into a different block
+// automatically unchecks it from wherever it was, then all blocks
+// re-render so the picture stays consistent. This is the MANUAL editing
+// surface (split/merge/move) — unlike the automatic per-unit Capex-year
+// trigger (autoDeriveScopeForUnit), reassigning a unit here does not
+// prompt a confirmation per unit; the whole point of opening this modal
+// is deliberate, explicit Scope construction.
+function splitScopeToggleUnit(unitId,blockId,checked){
+  if(checked)splitUnitAssign[unitId]=blockId;
+  else if(splitUnitAssign[unitId]===blockId)delete splitUnitAssign[unitId];
+  renderAllSplitScopeUnitLists();
+}
+window.splitScopeToggleUnit=splitScopeToggleUnit;
+
+function renderAllSplitScopeUnitLists(){
+  const overlay=document.getElementById('split-scopes-overlay');
+  if(!overlay)return;
+  const propId=overlay.dataset.propId;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const prop=port.find(p=>(p.id||p.n)===propId);
+  if(!prop)return;
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===prop.n).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  const blocks=[...document.querySelectorAll('.split-scope-block')];
+  blocks.forEach(b=>{
+    const listEl=document.getElementById(b.id+'-units-list');
+    const headerEl=document.getElementById(b.id+'-units-header');
+    if(!listEl||!headerEl)return;
+    const assignedCount=units.filter(u=>splitUnitAssign[u.id]===b.id).length;
+    const yearVal=parseInt(b.querySelector('.split-sc-year')?.value);
+    const vdaNum=(b.querySelector('.split-sc-vdanum')?.value||'').trim();
+    const missingVdaFlag=(assignedCount>0&&!isNaN(yearVal)&&!vdaNum)
+      ?'<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:14px" title="Units assigned but no VDA Project # set — worth checking whether this is secretly two separate projects"></i>'
+      :'';
+    headerEl.innerHTML=`Units <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--gray-light)">(${assignedCount} assigned)</span>${missingVdaFlag}`;
+    if(units.length===0){
+      listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:6px">No units in Unit Inventory List for this property yet.</div>';
+      return;
+    }
+    listEl.innerHTML=units.map(u=>{
+      const checked=splitUnitAssign[u.id]===b.id;
+      const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
+      return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
+        <input type="checkbox" ${checked?'checked':''} onchange="splitScopeToggleUnit('${u.id}','${b.id}',this.checked)">
+        <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+        ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
+      </label>`;
+    }).join('');
+  });
 }
 
 function initCurrencyInputEl(el){
@@ -10302,24 +11192,21 @@ async function saveSplitIntoScopes(){
   const blocks=[...document.querySelectorAll('.split-scope-block')];
   if(blocks.length===0){showToast('Add at least one scope','warn');return;}
 
+  // v34k — blockDomId carried through so the post-save reconciliation pass
+  // can map splitUnitAssign (keyed by DOM block id) to the real scopeId
+  // once new blocks get created and receive one.
   const rows=blocks.map(b=>{
-    const elevators=parseInt(b.querySelector('.split-sc-elevators')?.value)||0;
-    const escalators=parseInt(b.querySelector('.split-sc-escalators')?.value)||0;
-    const lifts=parseInt(b.querySelector('.split-sc-lifts')?.value)||0;
-    const other=parseInt(b.querySelector('.split-sc-other')?.value)||0;
-    const totalUnits=elevators+escalators+lifts+other;
-    const unitDesc=[elevators?`${elevators} Elev`:'',escalators?`${escalators} Esc`:'',lifts?`${lifts} WC Lift`:'',other?`${other} Other`:''].filter(Boolean).join(' / ');
     return {
+      blockDomId:b.id,
       scopeId:b.dataset.scopeId||'',
       name:b.querySelector('.split-sc-name')?.value.trim()||'Property Modernization',
       year:parseInt(b.querySelector('.split-sc-year')?.value)||null,
       plannedBudget:parseInt((b.querySelector('.split-sc-budget')?.value||'').replace(/[^0-9]/g,''))||0,
       priority:b.querySelector('.split-sc-priority')?.value||'4: Standard',
       budgetStatus:b.querySelector('.split-sc-budgetstatus')?.value||'TBD',
-      unitList:b.querySelector('.split-sc-units')?.value.trim()||'',
       m1date:b.querySelector('.split-sc-m1date')?.value||'',
-      elevators,escalators,lifts,other,totalUnits,unitDesc,
       consultant:b.querySelector('.split-sc-consultant')?.value.trim()||'',
+      vdaNum:b.querySelector('.split-sc-vdanum')?.value.trim()||'',
     };
   });
   if(rows.some(r=>!r.name)){showToast('Each scope needs a name','warn');return;}
@@ -10345,18 +11232,14 @@ async function saveSplitIntoScopes(){
       'Planned Budget':r.plannedBudget||null,
       'Priority':scopePriority(r.priority),
       'Budget Status':r.budgetStatus||'TBD',
-      'Unit List':r.unitList,
-      'Elevator Count':r.elevators||null,
-      'Escalator Count':r.escalators||null,
-      'Wheelchair Lift Count':r.lifts||null,
-      'Other Count':r.other||null,
       'VDA Consultant':r.consultant||null,
+      'VDA Project Number':r.vdaNum||null,
     };
     let scopeId=r.scopeId;
     if(scopeId){
       if(!demoMode) await atUpdate('Scopes',scopeId,fields);
       const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
-      if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.unitList=r.unitList;sc.elevatorCount=r.elevators;sc.escalatorCount=r.escalators;sc.liftCount=r.lifts;sc.otherCount=r.other;sc.v=r.consultant||sc.v||'';}
+      if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.isTbd=sc.isTbd||r.name==='TBD Scope';}
     } else {
       const createFields={...fields,'Property':[prop.id],'Status':'Capital Plan'};
       let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
@@ -10367,12 +11250,13 @@ async function saveSplitIntoScopes(){
       scopeId=newId;
       window.SCOPES=(window.SCOPES||[]).concat([{
         id:newId,property:prop.n,propertyId:prop.id||'',name:r.name,year:r.year,
-        unitList:r.unitList,plannedBudget:r.plannedBudget,approvedBudget:0,
+        unitList:'',plannedBudget:r.plannedBudget,approvedBudget:0,
         budgetStatus:r.budgetStatus||'TBD',priority:scopePriority(r.priority),status:'Capital Plan',
-        elevatorCount:r.elevators,escalatorCount:r.escalators,liftCount:r.lifts,otherCount:r.other,
-        v:r.consultant||'',
+        elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,
+        v:r.consultant||'',vdaNum:r.vdaNum||'',linkedUnitIds:[],isTbd:r.name==='TBD Scope',
       }]);
     }
+    r.scopeId=scopeId; // needed by the post-save unit-linking pass below
 
     // v28b — Mod Survey Date is the graduation trigger, now scoped to
     // this individual Scope rather than the property as a whole. Entering
@@ -10425,6 +11309,52 @@ async function saveSplitIntoScopes(){
     }
   }
 
+  // v34k — Unit-linking reconciliation. Every scope row now has a real
+  // scopeId (existing or freshly created above). Map splitUnitAssign
+  // (keyed by DOM block id, since new blocks had none at modal-open time)
+  // to real scopeIds, write each scope's Linked Units, and write each
+  // unit's own Linked Scope to match — clearing it for any unit that got
+  // unchecked from every block (a deliberate manual removal, not silent).
+  const blockIdToScopeId={};
+  rows.forEach(r=>{blockIdToScopeId[r.blockDomId]=r.scopeId;});
+  const propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===prop.n);
+  const scopeIdToUnitIds={};
+  rows.forEach(r=>{scopeIdToUnitIds[r.scopeId]=[];});
+  propUnits.forEach(u=>{
+    const assignedBlockId=splitUnitAssign[u.id];
+    const assignedScopeId=assignedBlockId?blockIdToScopeId[assignedBlockId]:null;
+    if(assignedScopeId&&scopeIdToUnitIds[assignedScopeId])scopeIdToUnitIds[assignedScopeId].push(u.id);
+  });
+  for(const r of rows){
+    const sc=(window.SCOPES||[]).find(s=>s.id===r.scopeId);
+    if(sc){
+      sc.linkedUnitIds=scopeIdToUnitIds[r.scopeId]||[];
+      const countFields=recomputeScopeTypeCounts(sc);
+      if(!demoMode)await atUpdate('Scopes',r.scopeId,{'Linked Units':sc.linkedUnitIds,...countFields});
+    }
+  }
+  // v34l — this manual reconciliation writes Linked Scope directly rather
+  // than going through linkUnitToScope, so it needs its own Dormant-clear
+  // and status-derivation pass — same rules as the automatic trigger.
+  for(const u of propUnits){
+    const assignedBlockId=splitUnitAssign[u.id];
+    const newScopeId=assignedBlockId?(blockIdToScopeId[assignedBlockId]||''):'';
+    if(u.scopeId!==newScopeId){
+      u.scopeId=newScopeId;
+      const fields={'Linked Scope':newScopeId?[newScopeId]:[]};
+      const targetScopeForStatus=newScopeId?(window.SCOPES||[]).find(s=>s.id===newScopeId):null;
+      if(targetScopeForStatus&&!targetScopeForStatus.isTbd&&u.status==='Dormant')u.status='';
+      // Same fix as linkUnitToScope — only derive/overwrite when not a
+      // protected Dormant override (e.g. TBD-only assignment above).
+      if(newScopeId&&u.status!=='Dormant'){
+        const derivedStatus=computeDerivedUnitStatus(u);
+        u.status=derivedStatus;
+        fields['Status']=derivedStatus;
+      }
+      if(!demoMode)await atUpdate('Unit Inventory List',u.id,fields);
+    }
+  }
+
   // Original property-level rough budget estimate is reconciled (cleared)
   // once split into real Scopes, rather than left sitting alongside the
   // new Scope-level budgets as a duplicate, confusing number (brief 1L).
@@ -10435,7 +11365,7 @@ async function saveSplitIntoScopes(){
   if(anyGraduated){renderCharts();populatePortfolio();}
   // v29d Bug 5 fix: re-render Overview tab so scope status pills update immediately
   // after a Mod Survey Date is saved via Manage Scopes / Split into Scopes.
-  if(currentProp&&currentProp.n===prop.n)renderPropertyView(currentProp);
+  if(currentProp&&currentProp.n===prop.n){renderPropertyView(currentProp);renderUnitsTab(currentProp);}
   showToast(`${rows.length} scope${rows.length===1?'':'s'} saved for ${prop.n}`,'success');
 }
 
@@ -10465,11 +11395,17 @@ function renderCharts(){
   // they carry a genuinely active construction status. 'Planned' and other pre-survey
   // statuses are pipeline, not active. Active statuses: In Progress, CIP, Awarded, Active.
   const _ACTIVE_ST=new Set(['In Progress','CIP','Awarded','Active']);
-  const _isActive=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length===0?_ACTIVE_ST.has(p.st):sc.some(s=>s.status!=='Capital Plan');};
-  const _isPipeline=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length===0?!_ACTIVE_ST.has(p.st):sc.every(s=>s.status==='Capital Plan');};
-  const _isSplit=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length>0&&sc.some(s=>s.status!=='Capital Plan')&&sc.some(s=>s.status==='Capital Plan');};
-  // Scope-level budget helper (contractAwardValue preferred over plannedBudget)
-  const _scopeBudgetForProp=p=>{const sc=_allScopes.filter(s=>s.property===p.n);if(sc.length===0)return p.budget||0;return sc.reduce((a,s)=>a+(s.contractAwardValue!=null&&s.contractAwardValue>0?s.contractAwardValue:s.plannedBudget||0),0);};
+  // v34p — Complete (historical or graduated) must never count as "real
+  // active work" here; only Planned/In Progress/On Hold do. Pipeline now
+  // also tolerates a Complete scope alongside Capital Plan ones (nothing
+  // active happening, remaining relevant work is still pipeline).
+  const _isActive=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length===0?_ACTIVE_ST.has(p.st):sc.some(s=>isRealActiveScopeStatus(s.status));};
+  const _isPipeline=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length===0?!_ACTIVE_ST.has(p.st):sc.every(s=>s.status==='Capital Plan'||s.status==='Complete');};
+  const _isSplit=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length>0&&sc.some(s=>isRealActiveScopeStatus(s.status))&&sc.some(s=>s.status==='Capital Plan');};
+  // Scope-level budget helper — contractAwardValue preferred; falls back
+  // to scopeUnitBudgetTotal() (Unit Inventory List-derived), not the old
+  // typed plannedBudget field, same v34p pattern used everywhere else.
+  const _scopeBudgetForProp=p=>{const sc=_allScopes.filter(s=>s.property===p.n);if(sc.length===0)return p.budget||0;return sc.reduce((a,s)=>a+(s.contractAwardValue!=null&&s.contractAwardValue>0?s.contractAwardValue:scopeUnitBudgetTotal(s.id)),0);};
   // Properties classified by scope status
   const capitalProps=_portAll.filter(p=>_isPipeline(p));
   const splitProps=_portAll.filter(p=>_isSplit(p));
@@ -10487,7 +11423,7 @@ function renderCharts(){
   const capitalUnitsTotal=capitalProps.reduce((a,p)=>a+(p.units||0),0);
   const splitCpBudget=splitProps.reduce((a,p)=>{
     const sc=_allScopes.filter(s=>s.property===p.n&&s.status==='Capital Plan');
-    return a+sc.reduce((b,s)=>b+(s.plannedBudget||0),0);
+    return a+sc.reduce((b,s)=>b+scopeUnitBudgetTotal(s.id),0);
   },0);
   const hasSplitProps=splitProps.length>0;
 
@@ -12139,27 +13075,33 @@ function renderDashboard(){
       // they carry a genuinely active construction status. 'Planned' and other
       // pre-survey statuses are pipeline, not active.
       const _ACTIVE_ST=new Set(['In Progress','CIP','Awarded','Active']);
+      // v34p — Complete (historical or graduated) must never count as
+      // "real active work" here; only Planned/In Progress/On Hold do.
+      // Pipeline tolerates a Complete scope alongside Capital Plan ones.
       const _activeProps=_portFiltered.filter(p=>{
         const sc=_scopes.filter(s=>s.property===p.n);
         if(sc.length===0) return _ACTIVE_ST.has(p.st);
-        return sc.some(s=>s.status!=='Capital Plan');
+        return sc.some(s=>isRealActiveScopeStatus(s.status));
       });
       const _pipelineProps=_portFiltered.filter(p=>{
         const sc=_scopes.filter(s=>s.property===p.n);
         if(sc.length===0) return !_ACTIVE_ST.has(p.st);
-        return sc.every(s=>s.status==='Capital Plan');
+        return sc.every(s=>s.status==='Capital Plan'||s.status==='Complete');
       });
-      // Split-scope: has ≥1 active scope AND ≥1 Capital Plan scope
+      // Split-scope: has ≥1 genuinely active scope AND ≥1 Capital Plan scope
       const _splitProps=_portFiltered.filter(p=>{
         const sc=_scopes.filter(s=>s.property===p.n);
         if(sc.length===0) return false;
-        return sc.some(s=>s.status!=='Capital Plan')&&sc.some(s=>s.status==='Capital Plan');
+        return sc.some(s=>isRealActiveScopeStatus(s.status))&&sc.some(s=>s.status==='Capital Plan');
       });
-      // Budget rollup — scope-level, contractAwardValue preferred over plannedBudget
+      // Budget rollup — scope-level, contractAwardValue preferred; falls
+      // back to scopeUnitBudgetTotal() (Unit Inventory List-derived), not
+      // the old typed plannedBudget field, same v34p pattern as Budget
+      // Outlook and Capital Plan's own Est. Budget column.
       const _scopeBudgetFor=p=>{
         const sc=_scopes.filter(s=>s.property===p.n);
         if(sc.length===0) return p.budget||0; // legacy fallback
-        const scopeSum=sc.reduce((a,s)=>a+(s.contractAwardValue!=null&&s.contractAwardValue>0?s.contractAwardValue:s.plannedBudget||0),0);
+        const scopeSum=sc.reduce((a,s)=>a+(s.contractAwardValue!=null&&s.contractAwardValue>0?s.contractAwardValue:scopeUnitBudgetTotal(s.id)),0);
         // v30d: if scopes exist but all have zero/null budget, fall back to property-level budget
         // so adding a new property with only a property-level budget doesn't reduce Total Program Value.
         return scopeSum>0?scopeSum:(p.budget||0);
@@ -12170,7 +13112,7 @@ function renderDashboard(){
       // (split props counted as active, but their CP scope budgets still belong in total)
       const _splitCpBudget=_splitProps.reduce((a,p)=>{
         const sc=_scopes.filter(s=>s.property===p.n&&s.status==='Capital Plan');
-        return a+sc.reduce((b,s)=>b+(s.plannedBudget||0),0);
+        return a+sc.reduce((b,s)=>b+scopeUnitBudgetTotal(s.id),0);
       },0);
       const _progVal=_actBudget+_cpBudget+_splitCpBudget;
       // Units — property-level (p.units), scope-aware classification
@@ -13962,8 +14904,23 @@ function populatePortfolio(){
     : allPort;
   const tbody=document.getElementById('portfolio-tbody');if(!tbody)return;
   const sub=document.getElementById('portfolio-sub');
-  const totalPortUnits=port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').reduce((a,p)=>a+(parseInt(p.units)||0),0);
-  if(sub)sub.textContent=port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').length>0?`${port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').length} ${demoMode?'stores':'properties'} | ${totalPortUnits} units · click any row to view details`:'Loading properties...';
+  // v34l — Portfolio View now shows EVERY property, including Capital
+  // Plan ones (previously excluded — that used to be Capital Plan view's
+  // job exclusively). Confirmed with Misty: Portfolio View's real purpose
+  // is being the single place to quickly confirm every property AND every
+  // unit in the whole portfolio is accounted for, so hiding Capital Plan
+  // properties defeated that. Only genuinely Removed properties stay
+  // excluded — those are actually gone, not just pre-graduation.
+  // v34p — Units column/total and Budget column now derive from Unit
+  // Inventory List directly (per-property unit count and summed Total
+  // Work Est.) instead of the stale, manually-typed p.units/p.budget
+  // Properties-table fields — same pattern already used for the property
+  // hero pills and Units tab. This was the root cause of several
+  // properties showing "—" here despite having real units in Unit
+  // Inventory List (never rewired when Unit Inventory List was built out).
+  const visiblePropNames=new Set(port.filter(p=>p.st!=='Removed').map(p=>p.n));
+  const totalPortUnits=(window.UNIT_INVENTORY||[]).filter(u=>visiblePropNames.has(u.property)).length;
+  if(sub)sub.textContent=port.filter(p=>p.st!=='Removed').length>0?`${port.filter(p=>p.st!=='Removed').length} ${demoMode?'stores':'properties'} | ${totalPortUnits} units · click any row to view details`:'Loading properties...';
   const delBtn=document.getElementById('delete-property-header-btn');
   if(delBtn)delBtn.style.display=(role==='pm'||role==='admin')?'inline-flex':'none';
   tbody.innerHTML='';
@@ -13971,21 +14928,27 @@ function populatePortfolio(){
     tbody.innerHTML=`<tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Loading from database...</td></tr>`;
     return;
   }
-  port.filter(p=>p.st!=='Capital Plan'&&p.st!=='Removed').forEach(p=>{
+  port.filter(p=>p.st!=='Removed').forEach(p=>{
     const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
     const endDate=getProjectEndDate(p.n);
+    // v34p — per-property unit count and budget now come from Unit
+    // Inventory List (count of linked units; sum of their Total Work
+    // Est.), not the stale typed p.units/p.budget fields.
+    const propUnitsInv=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+    const propUnitCount=propUnitsInv.length;
+    const propUnitBudget=propUnitsInv.reduce((a,u)=>a+(u.totalWorkEst||0),0);
     tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${p.type}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
       <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${p.n}</td>
       <td><span class="geo">${p.s||'—'}</span></td>
       <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type||'—'}</span></td>
       <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
       <td style="font-size:11px">${p.ec||'TBD'}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${p.units||'—'}</td>
+      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
       <td>${renderStatusBadge(p.st)}</td>
       <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${p.v||'TBD'}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${p.budget?fmtCurrency(p.budget):'—'}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
     </tr>`;
   });
   applyPriorityDisplaySetting();
