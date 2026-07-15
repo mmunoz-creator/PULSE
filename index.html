@@ -2094,7 +2094,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v34p</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35a</div>
     </div>
   </nav>
 
@@ -5322,7 +5322,12 @@ function renderScopeCards(p){
       ?rateItems.map(r=>`<span style="font-size:11px;color:var(--gray-mid)">${r}</span>`).join('')
       :`<span style="font-size:11px;color:var(--gray-light)">Not set</span>`;
     const awardVal=s.contractAwardValue>0?fmtCurrency(s.contractAwardValue):null;
-    const budgetVal=s.plannedBudget?fmtCurrency(s.plannedBudget):'TBD';
+    // v35a — was reading the stale typed s.plannedBudget; every other
+    // budget figure in the app derives from Unit Inventory List now
+    // (scopeUnitBudgetTotal), this was the one spot on the Scope card
+    // still left on the old field.
+    const scopeBudgetVal=scopeUnitBudgetTotal(s.id);
+    const budgetVal=scopeBudgetVal>0?fmtCurrency(scopeBudgetVal):'TBD';
     const onHoldToggle=(canEdit&&s.status!=='Complete'&&s.status!=='Capital Plan')
       ?(s.status==='On Hold'
         ?`<button onclick="event.stopPropagation();setScopeOnHold('${s.id}',false).then(()=>renderScopeCards(currentProp));" style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;white-space:nowrap">Resume</button>`
@@ -5336,11 +5341,17 @@ function renderScopeCards(p){
     const staleFlag=staleUnits.length>0
       ?`<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px" title="${staleUnits.length} unit${staleUnits.length===1?'':'s'} with a past CapEx year not marked Complete — worth checking"></i>`
       :'';
+    // v35a — per-card edit entry point. Opens a modal scoped to just this
+    // scope (openScopeEditModal), replacing the property-wide "Manage
+    // scopes" modal as the primary edit path for financial fields that
+    // were previously only reachable through the ambiguous currentScope-
+    // targeted section buried in Edit Property.
+    const editBtn=canEdit?`<button onclick="event.stopPropagation();openScopeEditModal('${s.id}')" title="Edit this scope" aria-label="Edit this scope" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;flex-shrink:0"><i class="ti ti-pencil" style="font-size:13px"></i></button>`:'';
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
           <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${s.name||'Property Modernization'} ${staleFlag}</span>
-          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${onHoldToggle}</span>
+          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${onHoldToggle}${editBtn}</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           ${coreBadge}
@@ -5402,6 +5413,179 @@ function renderScopeCards(p){
   applyPriorityDisplaySetting();
 }
 
+// v35a — Per-Scope Edit Modal. Opened from a Scope card's pencil icon
+// (renderScopeCards). Targets one specific scope id directly — no more
+// ambiguous currentScope guessing the way the buried Edit Property
+// section did. Elevator Company / VDA Project # / Priority / Contract
+// Rates / Contract Award Value all live here now; Planned Budget is a
+// live, read-only derivation from Unit Inventory List (never typed),
+// recalculating the instant a unit is checked/unchecked. "Split Into
+// Another Scope" hands off to the existing, already-correct multi-block
+// openSplitIntoScopes() flow rather than re-implementing block add/remove
+// here — this modal intentionally stays a single-scope surface.
+function openScopeEditModal(scopeId){
+  const s=(window.SCOPES||[]).find(x=>x.id===scopeId);
+  if(!s){showToast('Scope not found','warn');return;}
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const p=port.find(pp=>pp.n===s.property);
+  if(!p){showToast('Property not found','warn');return;}
+  renderScopeEditModal(s,p);
+}
+window.openScopeEditModal=openScopeEditModal;
+
+function scopeEditRecalcBudget(){
+  const boxes=[...document.querySelectorAll('.se-unit-check')];
+  const total=boxes.reduce((a,c)=>a+(c.checked?(parseFloat(c.dataset.cost)||0):0),0);
+  const el=document.getElementById('se-budget-val');
+  if(el)el.textContent=total>0?fmtCurrency(total):'TBD';
+}
+window.scopeEditRecalcBudget=scopeEditRecalcBudget;
+
+function renderScopeEditModal(s,p){
+  const existing=document.getElementById('scope-edit-overlay');
+  if(existing)existing.remove();
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n)
+    .sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  const unitRows=units.length
+    ?units.map(u=>{
+      const checked=u.scopeId===s.id;
+      const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
+      return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
+        <input type="checkbox" class="se-unit-check" data-unit-id="${u.id}" data-cost="${u.totalWorkEst||0}" ${checked?'checked':''} onchange="scopeEditRecalcBudget()">
+        <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+        ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
+      </label>`;
+    }).join('')
+    :'<div style="font-size:12px;color:var(--gray-mid);padding:6px">No units in Unit Inventory List for this property yet.</div>';
+  const initialBudget=scopeUnitBudgetTotal(s.id);
+  const priOptions=['1: Critical','2: High','3: Medium','4: Standard']
+    .map(pr=>`<option value="${pr}"${(scopePriorityDisplay(s.priority)||'4: Standard')===pr?' selected':''}>${pr}</option>`).join('');
+  const overlay=document.createElement('div');
+  overlay.id='scope-edit-overlay';
+  overlay.dataset.scopeId=s.id;
+  overlay.dataset.propId=p.id||p.n;
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:480px;box-shadow:var(--shadow-md);margin:auto">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:15px;font-weight:700;color:var(--navy)">Edit ${(s.name||'Scope').replace(/</g,'&lt;')}</div>
+      <button onclick="document.getElementById('scope-edit-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
+    </div>
+    <div style="padding:20px 22px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Consultant</label><input class="form-input" id="se-consultant" type="text" value="${(s.v||p.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
+        <div class="form-group"><label class="form-label">Elevator Co.</label><input class="form-input" id="se-ec" type="text" value="${(s.ec||p.ec||'').replace(/"/g,'&quot;')}" placeholder="e.g. Otis, Schindler"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input" id="se-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
+        <div class="form-group"><label class="form-label">Priority</label><select class="form-input" id="se-priority">${priOptions}</select></div>
+      </div>
+      <label class="form-label" style="display:block;margin-bottom:6px">Units In This Scope — Check To Include</label>
+      <div id="se-units-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:12px">${unitRows}</div>
+      <div style="background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);padding:10px 12px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em">Planned Budget</div>
+        <div id="se-budget-val" style="font-size:20px;font-weight:700;color:var(--navy);margin-top:2px">${initialBudget>0?fmtCurrency(initialBudget):'TBD'}</div>
+      </div>
+      <div class="form-group"><label class="form-label">Contract Award Value</label><input class="form-input" id="se-contract-award" type="text" inputmode="numeric" value="${s.contractAwardValue?Number(s.contractAwardValue).toLocaleString('en-US'):''}" placeholder="Not yet awarded" oninput="initCurrencyInputEl(this)"></div>
+      <label class="form-label" style="display:block;margin-bottom:6px">Contract Rates - From Awarded Contract</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;border:1px solid var(--border);border-radius:6px;padding:10px">
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">ST Rate / Hr</label><input class="form-input" id="se-rate-st" type="number" step="0.01" value="${s.coRateST!=null?s.coRateST:''}" placeholder="$"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">OT Rate / Hr</label><input class="form-input" id="se-rate-ot" type="number" step="0.01" value="${s.coRateOT!=null?s.coRateOT:''}" placeholder="$"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Material Markup</label><input class="form-input" id="se-material-markup" type="number" step="0.1" value="${s.coMaterialMarkup!=null?s.coMaterialMarkup:''}" placeholder="%"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">O&amp;P Markup</label><input class="form-input" id="se-op-markup" type="number" step="0.1" value="${s.coOPMarkup!=null?s.coOPMarkup:''}" placeholder="%"></div>
+        <div class="form-group" style="margin-bottom:0;grid-column:1/-1"><label class="form-label">Retainage</label><input class="form-input" id="se-retainage" type="number" step="0.1" value="${s.retainagePct!=null?s.retainagePct:''}" placeholder="%"></div>
+      </div>
+    </div>
+    <div style="padding:12px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:space-between">
+      <button class="btn" onclick="document.getElementById('scope-edit-overlay').remove();openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork"></i>Split Into Another Scope</button>
+      <button class="btn btn-add" onclick="saveScopeEditModal('${s.id}')"><i class="ti ti-check"></i>Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+window.renderScopeEditModal=renderScopeEditModal;
+
+// Persists just this one scope's fields plus any unit-checklist changes
+// made in the modal — mirrors the field-name/percent-conversion
+// convention already established in saveEditProperty (ST Rate/OT Rate
+// plain dollars, Material/O&P/Retainage stored as Airtable fractions but
+// edited here as whole-number percentages), and the unit-relink
+// convention already established in saveSplitIntoScopes/linkUnitToScope
+// (Dormant/Complete are protected manual overrides, never silently
+// re-derived).
+async function saveScopeEditModal(scopeId){
+  const overlay=document.getElementById('scope-edit-overlay');
+  if(!overlay)return;
+  const s=(window.SCOPES||[]).find(x=>x.id===scopeId);
+  if(!s){showToast('Scope not found','warn');return;}
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const p=port.find(pp=>pp.n===s.property);
+
+  const consultant=document.getElementById('se-consultant').value.trim();
+  const ec=document.getElementById('se-ec').value.trim();
+  const vdaNum=document.getElementById('se-vdanum').value.trim();
+  const priorityDisplay=document.getElementById('se-priority').value;
+  const coRateSTRaw=document.getElementById('se-rate-st').value.trim();
+  const coRateST=coRateSTRaw!==''?parseFloat(coRateSTRaw):null;
+  const coRateOTRaw=document.getElementById('se-rate-ot').value.trim();
+  const coRateOT=coRateOTRaw!==''?parseFloat(coRateOTRaw):null;
+  const coMaterialMarkupRaw=document.getElementById('se-material-markup').value.trim();
+  const coMaterialMarkup=coMaterialMarkupRaw!==''?parseFloat(coMaterialMarkupRaw):null;
+  const coOPMarkupRaw=document.getElementById('se-op-markup').value.trim();
+  const coOPMarkup=coOPMarkupRaw!==''?parseFloat(coOPMarkupRaw):null;
+  const retainageRaw=document.getElementById('se-retainage').value.trim();
+  const retainagePct=retainageRaw!==''?parseFloat(retainageRaw):null;
+  const contractAwardRaw=document.getElementById('se-contract-award').value.replace(/[^0-9.]/g,'');
+  const contractAwardValue=contractAwardRaw!==''?parseFloat(contractAwardRaw):null;
+
+  const scopeFields={
+    'VDA Consultant':consultant||null,
+    'Elevator Company':ec||'',
+    'VDA Project Number':vdaNum||null,
+    'Priority':scopePriority(priorityDisplay),
+    'ST Rate':coRateST,
+    'OT Rate':coRateOT,
+    'Material Markup':coMaterialMarkup!=null?coMaterialMarkup/100:null,
+    'O&P Markup':coOPMarkup!=null?coOPMarkup/100:null,
+    'Retainage':retainagePct!=null?retainagePct/100:null,
+    'Contract Award Value':contractAwardValue,
+  };
+  s.v=consultant;s.ec=ec;s.vdaNum=vdaNum;s.priority=scopePriority(priorityDisplay);
+  s.coRateST=coRateST;s.coRateOT=coRateOT;
+  s.coMaterialMarkup=coMaterialMarkup;s.coOPMarkup=coOPMarkup;
+  s.retainagePct=retainagePct;s.contractAwardValue=contractAwardValue;
+
+  overlay.remove();
+  showToast('Saving scope...','info');
+  if(!demoMode&&s.id)await atUpdate('Scopes',s.id,scopeFields);
+
+  // Reconcile unit checklist against this scope only. A unit checked here
+  // that belonged to a different scope on this property gets moved; a
+  // unit that was in this scope and got unchecked gets released to
+  // unassigned (matching the manual-reassignment behavior already used by
+  // Split Into Scopes — deliberate action, no per-unit confirmation).
+  const boxes=[...document.querySelectorAll('.se-unit-check')];
+  for(const box of boxes){
+    const unitId=box.dataset.unitId;
+    const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===unitId);
+    if(!u)continue;
+    const wasInThisScope=u.scopeId===s.id;
+    if(box.checked&&!wasInThisScope){
+      await linkUnitToScope(u,s);
+    } else if(!box.checked&&wasInThisScope){
+      s.linkedUnitIds=(s.linkedUnitIds||[]).filter(id=>id!==u.id);
+      u.scopeId='';
+      const countFields=recomputeScopeTypeCounts(s);
+      if(!demoMode){
+        await atUpdate('Scopes',s.id,{'Linked Units':s.linkedUnitIds,...countFields});
+        await atUpdate('Unit Inventory List',u.id,{'Linked Scope':[]});
+      }
+    }
+  }
+
+  if(p)renderScopeCards(p);
+  showToast('Scope updated','success');
+}
+window.saveScopeEditModal=saveScopeEditModal;
 
 function renderMilestones(p){
   renderScopeTabs('ms-scope-tabs',p.n);
