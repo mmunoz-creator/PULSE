@@ -2086,7 +2086,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35i</div>
     </div>
   </nav>
 
@@ -13334,21 +13334,33 @@ function renderDashboard(){
       // they carry a genuinely active construction status. 'Planned' and other
       // pre-survey statuses are pipeline, not active.
       const _ACTIVE_ST=new Set(['In Progress','CIP','Awarded','Active']);
-      // v34p — Complete (historical or graduated) must never count as
-      // "real active work" here; only Planned/In Progress/On Hold do.
-      // Pipeline tolerates a Complete scope alongside Capital Plan ones.
-      const _activeProps=_portFiltered.filter(p=>{
-        const sc=_scopes.filter(s=>s.property===p.n);
-        if(sc.length===0) return _ACTIVE_ST.has(p.st);
-        return sc.some(s=>isRealActiveScopeStatus(s.status));
-      });
-      const _pipelineProps=_portFiltered.filter(p=>{
-        const sc=_scopes.filter(s=>s.property===p.n);
-        if(sc.length===0) return !_ACTIVE_ST.has(p.st);
-        return sc.every(s=>s.status==='Capital Plan'||s.status==='Complete');
-      });
-      // Split-scope: has ≥1 genuinely active scope AND ≥1 Capital Plan scope
+      // v35i — 1a-dash-2 fix. Dashboard's Active Properties now matches
+      // Portfolio View exactly: p.st==='In Progress', full stop. Confirmed
+      // live (v35h brief) that Portfolio View's own Status badge/filter
+      // reads p.st==='In Progress' as its literal active definition — no
+      // scope-status logic involved there at all. Previously Dashboard's
+      // _activeProps was scope-status-driven (isRealActiveScopeStatus:
+      // Planned/In Progress/On Hold on ANY scope), which is why the heat
+      // map (14, scope-derived) and the Active Properties stat card (12,
+      // old scope-derived count) disagreed — two different definitions of
+      // "active" reading the same portfolio. Both now read p.st the same
+      // way Portfolio View does.
+      const _activeProps=_portFiltered.filter(p=>p.st==='In Progress');
+      // Pipeline = not In Progress. Legacy _ACTIVE_ST fallback (CIP/Awarded/
+      // Active) retained here only so a property in one of those other
+      // "real work happening" statuses doesn't get miscounted as Pipeline
+      // just because it isn't literally 'In Progress' — matches the spirit
+      // of the old no-scopes fallback branch, now applied uniformly.
+      const _pipelineProps=_portFiltered.filter(p=>p.st!=='In Progress'&&!_ACTIVE_ST.has(p.st));
+      // Split-scope: property itself is not In Progress (so it lands in
+      // Pipeline-adjacent territory), but has at least one genuinely active
+      // scope alongside a Capital Plan scope — i.e., scope-level work has
+      // started even though the property's own status field hasn't been
+      // flipped to In Progress yet. Kept for the existing Total Program
+      // Value footnote/rollup; membership no longer overlaps _activeProps
+      // since that's now purely p.st-based.
       const _splitProps=_portFiltered.filter(p=>{
+        if(p.st==='In Progress') return false;
         const sc=_scopes.filter(s=>s.property===p.n);
         if(sc.length===0) return false;
         return sc.some(s=>isRealActiveScopeStatus(s.status))&&sc.some(s=>s.status==='Capital Plan');
@@ -13382,7 +13394,16 @@ function renderDashboard(){
       // everywhere else. Split-property inclusion logic (v34b) unchanged —
       // still counts a split property's units toward pipeline via
       // _pipelineProps/_splitProps membership, just with a live unit count.
-      const _unitsForProp=p=>(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n).length;
+      // v35h fix — Active Units and Pipeline Units were counting every
+      // unit belonging to a property, including units individually marked
+      // Complete. That double-counted against the "X of Y total portfolio
+      // units complete" footnote below (a unit inside an otherwise-active
+      // scope was counted as both "active" AND "complete" at the same
+      // time), which is why 278+174=452 looked right on its own but didn't
+      // reconcile once the 37-complete footnote was factored in — Misty
+      // caught this live. Now excludes individually-Complete units from
+      // both tiles, so Active + Pipeline + Complete = 452 with no overlap.
+      const _unitsForProp=p=>(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n&&u.status!=='Complete').length;
       const _actUnits=_activeProps.reduce((a,p)=>a+_unitsForProp(p),0);
       const _cpUnits=_pipelineProps.reduce((a,p)=>a+_unitsForProp(p),0);
       // v30d: "in Construction" = active prop has M6 (First Phase Start) or later with an actual/completion date
