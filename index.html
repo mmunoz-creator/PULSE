@@ -4604,10 +4604,16 @@ function renderPropertyView(p){
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const latestBilling=propBilling[0]||null;
   const billedYTD=latestBilling?Number(latestBilling.billedYTD):0;
-  const propUnits=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
-  const totalUnits=parseInt(p.units)||0;
-  const unitsComplete=propUnits.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
-  const unitsInProgress=propUnits.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
+  // v35c fix — VT Units tile was reading the stale typed Properties.Units
+  // field (p.units) instead of a live count from Unit Inventory List, the
+  // same staleness pattern already fixed everywhere else (Capital Plan,
+  // Portfolio View, Budget Outlook, the v35a Scope card). Now derives from
+  // window.UNIT_INVENTORY filtered by property, matching the convention
+  // used by scopeUnitBudgetTotal() and the v35a per-Scope unit checklist.
+  const propUnitInventory=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+  const totalUnits=propUnitInventory.length;
+  const unitsComplete=propUnitInventory.filter(u=>u.status==='Complete').length;
+  const unitsInProgress=propUnitInventory.filter(u=>u.status==='In Progress').length;
   const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProgress);
   const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
   const billingBasis=getBillingBasis(p);
@@ -4624,26 +4630,31 @@ function renderPropertyView(p){
   const phasesComplete=propPhases.filter(u=>derivePhaseStatus(u.id,p.n,u.phase)==='Complete').length;
   const phasesInProgress=propPhases.filter(u=>{ const s=derivePhaseStatus(u.id,p.n,u.phase); return s==='In Progress'||s==='At Risk'; }).length;
 
-  // Budget tile: aggregate across all scopes on this property.
-  // Scopes with a Contract Award Value are "contracted"; scopes without are "pending award".
-  // If any scope is contracted → label = "Contract Award", value = sum of awarded scopes only.
-  // Sub-label notes how many scopes are still pending award.
-  // If no scopes are contracted → label = "Project Budget", value = sum of planned budgets.
+  // v35c — "Property Program Value" tile (was "Project Budget"/"Contract
+  // Award", split either/or depending on whether any scope had an award).
+  // Per Misty: this should always be one blended total — per scope, use
+  // the Contract Award Value if the scope has one, otherwise fall back to
+  // the live scopeUnitBudgetTotal() estimate — summed across all scopes
+  // on the property. Also fixes the same stale-s.plannedBudget bug noted
+  // below: estimates now always come from scopeUnitBudgetTotal(s.id),
+  // never the old typed field.
   const propScopes=(window.SCOPES||[]).filter(s=>s.property===p.n);
   const awardedScopes=propScopes.filter(s=>s.contractAwardValue!=null&&s.contractAwardValue>0);
   const pendingScopeCount=propScopes.filter(s=>!s.contractAwardValue||s.contractAwardValue<=0).length;
   const awardTotal=awardedScopes.reduce((a,s)=>a+(s.contractAwardValue||0),0);
-  const budgetTotal=propScopes.length>0?propScopes.reduce((a,s)=>a+(s.plannedBudget||0),0):p.budget||0;
-  const budgetTileLabel=awardTotal>0?'Contract Award':'Project Budget';
-  const budgetTileValue=awardTotal>0?fmtCurrency(awardTotal):budgetTotal?fmtCurrency(budgetTotal):'TBD';
+  const programValue=propScopes.length>0
+    ?propScopes.reduce((a,s)=>a+(s.contractAwardValue>0?s.contractAwardValue:(scopeUnitBudgetTotal(s.id)||0)),0)
+    :p.budget||0;
+  const budgetTileLabel='Property Program Value';
+  const budgetTileValue=programValue?fmtCurrency(programValue):'TBD';
   const budgetTileSub=awardTotal>0
     ?(pendingScopeCount>0
-      ?(billedYTD?pctBilled+'% billed · ':'')+pendingScopeCount+' scope'+(pendingScopeCount>1?'s':'')+' pending award'
+      ?(billedYTD?pctBilled+'% billed · ':'')+pendingScopeCount+' scope'+(pendingScopeCount>1?'s':'')+' est., '+awardedScopes.length+' awarded'
       :(billedYTD?pctBilled+'% billed':'Fully contracted'))
     :(billedYTD?pctBilled+'% billed':'No billing logged');
 
   document.getElementById('prop-mini-grid').innerHTML=`
-    <div class="prop-mini-card"><div class="prop-mini-label">VT Units</div><div class="prop-mini-val">${p.units||'—'}</div><div class="prop-mini-sub">${unitsComplete} of ${totalUnits} complete</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">VT Units</div><div class="prop-mini-val">${totalUnits||'—'}</div><div class="prop-mini-sub">${unitsComplete} of ${totalUnits} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount} of ${msExpectedTotal} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Active Phases</div><div class="prop-mini-val" style="color:var(--blue-dark)">${phasesTotal>0?Math.round((phasesComplete/phasesTotal)*100)+'%':'0%'}</div><div class="prop-mini-sub">${phasesComplete} of ${phasesTotal||0} phases complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Open Actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
@@ -5203,6 +5214,17 @@ async function deriveAndWritePropertyStatus(propName){
   // still showed "Capital Plan"; calling renderScopeCards(currentProp)
   // manually fixed the display instantly with no data change needed.
   if(currentProp&&currentProp.n===propName)renderScopeCards(currentProp);
+  // v35c fix — same staleness bug class as the v35b Scope-card fix, found
+  // on the Portfolio View table. p.st (window.PORTFOLIO) was being written
+  // correctly here the whole time, but populatePortfolio() — the function
+  // that redraws the Portfolio View table's Status/Health columns — was
+  // never called from this derivation path, only from login/view-switch/
+  // delete. Table showed stale "Capital Plan"/"Not Started" until a full
+  // reload. Guarded to only refresh if Portfolio View is the active tab.
+  {
+    const _activeView=document.querySelector('[id^="view-"]:not(.hidden)')?.id;
+    if(_activeView==='view-portfolio'&&typeof populatePortfolio==='function')populatePortfolio();
+  }
 }
 
 // v31v — Reconciliation pass. Runs deriveAndWriteScopeStatus() against
@@ -5609,6 +5631,29 @@ function renderMilestones(p){
   const msData=getMilestonesForProp(p.n,scopeId);
   const complete=msData.filter(m=>m.status==='Complete').length;
   const pct=Math.round(complete/MILESTONES_DEF.length*100);
+
+  // v35c fix — a Scope already in Complete status was still rendering the
+  // full percentage badge + per-milestone tracker (individual M1-M14 rows
+  // with editable Planned/Actual/Completion date inputs), which looked
+  // like an active/barely-started scope ("0%", "Not Started" rows) rather
+  // than a finished one. Short-circuit to a simple "Completed" state, same
+  // pattern as the existing "Awaiting survey date" special case on the
+  // Overview Scope card. Per Misty: this must NOT remove editability — if
+  // a scope was marked Complete in error, it still needs to be fixable.
+  // The per-Scope edit modal's pencil icon (openScopeEditModal) already
+  // works regardless of status (gated on role only, not on s.status), so
+  // that remains the correction path; this only changes what the
+  // Milestones-tab tracker itself displays, not what's editable.
+  if(currentScope&&currentScope.status==='Complete'){
+    document.getElementById('ms-progress-badge').textContent='Completed';
+    msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:13px">
+      <i class="ti ti-circle-check" style="font-size:28px;color:#15803d;display:block;margin-bottom:8px"></i>
+      <div style="font-weight:600;color:var(--navy);margin-bottom:4px">Scope Completed</div>
+      <div>All ${MILESTONES_DEF.length} milestones finished.${canEdit?' Use the pencil icon on this Scope\'s card (Overview tab) to correct this if it was marked Complete in error.':''}</div>
+    </div>`;
+    return;
+  }
+
   document.getElementById('ms-progress-badge').textContent=`${pct}% · ${complete} / ${MILESTONES_DEF.length}`;
 
   // Auto-populate if no milestones exist yet for THIS scope and PM/Admin.
