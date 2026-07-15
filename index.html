@@ -10226,6 +10226,45 @@ function getCompletedScopes(){
 function isRealActiveScopeStatus(status){
   return status==='Planned'||status==='In Progress'||status==='On Hold';
 }
+// v35i — unitLifecycleBucket(). Single shared classifier for "what
+// lifecycle bucket is this Unit Inventory List row in," built after
+// finding THREE independent, drifting copies of active/pipeline/split
+// logic across Dashboard, Capital Plan, and Analytics (see PULSE brief
+// v35i, sections 2a/6a/6b) — each one used a different definition of
+// "active"/"pipeline" (property-level p.st vs. scope-level status vs.
+// unit-level status), and each one silently disagreed with the others
+// every time real Airtable data didn't match the assumption baked into
+// that copy. This function is the single source of truth going forward;
+// call sites should read from here instead of re-deriving.
+//
+// Direction from Misty (v35i session): Dashboard is the portfolio's
+// at-a-glance view and must tie out to every other screen, so instead of
+// forcing "active" and "pipeline" to each mean one thing, every unit
+// lands in exactly one of four buckets, all mutually exclusive, and they
+// must always sum to the full unit count with zero overlap:
+//   - 'active'    — unit's Scope status is 'In Progress'
+//   - 'onhold'    — unit's Scope status is 'On Hold'
+//   - 'complete'  — unit's Scope status is 'Complete', OR the unit's OWN
+//                   status is 'Complete' even if its parent Scope isn't
+//                   (the v35e case: units can finish individually before
+//                   the whole Scope graduates — Hilton properties were the
+//                   original live example).
+//   - 'pipeline'  — everything else: Scope status 'Capital Plan' or
+//                   'Planned', OR the unit has no Scope link at all
+//                   (scopeId==='' — never assigned/scoped yet). Per
+//                   Misty's explicit rule: "any unit not assigned to an
+//                   active scope" is pipeline, so unscoped units are
+//                   pipeline too, not invisible/uncounted as they were
+//                   in both the old Dashboard and Capital Plan logic.
+function unitLifecycleBucket(unit){
+  if(unit.status==='Complete')return'complete';
+  const scope=unit.scopeId?(window.SCOPES||[]).find(s=>s.id===unit.scopeId):null;
+  if(!scope)return'pipeline';
+  if(scope.status==='Complete')return'complete';
+  if(scope.status==='In Progress')return'active';
+  if(scope.status==='On Hold')return'onhold';
+  return'pipeline'; // Capital Plan, Planned, or any other/unrecognized status
+}
 // Back-compat alias retained in case any other call site still expects
 // property-level Capital Plan rows — none found in v27j trace, but kept
 // as a thin pass-through rather than silently removed.
@@ -11885,9 +11924,24 @@ function renderCharts(){
     const ms=(window.MILESTONES||[]).filter(m=>m.property===p.n&&(m.milestoneNumber||0)>=6);
     return ms.some(m=>m.actualDate||m.completionDate);
   }).length;
+  // v35i — Analytics' unit tiles now share the same four-bucket
+  // classifier Dashboard uses (unitLifecycleBucket()), replacing the
+  // stale capitalUnitsTotal/activeUnitsFiltered scope-status logic this
+  // page carried independently (see brief v35i section 6b — this was the
+  // THIRD independent copy of active/pipeline/split logic found to have
+  // drifted from Dashboard/Capital Plan). Per Misty's direction this
+  // session, these four tiles always show full-portfolio totals — they do
+  // NOT respect the page's property/status/consultant filters, unlike
+  // Active Properties/Pipeline Properties above them, which stay
+  // filter-aware as before.
+  const _analyticsUnitBuckets={active:0,onhold:0,pipeline:0,complete:0};
+  (window.UNIT_INVENTORY||[]).forEach(u=>{
+    if(!_portAll.some(p=>p.n===u.property))return;
+    _analyticsUnitBuckets[unitLifecycleBucket(u)]++;
+  });
   container.innerHTML=`
   <!-- PROGRAM SUMMARY BAR -->
-  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
     <div class="stat-card" style="border-top:3px solid var(--navy)">
       <div class="stat-label">Total Program Value</div>
       <div class="stat-value" style="font-size:20px">${totalProgramValue?fmtBudget(totalProgramValue):'—'}</div>
@@ -11896,27 +11950,37 @@ function renderCharts(){
     <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
       <div class="stat-label">Active Properties</div>
       <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${filtersActive?active.length:activePortProps.length}</div>
-      <div class="stat-sub">${filtersActive?'Filtered':inProgCount>0?inProgCount+' in Construction':'In Active Program'}</div>
+      <div class="stat-sub">${filtersActive?'Filtered':activeBudget?fmtBudget(activeBudget)+' Estimated':'Budget TBD'}</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--indigo)">
       <div class="stat-label">Pipeline Properties</div>
       <div class="stat-value" style="font-size:20px;color:var(--indigo)">${capitalProps.length}</div>
       <div class="stat-sub">${capitalBudgetTotal?fmtBudget(capitalBudgetTotal)+' Estimated':'Budget TBD'}${hasSplitProps&&!filtersActive?'*':''}</div>
     </div>
-    <div class="stat-card" style="border-top:3px solid var(--teal)">
-      <div class="stat-label">Active Units</div>
-      <div class="stat-value" style="font-size:20px;color:var(--teal)">${activeUnitsFiltered}</div>
-      <div class="stat-sub">${filtersActive?'Filtered':'In Modernization'}</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--purple)">
-      <div class="stat-label">Pipeline Units</div>
-      <div class="stat-value" style="font-size:20px;color:var(--purple)">${capitalUnitsTotal}</div>
-      <div class="stat-sub">Planned Modernization</div>
-    </div>
     <div class="stat-card" style="border-top:3px solid var(--green)">
       <div class="stat-label">CO Savings Captured</div>
       <div class="stat-value" style="font-size:20px;color:var(--green)">${totalSavingsFiltered!=null?fmtCurrency(totalSavingsFiltered):'—'}</div>
       <div class="stat-sub">${filtersActive?'Filtered':'Approved Change Orders'}</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--teal)">
+      <div class="stat-label">Active Units</div>
+      <div class="stat-value" style="font-size:20px;color:var(--teal)">${_analyticsUnitBuckets.active}</div>
+      <div class="stat-sub">Scope In Progress</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--amber)">
+      <div class="stat-label">Units On Hold</div>
+      <div class="stat-value" style="font-size:20px;color:var(--amber)">${_analyticsUnitBuckets.onhold}</div>
+      <div class="stat-sub">Scope On Hold</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--purple)">
+      <div class="stat-label">Pipeline Units</div>
+      <div class="stat-value" style="font-size:20px;color:var(--purple)">${_analyticsUnitBuckets.pipeline}</div>
+      <div class="stat-sub">Capital Plan, Planned, or Unscoped</div>
+    </div>
+    <div class="stat-card" style="border-top:3px solid var(--gray-mid)">
+      <div class="stat-label">Completed Units</div>
+      <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_analyticsUnitBuckets.complete}</div>
+      <div class="stat-sub">Scope or Unit Complete</div>
     </div>
   </div>
   ${hasSplitProps&&!filtersActive?`
@@ -13393,26 +13457,29 @@ function renderDashboard(){
         return a+sc.reduce((b,s)=>b+scopeUnitBudgetTotal(s.id),0);
       },0);
       const _progVal=_actBudget+_cpBudget+_splitCpBudget;
-      // v35f fix — Active/Pipeline Units tiles were summing parseInt(p.units),
-      // the stale typed Properties.Units field, same staleness pattern
-      // already fixed on the property-level VT Units tile (v35c) and
-      // Portfolio View's Units column (v34p). Now derives from live
-      // window.UNIT_INVENTORY filtered by property, same convention used
-      // everywhere else. Split-property inclusion logic (v34b) unchanged —
-      // still counts a split property's units toward pipeline via
-      // _pipelineProps/_splitProps membership, just with a live unit count.
-      // v35h fix — Active Units and Pipeline Units were counting every
-      // unit belonging to a property, including units individually marked
-      // Complete. That double-counted against the "X of Y total portfolio
-      // units complete" footnote below (a unit inside an otherwise-active
-      // scope was counted as both "active" AND "complete" at the same
-      // time), which is why 278+174=452 looked right on its own but didn't
-      // reconcile once the 37-complete footnote was factored in — Misty
-      // caught this live. Now excludes individually-Complete units from
-      // both tiles, so Active + Pipeline + Complete = 452 with no overlap.
-      const _unitsForProp=p=>(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n&&u.status!=='Complete').length;
-      const _actUnits=_activeProps.reduce((a,p)=>a+_unitsForProp(p),0);
-      const _cpUnits=_pipelineProps.reduce((a,p)=>a+_unitsForProp(p),0);
+      // v35i — Active/Pipeline Units tiles replaced with a four-way split
+      // (Active/On Hold/Pipeline/Completed), one bucket per unit via the
+      // shared unitLifecycleBucket() classifier (see its definition,
+      // ~line 10230, for the full rationale). This replaces the old
+      // property-membership approach (_unitsForProp reading _activeProps/
+      // _pipelineProps) entirely — that approach was found to disagree
+      // with Capital Plan's own Units in Pipeline count (212 vs. 234,
+      // brief v35i section 6a) because it counted units by PROPERTY status
+      // while Capital Plan counts by the unit's own SCOPE status. Per
+      // Misty's direct instruction this session: Dashboard is the
+      // portfolio's at-a-glance view and must tie out to every other
+      // screen, so every unit now lands in exactly one of four buckets,
+      // always summing to the full portfolio count with zero overlap.
+      const _visiblePropNamesForUnits=new Set(_allPort.filter(p=>p.st!=='Removed').map(p=>p.n));
+      const _unitBuckets={active:0,onhold:0,pipeline:0,complete:0};
+      (window.UNIT_INVENTORY||[]).forEach(u=>{
+        if(!_visiblePropNamesForUnits.has(u.property))return;
+        _unitBuckets[unitLifecycleBucket(u)]++;
+      });
+      const _actUnits=_unitBuckets.active;
+      const _onHoldUnits=_unitBuckets.onhold;
+      const _cpUnits=_unitBuckets.pipeline;
+      const _completeUnitsPortfolio=_unitBuckets.complete;
       // v30d: "in Construction" = active prop has M6 (First Phase Start) or later with an actual/completion date
       const _inProgressProps=_activeProps.filter(p=>{
         const ms=(window.MILESTONES||[]).filter(m=>m.property===p.n&&(m.milestoneNumber||0)>=6);
@@ -13420,17 +13487,11 @@ function renderDashboard(){
       });
       const _coSav=(window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
       const _hasSplit=_splitProps.length>0;
-      // v35f fix — portfolio-wide completed-units footnote. Was summing
-      // parseInt(p.units) for the total (stale typed field) and reading
-      // window.UNIT_GROUPS for the complete count — the table Misty
-      // duplicated and cleared this session (see v35b/v35c briefs,
-      // 1a-iii-prereq), so this always read 0 regardless of real data.
-      // Confirmed live via console before this fix: window.UNIT_INVENTORY
-      // has 452 total units, 37 marked Complete — both numbers now derive
-      // from that live source instead.
-      const _visiblePropNamesForUnits=new Set(_allPort.filter(p=>p.st!=='Removed').map(p=>p.n));
-      const _allUnitsPortfolio=(window.UNIT_INVENTORY||[]).filter(u=>_visiblePropNamesForUnits.has(u.property)).length;
-      const _completeUnitsPortfolio=(window.UNIT_INVENTORY||[]).filter(u=>_visiblePropNamesForUnits.has(u.property)&&u.status==='Complete').length;
+      // v35i — footnote total now sums directly from the four buckets
+      // (guaranteed mutually exclusive and exhaustive by construction,
+      // since unitLifecycleBucket() returns exactly one of the four
+      // strings per unit) rather than a separate live-recount pass.
+      const _allUnitsPortfolio=_unitBuckets.active+_unitBuckets.onhold+_unitBuckets.pipeline+_unitBuckets.complete;
       const _completeUnitsPct=_allUnitsPortfolio>0?Math.round((_completeUnitsPortfolio/_allUnitsPortfolio)*100):0;
       const _unitsFootnote=`
         <div style="display:flex;gap:0;margin-bottom:1.25rem">
@@ -13446,7 +13507,7 @@ function renderDashboard(){
             * ${_splitProps.length} propert${_splitProps.length===1?'y has':'ies have'} both an active scope and a Capital Plan scope — counted as active only. Their pipeline budgets are included in Total Program Value.
           </div>
         </div>`:'')+_unitsFootnote;
-      return `<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:${_hasSplit?'10px':'1.25rem'}">
+      return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:${_hasSplit?'10px':'1.25rem'}">
         <div class="stat-card" style="border-top:3px solid var(--navy)">
           <div class="stat-label">Total Program Value</div>
           <div class="stat-value" style="font-size:20px">${_progVal?fmtBudget(_progVal):'—'}</div>
@@ -13455,27 +13516,37 @@ function renderDashboard(){
         <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
           <div class="stat-label">Active Properties</div>
           <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${_activeProps.length}</div>
-          <div class="stat-sub">${_inProgressProps.length>0?_inProgressProps.length+' in Construction':'In Active Program'}</div>
+          <div class="stat-sub">${_actBudget?fmtBudget(_actBudget)+' Estimated':'Budget TBD'}</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--indigo)">
           <div class="stat-label">Pipeline Properties</div>
           <div class="stat-value" style="font-size:20px;color:var(--indigo)">${_pipelineProps.length}</div>
           <div class="stat-sub">${_cpBudget?fmtBudget(_cpBudget)+' Estimated':'Budget TBD'}${_hasSplit?'*':''}</div>
         </div>
-        <div class="stat-card" style="border-top:3px solid var(--teal)">
-          <div class="stat-label">Active Units</div>
-          <div class="stat-value" style="font-size:20px;color:var(--teal)">${_actUnits}</div>
-          <div class="stat-sub">In Modernization</div>
-        </div>
-        <div class="stat-card" style="border-top:3px solid var(--purple)">
-          <div class="stat-label">Pipeline Units</div>
-          <div class="stat-value" style="font-size:20px;color:var(--purple)">${_cpUnits}</div>
-          <div class="stat-sub">Planned Modernization</div>
-        </div>
         <div class="stat-card" style="border-top:3px solid var(--green)">
           <div class="stat-label">CO Savings Captured</div>
           <div class="stat-value" style="font-size:20px;color:var(--green)">${_coSav!=null?fmtCurrency(_coSav):'—'}</div>
           <div class="stat-sub">Approved Change Orders</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid var(--teal)">
+          <div class="stat-label">Active Units</div>
+          <div class="stat-value" style="font-size:20px;color:var(--teal)">${_actUnits}</div>
+          <div class="stat-sub">Scope In Progress</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid var(--amber)">
+          <div class="stat-label">Units On Hold</div>
+          <div class="stat-value" style="font-size:20px;color:var(--amber)">${_onHoldUnits}</div>
+          <div class="stat-sub">Scope On Hold</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid var(--purple)">
+          <div class="stat-label">Pipeline Units</div>
+          <div class="stat-value" style="font-size:20px;color:var(--purple)">${_cpUnits}</div>
+          <div class="stat-sub">Capital Plan, Planned, or Unscoped</div>
+        </div>
+        <div class="stat-card" style="border-top:3px solid var(--gray-mid)">
+          <div class="stat-label">Completed Units</div>
+          <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_completeUnitsPortfolio}</div>
+          <div class="stat-sub">Scope or Unit Complete</div>
         </div>
       </div>${_footnote}`;
     })()}
