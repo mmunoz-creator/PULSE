@@ -2094,7 +2094,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35e</div>
     </div>
   </nav>
 
@@ -10200,8 +10200,24 @@ function getCompletedScopes(){
   const visiblePropNames=role==='consultant'
     ? new Set([...allPropNames].filter(n=>propertyHasConsultant(n,currentConsultantName)))
     : allPropNames;
+  // v35e fix — this used to only surface a Scope once its own status
+  // graduated to Complete, which matched reality back when a Scope's
+  // units all finished together. Now that the live migration is producing
+  // Scopes with a genuine mix of finished and unfinished units (e.g. New
+  // York Hilton Midtown, Hilton New Orleans Riverside — some units marked
+  // Complete in Unit Inventory List while the Scope itself is still In
+  // Progress because most milestones aren't done), a pure Scope-status
+  // filter hid those finished units from the Completed band entirely,
+  // even though the data was correct in Airtable the whole time. Now also
+  // includes any Scope with at least one individually-Complete unit, not
+  // just Scopes that are Complete outright. renderCapitalPlan's Completed-
+  // band builder (below) is responsible for only showing the actually-
+  // Complete units from a not-fully-Complete scope, not the whole roster.
+  const unitInv=window.UNIT_INVENTORY||[];
   return scopes
-    .filter(s=>s.status==='Complete'&&visiblePropNames.has(s.property))
+    .filter(s=>visiblePropNames.has(s.property)&&(
+      s.status==='Complete'||unitInv.some(u=>u.scopeId===s.id&&u.status==='Complete')
+    ))
     .map(s=>{
       const prop=port.find(p=>p.n===s.property)||{};
       return {...s,priority:scopePriorityDisplay(s.priority),_prop:prop};
@@ -10565,9 +10581,21 @@ function renderCapitalPlan(){
     const compGroups=Object.values(compByProp).map(propScopes=>{
       const propName=propScopes[0].property;
       const _p=propScopes[0]._prop;
-      const scopeIds=new Set(propScopes.map(s=>s.id));
-      const units=(window.UNIT_INVENTORY||[]).filter(u=>scopeIds.has(u.scopeId));
-      const budget=propScopes.reduce((a,s)=>a+scopeUnitBudgetTotal(s.id),0);
+      // v35e fix — propScopes can now include a Scope that isn't fully
+      // Complete itself (only some of its units are). For a genuinely
+      // Complete scope, still show every linked unit (matches prior
+      // behavior). For a partially-complete scope, only show the units
+      // actually marked Complete — showing an unfinished elevator in the
+      // Completed band would be wrong, not just incomplete.
+      const fullyCompleteScopeIds=new Set(propScopes.filter(s=>s.status==='Complete').map(s=>s.id));
+      const partialScopeIds=new Set(propScopes.filter(s=>s.status!=='Complete').map(s=>s.id));
+      const units=(window.UNIT_INVENTORY||[]).filter(u=>
+        fullyCompleteScopeIds.has(u.scopeId)||(partialScopeIds.has(u.scopeId)&&u.status==='Complete')
+      );
+      const budget=propScopes.reduce((a,s)=>a+(fullyCompleteScopeIds.has(s.id)
+        ?scopeUnitBudgetTotal(s.id)
+        :units.filter(u=>u.scopeId===s.id).reduce((b,u)=>b+(u.totalWorkEst||0),0)
+      ),0);
       return {property:propName,_prop:_p,units,budget,rowId:'comp-prop-'+(compIdx++)};
     }).sort((a,b)=>a.property.localeCompare(b.property));
     const compUnits=compGroups.reduce((a,g)=>a+g.units.length,0);
@@ -15589,6 +15617,23 @@ function pfApply(){
   });
   pfUpdateBadge();
   pfRenderChips();
+  // v35d — "31 properties | 452 units" header line was hardcoded to the
+  // full unfiltered portfolio; pfApply() only ever toggled row visibility
+  // via row.style.display and never touched #portfolio-sub, so the count
+  // never reflected an active filter. Now recomputes from whichever rows
+  // are actually visible after filtering, same unit-total source
+  // (window.UNIT_INVENTORY) populatePortfolio() already uses.
+  pfUpdateSubheader();
+}
+
+function pfUpdateSubheader(){
+  const sub=document.getElementById('portfolio-sub');
+  if(!sub)return;
+  const rows=[...document.querySelectorAll('#portfolio-tbody tr')].filter(r=>r.style.display!=='none');
+  const visibleNames=new Set(rows.map(r=>r.querySelector('td')?.textContent?.trim()).filter(Boolean));
+  const visibleUnits=(window.UNIT_INVENTORY||[]).filter(u=>visibleNames.has(u.property)).length;
+  const noun=demoMode?'stores':'properties';
+  sub.textContent=`${rows.length} ${noun} | ${visibleUnits} units · click any row to view details`;
 }
 
 function pfClearAll(){
