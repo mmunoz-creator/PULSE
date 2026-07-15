@@ -2094,7 +2094,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35f</div>
     </div>
   </nav>
 
@@ -13383,12 +13383,17 @@ function renderDashboard(){
         return a+sc.reduce((b,s)=>b+scopeUnitBudgetTotal(s.id),0);
       },0);
       const _progVal=_actBudget+_cpBudget+_splitCpBudget;
-      // Units — property-level (p.units), scope-aware classification
-      // v34b — same split-property fix as the main render: include split
-      // properties' units in pipeline count, matching how their CP budget
-      // already counts via _splitCpBudget above.
-      const _actUnits=_activeProps.reduce((a,p)=>a+(parseInt(p.units)||0),0);
-      const _cpUnits=_pipelineProps.reduce((a,p)=>a+(parseInt(p.units)||0),0);
+      // v35f fix — Active/Pipeline Units tiles were summing parseInt(p.units),
+      // the stale typed Properties.Units field, same staleness pattern
+      // already fixed on the property-level VT Units tile (v35c) and
+      // Portfolio View's Units column (v34p). Now derives from live
+      // window.UNIT_INVENTORY filtered by property, same convention used
+      // everywhere else. Split-property inclusion logic (v34b) unchanged —
+      // still counts a split property's units toward pipeline via
+      // _pipelineProps/_splitProps membership, just with a live unit count.
+      const _unitsForProp=p=>(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n).length;
+      const _actUnits=_activeProps.reduce((a,p)=>a+_unitsForProp(p),0);
+      const _cpUnits=_pipelineProps.reduce((a,p)=>a+_unitsForProp(p),0);
       // v30d: "in Construction" = active prop has M6 (First Phase Start) or later with an actual/completion date
       const _inProgressProps=_activeProps.filter(p=>{
         const ms=(window.MILESTONES||[]).filter(m=>m.property===p.n&&(m.milestoneNumber||0)>=6);
@@ -13396,15 +13401,17 @@ function renderDashboard(){
       });
       const _coSav=(window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
       const _hasSplit=_splitProps.length>0;
-      // v34b — portfolio-wide completed-units flag, shown under the stat
-      // cards (below the split-scope footnote when present). Sums Unit
-      // Groups Complete-status units across every non-Removed property,
-      // same logic VT Units already uses per-property on the property banner.
-      const _allUnitsPortfolio=_allPort.filter(p=>p.st!=='Removed').reduce((a,p)=>a+(parseInt(p.units)||0),0);
-      const _completeUnitsPortfolio=_allPort.filter(p=>p.st!=='Removed').reduce((a,p)=>{
-        const grp=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n&&u.status==='Complete');
-        return a+grp.reduce((b,u)=>b+(u.units||0),0);
-      },0);
+      // v35f fix — portfolio-wide completed-units footnote. Was summing
+      // parseInt(p.units) for the total (stale typed field) and reading
+      // window.UNIT_GROUPS for the complete count — the table Misty
+      // duplicated and cleared this session (see v35b/v35c briefs,
+      // 1a-iii-prereq), so this always read 0 regardless of real data.
+      // Confirmed live via console before this fix: window.UNIT_INVENTORY
+      // has 452 total units, 37 marked Complete — both numbers now derive
+      // from that live source instead.
+      const _visiblePropNamesForUnits=new Set(_allPort.filter(p=>p.st!=='Removed').map(p=>p.n));
+      const _allUnitsPortfolio=(window.UNIT_INVENTORY||[]).filter(u=>_visiblePropNamesForUnits.has(u.property)).length;
+      const _completeUnitsPortfolio=(window.UNIT_INVENTORY||[]).filter(u=>_visiblePropNamesForUnits.has(u.property)&&u.status==='Complete').length;
       const _completeUnitsPct=_allUnitsPortfolio>0?Math.round((_completeUnitsPortfolio/_allUnitsPortfolio)*100):0;
       const _unitsFootnote=`
         <div style="display:flex;gap:0;margin-bottom:1.25rem">
