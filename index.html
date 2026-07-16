@@ -11458,7 +11458,22 @@ function renderBudgetOutlook(){
   const allocsInYears=boYearSelection?allocs.filter(a=>boYearSelection.has(a.year)):allocs;
   const totalCommitted=allocsInYears.filter(a=>a.isCommitted).reduce((s,a)=>s+a.amount,0);
   const totalPlanned=allocsInYears.filter(a=>!a.isCommitted).reduce((s,a)=>s+a.amount,0);
-  const propCount=new Set(allocsInYears.map(a=>a.property)).size;
+  // v36j — "Properties" under "All scheduled" was undercounting (22 vs the
+  // real 31-property active+pipeline portfolio) because it only counted
+  // properties that happened to have a scope contributing a nonzero dollar
+  // amount to the chart — a property whose only scopes were Complete-status,
+  // yearless, or estimated at exactly $0 silently dropped off the count,
+  // even though it's still a real active/pipeline property. "All scheduled"
+  // is documented (see v34p note above) as spanning the whole portfolio, so
+  // its Properties count now reads directly from the same active+pipeline
+  // classification Dashboard uses, matching that screen's 31 regardless of
+  // whether every property has a plottable dollar figure this year. The
+  // narrower pills (Capital plan only / Active properties) keep counting
+  // from the actual chart data, since those are legitimately scoped subsets,
+  // not a full-portfolio claim.
+  const propCount=boFilter==='all'
+    ?getPortfolioClassification().activeProps.length+getPortfolioClassification().pipelineProps.length
+    :new Set(allocsInYears.map(a=>a.property)).size;
   const totalUnitsCard=years.reduce((s,y)=>s+(byYear[y].unitTotal||0),0);
 
   document.getElementById('bo-summary-cards').innerHTML=`
