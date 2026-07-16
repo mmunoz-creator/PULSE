@@ -2086,7 +2086,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36b</div>
     </div>
   </nav>
 
@@ -8985,8 +8985,15 @@ function derivePropertyStatusFromPhases(propName){
   // v29c Bug 14 fix: non-active-status properties (Planned, Capital Plan, etc.)
   // with no milestone activity should show Not Started, not On Track.
   // Only properties with genuinely active construction statuses default to In Progress.
-  const _ACTIVE_HEALTH=new Set(['In Progress','CIP','Awarded','Active']);
-  if(prop&&!_ACTIVE_HEALTH.has(prop.st))return'Not Started';
+  // v36b — removed dead CIP/Awarded/Active statuses (Park Hotels' real
+  // vocabulary is Complete/Planned/In Progress/Removed/Capital Plan; see
+  // brief 6o). This set previously let a property whose Scope was
+  // genuinely Complete but whose own p.st was still stale at 'In
+  // Progress' fall through to the phase-based logic below with no
+  // Complete branch at all, defaulting to 'In Progress' by default when
+  // it had no phases — the Reach Key West heat-map bug.
+  if(prop&&prop.st==='Complete')return'Complete';
+  if(prop&&prop.st!=='In Progress')return'Not Started';
   // Check milestones for AT RISK status — a property with an at-risk milestone
   // should surface as At Risk in Portfolio View even before phases exist
   const propMilestones=(window.MILESTONES||[]).filter(m=>m.property===propName);
@@ -11824,8 +11831,11 @@ function renderCharts(){
   const _portAll=allPort.filter(p=>p.st!=='Removed');
   // v29c — fixed legacy fallback: properties with no scopes are pipeline unless
   // they carry a genuinely active construction status. 'Planned' and other pre-survey
-  // statuses are pipeline, not active. Active statuses: In Progress, CIP, Awarded, Active.
-  const _ACTIVE_ST=new Set(['In Progress','CIP','Awarded','Active']);
+  // statuses are pipeline, not active.
+  // v36b — removed dead CIP/Awarded/Active statuses (never used by Park
+  // Hotels' real vocabulary — see brief 6o). 'In Progress' is the only
+  // genuinely active property status now, so the old _ACTIVE_ST set is
+  // gone; Pipeline is simply "not In Progress."
   // v36a — Analytics previously classified Active/Pipeline/Split by SCOPE
   // status (isRealActiveScopeStatus on any linked scope), while Dashboard
   // (since v35i's 1a-dash-2 fix) classifies by the property's own status
@@ -11836,7 +11846,7 @@ function renderCharts(){
   // Per direct instruction, Analytics now matches Dashboard exactly:
   // property-status-driven, not scope-status-driven.
   const _isActive=p=>p.st==='In Progress';
-  const _isPipeline=p=>p.st!=='In Progress'&&!_ACTIVE_ST.has(p.st);
+  const _isPipeline=p=>p.st!=='In Progress';
   // Split — kept for the Capital Plan CP-budget fold-in only (not
   // membership): property itself is not In Progress, but has at least
   // one genuinely active scope alongside a Capital Plan scope, i.e.
@@ -12224,7 +12234,10 @@ function renderCharts(){
     // Health color per property
     function getHealthColor(propName,st){
       if(st==='Complete')return{color:'var(--green)',label:'Complete'};
-      if(st==='Planned'||st==='Survey'||st==='Budgeting'||st==='Awarded'||!st)return{color:'var(--gray-light)',label:'Not Started'};
+      // v36b — removed dead Survey/Budgeting/Awarded statuses (never used
+      // by Park Hotels' real vocabulary — see brief 6o). Only 'Planned'
+      // (and no-status) collapse to Not Started now.
+      if(st==='Planned'||!st)return{color:'var(--gray-light)',label:'Not Started'};
       const propStatus=derivePropertyStatusFromPhases(propName);
       if(propStatus==='At Risk'||propStatus==='Behind')return{color:'var(--red)',label:'At Risk'};
       if(propStatus==='Ahead')return{color:'var(--green)',label:'On Track'};
@@ -12815,7 +12828,9 @@ function showBarDrilldown(type,value){
     props=filtered.filter(p=>p.s===value);
     title=`${value} — Properties (${props.length})`;
   } else if(type==='status'){
-    const statusMap={'Complete':'Complete','In Progress':'In Progress','Planned':'Planned','CIP':'In Progress','Awarded':'In Progress'};
+    // v36b — removed dead CIP/Awarded mappings (never used by Park
+    // Hotels' real vocabulary — see brief 6o).
+    const statusMap={'Complete':'Complete','In Progress':'In Progress','Planned':'Planned'};
     props=filtered.filter(p=>(statusMap[p.st]||p.st)===value);
     title=`${value} Properties (${props.length})`;
   } else if(type==='fc-year'){
@@ -13542,7 +13557,9 @@ function renderDashboard(){
       // v29c — fixed legacy fallback: properties with no scopes are pipeline unless
       // they carry a genuinely active construction status. 'Planned' and other
       // pre-survey statuses are pipeline, not active.
-      const _ACTIVE_ST=new Set(['In Progress','CIP','Awarded','Active']);
+      // v36b — removed dead CIP/Awarded/Active statuses (never used by
+      // Park Hotels' real vocabulary — see brief 6o). 'In Progress' is
+      // the only genuinely active property status now.
       // v35i — 1a-dash-2 fix. Dashboard's Active Properties now matches
       // Portfolio View exactly: p.st==='In Progress', full stop. Confirmed
       // live (v35h brief) that Portfolio View's own Status badge/filter
@@ -13555,12 +13572,8 @@ function renderDashboard(){
       // "active" reading the same portfolio. Both now read p.st the same
       // way Portfolio View does.
       const _activeProps=_portFiltered.filter(p=>p.st==='In Progress');
-      // Pipeline = not In Progress. Legacy _ACTIVE_ST fallback (CIP/Awarded/
-      // Active) retained here only so a property in one of those other
-      // "real work happening" statuses doesn't get miscounted as Pipeline
-      // just because it isn't literally 'In Progress' — matches the spirit
-      // of the old no-scopes fallback branch, now applied uniformly.
-      const _pipelineProps=_portFiltered.filter(p=>p.st!=='In Progress'&&!_ACTIVE_ST.has(p.st));
+      // Pipeline = not In Progress, full stop.
+      const _pipelineProps=_portFiltered.filter(p=>p.st!=='In Progress');
       // Split-scope: property itself is not In Progress (so it lands in
       // Pipeline-adjacent territory), but has at least one genuinely active
       // scope alongside a Capital Plan scope — i.e., scope-level work has
