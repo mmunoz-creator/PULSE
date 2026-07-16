@@ -2086,7 +2086,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36a</div>
     </div>
   </nav>
 
@@ -11826,13 +11826,24 @@ function renderCharts(){
   // they carry a genuinely active construction status. 'Planned' and other pre-survey
   // statuses are pipeline, not active. Active statuses: In Progress, CIP, Awarded, Active.
   const _ACTIVE_ST=new Set(['In Progress','CIP','Awarded','Active']);
-  // v34p — Complete (historical or graduated) must never count as "real
-  // active work" here; only Planned/In Progress/On Hold do. Pipeline now
-  // also tolerates a Complete scope alongside Capital Plan ones (nothing
-  // active happening, remaining relevant work is still pipeline).
-  const _isActive=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length===0?_ACTIVE_ST.has(p.st):sc.some(s=>isRealActiveScopeStatus(s.status));};
-  const _isPipeline=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length===0?!_ACTIVE_ST.has(p.st):sc.every(s=>s.status==='Capital Plan'||s.status==='Complete');};
-  const _isSplit=p=>{const sc=_allScopes.filter(s=>s.property===p.n);return sc.length>0&&sc.some(s=>isRealActiveScopeStatus(s.status))&&sc.some(s=>s.status==='Capital Plan');};
+  // v36a — Analytics previously classified Active/Pipeline/Split by SCOPE
+  // status (isRealActiveScopeStatus on any linked scope), while Dashboard
+  // (since v35i's 1a-dash-2 fix) classifies by the property's own status
+  // field, p.st==='In Progress'. Two different definitions of "active"
+  // over the same portfolio meant Analytics and Dashboard's stat cards
+  // never tied out (14/17 vs 15/16 properties, found live — brief
+  // section 6b flagged this as the third stale copy of the pattern).
+  // Per direct instruction, Analytics now matches Dashboard exactly:
+  // property-status-driven, not scope-status-driven.
+  const _isActive=p=>p.st==='In Progress';
+  const _isPipeline=p=>p.st!=='In Progress'&&!_ACTIVE_ST.has(p.st);
+  // Split — kept for the Capital Plan CP-budget fold-in only (not
+  // membership): property itself is not In Progress, but has at least
+  // one genuinely active scope alongside a Capital Plan scope, i.e.
+  // scope-level work has started even though the property's own status
+  // field hasn't caught up yet. Same definition Dashboard's _splitProps
+  // uses for its identical Total Program Value fold-in.
+  const _isSplit=p=>{if(p.st==='In Progress')return false;const sc=_allScopes.filter(s=>s.property===p.n);if(sc.length===0)return false;return sc.some(s=>isRealActiveScopeStatus(s.status))&&sc.some(s=>s.status==='Capital Plan');};
   // Scope-level budget helper — contractAwardValue preferred; falls back
   // to scopeUnitBudgetTotal() (Unit Inventory List-derived), not the old
   // typed plannedBudget field, same v34p pattern used everywhere else.
