@@ -1350,6 +1350,16 @@ async function loadAllData() {
       cabEst: r.fields['Cab Interior Est.']!=null?Number(r.fields['Cab Interior Est.']):0,
       contingencyEst: r.fields['Contingency Fee Est.']!=null?Number(r.fields['Contingency Fee Est.']):0,
       totalWorkEst: r.fields['Total Work Est.']!=null?Number(r.fields['Total Work Est.']):0,
+      // v36e — Award Value: new per-unit field, real/writable (not a
+      // formula like Total Work Est.). Once a unit has been awarded, its
+      // own Award Value replaces its estimate everywhere dollars roll up
+      // — per direct instruction: "it has to be the contract award
+      // value... the award value will have units broken out... Scope
+      // would sum those up." Falls back to 0/blank until the field is
+      // populated (or until the "Award Value" column exists in Airtable
+      // at all) — unitEffectiveValue() below handles the estimate
+      // fallback, so this mapping just needs to read whatever's there.
+      awardValue: r.fields['Award Value']!=null?Number(r.fields['Award Value']):0,
     })).filter(u=>u.property);
     // v35g — Unit Budget Allocations mapping removed (dead code, see note
     // near the window.UNIT_INVENTORY initializer above). unitIdToName was
@@ -2086,7 +2096,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36e</div>
     </div>
   </nav>
 
@@ -3630,7 +3640,21 @@ async function _finishLogin(){
         // the v31u guard-clause fix — the fixed logic was correct but
         // never got called for that data. This runs it for every Scope,
         // every load, regardless of how the underlying data arrived.
-        reconcileAllScopeStatuses();
+        // v36d — reconcileAllPropertyStatuses() runs right after: the
+        // Property-level rollup that deriveAndWriteScopeStatus() only
+        // triggers as a side effect when IT changes something. Chained
+        // (not parallel) so property rollups always see this session's
+        // freshly-reconciled Scope statuses, not whatever was cached at
+        // page load. Every screen that reads p.st (Dashboard, Analytics,
+        // Capital Plan, Portfolio View, the heat map) gets re-rendered
+        // once this finishes, so a stale property status entered
+        // directly in Airtable now self-heals on the very next login
+        // instead of requiring some unrelated in-app action to notice it.
+        reconcileAllScopeStatuses().then(()=>reconcileAllPropertyStatuses()).then(()=>{
+          populatePortfolio();renderDashboard();
+          if(typeof renderCharts==='function')renderCharts();
+          if(typeof renderCapitalPlan==='function'&&!document.getElementById('view-capital')?.classList.contains('hidden'))renderCapitalPlan();
+        }).catch(e=>console.error('Property/Scope status reconciliation failed:',e));
         if(!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
         showToast('Live data connected ✓','success');
       }
@@ -4027,7 +4051,7 @@ function renderUnitInventoryManagerModal(propName){
           <thead><tr>
             <th style="width:24px" id="uim-th-check"></th>
             <th>Unit Name</th><th>Device Location</th><th>Unit Type</th><th>Priority</th><th>Status</th><th>CapEx Year</th>
-            <th style="text-align:right">Elevator Mod Est.</th><th style="text-align:right">Related Work Est.</th><th style="text-align:right">Cab Interior Est.</th><th style="text-align:right">Contingency Fee Est.</th><th style="text-align:right">Total Work Est.</th>
+            <th style="text-align:right">Elevator Mod Est.</th><th style="text-align:right">Related Work Est.</th><th style="text-align:right">Cab Interior Est.</th><th style="text-align:right">Contingency Fee Est.</th><th style="text-align:right">Total Work Est.</th><th style="text-align:right">Award Value</th>
           </tr></thead>
           <tbody id="uim-tbody"></tbody>
         </table>
@@ -4484,6 +4508,7 @@ function renderUimTable(propName){
       <td><input id="uim-cab-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.cabEst?Number(u.cabEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Cab Interior Est.','cabEst',this.value,this)"></td>
       <td><input id="uim-cont-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.contingencyEst?Number(u.contingencyEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Contingency Fee Est.','contingencyEst',this.value,this)"></td>
       <td id="uim-total-${u.id}" style="text-align:right;font-weight:600">${u.totalWorkEst?fmtCurrencyFull(u.totalWorkEst):"$0"}</td>
+      <td><input id="uim-award-${u.id}" class="form-input" style="width:110px;text-align:right;font-weight:600" type="text" placeholder="Not awarded" value="${u.awardValue?Number(u.awardValue).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Award Value','awardValue',this.value,this)"></td>
     </tr>`;
   }).join('');
   units.forEach(u=>{
@@ -5242,6 +5267,34 @@ async function reconcileAllScopeStatuses(){
   }
 }
 
+// v36d — reconcileAllPropertyStatuses. The missing other half of the
+// v31v Scope reconciliation above. deriveAndWriteScopeStatus() only
+// calls deriveAndWritePropertyStatus() when IT ALSO finds something to
+// change at the Scope level — if a Scope's Status was corrected
+// directly in Airtable (e.g. the 6m case: Misty manually flipped
+// "Completed"-bucket Scopes back to Status=Complete in Airtable, not
+// through the app), the Scope itself needed no reconciliation, so its
+// rollup call to deriveAndWritePropertyStatus() never fired — the
+// Property's own Status field is left stale indefinitely, silently
+// disagreeing with its now-correct Scopes. Every screen this session
+// (Dashboard, Analytics, Capital Plan, Portfolio View, the heat map's
+// Complete branch) reads p.st as its source of truth, so this single
+// gap was the real root cause behind repeated, seemingly-unrelated
+// mismatches — not a display bug on any one screen. This pass runs the
+// Property-level rollup for every property, every load, independent of
+// whether its Scopes needed their own reconciliation this time.
+async function reconcileAllPropertyStatuses(){
+  if(demoMode)return;
+  const propNames=[...new Set((window.SCOPES||[]).map(s=>s.property).filter(Boolean))];
+  for(const name of propNames){
+    try{
+      await deriveAndWritePropertyStatus(name);
+    }catch(e){
+      console.error('reconcileAllPropertyStatuses: failed for property',name,e.message);
+    }
+  }
+}
+
 // renderScopeTabs — shared scope-switcher row used by Milestones, Phases,
 // Bids, Budget Performance, and Change Orders tabs. Renders nothing for
 // single-scope properties. For multi-scope properties renders one pill per
@@ -5508,7 +5561,7 @@ function renderScopeEditModal(s,p){
       const checked=u.scopeId===s.id;
       const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
       return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
-        <input type="checkbox" class="se-unit-check" data-unit-id="${u.id}" data-cost="${u.totalWorkEst||0}" ${checked?'checked':''} onchange="scopeEditRecalcBudget()">
+        <input type="checkbox" class="se-unit-check" data-unit-id="${u.id}" data-cost="${unitEffectiveValue(u)}" ${checked?'checked':''} onchange="scopeEditRecalcBudget()">
         <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
         ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
       </label>`;
@@ -10209,37 +10262,39 @@ let fcDrillYear=null; // null = year view, number = month view for that year
 // truth for property-level Active/Pipeline/Split membership and
 // dollars, callable from any of the four views so a definition change
 // only ever needs to happen in one place.
+// v36e — rewritten to be fully unit-driven, per direct instruction:
+// "the units are driving the values, the units aren't changing. If a
+// property has active units, then the property is active. If the
+// property has not active units, then it's pipeline. End of
+// discussion." This replaces the old p.st-based classification (which
+// depended on Properties.Status staying in sync with Scopes — a field
+// that kept going stale when Scopes were edited directly in Airtable,
+// the actual root cause behind a whole session of recurring mismatches
+// across Dashboard/Analytics/Capital Plan/Portfolio View) with a single
+// rule that reads straight from the units themselves, via the same
+// unitLifecycleBucket() classifier already used for the unit tiles.
+// p.st is no longer consulted for Active/Pipeline membership anywhere —
+// it remains a display label only. No more Split bucket either: a
+// property either has an active unit or it doesn't.
+// Dollars: unitEffectiveValue() per unit (Award Value once set, else
+// Total Work Est.), summed bottom-up — never a Scope- or Property-level
+// shortcut, per direct instruction that estimate flips to award value
+// per unit and the Scope/property total is just the sum of its units.
 function getPortfolioClassification(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
-  const scopes=window.SCOPES||[];
   const portFiltered=port.filter(p=>p.st!=='Removed');
-  const activeProps=portFiltered.filter(p=>p.st==='In Progress');
-  const pipelineProps=portFiltered.filter(p=>p.st!=='In Progress');
-  // Split — property itself is not In Progress, but has at least one
-  // genuinely active scope alongside a Capital Plan scope (scope-level
-  // work has started even though the property's own status field
-  // hasn't caught up yet). Used only for the CP-budget fold-in, never
-  // for membership — a split property still counts under Active.
-  const splitProps=portFiltered.filter(p=>{
-    if(p.st==='In Progress')return false;
-    const sc=scopes.filter(s=>s.property===p.n);
-    if(sc.length===0)return false;
-    return sc.some(s=>isRealActiveScopeStatus(s.status))&&sc.some(s=>s.status==='Capital Plan');
+  const unitsByProp={};
+  (window.UNIT_INVENTORY||[]).forEach(u=>{
+    if(!unitsByProp[u.property])unitsByProp[u.property]=[];
+    unitsByProp[u.property].push(u);
   });
-  const scopeBudgetForProp=p=>{
-    const sc=scopes.filter(s=>s.property===p.n);
-    if(sc.length===0)return p.budget||0;
-    const scopeSum=sc.reduce((a,s)=>a+(s.contractAwardValue!=null&&s.contractAwardValue>0?s.contractAwardValue:scopeUnitBudgetTotal(s.id)),0);
-    return scopeSum>0?scopeSum:(p.budget||0);
-  };
-  const activeBudget=activeProps.reduce((a,p)=>a+scopeBudgetForProp(p),0);
-  const pipelineBudgetRaw=pipelineProps.reduce((a,p)=>a+scopeBudgetForProp(p),0);
-  const splitCpBudget=splitProps.reduce((a,p)=>{
-    const sc=scopes.filter(s=>s.property===p.n&&s.status==='Capital Plan');
-    return a+sc.reduce((b,s)=>b+scopeUnitBudgetTotal(s.id),0);
-  },0);
-  const pipelineBudgetDisplay=pipelineBudgetRaw+splitCpBudget;
-  return {activeProps,pipelineProps,splitProps,activeBudget,pipelineBudgetRaw,splitCpBudget,pipelineBudgetDisplay,totalProgramValue:activeBudget+pipelineBudgetRaw+splitCpBudget};
+  const propHasActiveUnit=p=>(unitsByProp[p.n]||[]).some(u=>unitLifecycleBucket(u)==='active');
+  const propBudget=p=>(unitsByProp[p.n]||[]).reduce((a,u)=>a+unitEffectiveValue(u),0);
+  const activeProps=portFiltered.filter(p=>propHasActiveUnit(p));
+  const pipelineProps=portFiltered.filter(p=>!propHasActiveUnit(p));
+  const activeBudget=activeProps.reduce((a,p)=>a+propBudget(p),0);
+  const pipelineBudgetRaw=pipelineProps.reduce((a,p)=>a+propBudget(p),0);
+  return {activeProps,pipelineProps,activeBudget,pipelineBudgetRaw,pipelineBudgetDisplay:pipelineBudgetRaw,totalProgramValue:activeBudget+pipelineBudgetRaw};
 }
 
 // ── CAPITAL PLAN ──────────────────────────────────────────────────────
@@ -10283,7 +10338,19 @@ function getCapitalPlanScopes(){
 // Inventory List's Total Work Est. per linked unit, not the Scope's
 // typed/cached plannedBudget field, per Misty's explicit directive.
 function scopeUnitBudgetTotal(scopeId){
-  return (window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId).reduce((a,u)=>a+(u.totalWorkEst||0),0);
+  return (window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId).reduce((a,u)=>a+unitEffectiveValue(u),0);
+}
+// v36e — unitEffectiveValue(). Single source of truth for a unit's
+// dollar value everywhere in the app: once a unit has been awarded
+// (Award Value > 0), that real number replaces its pre-award estimate
+// (Total Work Est.) — never a proportional split of the scope's award,
+// per direct instruction. Every budget rollup in the app (Capital
+// Outlook, Capital Plan, Dashboard/Analytics/Portfolio View via
+// getPortfolioClassification(), the scope-edit modal) should call this
+// instead of reading u.totalWorkEst directly, so "estimate flips to
+// award value" happens in exactly one place.
+function unitEffectiveValue(u){
+  return(u.awardValue>0?u.awardValue:(u.totalWorkEst||0));
 }
 // v34p — Completed band. Mirrors getCapitalPlanScopes()'s structure and
 // visibility scoping exactly, filtering status==='Complete' instead of
@@ -10376,129 +10443,23 @@ function getCapitalPlanProperties(){
   return getCapitalPlanScopes().map(s=>s._prop);
 }
 
-// v35i — Capital Plan reconciliation banner. Built after Misty found (live,
-// twice in one session) that Capital Plan's Units in Pipeline count and
-// Dashboard's Pipeline Units count can legitimately disagree, because the
-// two pages answer different questions: Capital Plan only shows units
-// linked to a Capital-Plan-STATUS scope, while Dashboard's pipeline bucket
-// (unitLifecycleBucket()) is broader — it also includes Planned-status
-// scopes and units with no scope at all. With 452 units across 31
-// properties, a real number mismatch (a bug) and this expected, by-design
-// difference look identical to someone just eyeballing two stat cards —
-// Misty's own words: "impossible to understand these are not system
-// errors." This banner makes the gap self-explaining instead of requiring
-// a live console query (which is how the Hilton Hawaiian Village case
-// above was actually diagnosed this session) every time it comes up.
-let capReconcileExpanded=false;
+// v36e — the reconciliation banners that used to live here (v35i units
+// gap, v36c property/dollar gap) are gone. Per direct instruction —
+// "pick one classification and apply it across all the tabs" — there's
+// nothing left to reconcile: Capital Plan's own stat cards now read the
+// same getPortfolioClassification() as every other screen (see
+// renderCapitalPlan() below), so Pipeline Properties/Units/Budget are
+// identical numbers everywhere, not two views that need explaining
+// apart. capital-reconciliation-banner's container div is cleared, not
+// removed, in case a genuinely new kind of drift needs a home later.
 // v36c — Dashboard heat map's Completed-properties toggle. Defaults to
-// visible (true) per direct instruction: never hide good news. Session-
-// only state, same pattern as capReconcileExpanded/boFilter below.
+// visible (true) per direct instruction: never hide good news.
 let dashHeatShowComplete=true;
 function toggleDashHeatComplete(){
   dashHeatShowComplete=!dashHeatShowComplete;
   renderDashboard();
 }
 window.toggleDashHeatComplete=toggleDashHeatComplete;
-function toggleCapReconcile(){
-  capReconcileExpanded=!capReconcileExpanded;
-  renderCapitalPlan();
-}
-window.toggleCapReconcile=toggleCapReconcile;
-// v36c — second, independent reconciliation section: property-count and
-// dollar gap between "Scopes in Pipeline" (Capital-Plan-status scopes
-// only, this page's own workflow-specific view) and the portfolio-wide
-// Pipeline Properties figure every other screen now shows (via
-// getPortfolioClassification()). Same collapsible pattern as the units
-// banner above, own expand state so they toggle independently.
-let capPropReconcileExpanded=false;
-function toggleCapPropReconcile(){
-  capPropReconcileExpanded=!capPropReconcileExpanded;
-  renderCapitalPlan();
-}
-window.toggleCapPropReconcile=toggleCapPropReconcile;
-function renderCapitalReconciliationBanner(pipelineScopeIds,pc){
-  const el=document.getElementById('capital-reconciliation-banner');
-  if(!el)return;
-  const gapByProp={};
-  (window.UNIT_INVENTORY||[]).forEach(u=>{
-    if(unitLifecycleBucket(u)!=='pipeline')return;
-    if(u.scopeId&&pipelineScopeIds.has(u.scopeId))return; // already shown on this page
-    if(!gapByProp[u.property])gapByProp[u.property]={count:0,reason:null};
-    gapByProp[u.property].count++;
-    const scope=u.scopeId?(window.SCOPES||[]).find(s=>s.id===u.scopeId):null;
-    gapByProp[u.property].reason=scope?scope.status+' scope':'Unscoped';
-  });
-  const propRows=Object.entries(gapByProp);
-  const gapTotal=propRows.reduce((a,[,v])=>a+v.count,0);
-
-  // Property-count/dollar gap — properties that count toward the shared
-  // Pipeline Properties figure (p.st!=='In Progress') but have zero
-  // Capital-Plan-status scopes, so they never show up in "Scopes in
-  // Pipeline" on this page at all (e.g. a property sitting entirely on
-  // Planned-status scopes, or with no scopes yet).
-  const capScopePropNames=new Set(getCapitalPlanScopes().map(s=>s.property));
-  const propGapRows=(pc?pc.pipelineProps:[]).filter(p=>!capScopePropNames.has(p.n));
-  const propGapCount=propGapRows.length;
-
-  const unitsBannerHtml=gapTotal===0?'':`
-    <div style="background:var(--surface-2,#fff);border:0.5px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:10px">
-      <div onclick="toggleCapReconcile()" style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--amber-pale);cursor:pointer">
-        <i class="ti ti-info-circle" style="font-size:16px;color:var(--amber)"></i>
-        <div style="font-size:13px;color:var(--amber);flex:1">${gapTotal} unit${gapTotal===1?"":"s"} ${gapTotal===1?"isn't":"aren't"} shown here but count${gapTotal===1?"s":""} toward Dashboard's pipeline total.${capReconcileExpanded?'':' <span style="font-weight:500">See why</span>'}</div>
-        <i class="ti ti-chevron-${capReconcileExpanded?'up':'down'}" style="font-size:14px;color:var(--amber)"></i>
-      </div>
-      ${capReconcileExpanded?`
-      <div style="padding:14px 16px;border-top:0.5px solid var(--border)">
-        <div style="font-size:12px;color:var(--gray-mid);margin-bottom:10px;line-height:1.6">Capital Plan shows units with a Capital Plan status. Dashboard's pipeline count shows all units not yet active.</div>
-        <div style="border:0.5px solid var(--border);border-radius:var(--radius,8px);overflow:hidden">
-          <div style="display:flex;padding:8px 12px;background:var(--gray-pale);font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">
-            <div style="flex:2">Property</div>
-            <div style="flex:1">Units</div>
-            <div style="flex:1">Reason</div>
-          </div>
-          ${propRows.map(([prop,v])=>`
-          <div style="display:flex;align-items:center;padding:8px 12px;font-size:13px;border-top:0.5px solid var(--border)">
-            <div style="flex:2">${prop}</div>
-            <div style="flex:1;color:var(--gray-mid)">${v.count}</div>
-            <div style="flex:1"><span class="badge" style="background:var(--amber-pale);color:var(--amber);font-size:11px">${v.reason}</span></div>
-          </div>`).join('')}
-        </div>
-      </div>`:''}
-    </div>`;
-
-  const propBannerHtml=propGapCount===0?'':`
-    <div style="background:var(--surface-2,#fff);border:0.5px solid var(--border);border-radius:12px;overflow:hidden">
-      <div onclick="toggleCapPropReconcile()" style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--amber-pale);cursor:pointer">
-        <i class="ti ti-info-circle" style="font-size:16px;color:var(--amber)"></i>
-        <div style="font-size:13px;color:var(--amber);flex:1">${propGapCount} propert${propGapCount===1?"y isn't":"ies aren't"} shown in Scopes in Pipeline but count${propGapCount===1?"s":""} toward Dashboard/Analytics' Pipeline Properties total.${capPropReconcileExpanded?'':' <span style="font-weight:500">See why</span>'}</div>
-        <i class="ti ti-chevron-${capPropReconcileExpanded?'up':'down'}" style="font-size:14px;color:var(--amber)"></i>
-      </div>
-      ${capPropReconcileExpanded?`
-      <div style="padding:14px 16px;border-top:0.5px solid var(--border)">
-        <div style="font-size:12px;color:var(--gray-mid);margin-bottom:10px;line-height:1.6">Scopes in Pipeline only counts properties with at least one Capital-Plan-status scope. Pipeline Properties (Dashboard/Analytics/Portfolio View) counts every property whose own status isn't In Progress — broader by design, since a property can sit entirely on Planned-status scopes or have none at all.</div>
-        <div style="border:0.5px solid var(--border);border-radius:var(--radius,8px);overflow:hidden">
-          <div style="display:flex;padding:8px 12px;background:var(--gray-pale);font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">
-            <div style="flex:2">Property</div>
-            <div style="flex:1">Status</div>
-            <div style="flex:1">Reason</div>
-          </div>
-          ${propGapRows.map(p=>{
-            const sc=(window.SCOPES||[]).filter(s=>s.property===p.n);
-            const reason=sc.length===0?'No scopes yet':sc.map(s=>s.status).join(', ');
-            return `<div style="display:flex;align-items:center;padding:8px 12px;font-size:13px;border-top:0.5px solid var(--border)">
-              <div style="flex:2">${p.n}</div>
-              <div style="flex:1;color:var(--gray-mid)">${p.st}</div>
-              <div style="flex:1"><span class="badge" style="background:var(--amber-pale);color:var(--amber);font-size:11px">${reason}</span></div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>`:''}
-    </div>`;
-
-  if(gapTotal===0&&propGapCount===0){el.innerHTML='';el.style.marginBottom='0';return;}
-  el.style.marginBottom='16px';
-  el.innerHTML=unitsBannerHtml+propBannerHtml;
-}
 
 function renderCapitalPlan(){
   // v28b — Option A grouping: table rows are per-PROPERTY, not per-Scope.
@@ -10521,7 +10482,7 @@ function renderCapitalPlan(){
   // consultant visibility scoping carries through unchanged).
   const pipelineScopeIds=new Set(scopeRows.map(s=>s.id));
   const pipelineUnits=(window.UNIT_INVENTORY||[]).filter(u=>pipelineScopeIds.has(u.scopeId));
-  const totalBudget=pipelineUnits.reduce((a,u)=>a+(u.totalWorkEst||0),0);
+  const totalBudget=pipelineUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
   // v35g fix — this card was summing stale typed scope fields
   // (elevatorCount+escalatorCount+liftCount+otherCount) with a p.units
   // fallback, same disease as the year-band totals fixed just below (in
@@ -10548,20 +10509,24 @@ function renderCapitalPlan(){
   // no longer treats split-property Capital Plan scopes as anything
   // special, so neither does this card — the two numbers should now
   // always agree going forward.
-  const totalUnits=pipelineUnits.length;
-  const approvedCount=scopeRows.filter(s=>s.budgetStatus==='Approved').length;
-  const propCount=new Set(scopeRows.map(s=>s.property)).size;
-  // v36c — shared classifier, same one Dashboard/Analytics now call.
-  // "Scopes in Pipeline" keeps its existing, deliberately narrower
-  // meaning (Capital-Plan-status Scopes specifically — a workflow view),
-  // but Capital Plan now also surfaces the portfolio-wide Pipeline
-  // Properties figure alongside it so the two numbers sit next to each
-  // other instead of silently disagreeing. renderCapitalReconciliationBanner
-  // explains the gap whenever one exists — per direct instruction that
-  // Capital Plan, Dashboard, Portfolio View, and Analytics must always
-  // match or explicitly flag what's preventing the match.
+  // v36e — Capital Plan's headline stat cards now read the SAME
+  // unit-driven getPortfolioClassification() every other screen uses,
+  // instead of a Scope-status-scoped count of its own ("Scopes in
+  // Pipeline" was Capital-Plan-status scopes specifically, a narrower,
+  // workflow-only number that never matched Dashboard/Analytics/
+  // Portfolio View by design). Per direct instruction — "I don't want
+  // the disagreements I want them to match... pick one classification
+  // and apply it across all the tabs" — there is no more reconciliation
+  // banner to build here, because there's nothing left to reconcile:
+  // Pipeline Properties/Pipeline Units/Pipeline Budget are the exact
+  // same numbers on every screen, always. The year-band table below
+  // still lists Capital-Plan-status Scopes specifically (that's a real,
+  // useful workflow view of what hasn't been awarded yet), but the top
+  // cards are portfolio truth, not a scope-status subset of it.
   const _pc=getPortfolioClassification();
-  renderCapitalReconciliationBanner(pipelineScopeIds,_pc);
+  const pipelineUnitsAll=_pc.pipelineProps.reduce((a,p)=>a+(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n).length,0);
+  const approvedCount=scopeRows.filter(s=>s.budgetStatus==='Approved').length;
+  document.getElementById('capital-reconciliation-banner')&&(document.getElementById('capital-reconciliation-banner').innerHTML='');
 
   // Summary cards
   const cards=document.getElementById('capital-summary-cards');
@@ -10570,11 +10535,10 @@ function renderCapitalPlan(){
     // (plain integer 1-4), not the Scope's typed priority string.
     const priMap={'1':0,'2':0,'3':0,'4':0};
     pipelineUnits.forEach(u=>{const k=String(parseInt(u.priority)||4);if(priMap[k]!==undefined)priMap[k]++;});
-    const pipelinePropGap=_pc.pipelineProps.length-propCount;
     cards.innerHTML=`
-      <div class="stat-card"><div class="stat-label">Scopes in Pipeline</div><div class="stat-value">${scopeRows.length}</div><div class="stat-sub">${propCount} propert${propCount===1?'y':'ies'} · ${approvedCount} Budget Approved${pipelinePropGap!==0?` · <span style="color:var(--amber)">${_pc.pipelineProps.length} portfolio-wide, see banner</span>`:''}</div></div>
-      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${totalBudget?fmtBudget(totalBudget):'TBD'}</div><div class="stat-sub">${pipelineUnits.filter(u=>!u.totalWorkEst).length} Units Budget TBD</div></div>
-      <div class="stat-card"><div class="stat-label">Units in Pipeline</div><div class="stat-value">${totalUnits}</div><div class="stat-sub">Elevators &amp; Escalators</div></div>
+      <div class="stat-card"><div class="stat-label">Pipeline Properties</div><div class="stat-value">${_pc.pipelineProps.length}</div><div class="stat-sub">${_pc.pipelineProps.length} propert${_pc.pipelineProps.length===1?'y':'ies'} · ${approvedCount} Capital Plan scope${approvedCount===1?'':'s'} Budget Approved</div></div>
+      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${_pc.pipelineBudgetRaw?fmtBudget(_pc.pipelineBudgetRaw):'TBD'}</div><div class="stat-sub">${pipelineUnits.filter(u=>!unitEffectiveValue(u)).length} Units Budget TBD</div></div>
+      <div class="stat-card"><div class="stat-label">Units in Pipeline</div><div class="stat-value">${pipelineUnitsAll}</div><div class="stat-sub">Elevators &amp; Escalators</div></div>
       <div class="stat-card"><div class="stat-label">Priority Breakdown</div><div class="stat-value" style="font-size:13px;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
         ${priMap['1']?`<span class="badge" style="background:#fdecea;color:var(--red);border:1px solid #f5c2c2">P1: ${priMap['1']}</span>`:''}
         ${priMap['2']?`<span class="badge" style="background:#fff7e6;color:var(--amber);border:1px solid #fde6a0">P2: ${priMap['2']}</span>`:''}
@@ -10862,7 +10826,7 @@ function renderCapitalPlan(){
       );
       const budget=propScopes.reduce((a,s)=>a+(fullyCompleteScopeIds.has(s.id)
         ?scopeUnitBudgetTotal(s.id)
-        :units.filter(u=>u.scopeId===s.id).reduce((b,u)=>b+(u.totalWorkEst||0),0)
+        :units.filter(u=>u.scopeId===s.id).reduce((b,u)=>b+unitEffectiveValue(u),0)
       ),0);
       return {property:propName,_prop:_p,units,budget,rowId:'comp-prop-'+(compIdx++)};
     }).sort((a,b)=>a.property.localeCompare(b.property));
@@ -11972,21 +11936,15 @@ function renderCharts(){
   // screens' numbers must match or explicitly flag why not.
   const _pc=getPortfolioClassification();
   const capitalProps=_pc.pipelineProps;
-  const splitProps=_pc.splitProps;
   const activePortProps=_pc.activeProps;
   const capitalBudgetTotal=_pc.pipelineBudgetRaw;
-  // v34b — Pipeline Units was undercounting relative to Capital Plan's
-  // own "Units in Pipeline" card: split properties (an active scope AND
-  // a Capital Plan scope) are excluded from capitalProps entirely, so
-  // their units never counted here — even though their Capital Plan
-  // BUDGET already gets added back in via splitCpBudget below. Add the
-  // same split-property units back in for consistency between the two
-  // pages, using each split property's full unit count (matching Capital
-  // Plan's own totalUnits logic, which counts p.units once per property
-  // with a Capital Plan scope regardless of whether it's also active).
+  // v36e — Split-property concept removed along with the p.st-based
+  // classifier. Under the new unit-driven rule, a property is either
+  // Active (has ≥1 active unit) or Pipeline — there's no third "some
+  // active, some pipeline" state to fold in separately, since
+  // capitalUnitsTotal/capitalBudgetTotal already sum every unit that
+  // actually belongs to a Pipeline property, whole.
   const capitalUnitsTotal=capitalProps.reduce((a,p)=>a+(p.units||0),0);
-  const splitCpBudget=_pc.splitCpBudget;
-  const hasSplitProps=splitProps.length>0;
 
   // Capital outlook by year — scope-level: iterate Capital Plan scopes directly,
   // so a split-scope property's CP scope(s) still appear at their scope year/budget.
@@ -12222,7 +12180,7 @@ function renderCharts(){
     <div class="stat-card" style="border-top:3px solid var(--indigo)">
       <div class="stat-label">Pipeline Properties</div>
       <div class="stat-value" style="font-size:20px;color:var(--indigo)">${capitalProps.length}</div>
-      <div class="stat-sub">${(capitalBudgetTotal+splitCpBudget)?fmtBudget(capitalBudgetTotal+splitCpBudget)+' Est.'+(hasSplitProps&&!filtersActive?' (incl. '+splitProps.length+' split propert'+(splitProps.length===1?'y':'ies')+')':''):'Budget TBD'}</div>
+      <div class="stat-sub">${capitalBudgetTotal?fmtBudget(capitalBudgetTotal)+' Est.':'Budget TBD'}</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--green)">
       <div class="stat-label">CO Savings Captured</div>
@@ -13680,10 +13638,8 @@ function renderDashboard(){
       const _pc=getPortfolioClassification();
       const _activeProps=_pc.activeProps;
       const _pipelineProps=_pc.pipelineProps;
-      const _splitProps=_pc.splitProps;
       const _actBudget=_pc.activeBudget;
       const _cpBudget=_pc.pipelineBudgetRaw;
-      const _splitCpBudget=_pc.splitCpBudget;
       const _progVal=_pc.totalProgramValue;
       // v35i — Active/Pipeline Units tiles replaced with a four-way split
       // (Active/On Hold/Pipeline/Completed), one bucket per unit via the
@@ -13714,27 +13670,12 @@ function renderDashboard(){
         return ms.some(m=>m.actualDate||m.completionDate);
       });
       const _coSav=(window.CO_SAVINGS||[]).filter(s=>s.status==='Approved'||s.status==='Client Approved').reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
-      const _hasSplit=_splitProps.length>0;
-      // v35i — Total Program Value = _actBudget + _cpBudget + _splitCpBudget
-      // (three terms), but only two of those three ever had a visible tile
-      // (Active Properties, Pipeline Properties) — the split-property
-      // Capital Plan budget was folded silently into the total with no
-      // on-screen line of its own, so Active + Pipeline never visibly
-      // summed to Total Program Value even though the underlying math was
-      // correct (found live by Misty, brief v35i section 6d). Per Misty's
-      // direct choice (Option B): Pipeline Properties' displayed dollar
-      // figure now includes _splitCpBudget directly, with the subtitle
-      // spelling out why, so Active + Pipeline always visibly sums to the
-      // total with no separate footnote required. Pipeline Properties'
-      // COUNT (_pipelineProps.length) is intentionally unchanged — the
-      // split property itself is still counted under Active Properties,
-      // only its Capital Plan scope's dollar amount is added here.
-      const _cpBudgetDisplay=_cpBudget+_splitCpBudget;
-      // v35i — both the completed-units and split-property footnotes
-      // removed per Misty's direction: the Completed Units tile above
-      // already shows this number directly, and Option B's inline
-      // subtitle wording on Pipeline Properties replaces what the
-      // asterisk/footnote used to explain.
+      // v36e — Split-property concept removed along with the p.st-based
+      // classifier (getPortfolioClassification() no longer returns
+      // splitProps/splitCpBudget). Total Program Value is now just
+      // Active + Pipeline, two terms, both visible tiles — nothing
+      // folded in silently, so there's no separate footnote needed.
+      const _cpBudgetDisplay=_cpBudget;
       return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
         <div class="stat-card" style="border-top:3px solid var(--navy)">
           <div class="stat-label">Total Program Value</div>
@@ -13749,7 +13690,7 @@ function renderDashboard(){
         <div class="stat-card" style="border-top:3px solid var(--indigo)">
           <div class="stat-label">Pipeline Properties</div>
           <div class="stat-value" style="font-size:20px;color:var(--indigo)">${_pipelineProps.length}</div>
-          <div class="stat-sub">${_cpBudgetDisplay?fmtBudget(_cpBudgetDisplay)+' Est.'+(_hasSplit?' (incl. '+_splitProps.length+' split propert'+(_splitProps.length===1?'y':'ies')+')':''):'Budget TBD'}</div>
+          <div class="stat-sub">${_cpBudgetDisplay?fmtBudget(_cpBudgetDisplay)+' Est.':'Budget TBD'}</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--green)">
           <div class="stat-label">CO Savings Captured</div>
@@ -15528,24 +15469,19 @@ function populatePortfolio(){
   const visiblePropNames=new Set(port.filter(p=>p.st!=='Removed').map(p=>p.n));
   const totalPortUnits=(window.UNIT_INVENTORY||[]).filter(u=>visiblePropNames.has(u.property)).length;
   const visibleCount=port.filter(p=>p.st!=='Removed').length;
-  // v36c — Portfolio View previously had no explicit tie-out against
-  // Dashboard/Analytics/Capital Plan's Active/Pipeline Properties counts
-  // — just a flat total. Per direct instruction that all four screens
-  // must match or flag why not, the subheader now surfaces the same
-  // shared classification (getPortfolioClassification()) and flags if
-  // Active+Pipeline don't sum to the visible total — which would mean a
-  // property fell through both buckets, a real bug worth surfacing
-  // immediately rather than only catching it by cross-referencing pages.
-  let reconcileNote='';
+  // v36e — Active/Pipeline breakdown, sourced from the same
+  // getPortfolioClassification() every screen now shares. No more
+  // mismatch flag needed here: every property is definitionally either
+  // Active or Pipeline under the new unit-driven rule (a property has an
+  // active unit, or it doesn't — no third state to fall through), so
+  // activeProps.length + pipelineProps.length always equals the visible
+  // total by construction, not by coincidence.
+  let breakdownNote='';
   if(sub&&visibleCount>0&&!demoMode){
     const _pfPc=getPortfolioClassification();
-    const sumCheck=_pfPc.activeProps.length+_pfPc.pipelineProps.length;
-    reconcileNote=` · ${_pfPc.activeProps.length} active, ${_pfPc.pipelineProps.length} pipeline`;
-    if(sumCheck!==visibleCount){
-      reconcileNote+=` <span style="color:var(--amber);font-weight:600">⚠ ${visibleCount-sumCheck} propert${Math.abs(visibleCount-sumCheck)===1?'y':'ies'} unaccounted for — doesn't match Dashboard/Analytics/Capital Plan</span>`;
-    }
+    breakdownNote=` · ${_pfPc.activeProps.length} active, ${_pfPc.pipelineProps.length} pipeline`;
   }
-  if(sub)sub.innerHTML=visibleCount>0?`${visibleCount} ${demoMode?'stores':'properties'} | ${totalPortUnits} units${reconcileNote} · click any row to view details`:'Loading properties...';
+  if(sub)sub.innerHTML=visibleCount>0?`${visibleCount} ${demoMode?'stores':'properties'} | ${totalPortUnits} units${breakdownNote} · click any row to view details`:'Loading properties...';
   const delBtn=document.getElementById('delete-property-header-btn');
   if(delBtn)delBtn.style.display=(role==='pm'||role==='admin')?'inline-flex':'none';
   tbody.innerHTML='';
@@ -15561,7 +15497,7 @@ function populatePortfolio(){
     // Est.), not the stale typed p.units/p.budget fields.
     const propUnitsInv=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
     const propUnitCount=propUnitsInv.length;
-    const propUnitBudget=propUnitsInv.reduce((a,u)=>a+(u.totalWorkEst||0),0);
+    const propUnitBudget=propUnitsInv.reduce((a,u)=>a+unitEffectiveValue(u),0);
     tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${p.type}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
       <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${p.n}</td>
       <td><span class="geo">${p.s||'—'}</span></td>
@@ -16036,22 +15972,19 @@ function pfUpdateSubheader(){
     ? (window.UNIT_INVENTORY||[]).filter(u=>visibleNames.has(u.property)&&unitLifecycleBucket(u)==='active').length
     : (window.UNIT_INVENTORY||[]).filter(u=>visibleNames.has(u.property)).length;
   const noun=demoMode?'stores':'properties';
-  // v36c — reconciliation flag against the shared getPortfolioClassification()
-  // (see populatePortfolio() for the fuller rationale) only applies when
-  // no filter is active — with a filter on, "rows.length" is a filtered
-  // subset by design and comparing it to the portfolio-wide Active+
-  // Pipeline split would be a false mismatch, not a real one.
+  // v36e — Active/Pipeline breakdown from the shared
+  // getPortfolioClassification(), only shown when no filter is active
+  // (with a filter on, rows.length is a filtered subset, not the
+  // portfolio total, so the breakdown wouldn't mean anything). No
+  // mismatch check anymore — under the unit-driven rule every property
+  // is Active or Pipeline by construction, nothing to flag.
   const noFilterActive=Object.values(PF).every(v=>v==='all');
-  let reconcileNote='';
+  let breakdownNote='';
   if(noFilterActive&&rows.length>0&&!demoMode){
     const _pfPc=getPortfolioClassification();
-    const sumCheck=_pfPc.activeProps.length+_pfPc.pipelineProps.length;
-    reconcileNote=` · ${_pfPc.activeProps.length} active, ${_pfPc.pipelineProps.length} pipeline`;
-    if(sumCheck!==rows.length){
-      reconcileNote+=` <span style="color:var(--amber);font-weight:600">⚠ ${rows.length-sumCheck} propert${Math.abs(rows.length-sumCheck)===1?'y':'ies'} unaccounted for — doesn't match Dashboard/Analytics/Capital Plan</span>`;
-    }
+    breakdownNote=` · ${_pfPc.activeProps.length} active, ${_pfPc.pipelineProps.length} pipeline`;
   }
-  sub.innerHTML=`${rows.length} ${noun} | ${visibleUnits} units${reconcileNote} · click any row to view details`;
+  sub.innerHTML=`${rows.length} ${noun} | ${visibleUnits} units${breakdownNote} · click any row to view details`;
 }
 
 function pfClearAll(){
