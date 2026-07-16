@@ -2086,7 +2086,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v35j</div>
     </div>
   </nav>
 
@@ -5337,6 +5337,32 @@ function renderScopeCards(p){
     const msLabel=s.status==='Capital Plan'&&!m1?'<span style="color:var(--gray-mid)">Awaiting survey date</span>'
       :activeMilestone?`<span style="font-weight:500;color:${msColor}">M${activeMilestone.milestoneNumber} — ${activeMilestone.milestoneName}</span>`
       :'<span style="color:var(--gray-mid)">Not started</span>';
+    // v35i — drift detection (read-only, never writes). Compares this
+    // Scope's Status field against what its real Milestone rows justify,
+    // using the same logic deriveAndWriteScopeStatus already uses to
+    // compute a status — but only to compare, not to overwrite. Per
+    // Misty's decision this session: surface the disagreement, don't
+    // silently auto-correct it, since manual Airtable edits are a normal
+    // part of her workflow and an auto-write could re-clobber a
+    // deliberate status change (the same mechanism already fixed once
+    // this session for Completed-bucket scopes).
+    const realMs=(window.MILESTONES||[]).filter(m=>m.scopeId===s.id);
+    let driftMsg=null;
+    if(realMs.length>0&&!s.isCompleteBucket){
+      const finalMsNum=MILESTONES_DEF.length;
+      const msFinal=realMs.find(m=>m.milestoneNumber===finalMsNum);
+      const ms1Real=realMs.find(m=>m.milestoneNumber===1);
+      const milestonesJustify=(msFinal&&(msFinal.completionDate||msFinal.actualDate))?'Complete'
+        :(ms1Real&&ms1Real.actualDate)?'In Progress'
+        :(s.status==='Capital Plan'?'Capital Plan':'Planned');
+      if(milestonesJustify!==s.status&&!(s.status==='On Hold')){
+        driftMsg=`Status says <strong>${s.status}</strong>, but milestones show <strong>${milestonesJustify}</strong>`;
+      }
+    }
+    const driftBadge=driftMsg?`<div style="display:flex;align-items:center;gap:6px;background:#fff7ed;border-radius:6px;padding:5px 8px;margin-top:6px">
+      <i class="ti ti-alert-triangle" style="font-size:13px;color:#b45309;flex-shrink:0"></i>
+      <span style="font-size:11px;color:#b45309">${driftMsg}</span>
+    </div>`:'';
     const rateItems=[
       s.coRateST!=null?`ST <strong>$${s.coRateST}/hr</strong>`:'',
       s.coRateOT!=null?`OT <strong>$${s.coRateOT}/hr</strong>`:'',
@@ -5379,6 +5405,7 @@ function renderScopeCards(p){
           <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${s.name||'Property Modernization'} ${staleFlag}</span>
           <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${onHoldToggle}${editBtn}</span>
         </div>
+        ${driftBadge}
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           ${coreBadge}
           <span class="scope-priority-badge">${priBadge(s.priority||'4: Standard')}</span>
@@ -5415,6 +5442,9 @@ function renderScopeCards(p){
         </div>
         <div style="border-top:0.5px solid var(--border);padding-top:10px">
           <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">VDA Milestones</div>
+          ${(s.status==='Complete'||s.isCompleteBucket)?`
+          <div style="font-size:11px;color:#15803d;display:flex;align-items:center;gap:5px"><i class="ti ti-circle-check" style="font-size:13px"></i>All milestones complete</div>
+          `:`
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
             <div style="flex:1;height:3px;background:var(--border-strong);border-radius:2px;overflow:hidden">
               <div style="width:${msPct}%;height:100%;background:${msBarColor};border-radius:2px"></div>
@@ -5422,6 +5452,7 @@ function renderScopeCards(p){
             <span style="font-size:11px;font-weight:600;color:${msColor};min-width:28px;text-align:right">${msPct}%</span>
           </div>
           <div style="font-size:11px;color:var(--gray-mid)">${msComplete} of ${MILESTONES_DEF.length} · ${msLabel}</div>
+          `}
         </div>
       </div>
     </div>`;
@@ -5637,7 +5668,19 @@ function renderMilestones(p){
   // works regardless of status (gated on role only, not on s.status), so
   // that remains the correction path; this only changes what the
   // Milestones-tab tracker itself displays, not what's editable.
-  if(currentScope&&currentScope.status==='Complete'){
+  // v35i — also short-circuit on isCompleteBucket, not just status==='Complete'.
+  // Root cause found this session: "Completed"-bucket Scopes (created via
+  // createScopeForYearKey with yearKey==='COMPLETE') can end up with a Status
+  // field that doesn't actually say "Complete" (e.g. it got overwritten back
+  // to "Planned" by deriveAndWriteScopeStatus after real-but-Not-Started
+  // Milestone rows were auto-populated against them — see below). Checking
+  // isCompleteBucket here means a mis-statused Completed scope still gets the
+  // simple "Scope Completed" card instead of a misleading 0%/Not Started
+  // tracker, AND (more importantly) never reaches the auto-populate trigger
+  // below, which is what caused the Status field to get overwritten in the
+  // first place. Per Misty: correction path (openScopeEditModal / Manage
+  // Scopes) remains available regardless — this only changes what renders.
+  if(currentScope&&(currentScope.status==='Complete'||currentScope.isCompleteBucket)){
     document.getElementById('ms-progress-badge').textContent='Completed';
     msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:13px">
       <i class="ti ti-circle-check" style="font-size:28px;color:#15803d;display:block;margin-bottom:8px"></i>
@@ -5654,9 +5697,15 @@ function renderMilestones(p){
   // second Scope on an already-populated property (its own Milestones
   // wouldn't exist yet, but the property-wide count would already be
   // nonzero from the first Scope).
+  // v35i — also gated on !currentScope?.isCompleteBucket, belt-and-suspenders
+  // with the short-circuit above: a Completed-bucket scope should never have
+  // 14 "Not Started" Milestone rows auto-created against it, since that's
+  // exactly what caused deriveAndWriteScopeStatus to overwrite Status back
+  // to "Planned" (its msData.length===0 guard no longer applied once real
+  // rows existed).
   const liveMsCount=(window.MILESTONES||[]).filter(m=>m.property===p.n&&(!scopeId||m.scopeId===scopeId)).length;
   if(liveMsCount===0){
-    if((canEdit)&&!demoMode&&scopeId){
+    if((canEdit)&&!demoMode&&scopeId&&!currentScope?.isCompleteBucket){
       autoPopulateMilestones(p.n,scopeId).then(()=>{
         renderMilestones(p);
         // Refresh the top stat card — it rendered before milestones existed
@@ -11587,9 +11636,22 @@ async function saveSplitIntoScopes(){
   const keptIds=new Set(rows.map(r=>r.scopeId).filter(Boolean));
   const removed=existingScopes.filter(s=>!keptIds.has(s.id));
 
-  // Delete any Scope blocks the user removed from the modal
+  // v35i — deleting a Scope block here (e.g. merging it back into another
+  // scope) previously only deleted the Scope record itself, leaving any
+  // Milestone rows still linked to that scopeId behind as orphans — the
+  // exact "no property/scope link" pattern found in this session's 798-row
+  // Milestones audit, just created going forward instead of inherited from
+  // old data. Now: delete each removed Scope's linked Milestone rows first,
+  // then the Scope record, so a merge-back doesn't quietly leave debris.
   for(const s of removed){
-    if(!demoMode&&s.id) await atDelete('Scopes',s.id);
+    if(!demoMode&&s.id){
+      const orphanedMs=(window.MILESTONES||[]).filter(m=>m.scopeId===s.id);
+      for(const m of orphanedMs){
+        if(m.id) await atDelete('Milestones',m.id);
+      }
+      window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.scopeId!==s.id);
+      await atDelete('Scopes',s.id);
+    }
   }
   window.SCOPES=(window.SCOPES||[]).filter(s=>s.property!==prop.n||keptIds.has(s.id));
 
@@ -11807,7 +11869,15 @@ function renderCharts(){
     if(!prop||prop.st==='Removed')return;
     const yr=sc.year||'TBD';
     if(!capitalByYear[yr])capitalByYear[yr]={budget:0,units:0,count:0,p1:0,p2:0,p3:0,p4:0};
-    capitalByYear[yr].budget+=(sc.plannedBudget||0);
+    // v35j — was reading sc.plannedBudget, a field that's effectively
+    // never populated on live Capital Plan scopes (dollars live in
+    // Contract Award Value or Unit Inventory instead), so every year
+    // bucket showed "TBD" despite real property/unit counts underneath.
+    // Now matches the same estimate-until-awarded pattern used by the
+    // stat cards and every other budget rollup on this page: Contract
+    // Award Value wins once entered; until then, falls back to the
+    // Unit Inventory-derived estimate (scopeUnitBudgetTotal).
+    capitalByYear[yr].budget+=(sc.contractAwardValue!=null&&sc.contractAwardValue>0?sc.contractAwardValue:scopeUnitBudgetTotal(sc.id));
     // v34e fix: was using the WHOLE property's unit count (prop.units) per
     // scope, so a property with scopes split across multiple years (e.g.
     // Hilton Hawaiian Village with a 2027 scope and a separate 2028 scope)
@@ -15758,10 +15828,19 @@ function pfPopulateDropdowns(){
 // once you're specifically asking "what's active" via this filter — "a
 // property is active because it has active scopes, and the units in those
 // scopes is what should render."
+// v35i fix — returns {count, hasAnyUnits}. Found live: when filtered to
+// Status=In Progress, a property with real units but zero of them
+// currently on an In Progress scope (e.g. Juniper Hotel Cupertino — its
+// only scope is Capital Plan status, so 0 of its 3 units qualify as
+// "active") rendered as "—", visually identical to a property with NO
+// units at all. count||'—' collapsed the legitimate value 0 into the same
+// dash used for "nothing here." Callers now check hasAnyUnits to decide
+// between showing 0 (has units, none active) vs. '—' (no units exist).
 function unitCountForPropertyRow(propName,useActiveScopeCount){
   const allUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName);
-  if(!useActiveScopeCount)return allUnits.length;
-  return allUnits.filter(u=>unitLifecycleBucket(u)==='active').length;
+  if(!useActiveScopeCount)return{count:allUnits.length,hasAnyUnits:allUnits.length>0};
+  const activeCount=allUnits.filter(u=>unitLifecycleBucket(u)==='active').length;
+  return{count:activeCount,hasAnyUnits:allUnits.length>0};
 }
 function pfApply(){
   PF.status=document.getElementById('pf-status')?.value||'all';
@@ -15799,8 +15878,8 @@ function pfApply(){
     // Budget.
     const unitsCell=row.children[5];
     if(unitsCell){
-      const count=unitCountForPropertyRow(propName,useActiveScopeCount);
-      unitsCell.textContent=count||'—';
+      const{count,hasAnyUnits}=unitCountForPropertyRow(propName,useActiveScopeCount);
+      unitsCell.textContent=hasAnyUnits?String(count):'—';
     }
   });
   pfUpdateBadge();
