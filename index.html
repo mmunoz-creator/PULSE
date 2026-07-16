@@ -2096,7 +2096,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36h</div>
     </div>
   </nav>
 
@@ -10298,7 +10298,21 @@ function getPortfolioClassification(){
   const pipelineProps=portFiltered.filter(p=>!propHasActiveUnit(p));
   const activeBudget=activeProps.reduce((a,p)=>a+propBudget(p),0);
   const pipelineBudgetRaw=pipelineProps.reduce((a,p)=>a+propBudget(p),0);
-  return {activeProps,pipelineProps,activeBudget,pipelineBudgetRaw,pipelineBudgetDisplay:pipelineBudgetRaw,totalProgramValue:activeBudget+pipelineBudgetRaw};
+  // v36h — single shared unit bucket counts. Every screen showing a unit
+  // count (Dashboard tiles, Capital Plan "Units in Pipeline") must read
+  // these, not recompute its own filter. Root cause of the 228 vs. 151
+  // gap: Capital Plan was counting "every unit belonging to a pipeline
+  // PROPERTY" while Dashboard counted "every unit whose own SCOPE status
+  // buckets it as pipeline" — a property-level vs. unit-level mismatch.
+  // Per direct instruction this must never recur, so the bucket counts
+  // now live here, once, and both screens call this.
+  const visiblePropNames=new Set(portFiltered.map(p=>p.n));
+  const unitBuckets={active:0,onhold:0,pipeline:0,complete:0};
+  (window.UNIT_INVENTORY||[]).forEach(u=>{
+    if(!visiblePropNames.has(u.property))return;
+    unitBuckets[unitLifecycleBucket(u)]++;
+  });
+  return {activeProps,pipelineProps,activeBudget,pipelineBudgetRaw,pipelineBudgetDisplay:pipelineBudgetRaw,totalProgramValue:activeBudget+pipelineBudgetRaw,unitBuckets};
 }
 
 // ── CAPITAL PLAN ──────────────────────────────────────────────────────
@@ -10548,7 +10562,12 @@ function renderCapitalPlan(){
   // useful workflow view of what hasn't been awarded yet), but the top
   // cards are portfolio truth, not a scope-status subset of it.
   const _pc=getPortfolioClassification();
-  const pipelineUnitsAll=_pc.pipelineProps.reduce((a,p)=>a+(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n).length,0);
+  // v36h — was counting every unit belonging to a pipeline-classified
+  // PROPERTY (double-counting units that are themselves active/on-hold/
+  // complete on a mixed property). Now reads the shared per-unit bucket
+  // count from getPortfolioClassification() — same number Dashboard's
+  // Pipeline Units tile shows, always.
+  const pipelineUnitsAll=_pc.unitBuckets.pipeline;
   const approvedCount=scopeRows.filter(s=>s.budgetStatus==='Approved').length;
   document.getElementById('capital-reconciliation-banner')&&(document.getElementById('capital-reconciliation-banner').innerHTML='');
 
@@ -10560,7 +10579,7 @@ function renderCapitalPlan(){
     const priMap={'1':0,'2':0,'3':0,'4':0};
     pipelineUnits.forEach(u=>{const k=String(parseInt(u.priority)||4);if(priMap[k]!==undefined)priMap[k]++;});
     cards.innerHTML=`
-      <div class="stat-card"><div class="stat-label">Pipeline Properties</div><div class="stat-value">${_pc.pipelineProps.length}</div><div class="stat-sub">${_pc.pipelineProps.length} propert${_pc.pipelineProps.length===1?'y':'ies'} · ${approvedCount} Capital Plan scope${approvedCount===1?'':'s'} Budget Approved</div></div>
+      <div class="stat-card"><div class="stat-label">Pipeline Properties</div><div class="stat-value">${_pc.pipelineProps.length}</div></div>
       <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${_pc.pipelineBudgetRaw?fmtBudget(_pc.pipelineBudgetRaw):'TBD'}</div><div class="stat-sub">${pipelineUnits.filter(u=>!unitEffectiveValue(u)).length} Units Budget TBD</div></div>
       <div class="stat-card"><div class="stat-label">Units in Pipeline</div><div class="stat-value">${pipelineUnitsAll}</div><div class="stat-sub">Elevators &amp; Escalators</div></div>
       <div class="stat-card"><div class="stat-label">Priority Breakdown</div><div class="stat-value" style="font-size:13px;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
@@ -12203,11 +12222,10 @@ function renderCharts(){
   // NOT respect the page's property/status/consultant filters, unlike
   // Active Properties/Pipeline Properties above them, which stay
   // filter-aware as before.
-  const _analyticsUnitBuckets={active:0,onhold:0,pipeline:0,complete:0};
-  (window.UNIT_INVENTORY||[]).forEach(u=>{
-    if(!_portAll.some(p=>p.n===u.property))return;
-    _analyticsUnitBuckets[unitLifecycleBucket(u)]++;
-  });
+  // v36h — was its own third copy of the unit-bucketing loop (see brief
+  // v35i section 6b for the earlier drift this caused). Now reads
+  // getPortfolioClassification().unitBuckets, the single shared source.
+  const _analyticsUnitBuckets=getPortfolioClassification().unitBuckets;
   container.innerHTML=`
   <!-- PROGRAM SUMMARY BAR -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
@@ -13662,12 +13680,10 @@ function renderDashboard(){
       // portfolio's at-a-glance view and must tie out to every other
       // screen, so every unit now lands in exactly one of four buckets,
       // always summing to the full portfolio count with zero overlap.
-      const _visiblePropNamesForUnits=new Set(_allPort.filter(p=>p.st!=='Removed').map(p=>p.n));
-      const _unitBuckets={active:0,onhold:0,pipeline:0,complete:0};
-      (window.UNIT_INVENTORY||[]).forEach(u=>{
-        if(!_visiblePropNamesForUnits.has(u.property))return;
-        _unitBuckets[unitLifecycleBucket(u)]++;
-      });
+      // v36h — was its own copy of this exact loop; now reads the same
+      // unitBuckets getPortfolioClassification() already computed above,
+      // so there is exactly one place in the codebase that buckets units.
+      const _unitBuckets=_pc.unitBuckets;
       const _actUnits=_unitBuckets.active;
       const _onHoldUnits=_unitBuckets.onhold;
       const _cpUnits=_unitBuckets.pipeline;
