@@ -2679,7 +2679,7 @@ window.PROPERTIES_SEED = [
       <!-- CHARTS -->
       <div id="view-charts" class="hidden">
         <div id="analytics-main-view">
-        <div class="page-header"><div class="page-header-left"><h1>Analytics</h1><p style="color:var(--blue-dark);font-size:13px;margin-top:2px">Every property. Every unit. Always in view.</p></div><div class="header-actions no-print"><button class="btn" onclick="cfTogglePanel()" id="cf-panel-toggle-btn" title="Filters" style="position:relative"><i class="ti ti-adjustments-horizontal"></i> Filters <span id="cf-badge" style="display:none;position:absolute;top:-5px;right:-5px;background:var(--blue-dark);color:white;border-radius:10px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center"></span></button><button class="btn no-print" onclick="showBudgetOutlook()"><i class="ti ti-chart-bar"></i>Budget Outlook</button><button class="btn no-print" onclick="showReforecastView()"><i class="ti ti-calendar-repeat"></i>Reforecast</button><button class="btn btn-primary" onclick="printCharts()"><i class="ti ti-printer"></i>Print / PDF</button></div></div>
+        <div class="page-header"><div class="page-header-left"><h1>Analytics</h1><p style="color:var(--blue-dark);font-size:13px;margin-top:2px">Every property. Every unit. Always in view.</p></div><div class="header-actions no-print"><button class="btn" onclick="cfTogglePanel()" id="cf-panel-toggle-btn" title="Filters" style="position:relative"><i class="ti ti-adjustments-horizontal"></i> Filters <span id="cf-badge" style="display:none;position:absolute;top:-5px;right:-5px;background:var(--blue-dark);color:white;border-radius:10px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center"></span></button><button class="btn no-print" onclick="showBudgetOutlook()"><i class="ti ti-chart-bar"></i>Budget Outlook</button><button class="btn btn-primary" onclick="printCharts()"><i class="ti ti-printer"></i>Print / PDF</button></div></div>
         <div class="page-body" id="analytics-body" style="position:relative"></div>
         </div>
         <!-- BUDGET OUTLOOK — v33a/v34a. Live-pulled rollup of Scope budgets
@@ -2697,7 +2697,8 @@ window.PROPERTIES_SEED = [
             <div class="page-header-left"><h1>Budget Outlook</h1><p>Committed and Planned Spend by Year, Across Every Scope</p></div>
             <div class="header-actions">
               <button class="btn no-print" onclick="closeBudgetOutlook()"><i class="ti ti-arrow-left"></i>Back to Analytics</button>
-              <button class="btn no-print" onclick="exportBudgetOutlookExcel()"><i class="ti ti-file-spreadsheet"></i>Export to Excel</button>
+              <button class="btn btn-success no-print" onclick="showReforecastView()"><i class="ti ti-calendar-repeat"></i>Reforecast</button>
+              <button class="btn btn-success no-print" onclick="exportBudgetOutlookExcel()"><i class="ti ti-file-spreadsheet"></i>Export to Excel</button>
               <button class="btn btn-primary no-print" onclick="printBudgetOutlook()"><i class="ti ti-printer"></i>Print / PDF</button>
             </div>
           </div>
@@ -2749,7 +2750,7 @@ window.PROPERTIES_SEED = [
           <div class="page-header no-print">
             <div class="page-header-left"><h1>Reforecast view</h1><p>Reassign scopes to a different program year</p></div>
             <div class="header-actions">
-              <button class="btn no-print" onclick="closeReforecastView()"><i class="ti ti-arrow-left"></i>Back to Analytics</button>
+              <button class="btn no-print" onclick="closeReforecastView()"><i class="ti ti-arrow-left"></i>Back to Budget Outlook</button>
             </div>
           </div>
           <div class="page-body">
@@ -11229,9 +11230,18 @@ window.toggleBoYear=toggleBoYear;
 // anything edited but not yet saved, so Save writes only the deltas and
 // Discard can cleanly reset without a full data reload.
 let rfPendingChanges={};
+// v36j — Reforecast now opens from Budget Outlook's header (moved off
+// Analytics per direct instruction). gotoView('charts') only toggles the
+// top-level view-charts container, not the budget-outlook-view/
+// analytics-main-view sub-panels nested inside it — those are managed here
+// directly, so both possible "where was I" starting points (Analytics main
+// view, or already on Budget Outlook) get hidden before Reforecast shows,
+// and closeReforecastView() returns to Budget Outlook specifically (that's
+// where the button lives now) rather than always landing back on Analytics.
 function showReforecastView(){
   gotoView('charts',null);
   document.getElementById('analytics-main-view').style.display='none';
+  document.getElementById('budget-outlook-view').style.display='none';
   document.getElementById('reforecast-view').style.display='';
   rfPendingChanges={};
   renderReforecastView();
@@ -11242,7 +11252,8 @@ function closeReforecastView(){
   }
   rfPendingChanges={};
   document.getElementById('reforecast-view').style.display='none';
-  document.getElementById('analytics-main-view').style.display='';
+  document.getElementById('budget-outlook-view').style.display='';
+  renderBudgetOutlook();
 }
 function rfEligibleScopes(){
   // Same "not committed yet" definition Budget Outlook already uses
@@ -11411,9 +11422,18 @@ function renderBudgetOutlook(){
     }
   });
 
+  // v36j — "Active properties" was filtering on isCommitted (real Contract
+  // Award Value), which reads as "committed dollars," a distinction already
+  // shown by the Committed/Planned bar-color legend above. Per the
+  // governing classification rule ("if a property has active units, the
+  // property is active"), this pill now filters to scopes whose property
+  // is in the shared active-property set from getPortfolioClassification(),
+  // matching what "active" means everywhere else in the app (Dashboard,
+  // Capital Plan, Portfolio View).
+  const _activePropNames=new Set(getPortfolioClassification().activeProps.map(p=>p.n));
   const allocs=items.filter(a=>a.year!=null).filter(a=>{
     if(boFilter==='capital')return !a.isCommitted;
-    if(boFilter==='active')return a.isCommitted;
+    if(boFilter==='active')return _activePropNames.has(a.property);
     return true;
   });
 
@@ -11450,7 +11470,7 @@ function renderBudgetOutlook(){
 
   const chartEl=document.getElementById('bo-chart');
   if(years.length===0){
-    chartEl.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-chart-bar-off"></i><div class="empty-state-title">No budget data yet</div><div class="empty-state-sub">Estimates appear once units are linked to a Scope with a real year, or enter a Contract Award Value on a Scope.</div></div>`;
+    chartEl.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-chart-bar-off"></i><div class="empty-state-title">No budget data yet</div><div class="empty-state-sub">Estimates appear once units are linked to a Scope with a real year, or once a Scope has a Contract Award Value entered.</div></div>`;
   }else{
     const maxTotal=Math.max(...years.map(y=>byYear[y].committed+byYear[y].planned));
     chartEl.innerHTML=`<div style="display:flex;align-items:flex-end;gap:20px;height:200px;padding:0 8px;border-bottom:0.5px solid var(--border)">
