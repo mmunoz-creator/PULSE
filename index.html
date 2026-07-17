@@ -2535,7 +2535,7 @@ window.PROPERTIES_SEED = [
             </div>
           </div>
           <div class="page-body">
-            <div id="capital-summary-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px"></div>
+            <div id="capital-summary-cards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px"></div>
             <div id="capital-reconciliation-banner"></div>
             <div id="capital-plan-body"></div>
           </div>
@@ -10656,7 +10656,8 @@ function renderCapitalPlan(){
         ${priMap['2']?`<span class="badge" style="background:#fff7e6;color:var(--amber);border:1px solid #fde6a0">P2: ${priMap['2']}</span>`:''}
         ${priMap['3']?`<span class="badge" style="background:var(--blue-xpale);color:var(--blue-dark);border:1px solid var(--blue-light)">P3: ${priMap['3']}</span>`:''}
         ${priMap['4']?`<span class="badge" style="background:var(--gray-pale);color:var(--gray-mid);border:1px solid var(--border)">P4: ${priMap['4']}</span>`:''}
-      </div></div>`;
+      </div></div>
+      <div class="stat-card"><div class="stat-label">Completed Units</div><div class="stat-value">${_pc.unitBuckets.complete}</div></div>`;
   }
 
   // v28g — group by scope year first, then by property within each year.
@@ -11551,13 +11552,20 @@ function exportBudgetOutlookExcel(){
     const s=String(v==null?'':v);
     return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
   };
-  const rows=[['Year','Committed','Planned','Total','Units','Unit Names']];
+  // v36k — added Properties column. The on-screen table only shows Unit
+  // Names per year, with no property breakdown at all — Misty asked for
+  // property names in the export specifically. Each item already carries
+  // its own .property (see renderBudgetOutlook's items.push()), so this
+  // collects the same way unitNames already does: de-duplicated, one
+  // column per year row.
+  const rows=[['Year','Properties','Committed','Planned','Total','Units','Unit Names']];
   d.years.forEach(y=>{
     const yr=d.byYear[y];
+    const properties=Array.from(new Set(yr.items.map(it=>it.property).filter(Boolean))).join('; ');
     const names=Array.from(new Set(yr.items.flatMap(it=>it.unitNames||[]))).join('; ');
-    rows.push([y,yr.committed||0,yr.planned||0,(yr.committed||0)+(yr.planned||0),yr.unitTotal||0,names]);
+    rows.push([y,properties,yr.committed||0,yr.planned||0,(yr.committed||0)+(yr.planned||0),yr.unitTotal||0,names]);
   });
-  rows.push(['Total',d.totalCommitted||0,d.totalPlanned||0,(d.totalCommitted||0)+(d.totalPlanned||0),d.years.reduce((a,y)=>a+(d.byYear[y].unitTotal||0),0),'']);
+  rows.push(['Total','',d.totalCommitted||0,d.totalPlanned||0,(d.totalCommitted||0)+(d.totalPlanned||0),d.years.reduce((a,y)=>a+(d.byYear[y].unitTotal||0),0),'']);
   const csv=rows.map(r=>r.map(esc).join(',')).join('\r\n');
   const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);
