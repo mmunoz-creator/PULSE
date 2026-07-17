@@ -13946,7 +13946,28 @@ function renderDashboard(){
   // assigned to at least one Scope (or, for un-scoped properties, the
   // legacy Properties-level VDA Consultant field). See propertyHasConsultant().
   const port=role==='consultant'?_allPort.filter(p=>propertyHasConsultant(p.n,currentConsultantName)):_allPort;
+  // v36n — this block used to render a "Loading portfolio data..." spinner
+  // whenever port.length===0, on the assumption that an empty port array
+  // always meant data hadn't arrived from Airtable yet. That's true right
+  // after login, but it's ALSO what a consultant with zero assigned Scopes
+  // looks like once loading has genuinely finished — and nothing ever
+  // re-renders the dashboard after that point, so those two very different
+  // situations were indistinguishable and the second one hung forever on a
+  // spinner that falsely claimed to still be "Connecting to live database."
+  // Now gated on AT_CONNECTED (true once loadAllData() has actually
+  // resolved) so a true still-loading state keeps the spinner, while a
+  // fully-loaded-but-zero-properties consultant sees an honest message
+  // instead of an infinite fake-loading screen.
   if(port.length===0&&!demoMode){
+    if(role==='consultant'&&AT_CONNECTED){
+      document.getElementById('dashboard-body').innerHTML=`
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem;gap:12px;text-align:center">
+          <i class="ti ti-clipboard-off" style="font-size:32px;color:var(--gray-light)"></i>
+          <div style="font-size:14px;font-weight:500;color:var(--gray-mid)">No properties assigned yet</div>
+          <div style="font-size:12px;color:var(--gray-light);max-width:340px">Your account isn't linked to any active scopes. Contact your Project Manager to be assigned to a property.</div>
+        </div>`;
+      return;
+    }
     document.getElementById('dashboard-body').innerHTML=`
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem;gap:12px">
         <i class="ti ti-loader" style="font-size:32px;color:var(--gray-light);animation:spin 1s linear infinite"></i>
