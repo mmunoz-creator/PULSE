@@ -2096,7 +2096,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36m</div>
     </div>
   </nav>
 
@@ -10648,8 +10648,8 @@ function renderCapitalPlan(){
     const priMap={'1':0,'2':0,'3':0,'4':0};
     pipelineUnits.forEach(u=>{const k=String(parseInt(u.priority)||4);if(priMap[k]!==undefined)priMap[k]++;});
     cards.innerHTML=`
+      <div class="stat-card"><div class="stat-label">Completed Units</div><div class="stat-value">${_pc.unitBuckets.complete}</div></div>
       <div class="stat-card"><div class="stat-label">Pipeline Properties</div><div class="stat-value">${_pc.pipelineProps.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${_pc.pipelineBudgetRaw?fmtBudget(_pc.pipelineBudgetRaw):'TBD'}</div><div class="stat-sub">${pipelineUnits.filter(u=>!unitEffectiveValue(u)).length} Units Budget TBD</div></div>
       <div class="stat-card"><div class="stat-label">Units in Pipeline</div><div class="stat-value">${pipelineUnitsAll}</div><div class="stat-sub">Elevators &amp; Escalators</div></div>
       <div class="stat-card"><div class="stat-label">Priority Breakdown</div><div class="stat-value" style="font-size:13px;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
         ${priMap['1']?`<span class="badge" style="background:#fdecea;color:var(--red);border:1px solid #f5c2c2">P1: ${priMap['1']}</span>`:''}
@@ -10657,7 +10657,7 @@ function renderCapitalPlan(){
         ${priMap['3']?`<span class="badge" style="background:var(--blue-xpale);color:var(--blue-dark);border:1px solid var(--blue-light)">P3: ${priMap['3']}</span>`:''}
         ${priMap['4']?`<span class="badge" style="background:var(--gray-pale);color:var(--gray-mid);border:1px solid var(--border)">P4: ${priMap['4']}</span>`:''}
       </div></div>
-      <div class="stat-card"><div class="stat-label">Completed Units</div><div class="stat-value">${_pc.unitBuckets.complete}</div></div>`;
+      <div class="stat-card"><div class="stat-label">Total Pipeline Budget</div><div class="stat-value">${_pc.pipelineBudgetRaw?fmtBudget(_pc.pipelineBudgetRaw):'TBD'}</div><div class="stat-sub">${pipelineUnits.filter(u=>!unitEffectiveValue(u)).length} Units Budget TBD</div></div>`;
   }
 
   // v28g — group by scope year first, then by property within each year.
@@ -11422,6 +11422,18 @@ function renderBudgetOutlook(){
   // buckets) are excluded too — nothing to plot on a year-based outlook.
   const allScopes=window.SCOPES||[];
   const items=[];
+  // v36l — parallel per-unit array for the Excel export (one row per unit,
+  // not one jammed semicolon-joined cell per year). Same eligibility gate
+  // as `items` above (non-Complete scope, real year) so the two stay in
+  // sync, but built at unit grain: each unit's own dollar value via
+  // unitEffectiveValue() when it has one, falling back to an even split of
+  // the scope's total only when no unit-level number exists (matches
+  // scopeUnitBudgetTotal()'s own fallback order — Contract Award Value on
+  // the scope only applies when no unit under it has its own Award Value).
+  // Also carries unitLifecycleBucket() per Misty's request to include
+  // status (active/on hold/pipeline/complete) in the export — the same
+  // shared classifier every other screen uses, not a new one-off.
+  const unitItems=[];
   allScopes.forEach(sc=>{
     if(sc.status==='Complete')return;
     if(sc.year==null)return;
@@ -11429,9 +11441,19 @@ function renderBudgetOutlook(){
     const unitNames=units.map(u=>u.name).filter(Boolean);
     if(sc.contractAwardValue>0){
       items.push({year:sc.year,amount:sc.contractAwardValue,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:true,source:'scope',unitCount:units.length,unitNames});
+      const anyUnitAwarded=units.some(u=>u.awardValue>0);
+      units.forEach(u=>{
+        const amt=(!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
+        unitItems.push({year:sc.year,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',amount:amt,isCommitted:true,status:unitLifecycleBucket(u)});
+      });
     }else{
       const est=scopeUnitBudgetTotal(sc.id);
-      if(est>0)items.push({year:sc.year,amount:est,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:false,source:'estimate',unitCount:units.length,unitNames});
+      if(est>0){
+        items.push({year:sc.year,amount:est,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:false,source:'estimate',unitCount:units.length,unitNames});
+        units.forEach(u=>{
+          unitItems.push({year:sc.year,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',amount:unitEffectiveValue(u),isCommitted:false,status:unitLifecycleBucket(u)});
+        });
+      }
     }
   });
 
@@ -11552,6 +11574,9 @@ function renderBudgetOutlook(){
   // same numbers on screen, rather than recomputing (and risking drift from)
   // the aggregation logic a second time.
   window._boData={years,byYear,totalCommitted,totalPlanned,propCount,filter:boFilter};
+  // v36l — per-unit rows for the Excel export, filtered to the same
+  // selected years the on-screen chart/table are currently showing.
+  window._boUnitItems=boYearSelection?unitItems.filter(u=>boYearSelection.has(u.year)):unitItems;
 }
 // v34i — Export to Excel. CSV, not a real .xlsx: this codebase has zero
 // external script dependencies today (no CDN libraries anywhere), and CSV
@@ -11559,32 +11584,51 @@ function renderBudgetOutlook(){
 // Flagged to Misty as a deliberate choice, not a silent shortcut.
 function exportBudgetOutlookExcel(){
   const d=window._boData;
+  const unitItems=window._boUnitItems||[];
   if(!d||!d.years||d.years.length===0){showToast('No budget data to export','error');return;}
   const esc=v=>{
     const s=String(v==null?'':v);
     return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
   };
-  // v36k — added Properties column. The on-screen table only shows Unit
-  // Names per year, with no property breakdown at all — Misty asked for
-  // property names in the export specifically. Each item already carries
-  // its own .property (see renderBudgetOutlook's items.push()), so this
-  // collects the same way unitNames already does: de-duplicated, one
-  // column per year row.
-  const rows=[['Year','Properties','Committed','Planned','Total','Units','Unit Names']];
-  d.years.forEach(y=>{
-    const yr=d.byYear[y];
-    const properties=Array.from(new Set(yr.items.map(it=>it.property).filter(Boolean))).join('; ');
-    const names=Array.from(new Set(yr.items.flatMap(it=>it.unitNames||[]))).join('; ');
-    rows.push([y,properties,yr.committed||0,yr.planned||0,(yr.committed||0)+(yr.planned||0),yr.unitTotal||0,names]);
+  // v36l — rebuilt from one row per YEAR (properties/unit names jammed
+  // into single semicolon-joined cells, unreadable once a year had 7+
+  // properties) to one row per UNIT — Property, Scope, Unit, and that
+  // unit's own dollar value each get their own column/row instead of being
+  // squashed together. Also adds Status (unitLifecycleBucket() — the same
+  // shared active/on hold/pipeline/complete classifier every other screen
+  // uses, not a new one-off), per direct request. Sorted by year then
+  // property so it reads top-to-bottom the same way the on-screen table
+  // groups by year. Still a real .csv, not a true .xlsx — this codebase
+  // has zero external script dependencies today by deliberate prior
+  // decision, and adding a CDN library (SheetJS) just for this felt like
+  // unnecessary new risk while other higher-priority fixes were in
+  // progress same session. CSV opens directly in Excel on Mac and Windows
+  // either way — only difference is it isn't Excel's own native format.
+  const statusLabel={active:'Active',onhold:'On Hold',pipeline:'Pipeline',complete:'Complete'};
+  const rows=[['Year','Property','Scope','Unit','Status','Committed','Planned','Total']];
+  const sorted=unitItems.slice().sort((a,b)=>a.year-b.year||(a.property||'').localeCompare(b.property||'')||(a.unitName||'').localeCompare(b.unitName||''));
+  sorted.forEach(u=>{
+    rows.push([
+      u.year,
+      u.property||'',
+      u.scopeName||'',
+      u.unitName||'',
+      statusLabel[u.status]||u.status||'',
+      u.isCommitted?(u.amount||0):0,
+      u.isCommitted?0:(u.amount||0),
+      u.amount||0
+    ]);
   });
-  rows.push(['Total','',d.totalCommitted||0,d.totalPlanned||0,(d.totalCommitted||0)+(d.totalPlanned||0),d.years.reduce((a,y)=>a+(d.byYear[y].unitTotal||0),0),'']);
+  const totalCommitted=sorted.filter(u=>u.isCommitted).reduce((s,u)=>s+(u.amount||0),0);
+  const totalPlanned=sorted.filter(u=>!u.isCommitted).reduce((s,u)=>s+(u.amount||0),0);
+  rows.push(['Total','','','','',totalCommitted,totalPlanned,totalCommitted+totalPlanned]);
   const csv=rows.map(r=>r.map(esc).join(',')).join('\r\n');
   const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   const stamp=new Date().toISOString().slice(0,10);
   a.href=url;
-  a.download=`PULSE_Budget_Outlook_${d.filter||'all'}_${stamp}.csv`;
+  a.download=`PULSE_Budget_Outlook_Units_${d.filter||'all'}_${stamp}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
