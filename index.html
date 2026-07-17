@@ -1186,6 +1186,11 @@ async function loadAllData() {
       notes: r.fields['Notes']||'',
       productType: r.fields['Product Type']||'',
       unitNames: r.fields['Unit Names']||'',
+      // v36p — Unit Phase Picker. linkedUnitIds resolved just below, after
+      // normalizeLookupIds is defined (that helper isn't hoisted — same
+      // ordering constraint that already applies to Scope's linkedUnitIds,
+      // see the note near window.SCOPES.forEach below).
+      linkedUnitIds: [],
       phaseTasks: r.fields['Phase Tasks']?r.fields['Phase Tasks'].split(',').map(s=>s.trim()).filter(Boolean):[],
     }));
     // Phase Steps
@@ -1323,6 +1328,13 @@ async function loadAllData() {
     // the Scopes.map() above) since normalizeLookupIds isn't hoisted.
     window.SCOPES.forEach((s,i)=>{
       s.linkedUnitIds=normalizeLookupIds(scopes[i]?.fields?.['Linked Units']);
+    });
+    // v36p — Unit Phase Picker. Same normalizeLookupIds resolution, applied
+    // to Unit Groups (phases) now that a real Linked Units link field exists
+    // on that table too. Placed here for the same reason as Scope's above:
+    // normalizeLookupIds isn't defined until this point in the load sequence.
+    window.UNIT_GROUPS.forEach((u,i)=>{
+      u.linkedUnitIds=normalizeLookupIds(unitGroups[i]?.fields?.['Linked Units']);
     });
     // v34a — Unit Inventory List, now loaded properly (not just a
     // throwaway id->name map) so the Units tab can show which units on a
@@ -2382,11 +2394,21 @@ window.PROPERTIES_SEED = [
                     <option>Wheelchair Lift</option>
                   </select>
                 </div>
-                <div class="form-group"><label class="form-label"># Units in Phase</label><input class="form-input" type="number" id="phase-units-input" placeholder="e.g. 2" min="1"></div>
+                <div class="form-group"><label class="form-label"># Units in Phase <span style="font-size:10px;color:var(--gray-mid)">(auto-counted)</span></label><input class="form-input" type="number" id="phase-units-input" readonly style="background:var(--gray-xpale);color:var(--gray-mid);cursor:default"></div>
               </div>
-              <div class="two-col" style="gap:12px">
-                <div class="form-group"><label class="form-label">Unit Names <span style="font-size:10px;color:var(--gray-mid)">(must be concurrent)</span></label><input class="form-input" type="text" id="phase-unit-names" placeholder="e.g. PE1, PE2"></div>
-                <div class="form-group"></div>
+              <!-- v36p — Unit Phase Picker. Real checkbox picker over this
+              project's Unit Inventory List records, replacing the old
+              free-typed Unit Names field. Filtered to units already linked
+              to currentScope (a phase is a sub-breakdown of one project's
+              units, not the whole property) — same visual pattern as the
+              Split Into Projects unit checklist. Auto-counts into
+              phase-units-input as boxes are checked, and (once a Product
+              Type is picked) flags any checked unit whose real Unit Type
+              doesn't match, replacing the old regex-guess mixed-type
+              warning with a real per-unit check. -->
+              <div class="form-group">
+                <label class="form-label" style="display:block;margin-bottom:6px">Units In This Phase <span style="font-weight:400;color:var(--gray-mid)">(must be concurrent)</span></label>
+                <div id="phase-units-picker" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div>
               </div>
               <div class="two-col" style="gap:12px">
                 <div class="form-group"><label class="form-label">Planned Start</label><input class="form-input" type="date" id="phase-planned-start"></div>
@@ -2428,8 +2450,18 @@ window.PROPERTIES_SEED = [
                 </div>
               </div>
               <div class="two-col" style="gap:12px">
-                <div class="form-group"><label class="form-label">Unit Names</label><input class="form-input" type="text" id="edit-phase-unit-names" placeholder="e.g. PE1, PE2"></div>
-                <div class="form-group"><label class="form-label"># Units in Phase</label><input class="form-input" type="number" id="edit-phase-units" min="1"></div>
+                <div class="form-group"><label class="form-label"># Units in Phase <span style="font-size:10px;color:var(--gray-mid)">(auto-counted)</span></label><input class="form-input" type="number" id="edit-phase-units" readonly style="background:var(--gray-xpale);color:var(--gray-mid);cursor:default"></div>
+                <div class="form-group"></div>
+              </div>
+              <!-- v36p — Unit Phase Picker, Edit Phase version. Same picker
+              as Add Phase, pre-checked from this phase's real linkedUnitIds.
+              excludePhaseId (this phase's own id) is passed to
+              renderPhaseUnitsPicker so its own currently-checked units don't
+              get flagged as "claimed by another phase" against themselves. -->
+              <div class="form-group">
+                <label class="form-label" style="display:block;margin-bottom:6px">Units In This Phase</label>
+                <div id="edit-phase-units-picker" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div>
+                <div id="edit-phase-legacy-warning" style="display:none;margin-top:6px;font-size:11px;color:var(--amber)"><i class="ti ti-alert-triangle"></i> This phase still has old typed unit names ("<span id="edit-phase-legacy-names"></span>") but no units checked below — check the correct units above before saving.</div>
               </div>
               <div class="two-col" style="gap:12px">
                 <div class="form-group"><label class="form-label">Planned Start</label><input class="form-input" type="date" id="edit-phase-planned-start"></div>
@@ -9283,6 +9315,7 @@ function renderPhasesTab(p){
           </div>
           <div style="font-size:11px;color:var(--gray-mid)">
             ${ph.unitNames?`<span style="font-style:italic">${ph.unitNames}</span> · `:''}
+            ${(ph.unitNames||'').trim()&&(!ph.linkedUnitIds||ph.linkedUnitIds.length===0)?`<span style="color:var(--amber);font-weight:600" title="This phase has old typed unit names but no units picked yet — open Edit to check the correct units"><i class="ti ti-alert-triangle"></i> Needs unit picker · </span>`:''}
             ${fmtShort(ph.plannedStart)} → ${fmtShort(ph.plannedCompletion)}
           </div>
           ${renderStepLegend(p.n,ph.phase,false,ph.id)}
@@ -9678,13 +9711,81 @@ function openAddPhaseForm(){
   if(descEl){descEl.value='';descEl.focus();}
   document.getElementById('phase-product-type').value='';
   document.getElementById('phase-milestone-selector').style.display='none';
+  renderPhaseUnitsPicker('phase-units-picker',[],'phase-units-input',null);
   form.scrollIntoView({behavior:'smooth'});
 }
+
+// v36p — Unit Phase Picker. Shared render function used by both Add Phase
+// and Edit Phase — renders a checkbox per Unit Inventory List record
+// belonging to currentScope, pre-checking any unit id in checkedIds.
+// excludePhaseId lets Edit Phase see units already claimed by OTHER phases
+// (still shown, but flagged) without flagging its own current picks.
+// countInputId is kept live in sync on every checkbox change so # Units in
+// Phase never has to be typed separately again.
+function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhaseId){
+  const container=document.getElementById(containerId);
+  if(!container)return;
+  const scopeId=currentScope?.id;
+  const units=(window.UNIT_INVENTORY||[])
+    .filter(u=>u.property===currentProp?.n&&(!scopeId||u.scopeId===scopeId))
+    .sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  if(units.length===0){
+    container.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:6px">No units linked to this project yet in Unit Inventory List.</div>';
+    if(countInputId){const ci=document.getElementById(countInputId);if(ci)ci.value=0;}
+    return;
+  }
+  // Units already claimed by a different phase on this project — still
+  // shown (never hidden, so nothing silently disappears), but flagged so
+  // it's obvious before double-assigning.
+  const claimedElsewhere={};
+  (window.UNIT_GROUPS||[]).forEach(g=>{
+    if(g.property!==currentProp?.n)return;
+    if(excludePhaseId&&g.id===excludePhaseId)return;
+    (g.linkedUnitIds||[]).forEach(uid=>{claimedElsewhere[uid]=g.phase||'another phase';});
+  });
+  container.innerHTML=units.map(u=>{
+    const checked=(checkedIds||[]).includes(u.id);
+    const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
+    const claim=!checked&&claimedElsewhere[u.id]?`<span style="color:var(--amber);font-size:10px" title="Already in ${claimedElsewhere[u.id]}"><i class="ti ti-alert-triangle"></i> in ${claimedElsewhere[u.id]}</span>`:'';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
+      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${(u.unitType||'').replace(/"/g,'&quot;')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
+      <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+      ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
+      ${claim}
+    </label>`;
+  }).join('');
+  phaseUnitsPickerChanged(countInputId);
+}
+window.renderPhaseUnitsPicker=renderPhaseUnitsPicker;
+
+function getCheckedPhaseUnitIds(){
+  return [...document.querySelectorAll('.phase-unit-check:checked')].map(c=>c.dataset.unitId);
+}
+window.getCheckedPhaseUnitIds=getCheckedPhaseUnitIds;
+
+function phaseUnitsPickerChanged(countInputId){
+  const checked=[...document.querySelectorAll('.phase-unit-check:checked')];
+  if(countInputId){const ci=document.getElementById(countInputId);if(ci)ci.value=checked.length;}
+  // Real per-unit type-mismatch check, replacing the old regex guess against
+  // free-typed unit names — now that each unit's real Unit Type is known.
+  const productTypeEl=document.getElementById('phase-product-type')||document.getElementById('edit-phase-product-type');
+  const productType=productTypeEl?productTypeEl.value:'';
+  if(productType){
+    const mismatched=checked.filter(c=>c.dataset.unitType&&c.dataset.unitType!==productType);
+    if(mismatched.length>0){
+      showToast(`${mismatched.length} checked unit${mismatched.length===1?'':'s'} ${mismatched.length===1?"doesn't":"don't"} match this phase's Product Type (${productType})`,'warn');
+    }
+  }
+}
+window.phaseUnitsPickerChanged=phaseUnitsPickerChanged;
 
 function renderPhaseMilestoneSelector(){
   const type=document.getElementById('phase-product-type').value;
   const sel=document.getElementById('phase-milestone-selector');
   const checks=document.getElementById('phase-milestone-checks');
+  // v36p — re-run the unit type-mismatch check whenever Product Type
+  // changes, since it's now checked live against each unit's real Unit Type.
+  phaseUnitsPickerChanged('phase-units-input');
   if(!type){sel.style.display='none';return;}
   const steps=PHASE_MILESTONE_TEMPLATES[type]||[];
   const optional=(OPTIONAL_STEPS[type]||[]);
@@ -9706,27 +9807,27 @@ async function saveNewPhase(){
   const phaseDesc=document.getElementById('phase-description-input')?.value.trim()||'';
   const name=phaseDesc?`${phaseNum}: ${phaseDesc}`:phaseNum;
   const productType=document.getElementById('phase-product-type').value;
-  const unitNames=document.getElementById('phase-unit-names').value.trim();
-  const units=parseInt(document.getElementById('phase-units-input').value)||0;
+  // v36p — Unit Phase Picker. linkedUnitIds now the real source of truth;
+  // unitNames is derived display text only (kept for anything still reading
+  // the old field, e.g. printed reports), never typed directly again.
+  const linkedUnitIds=getCheckedPhaseUnitIds();
+  const pickedUnits=(window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id));
+  const unitNames=pickedUnits.map(u=>u.name).filter(Boolean).join(', ');
+  const units=linkedUnitIds.length;
   const plannedStart=document.getElementById('phase-planned-start').value;
   const plannedEnd=document.getElementById('phase-planned-end').value;
   if(!phaseNum){showToast('Phase number missing','warn');return;}
   if(!productType){showToast('Please select a product type','warn');return;}
-  if(!units){showToast('Please enter units in phase','warn');return;}
-  // Product type guardrail — detect mixed unit name patterns
-  const isElevatorType=productType.includes('Elevator');
-  const isEscalatorType=productType==='Escalator';
-  const isLiftType=productType==='Wheelchair Lift';
-  const uNames=unitNames.toLowerCase();
-  const hasEscPrefix=/(esc|escalator)/i.test(uNames);
-  const hasLiftPrefix=/(wl|lift|wheelchair)/i.test(uNames);
-  const hasElevPrefix=/(pe|el|elev|cab)/i.test(uNames);
-  let mixWarning='';
-  if(isElevatorType&&hasEscPrefix)mixWarning='Unit names suggest escalators are included in an elevator phase.';
-  if(isElevatorType&&hasLiftPrefix)mixWarning='Unit names suggest wheelchair lifts are included in an elevator phase.';
-  if(isEscalatorType&&hasElevPrefix)mixWarning='Unit names suggest elevators are included in an escalator phase.';
-  if(mixWarning&&unitNames){
-    const proceed=confirm(`Warning: ${mixWarning}\n\nEach phase should contain only one product type with concurrent units.\n\nClick OK to save anyway, or Cancel to review.`);
+  if(!units){showToast('Please check at least one unit for this phase','warn');return;}
+  // Product type guardrail — now a real per-unit check against each picked
+  // unit's actual Unit Type field, replacing the old regex guess against
+  // free-typed unit names (which could only pattern-match on naming
+  // conventions like "PE1"/"ESC1" and would miss anything that didn't
+  // follow them).
+  const mismatched=pickedUnits.filter(u=>u.unitType&&u.unitType!==productType);
+  if(mismatched.length>0){
+    const names=mismatched.map(u=>u.name||'(unnamed)').join(', ');
+    const proceed=confirm(`Warning: ${mismatched.length} checked unit${mismatched.length===1?'':'s'} (${names}) ${mismatched.length===1?"doesn't":"don't"} match this phase's Product Type (${productType}).\n\nEach phase should contain only one product type with concurrent units.\n\nClick OK to save anyway, or Cancel to review.`);
     if(!proceed)return;
   }
   // Collect selected tasks
@@ -9745,7 +9846,7 @@ async function saveNewPhase(){
     'Planned Start':plannedStart||null,
     'Planned Completion':plannedEnd||null,
     'Product Type':productType,
-    'Unit Names':unitNames,
+    'Linked Units':linkedUnitIds,
     'Phase Tasks':selectedMs.join(', '),
     'Phase Order':nextPhaseOrder,
   };
@@ -9758,7 +9859,7 @@ async function saveNewPhase(){
     status:'Not Started',
     plannedStart,plannedCompletion:plannedEnd,
     actualStart:'',completionDate:'',notes:'',
-    productType,unitNames,
+    productType,unitNames,linkedUnitIds,
     phaseTasks:selectedMs,
     phaseOrder:nextPhaseOrder,
   };
@@ -9799,9 +9900,11 @@ async function saveNewPhase(){
     }
   });
   document.getElementById('add-phase-form').style.display='none';
-  ['phase-description-input','phase-units-input','phase-planned-start','phase-planned-end','phase-unit-names'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['phase-description-input','phase-units-input','phase-planned-start','phase-planned-end'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('phase-product-type').value='';
   document.getElementById('phase-milestone-selector').style.display='none';
+  const pickerEl=document.getElementById('phase-units-picker');
+  if(pickerEl)pickerEl.innerHTML='';
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
   if(demoMode){showToast('Phase added — Demo mode: changes reset on logout','info');}
@@ -9819,7 +9922,6 @@ function openEditPhaseForm(id,propName){
   const nameEl=document.getElementById('edit-phase-name');
   if(nameEl){nameEl.value=ph.phase||'';nameEl.disabled=hasStarted;nameEl.style.background=hasStarted?'var(--gray-xpale)':'';nameEl.title=hasStarted?'Cannot change phase name after tasks have started':'';}
   document.getElementById('edit-phase-units').value=ph.units||'';
-  document.getElementById('edit-phase-unit-names').value=ph.unitNames||'';
   document.getElementById('edit-phase-planned-start').value=ph.plannedStart||'';
   document.getElementById('edit-phase-planned-end').value=ph.plannedCompletion||'';
   document.getElementById('edit-phase-actual-start').value=ph.actualStart||'';
@@ -9831,6 +9933,17 @@ function openEditPhaseForm(id,propName){
   // Set product type and render steps
   const ptEl=document.getElementById('edit-phase-product-type');
   if(ptEl){ptEl.disabled=hasStarted;ptEl.style.background=hasStarted?'var(--gray-xpale)':'';ptEl.value=ph.productType||'';renderEditPhaseMilestoneSelector(ph,hasStarted);}
+  // v36p — Unit Phase Picker. Pre-check from this phase's real
+  // linkedUnitIds; excludePhaseId=id so this phase's own current picks
+  // aren't flagged as "claimed by another phase" against themselves.
+  renderPhaseUnitsPicker('edit-phase-units-picker',ph.linkedUnitIds||[],'edit-phase-units',id);
+  // Legacy-phase flag — this phase has old typed Unit Names text but no
+  // real Linked Units yet (created before this feature, never re-picked).
+  const legacyWarn=document.getElementById('edit-phase-legacy-warning');
+  const legacyNamesEl=document.getElementById('edit-phase-legacy-names');
+  const isLegacyUnpicked=(ph.unitNames||'').trim()&&(!ph.linkedUnitIds||ph.linkedUnitIds.length===0);
+  if(legacyWarn)legacyWarn.style.display=isLegacyUnpicked?'block':'none';
+  if(legacyNamesEl)legacyNamesEl.textContent=ph.unitNames||'';
   document.getElementById('add-phase-form').style.display='none';
   const form=document.getElementById('edit-phase-form');
   form.style.display='block';
@@ -9841,6 +9954,10 @@ function renderEditPhaseMilestoneSelector(ph,hasStarted){
   const type=document.getElementById('edit-phase-product-type').value;
   const sel=document.getElementById('edit-phase-step-selector');
   const checks=document.getElementById('edit-phase-step-checks');
+  // v36p — re-run the unit type-mismatch check whenever Product Type
+  // changes (works safely with ph undefined, since phaseUnitsPickerChanged
+  // reads live from the DOM, not from ph).
+  phaseUnitsPickerChanged('edit-phase-units');
   if(!type){sel.style.display='none';return;}
   const template=PHASE_MILESTONE_TEMPLATES[type]||[];
   const optional=(OPTIONAL_STEPS[type]||[]);
@@ -9872,15 +9989,15 @@ async function saveEditPhase(){
   if(idx<0){showToast('Phase not found','warn');return;}
   const ph=window.UNIT_GROUPS[idx];
   const name=document.getElementById('edit-phase-name').value.trim();
-  // Bug fix (v21a) — previously parseInt(...)||0 coerced a blank or invalid
-  // Units field to 0 and saved it, silently corrupting the phase's unit
-  // count. Units in Phase isn't a clearable/optional field (a phase with 0
-  // units doesn't make sense), so this is now a required-field validation,
-  // matching the existing guard in saveNewPhase.
-  const unitsRaw=document.getElementById('edit-phase-units').value.trim();
-  const units=parseInt(unitsRaw);
-  if(unitsRaw===''||isNaN(units)||units<=0){showToast('Please enter units in phase','warn');return;}
-  const unitNames=document.getElementById('edit-phase-unit-names').value.trim();
+  // v36p — Unit Phase Picker. linkedUnitIds now the real source of truth;
+  // units count and unitNames display text both derive from the picker,
+  // same as saveNewPhase. Required-field validation (v21a) still applies —
+  // a phase with 0 checked units doesn't make sense.
+  const linkedUnitIds=getCheckedPhaseUnitIds();
+  const pickedUnits=(window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id));
+  const unitNames=pickedUnits.map(u=>u.name).filter(Boolean).join(', ');
+  const units=linkedUnitIds.length;
+  if(units<=0){showToast('Please check at least one unit for this phase','warn');return;}
   const productType=document.getElementById('edit-phase-product-type').value;
   const plannedStart=document.getElementById('edit-phase-planned-start').value;
   const plannedEnd=document.getElementById('edit-phase-planned-end').value;
@@ -9889,6 +10006,14 @@ async function saveEditPhase(){
   const notes=document.getElementById('edit-phase-notes').value.trim();
   const selectedSteps=[...document.querySelectorAll('.edit-phase-step-check:checked')].map(c=>c.value);
   if(!name){showToast('Phase name required','warn');return;}
+  // Real per-unit type-mismatch check, same as saveNewPhase — confirm
+  // rather than silently save if a checked unit's real type doesn't match.
+  const mismatched=pickedUnits.filter(u=>u.unitType&&productType&&u.unitType!==productType);
+  if(mismatched.length>0){
+    const names=mismatched.map(u=>u.name||'(unnamed)').join(', ');
+    const proceed=confirm(`Warning: ${mismatched.length} checked unit${mismatched.length===1?'':'s'} (${names}) ${mismatched.length===1?"doesn't":"don't"} match this phase's Product Type (${productType}).\n\nEach phase should contain only one product type with concurrent units.\n\nClick OK to save anyway, or Cancel to review.`);
+    if(!proceed)return;
+  }
   const oldPhaseName=ph.phase;
   // Mutate in place by index to ensure UNIT_GROUPS array is updated
   // Remove unchecked tasks from PHASE_STEPS locally
@@ -9909,13 +10034,13 @@ async function saveEditPhase(){
       }
     }
   }
-  window.UNIT_GROUPS[idx]={...ph,phase:name,units,unitNames,productType,
+  window.UNIT_GROUPS[idx]={...ph,phase:name,units,unitNames,linkedUnitIds,productType,
     plannedStart,plannedCompletion:plannedEnd,
     actualStart,actualCompletion:actualEnd,
     notes,phaseTasks:selectedSteps};
   if(!demoMode){
     await atUpdate('Unit Groups',id,{
-      'Phase Name':name,'Units in Phase':units,'Unit Names':unitNames,
+      'Phase Name':name,'Units in Phase':units,'Linked Units':linkedUnitIds,
       'Product Type':productType,'Phase Tasks':selectedSteps.join(', '),
       'Planned Start':plannedStart||null,'Planned Completion':plannedEnd||null,
       'Actual Start':actualStart||null,'Actual Completion':actualEnd||null,
