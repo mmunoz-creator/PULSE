@@ -672,6 +672,7 @@ window.UNIT_INVENTORY = window.UNIT_INVENTORY || [];
 window.BILLING_LOG = window.BILLING_LOG || [];
 window.MILESTONES = window.MILESTONES || [];
 window.CLIENT_COMMENTS = window.CLIENT_COMMENTS || [];
+window.PM_UPDATES = window.PM_UPDATES || [];
 window.RETAINAGE_RELEASES = window.RETAINAGE_RELEASES || [];
 // v28a — Scopes: window.SCOPES is the in-memory mirror of the Airtable
 // Scopes table. Property link resolved to property NAME at load time
@@ -728,6 +729,27 @@ function propertyHasConsultant(propName,consultantName){
   if(!consultantName)return false;
   const target=consultantName.trim().toLowerCase();
   return propertyConsultants(propName).some(c=>c.toLowerCase()===target);
+}
+// v37j -- Scorecard KPI attribution helper. The 5 KPI functions below were
+// attributing every metric event (milestone completion, closed action
+// item, budget variance, CO savings) to a property's stale p.v field
+// instead of the real consultant on the specific Scope the event actually
+// belongs to -- same root cause as the Portfolio View/Dashboard fixes in
+// v37f, but affecting performance rankings rather than just a display
+// label, so it gets its own careful pass. Given a scopeId (present on
+// Milestones and resolvable for Action Items/CO Savings via their
+// property's Scope), returns that Scope's own consultant if set, falling
+// back to propertyConsultants() (Scope-first/Property-fallback) when the
+// scopeId is missing or that Scope has no consultant of its own -- so
+// attribution is exact when we know the Scope, and no worse than before
+// when we don't.
+function scorecardConsultantForScope(propName,scopeId){
+  if(scopeId){
+    const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+    if(sc&&sc.v&&sc.v.trim()!==''&&sc.v.trim()!=='TBD')return sc.v.trim();
+  }
+  const list=propertyConsultants(propName);
+  return list.length>0?list[0]:'Unassigned';
 }
 // v31r — dropdown lists of "all consultants" must include names that only
 // exist on Scope records now, not just the legacy Properties field, or a
@@ -1033,11 +1055,11 @@ async function loadAllData() {
   try {
     await seedIfEmpty();
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory, pmUpdates] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
-      atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes'), atGet('Unit Inventory List')
+      atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes'), atGet('Unit Inventory List'), atGet('PM Updates')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     if (props.length > 0) {
@@ -1430,6 +1452,22 @@ async function loadAllData() {
       readByClient: r.fields['Read by Client']||false,
       readByConsultant: r.fields['Read by Consultant']||false,
     })).sort((a,b)=>new Date(a.created)-new Date(b.created));
+    // PM Updates -- v37j. One-way status broadcast: PM/Consultant drafts
+    // an update tied to a Property + optional Scope/Project, then
+    // explicitly Publishes it so the Client role can see it in their own
+    // read-only feed. Distinct from Client Comments above (a two-way
+    // threaded/flagged conversation) -- this is a one-way announcement
+    // channel, hence its own table.
+    window.PM_UPDATES = pmUpdates.map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property Name']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      author: r.fields['Author']||'',
+      text: r.fields['Update Text']||'',
+      status: r.fields['Status']||'Draft',
+      created: r.fields['Created Date']||'',
+      published: r.fields['Published Date']||'',
+    })).sort((a,b)=>new Date(b.created)-new Date(a.created));
     // Change Order Savings Log
     window.CO_SAVINGS = coSavings.map(r=>({
       id: r.id,
@@ -2055,6 +2093,7 @@ window.PROPERTIES_SEED = [
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('queue',this)"><i class="ti ti-inbox"></i>Pending Review<span id="queue-badge-admin" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-admin" class="nav-badge hidden" style="background:var(--red)">0</span></button>
+        <button class="nav-item" onclick="gotoView('pmupdates',this)"><i class="ti ti-broadcast"></i>PM Updates<span id="pmu-badge-admin" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
       <div class="nav-section">
@@ -2080,6 +2119,7 @@ window.PROPERTIES_SEED = [
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('queue',this)"><i class="ti ti-inbox"></i>Pending Review<span id="queue-badge" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-pm" class="nav-badge hidden" style="background:var(--red)">0</span></button>
+        <button class="nav-item" onclick="gotoView('pmupdates',this)"><i class="ti ti-broadcast"></i>PM Updates<span id="pmu-badge-pm" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
       <div class="nav-section">
@@ -2104,6 +2144,7 @@ window.PROPERTIES_SEED = [
         <div class="nav-section-label">Operations</div>
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-consultant" class="nav-badge hidden" style="background:var(--red)">0</span></button>
+        <button class="nav-item" onclick="gotoView('pmupdates',this)"><i class="ti ti-broadcast"></i>PM Updates<span id="pmu-badge-consultant" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('submit',this)"><i class="ti ti-upload"></i>Submit Update</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
@@ -2127,6 +2168,7 @@ window.PROPERTIES_SEED = [
         <div class="nav-section-label">Operations</div>
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Comments &amp; Flags<span id="cc-badge-client" class="nav-badge hidden" style="background:var(--red)">0</span></button>
+        <button class="nav-item" onclick="gotoView('pmupdates',this)"><i class="ti ti-broadcast"></i>PM Updates</button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
@@ -3101,6 +3143,34 @@ window.PROPERTIES_SEED = [
         <div class="page-body"><div id="my-updates-container"><div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No Updates Submitted Yet</div></div></div></div>
       </div>
 
+      <!-- PM UPDATES -- v37j. One-way status broadcast channel: PM/Admin/
+           Consultant draft & publish updates tied to a Property + optional
+           Project; Client sees a read-only feed of Published items only.
+           Distinct from Client Comments (two-way threaded/flagged
+           conversation) and from My Updates above (weekly Field Update
+           submission review). -->
+      <div id="view-pmupdates" class="hidden">
+        <div class="page-header"><div class="page-header-left"><h1>PM Updates</h1><p id="pmu-header-sub">Status updates shared with the client</p></div></div>
+        <div class="page-body">
+          <div id="pmu-composer" class="card" style="margin-bottom:16px">
+            <div class="card-title" style="margin-bottom:1rem">New Update</div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Property</label><select class="form-select" id="pmu-property" onchange="pmuPopulateScopes()"></select></div>
+              <div class="form-group"><label class="form-label">Project (optional)</label><select class="form-select" id="pmu-scope"><option value="">All Projects</option></select></div>
+            </div>
+            <div class="form-group"><label class="form-label">Update</label><textarea class="form-input" id="pmu-text" rows="4" placeholder="What's the latest on this property?"></textarea></div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn" onclick="saveDraftPMUpdate()"><i class="ti ti-device-floppy"></i>Save Draft</button>
+              <button class="btn btn-primary" onclick="publishNewPMUpdate()"><i class="ti ti-send"></i>Publish to Client</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title" style="margin-bottom:1rem">Feed</div>
+            <div id="pmu-feed"><div class="empty-state" style="padding:2rem"><i class="ti ti-broadcast-off"></i><div class="empty-state-title">No updates yet</div></div></div>
+          </div>
+        </div>
+      </div>
+
       <!-- GLOSSARY VIEW -->
       <!-- SCHEDULE / GANTT -->
       <div id="view-schedule" class="hidden">
@@ -3760,7 +3830,7 @@ async function _finishLogin(){
         // Cache portfolio for next login
         try{sessionStorage.setItem('pulse_portfolio',JSON.stringify(window.PORTFOLIO));}catch(e){}
         populatePortfolio();populateMilestonesTable();
-        renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();populatePanelPropertyList();
+        renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();populatePanelPropertyList();updatePMUpdatesBadge();
         // Bug fix (v22b): populateSubmitDropdown() previously only ran once,
         // at the moment gotoView('submit') fired — which for a consultant
         // happens immediately on login, before this loadAllData() promise
@@ -3849,7 +3919,7 @@ function doLogout(){
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.UNIT_INVENTORY=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.UNIT_INVENTORY=[];window.PM_UPDATES=[];
   clientFlags=[];flagIdCounter=0;
   window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
   // Reset chatbot to Park Hotels context
@@ -3992,6 +4062,7 @@ function gotoView(viewId,btn){
   if(viewId==='comments'){
     renderCommentsView();
   }
+  if(viewId==='pmupdates')renderPMUpdates();
   if(viewId==='reports')renderAnalytics();
   if(viewId==='charts'||viewId==='analytics')renderCharts();
   if(viewId==='calendar')renderCalendar();
@@ -14701,7 +14772,7 @@ function _scorecardMilestoneOnTimeStats(milestoneNum,rangeStart){
     const actual=new Date(ms.actualDate+'T12:00:00');
     if(rangeStart&&actual<rangeStart)return;
     completed++;
-    const consultant=p.v||'Unassigned';
+    const consultant=scorecardConsultantForScope(p.n,ms.scopeId);
     if(!perConsultant[consultant])perConsultant[consultant]={completed:0,onTime:0};
     perConsultant[consultant].completed++;
     let isOnTime=false;
@@ -14724,9 +14795,6 @@ function _scorecardMilestoneOnTimeStats(milestoneNum,rangeStart){
 // carry an explicit due date — closing late is closing late, no grace
 // window beyond what the due date itself represents.
 function _scorecardActionItemStats(rangeStart){
-  const port=_scorecardPort();
-  const propToConsultant={};
-  port.forEach(p=>{propToConsultant[p.n]=p.v||'Unassigned';});
   let closed=0,onTime=0;
   const perConsultant={};
   (actionItems||[]).forEach(a=>{
@@ -14734,7 +14802,7 @@ function _scorecardActionItemStats(rangeStart){
     const closedDate=new Date(a.closedDate+'T12:00:00');
     if(rangeStart&&closedDate<rangeStart)return;
     closed++;
-    const consultant=propToConsultant[a.property]||'Unassigned';
+    const consultant=scorecardConsultantForScope(a.property,a.scopeId);
     if(!perConsultant[consultant])perConsultant[consultant]={closed:0,onTime:0};
     perConsultant[consultant].closed++;
     const dueDate=new Date(a.due+'T12:00:00');
@@ -14748,23 +14816,34 @@ function _scorecardActionItemStats(rangeStart){
 // Contract Award Value, signed, as a %. Properties with no Contract Award
 // Value entered are excluded entirely (not zero, not assumed) — see
 // continuity brief: no backfill push, organic fill-in only during pilot.
+// v37j -- KPI 4 now scores each Scope/Project as its own data point (not
+// one blended number per property), since Contract Award Value, budget,
+// and consultant assignment all really live at the Scope level -- a
+// property with 2 Scopes on 2 different consultants should produce 2
+// variance points credited to the right people, not 1 point credited to
+// whichever consultant happened to be attached at the property level.
+// Confirmed with Misty directly (2 separate points, one per Scope).
 function _scorecardBudgetVarianceStats(){
-  const port=_scorecardPort();
+  const scopes=window.SCOPES||[];
   const perConsultant={}; // name -> array of variance %
   const missing=[];
   let withData=0;
-  port.forEach(p=>{
-    if(p.contractAwardValue==null||p.contractAwardValue===0){
-      // Only flag properties that have actually reached Contract Award
-      // (M4 Complete) — properties still upstream of award aren't "missing"
-      // data, they simply haven't gotten there yet.
-      const m4=getMilestonesForProp(p.n).find(m=>m.milestoneNumber===4);
-      if(m4&&m4.status==='Complete')missing.push(p);
+  scopes.forEach(sc=>{
+    if(sc.contractAwardValue==null||sc.contractAwardValue===0){
+      // Only flag Scopes that have actually reached Contract Award (M4
+      // Complete) -- Scopes still upstream of award aren't "missing" data,
+      // they simply haven't gotten there yet.
+      const m4=getMilestonesForProp(sc.property,sc.id).find(m=>m.milestoneNumber===4);
+      if(m4&&m4.status==='Complete'){
+        const prop=(window.PORTFOLIO||[]).find(p=>p.n===sc.property);
+        if(prop)missing.push(prop);
+      }
       return;
     }
+    const scBudget=(sc.plannedBudget||0)>0?sc.plannedBudget:(sc.approvedBudget||0);
     withData++;
-    const variance=((p.budget||0)-p.contractAwardValue)/p.contractAwardValue*100;
-    const consultant=p.v||'Unassigned';
+    const variance=(scBudget-sc.contractAwardValue)/sc.contractAwardValue*100;
+    const consultant=scorecardConsultantForScope(sc.property,sc.id);
     if(!perConsultant[consultant])perConsultant[consultant]=[];
     perConsultant[consultant].push(variance);
   });
@@ -14783,25 +14862,32 @@ function _scorecardBudgetVarianceStats(){
 // Savings Log (originalAmount/negotiatedAmount per CO). Same exclusion
 // rule as KPI 4 — properties without a Contract Award Value are excluded,
 // not assumed zero.
+// v37j -- KPI 5 now scores each Scope/Project as its own data point too,
+// same reasoning and same direct confirmation from Misty as KPI 4 above --
+// CO savings, Contract Award Value, and consultant assignment all really
+// live at the Scope level.
 function _scorecardChangeOrderStats(){
-  const port=_scorecardPort();
+  const scopes=window.SCOPES||[];
   const coLog=window.CO_SAVINGS||[];
   const perConsultant={};
   const missing=[];
-  port.forEach(p=>{
-    if(p.contractAwardValue==null||p.contractAwardValue===0){
-      const m4=getMilestonesForProp(p.n).find(m=>m.milestoneNumber===4);
-      if(m4&&m4.status==='Complete'&&!missing.includes(p))missing.push(p);
+  scopes.forEach(sc=>{
+    if(sc.contractAwardValue==null||sc.contractAwardValue===0){
+      const m4=getMilestonesForProp(sc.property,sc.id).find(m=>m.milestoneNumber===4);
+      if(m4&&m4.status==='Complete'){
+        const prop=(window.PORTFOLIO||[]).find(p=>p.n===sc.property);
+        if(prop&&!missing.includes(prop))missing.push(prop);
+      }
       return;
     }
     // Same status filter used elsewhere (renderChangeOrders, property mini-
     // cards) — only Approved/Client Approved COs count toward realized
     // savings. Pending/rejected COs aren't a negotiated outcome yet.
-    const propCOs=(coLog||[]).filter(c=>c.property===p.n&&(c.status==='Approved'||c.status==='Client Approved'));
-    if(propCOs.length===0)return; // no realized COs — not a ranking input either way
-    const netSavings=propCOs.reduce((a,c)=>a+((c.originalAmount||0)-(c.negotiatedAmount||0)),0);
-    const savingsPct=netSavings/p.contractAwardValue*100;
-    const consultant=p.v||'Unassigned';
+    const scopeCOs=(coLog||[]).filter(c=>c.scopeId===sc.id&&(c.status==='Approved'||c.status==='Client Approved'));
+    if(scopeCOs.length===0)return; // no realized COs — not a ranking input either way
+    const netSavings=scopeCOs.reduce((a,c)=>a+((c.originalAmount||0)-(c.negotiatedAmount||0)),0);
+    const savingsPct=netSavings/sc.contractAwardValue*100;
+    const consultant=scorecardConsultantForScope(sc.property,sc.id);
     if(!perConsultant[consultant])perConsultant[consultant]=[];
     perConsultant[consultant].push(savingsPct);
   });
@@ -14854,7 +14940,7 @@ function renderScorecard(){
     {label:'Modernization delivery',val:fmtPct(k1.pct),sub:`${k1.onTime} of ${k1.completed} closed on time`,color:'var(--blue-dark)'},
     {label:'Construction on-time',val:fmtPct(k2.pct),sub:`${k2.onTime} of ${k2.completed} closed on time`,color:'var(--blue-mid)'},
     {label:'Action item closure',val:fmtPct(k3.pct),sub:`${k3.onTime} of ${k3.closed} closed on time`,color:'var(--green)'},
-    {label:'Budget variance',val:fmtSignedPct(k4.avgVariance!=null?Math.round(k4.avgVariance*10)/10:null),sub:`avg vs. award value · ${k4.withData} properties`,color:'var(--amber)'},
+    {label:'Budget variance',val:fmtSignedPct(k4.avgVariance!=null?Math.round(k4.avgVariance*10)/10:null),sub:`avg vs. award value · ${k4.withData} projects`,color:'var(--amber)'},
     {label:'CO impact',val:k5.avgPct!=null?Math.round(k5.avgPct*10)/10+'%':'—',sub:'avg net savings vs. award value',color:'var(--green)'},
   ];
 
@@ -17630,6 +17716,155 @@ async function markThreadRead(threadId, isRead){
   renderCommentsView(expandedThreads);
 }
 
+// ── PM UPDATES (v37j) ────────────────────────────────────────────────
+// One-way status broadcast channel. PM/Admin/Consultant author updates
+// tied to a Property + optional Project; Draft = internal-only, Published
+// = visible to the Client role too. Distinct from Client Comments (a
+// two-way threaded/flagged conversation) and from My Updates (weekly
+// Field Update submission review) -- see notes at the view-pmupdates
+// markup and window.PM_UPDATES load mapping above.
+function pmuCanAuthor(){
+  return role==='admin'||role==='pm'||role==='consultant';
+}
+function pmuPopulateScopes(){
+  const propSel=document.getElementById('pmu-property');
+  const scopeSel=document.getElementById('pmu-scope');
+  if(!propSel||!scopeSel)return;
+  const propName=propSel.value;
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===propName);
+  scopeSel.innerHTML='<option value="">All Projects</option>'+
+    scopes.map(s=>`<option value="${s.id}">${s.name||'Project'}</option>`).join('');
+}
+function renderPMUpdates(){
+  const composer=document.getElementById('pmu-composer');
+  const sub=document.getElementById('pmu-header-sub');
+  const canAuthor=pmuCanAuthor();
+  if(composer)composer.style.display=canAuthor?'':'none';
+  if(sub)sub.textContent=canAuthor?'Status updates shared with the client':'Status updates from your VDA team';
+  if(canAuthor){
+    const propSel=document.getElementById('pmu-property');
+    if(propSel&&propSel.options.length===0){
+      const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+      propSel.innerHTML=port.map(p=>`<option value="${p.n}">${p.n}</option>`).join('');
+      pmuPopulateScopes();
+    }
+  }
+  const feed=document.getElementById('pmu-feed');
+  if(!feed)return;
+  // Client role only ever sees Published updates -- Draft items are
+  // internal-only by definition.
+  const all=(window.PM_UPDATES||[]).slice();
+  const visible=role==='client'?all.filter(u=>u.status==='Published'):all;
+  if(visible.length===0){
+    feed.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-broadcast-off"></i><div class="empty-state-title">No updates yet</div></div>`;
+    updatePMUpdatesBadge();
+    return;
+  }
+  feed.innerHTML=visible.map(u=>{
+    const scope=(window.SCOPES||[]).find(s=>s.id===u.scopeId);
+    const scopeLabel=scope?scope.name||'Project':'';
+    const dateLabel=(u.status==='Published'&&u.published)?u.published:u.created;
+    const dateFmt=dateLabel?new Date(dateLabel+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+    const statusBadge=u.status==='Published'
+      ?'<span class="badge b-approved">Published</span>'
+      :'<span class="badge b-pending">Draft</span>';
+    const actions=canAuthor?`<div style="display:flex;gap:6px;margin-top:8px">
+        ${u.status==='Published'
+          ?`<button class="btn btn-icon" onclick="unpublishPMUpdate('${u.id}')" title="Unpublish"><i class="ti ti-eye-off" style="font-size:13px"></i></button>`
+          :`<button class="btn btn-icon" onclick="publishPMUpdate('${u.id}')" title="Publish to Client"><i class="ti ti-eye" style="font-size:13px"></i></button>`}
+        <button class="btn btn-icon" style="background:var(--red-pale);border-color:#f7c1c1" onclick="deletePMUpdate('${u.id}')" title="Delete"><i class="ti ti-trash" style="color:var(--red);font-size:13px"></i></button>
+      </div>`:'';
+    return `<div class="card" style="margin-bottom:10px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--navy)">${u.property}${scopeLabel?' · '+scopeLabel:''}</div>
+          <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${u.author||'PULSE Team'} · ${dateFmt}</div>
+        </div>
+        ${statusBadge}
+      </div>
+      <div style="font-size:13px;color:var(--navy);margin-top:10px;white-space:pre-wrap">${u.text}</div>
+      ${actions}
+    </div>`;
+  }).join('');
+  updatePMUpdatesBadge();
+}
+// Badge = count of Draft updates waiting to be published (PM/Admin/
+// Consultant sidebars only -- Client never sees a badge since they only
+// ever see Published items, which have nothing "pending" about them).
+function updatePMUpdatesBadge(){
+  const draftCount=(window.PM_UPDATES||[]).filter(u=>u.status==='Draft').length;
+  ['pmu-badge-admin','pmu-badge-pm','pmu-badge-consultant'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el)return;
+    el.textContent=draftCount;
+    el.classList.toggle('hidden',draftCount===0);
+  });
+}
+async function pmuCreate(status){
+  const propName=document.getElementById('pmu-property')?.value;
+  const scopeId=document.getElementById('pmu-scope')?.value||'';
+  const text=document.getElementById('pmu-text')?.value.trim();
+  if(!propName){showToast('Select a property','warn');return;}
+  if(!text){showToast('Enter an update','warn');return;}
+  const authorName=role==='consultant'?(currentConsultantName||'Consultant'):(window._userName||'PM User');
+  const todayStr=new Date().toISOString().split('T')[0];
+  const fields={
+    'Property Name':propertyNameToLink(propName),
+    'Author':authorName,
+    'Update Text':text,
+    'Status':status,
+    'Created Date':todayStr,
+  };
+  if(scopeId)fields['Linked Scope']=[scopeId];
+  if(status==='Published')fields['Published Date']=todayStr;
+  const res=await atCreate('PM Updates',fields);
+  if(!res){showToast('Error saving update','error');return;}
+  const newId=res.records?.[0]?.id||res.id;
+  window.PM_UPDATES=window.PM_UPDATES||[];
+  window.PM_UPDATES.unshift({
+    id:newId,property:propName,scopeId,author:authorName,text,status,
+    created:todayStr,published:status==='Published'?todayStr:'',
+  });
+  document.getElementById('pmu-text').value='';
+  showToast(status==='Published'?'Update published':'Draft saved','success');
+  renderPMUpdates();
+}
+function saveDraftPMUpdate(){pmuCreate('Draft');}
+function publishNewPMUpdate(){pmuCreate('Published');}
+async function publishPMUpdate(id){
+  const u=(window.PM_UPDATES||[]).find(x=>x.id===id);
+  if(!u)return;
+  const todayStr=new Date().toISOString().split('T')[0];
+  const res=await atUpdate('PM Updates',id,{'Status':'Published','Published Date':todayStr});
+  if(!res){showToast('Error publishing update','error');return;}
+  u.status='Published';u.published=todayStr;
+  showToast('Published to client','success');
+  renderPMUpdates();
+}
+async function unpublishPMUpdate(id){
+  const u=(window.PM_UPDATES||[]).find(x=>x.id===id);
+  if(!u)return;
+  const res=await atUpdate('PM Updates',id,{'Status':'Draft'});
+  if(!res){showToast('Error unpublishing update','error');return;}
+  u.status='Draft';
+  showToast('Unpublished — hidden from client again','success');
+  renderPMUpdates();
+}
+async function deletePMUpdate(id){
+  if(!confirm('Delete this update? This can\'t be undone.'))return;
+  const res=await atDelete('PM Updates',id);
+  if(!res){showToast('Error deleting update','error');return;}
+  window.PM_UPDATES=(window.PM_UPDATES||[]).filter(u=>u.id!==id);
+  showToast('Update deleted','success');
+  renderPMUpdates();
+}
+window.pmuPopulateScopes=pmuPopulateScopes;
+window.saveDraftPMUpdate=saveDraftPMUpdate;
+window.publishNewPMUpdate=publishNewPMUpdate;
+window.publishPMUpdate=publishPMUpdate;
+window.unpublishPMUpdate=unpublishPMUpdate;
+window.deletePMUpdate=deletePMUpdate;
+
 function renderCommentsView(expandedThreads){
   const isClient=role==='client';
   const isPM=role==='pm'||role==='admin';
@@ -17725,10 +17960,16 @@ function renderReportLibrary(){
     list.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-file-analytics"></i><div class="empty-state-title">No reports yet</div><div class="empty-state-sub">Generate your first report or wait for Monday's scheduled report</div></div>`;
     return;
   }
+  // v37j -- Delete button (Admin/PM only). Performance Reports had no way
+  // to remove stale/test reports from the library before this -- Misty
+  // confirmed she wants a real delete feature rather than one-off manual
+  // Airtable cleanup.
+  const canDeleteReports=(role==='admin'||role==='pm');
   list.innerHTML=allReports.map(r=>{
     const typeLabel=r.reportType==='Weekly'?'<span class="badge b-cip" style="font-size:9px">Weekly</span>':'<span class="badge b-vda" style="font-size:9px">On-Demand</span>';
     const scopeLabel=r.scope||r.subfolder||'All Properties';
     const dateLabel=r.uploaded?new Date(r.uploaded+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'}):r.date||'';
+    const deleteBtn=canDeleteReports?`<button class="btn btn-icon" style="flex-shrink:0;background:var(--red-pale);border-color:#f7c1c1" onclick="event.stopPropagation();deleteReport('${r.id}','${(r.name||'Performance Report').replace(/'/g,"\\'")}')" title="Delete report"><i class="ti ti-trash" style="color:var(--red)"></i></button>`:'';
     return `<div class="card" style="margin-bottom:10px;cursor:pointer" onclick="openSavedReport('${r.id}')">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div style="display:flex;align-items:center;gap:12px">
@@ -17738,11 +17979,31 @@ function renderReportLibrary(){
             <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${dateLabel} · ${scopeLabel}</div>
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">${typeLabel}<i class="ti ti-eye" style="color:var(--gray-mid);font-size:15px"></i></div>
+        <div style="display:flex;align-items:center;gap:8px">${typeLabel}<i class="ti ti-eye" style="color:var(--gray-mid);font-size:15px"></i>${deleteBtn}</div>
       </div>
     </div>`;
   }).join('');
 }
+
+// v37j -- Delete a Performance Report. Removes the real Airtable Documents
+// record (if this report has one) plus both in-memory copies
+// (window.DOCUMENTS_LIVE and the local-only savedReports array used
+// before a just-generated report's Airtable record has round-tripped
+// back), then re-renders the library. Confirm-gated since this is a
+// permanent delete with no undo.
+async function deleteReport(id,name){
+  if(!confirm(`Delete "${name}"? This can't be undone.`))return;
+  const isRealDoc=(window.DOCUMENTS_LIVE||[]).some(d=>d.id===id);
+  if(isRealDoc){
+    const result=await atDelete('Documents',id);
+    if(!result){showToast('Error deleting report','error');return;}
+  }
+  window.DOCUMENTS_LIVE=(window.DOCUMENTS_LIVE||[]).filter(d=>d.id!==id);
+  savedReports=savedReports.filter(r=>r.id!==id);
+  showToast('Report deleted','success');
+  renderReportLibrary();
+}
+window.deleteReport=deleteReport;
 
 function openSavedReport(id){
   const doc=(window.DOCUMENTS_LIVE||[]).find(d=>d.id===id)||savedReports.find(r=>r.id===id);
