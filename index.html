@@ -619,24 +619,11 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   </div>
 </div>
 
-<!-- CONSULTANT PICKER SCREEN -->
-<div id="consultant-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem">
-  <div style="width:44px;height:44px;background:#0F6E56;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1.25rem"><i class="ti ti-hard-hat" style="color:white;font-size:24px"></i></div>
-  <div style="font-size:20px;font-weight:600;color:white;margin-bottom:6px;letter-spacing:-.3px">Who are you?</div>
-  <div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:2rem;text-align:center">Enter your name and PIN — it will be attached to all updates you submit this session.</div>
-  <div style="background:white;border-radius:12px;padding:1.5rem;width:100%;max-width:380px">
-    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">First and last name</label>
-    <input type="text" id="consultant-name-input" placeholder="First and last name" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;margin-bottom:12px;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box">
-    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">PIN</label>
-    <div style="position:relative;margin-bottom:12px">
-      <input type="password" id="consultant-pin-input" placeholder="6-character PIN" maxlength="6" autocomplete="off" style="width:100%;padding:9px 36px 9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;background:#f8f8f6;color:#2C2C2A;box-sizing:border-box" onkeydown="if(event.key==='Enter')confirmConsultant()">
-      <button type="button" onclick="togglePinVisibility('consultant-pin-input',this)" title="Show PIN" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;color:#5F5E5A"><i class="ti ti-eye" style="font-size:16px"></i></button>
-    </div>
-    <div id="consultant-pin-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:10px"></div>
-    <button onclick="confirmConsultant()" style="width:100%;padding:10px;background:#0F6E56;color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer">Continue to portal</button>
-    <div style="text-align:center;margin-top:10px"><button onclick="cancelConsultantPicker()" style="background:none;border:none;color:#B4B2A9;font-size:12px;cursor:pointer">← Back to login</button></div>
-  </div>
-</div>
+<!-- v36q — Consultant Picker Screen removed. Consultant now logs in
+through the same main login-screen name+PIN flow as PM/Client/Admin (see
+selectRole()/doLogin() above) — this second screen asking for the exact
+same two fields again is gone as dead code, along with
+showConsultantPicker()/cancelConsultantPicker()/confirmConsultant() below. -->
 
 <script>
 // ── AIRTABLE VIA CLOUDFLARE WORKER ───────────────────────────────────
@@ -820,43 +807,11 @@ async function maybeAutoStartTour(roleKey,loginResult){
   _tourStartLinear();
 }
 
-// Consultant picker
-function showConsultantPicker(callback) {
-  const screen = document.getElementById('consultant-screen');
-  screen.style.display = 'flex';
-  window._consultantCallback = callback;
-  const err=document.getElementById('consultant-pin-error');if(err)err.style.display='none';
-  // Pre-fill if already set this session
-  if (currentConsultantName) {
-    const nameEl = document.getElementById('consultant-name-input');
-    if(nameEl)nameEl.value = currentConsultantName;
-  }
-}
-function cancelConsultantPicker() {
-  document.getElementById('consultant-screen').style.display = 'none';
-  const err=document.getElementById('consultant-pin-error');if(err)err.style.display='none';
-}
-async function confirmConsultant() {
-  const nameEl=document.getElementById('consultant-name-input');
-  const pinEl=document.getElementById('consultant-pin-input');
-  const errEl=document.getElementById('consultant-pin-error');
-  const name=nameEl.value;
-  const result=await verifyPinLogin('consultant',name,pinEl.value);
-  if(!result.ok){
-    errEl.textContent=result.message;errEl.style.display='block';
-    return;
-  }
-  errEl.style.display='none';
-  currentConsultantName = result.name;
-  window._userName = result.name;
-  window._lastLoginResult = result;
-  sessionStorage.setItem('pulse_consultant', result.name);
-  document.getElementById('consultant-screen').style.display = 'none';
-  // Update sidebar display
-  document.getElementById('sb-username').textContent = result.name;
-  document.getElementById('sb-avatar').textContent = result.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-  if (window._consultantCallback) window._consultantCallback();
-}
+// v36q — showConsultantPicker()/cancelConsultantPicker()/confirmConsultant()
+// removed as dead code. Consultant login now goes through doLogin() on the
+// main screen exactly like PM/Client/Admin (see selectRole()/doLogin()
+// above) — nothing else in the app calls these three functions or
+// references the removed consultant-screen div/window._consultantCallback.
 
 // Airtable API helpers — all routed through Cloudflare Worker
 async function atGet(table, formula='') {
@@ -1276,6 +1231,9 @@ async function loadAllData() {
         v: r.fields['VDA Consultant']||'',
         ec: r.fields['Elevator Company']||'',
         vdaNum: r.fields['VDA Project Number']||'',
+        // v37a — Client Project #, same pattern as VDA Project #/vdaNum
+        // just above. Displayed on the Project card next to VDA Project #.
+        clientProjectNum: r.fields['Client Project #']||'',
         coRateST: r.fields['ST Rate']!=null?Number(r.fields['ST Rate']):null,
         coRateOT: r.fields['OT Rate']!=null?Number(r.fields['OT Rate']):null,
         coMaterialMarkup: r.fields['Material Markup']!=null?Number(r.fields['Material Markup'])*100:null,
@@ -1951,6 +1909,8 @@ window.PROPERTIES_SEED = [
       <div class="form-group" style="grid-column:1/-1;margin-top:4px;padding-top:12px;border-top:1px solid var(--border)"><div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em">Project Details <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">— saved to current project</span></div><div id="ep-scope-indicator" style="display:none;margin-top:8px"></div></div>
       <div class="form-group"><label class="form-label">Elevator Company</label><input class="form-input" type="text" id="ep-ec" placeholder="e.g. Otis, Schindler, TBD"></div>
       <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input" type="text" id="ep-vda" placeholder="e.g. 65153"></div>
+      <!-- v37a — Client Project #, same field pattern as VDA Project # above. -->
+      <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input" type="text" id="ep-client-project-num" placeholder="Client's own project number"></div>
       <div class="form-group"><label class="form-label">Project Budget</label><input class="form-input" type="text" inputmode="numeric" id="ep-budget" placeholder="e.g. 1,800,000"></div>
       <div class="form-group"><label class="form-label">Total Units</label><input class="form-input" type="number" id="ep-units" placeholder="e.g. 8" min="0"></div>
       <div class="form-group"><label class="form-label">Elevator Count</label><input class="form-input" type="number" id="ep-elevators" placeholder="0" min="0"></div>
@@ -3593,7 +3553,12 @@ function selectRole(r,btn){
   const wrap=document.getElementById('login-name-pin-wrap');
   const nameGroup=document.getElementById('login-name-field-group');
   if(wrap){
-    wrap.style.display=(r==='pm'||r==='client'||r==='admin')?'block':'none';
+    // v36q — Consultant login redesign. Consultant now uses this same
+    // main-screen name+PIN flow as PM/Client/Admin, instead of verifying
+    // here and then launching a second, redundant consultant-screen popup
+    // asking for the exact same two fields again (see doLogin() below —
+    // showConsultantPicker() call removed). 'pm'/'client'/'admin' unchanged.
+    wrap.style.display=(r==='pm'||r==='client'||r==='admin'||r==='consultant')?'block':'none';
     if(nameGroup)nameGroup.style.display=(r==='admin')?'none':'block';
     const err=document.getElementById('login-pin-error');if(err)err.style.display='none';
   }
@@ -3625,14 +3590,11 @@ async function doLogin(){
     document.getElementById('under-construction-screen').style.display='flex';
     return;
   }
-  // If consultant role, show name+PIN picker first
-  if(role==='consultant' && !currentConsultantName) {
-    showConsultantPicker(()=>_finishLogin());
-    return;
-  }
-  // PM, Client, and Admin verify PIN on the main login screen.
+  // v36q — Consultant login redesign. PM, Client, Admin, and now Consultant
+  // all verify name+PIN on this one main login screen — no more second
+  // consultant-screen popup asking for the exact same two fields again.
   // Admin has no Name field — pass null; verifyPinLogin matches Role+PIN only.
-  if(role==='pm'||role==='client'||role==='admin'){
+  if(role==='pm'||role==='client'||role==='admin'||role==='consultant'){
     const nameEl=document.getElementById('login-name-input');
     const pinEl=document.getElementById('login-pin-input');
     const errEl=document.getElementById('login-pin-error');
@@ -3644,6 +3606,14 @@ async function doLogin(){
     errEl.style.display='none';
     window._userName=result.name;
     window._lastLoginResult=result;
+    // Consultant-specific: currentConsultantName drives every property/
+    // filter check across the app (propertyHasConsultant, etc.) — same
+    // assignment confirmConsultant() used to do, just from this one unified
+    // path now instead of the popup's own success handler.
+    if(role==='consultant'){
+      currentConsultantName=result.name;
+      sessionStorage.setItem('pulse_consultant',result.name);
+    }
   }
   // v30e: store previous login time before updating (for Portfolio Activity feed)
   try{
@@ -3788,9 +3758,11 @@ function doLogout(){
   // persists on top of the login screen after sign-out.
   if(typeof _tourEnd==='function' && _tourRole){_tourEnd();}
   // Clear authenticated identity so the next login — any role — always
-  // requires a fresh PIN check. Without this, currentConsultantName (restored
-  // from sessionStorage) would silently bypass the Consultant PIN picker on
-  // every subsequent login in the same browser session.
+  // requires a fresh PIN check. currentConsultantName is also just a
+  // display/filtering value now (v36q — consultant verifies PIN through the
+  // same doLogin() path every time, no separate bypass condition exists
+  // anymore), but still needs clearing here so a stale name from
+  // sessionStorage never leaks into a different person's session.
   currentConsultantName='';
   window._userName=null;
   sessionStorage.removeItem('pulse_consultant');
@@ -4376,7 +4348,7 @@ async function createScopeForYearKey(propName,propId,yearKey){
     const res=await atCreate('Scopes',fields);
     newId=res?.records?.[0]?.id||newId;
   }
-  const newScope={id:newId,property:propName,propertyId:propId||'',name,year:yearNum,unitList:'',plannedBudget:0,approvedBudget:0,budgetStatus:'TBD',priority:'4: Standard',status:initialStatus,v:'',ec:'',vdaNum:'',elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,linkedUnitIds:[],isTbd:yearKey==='TBD',isCompleteBucket:isComplete};
+  const newScope={id:newId,property:propName,propertyId:propId||'',name,year:yearNum,unitList:'',plannedBudget:0,approvedBudget:0,budgetStatus:'TBD',priority:'4: Standard',status:initialStatus,v:'',ec:'',vdaNum:'',clientProjectNum:'',elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,linkedUnitIds:[],isTbd:yearKey==='TBD',isCompleteBucket:isComplete};
   window.SCOPES=(window.SCOPES||[]).concat([newScope]);
   return newScope;
 }
@@ -5585,6 +5557,12 @@ function renderScopeCards(p){
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">VDA Project #</div>
             <div style="font-size:13px;font-weight:500;color:var(--navy)">${s.vdaNum||'—'}</div>
           </div>
+          <!-- v37a — Client Project #, same field pattern as VDA Project #
+          just above, displayed right next to it on the card. -->
+          <div>
+            <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Client Project #</div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">${s.clientProjectNum||'—'}</div>
+          </div>
           <div>
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${awardVal?'Contract Award':'Planned Budget'}</div>
             <div style="font-size:13px;font-weight:500;color:var(--navy)">${awardVal||budgetVal}</div>
@@ -5694,6 +5672,11 @@ function renderScopeEditModal(s,p){
         <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input" id="se-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
         <div class="form-group"><label class="form-label">Priority</label><select class="form-input" id="se-priority">${priOptions}</select></div>
       </div>
+      <!-- v37a — Client Project #, same field pattern as VDA Project # above. -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input" id="se-client-project-num" type="text" value="${(s.clientProjectNum||'').replace(/"/g,'&quot;')}" placeholder="Client's own project number"></div>
+        <div class="form-group"></div>
+      </div>
       <label class="form-label" style="display:block;margin-bottom:6px">Units In This Project — Check To Include</label>
       <div id="se-units-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:12px">${unitRows}</div>
       <div style="background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);padding:10px 12px;margin-bottom:12px">
@@ -5738,6 +5721,8 @@ async function saveScopeEditModal(scopeId){
   const consultant=document.getElementById('se-consultant').value.trim();
   const ec=document.getElementById('se-ec').value.trim();
   const vdaNum=document.getElementById('se-vdanum').value.trim();
+  // v37a — Client Project #, same field pattern as VDA Project # above.
+  const clientProjectNum=document.getElementById('se-client-project-num').value.trim();
   const priorityDisplay=document.getElementById('se-priority').value;
   const coRateSTRaw=document.getElementById('se-rate-st').value.trim();
   const coRateST=coRateSTRaw!==''?parseFloat(coRateSTRaw):null;
@@ -5756,6 +5741,7 @@ async function saveScopeEditModal(scopeId){
     'VDA Consultant':consultant||null,
     'Elevator Company':ec||'',
     'VDA Project Number':vdaNum||null,
+    'Client Project #':clientProjectNum||null,
     'Priority':scopePriority(priorityDisplay),
     'ST Rate':coRateST,
     'OT Rate':coRateOT,
@@ -5764,7 +5750,7 @@ async function saveScopeEditModal(scopeId){
     'Retainage':retainagePct!=null?retainagePct/100:null,
     'Contract Award Value':contractAwardValue,
   };
-  s.v=consultant;s.ec=ec;s.vdaNum=vdaNum;s.priority=scopePriority(priorityDisplay);
+  s.v=consultant;s.ec=ec;s.vdaNum=vdaNum;s.clientProjectNum=clientProjectNum;s.priority=scopePriority(priorityDisplay);
   s.coRateST=coRateST;s.coRateOT=coRateOT;
   s.coMaterialMarkup=coMaterialMarkup;s.coOPMarkup=coOPMarkup;
   s.retainagePct=retainagePct;s.contractAwardValue=contractAwardValue;
@@ -12153,6 +12139,11 @@ function addSplitScopeBlock(scope){
       <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input split-sc-consultant" type="text" value="${(s.v||prop?.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
       <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input split-sc-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
     </div>
+    <!-- v37a — Client Project #, same field pattern as VDA Project # above. -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input split-sc-client-project-num" type="text" value="${(s.clientProjectNum||'').replace(/"/g,'&quot;')}" placeholder="Client's own project number"></div>
+      <div class="form-group"></div>
+    </div>
     <div class="form-group" style="margin-bottom:12px"><label class="form-label">Mod. Survey Date <span style="font-weight:400;color:var(--gray-mid)">(graduates this project)</span></label><input class="form-input split-sc-m1date" type="date" value="${m1dateVal}"></div>
     <div id="${id}-units-header" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:12px 0 6px;display:flex;align-items:center;gap:6px"></div>
     <div id="${id}-units-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border-light,var(--border));border-radius:6px;padding:8px"></div>
@@ -12281,6 +12272,8 @@ async function saveSplitIntoScopes(){
       m1date:b.querySelector('.split-sc-m1date')?.value||'',
       consultant:b.querySelector('.split-sc-consultant')?.value.trim()||'',
       vdaNum:b.querySelector('.split-sc-vdanum')?.value.trim()||'',
+      // v37a — Client Project #, same field pattern as VDA Project # above.
+      clientProjectNum:b.querySelector('.split-sc-client-project-num')?.value.trim()||'',
     };
   });
   if(rows.some(r=>!r.name)){showToast('Each scope needs a name','warn');return;}
@@ -12321,12 +12314,13 @@ async function saveSplitIntoScopes(){
       'Budget Status':r.budgetStatus||'TBD',
       'VDA Consultant':r.consultant||null,
       'VDA Project Number':r.vdaNum||null,
+      'Client Project #':r.clientProjectNum||null,
     };
     let scopeId=r.scopeId;
     if(scopeId){
       if(!demoMode) await atUpdate('Scopes',scopeId,fields);
       const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
-      if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.isTbd=sc.isTbd||r.name==='TBD Scope';}
+      if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.clientProjectNum=r.clientProjectNum||sc.clientProjectNum||'';sc.isTbd=sc.isTbd||r.name==='TBD Scope';}
     } else {
       const createFields={...fields,'Property':[prop.id],'Status':'Capital Plan'};
       let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
@@ -12340,7 +12334,7 @@ async function saveSplitIntoScopes(){
         unitList:'',plannedBudget:r.plannedBudget,approvedBudget:0,
         budgetStatus:r.budgetStatus||'TBD',priority:scopePriority(r.priority),status:'Capital Plan',
         elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,
-        v:r.consultant||'',vdaNum:r.vdaNum||'',linkedUnitIds:[],isTbd:r.name==='TBD Scope',
+        v:r.consultant||'',vdaNum:r.vdaNum||'',clientProjectNum:r.clientProjectNum||'',linkedUnitIds:[],isTbd:r.name==='TBD Scope',
       }]);
     }
     r.scopeId=scopeId; // needed by the post-save unit-linking pass below
@@ -16092,6 +16086,8 @@ function openEditPropertyPanel(){
   document.getElementById('ep-consultant').value=p.v||'';
   document.getElementById('ep-ec').value=sc?.ec||p.ec||'';
   document.getElementById('ep-vda').value=sc?.vdaNum||p.vda||'';
+  // v37a — Client Project #, same field pattern as VDA Project # above.
+  document.getElementById('ep-client-project-num').value=sc?.clientProjectNum||p.clientProjectNum||'';
   document.getElementById('ep-co-rate-st').value=sc?.coRateST!=null?sc.coRateST:(p.coRateST!=null?p.coRateST:'');
   document.getElementById('ep-co-rate-ot').value=sc?.coRateOT!=null?sc.coRateOT:(p.coRateOT!=null?p.coRateOT:'');
   document.getElementById('ep-co-material-markup').value=sc?.coMaterialMarkup!=null?sc.coMaterialMarkup:(p.coMaterialMarkup!=null?p.coMaterialMarkup:'');
@@ -16115,6 +16111,8 @@ function epSwitchScope(scopeId){
   // Re-populate scope-level fields with the newly selected scope's values
   document.getElementById('ep-ec').value=sc.ec||currentProp?.ec||'';
   document.getElementById('ep-vda').value=sc.vdaNum||currentProp?.vda||'';
+  // v37a — Client Project #, same field pattern as VDA Project # above.
+  document.getElementById('ep-client-project-num').value=sc.clientProjectNum||currentProp?.clientProjectNum||'';
   document.getElementById('ep-co-rate-st').value=sc.coRateST!=null?sc.coRateST:'';
   document.getElementById('ep-co-rate-ot').value=sc.coRateOT!=null?sc.coRateOT:'';
   document.getElementById('ep-co-material-markup').value=sc.coMaterialMarkup!=null?sc.coMaterialMarkup:'';
@@ -16305,6 +16303,8 @@ async function saveEditProperty(){
   // individually retargeted to read from currentScope.
   const ec=document.getElementById('ep-ec').value.trim();
   const vdaNum=document.getElementById('ep-vda').value.trim();
+  // v37a — Client Project #, same field pattern as VDA Project # above.
+  const clientProjectNum=document.getElementById('ep-client-project-num').value.trim();
   const coRateSTRaw=document.getElementById('ep-co-rate-st').value.trim();
   const coRateST=coRateSTRaw!==''?parseFloat(coRateSTRaw):null;
   const coRateOTRaw=document.getElementById('ep-co-rate-ot').value.trim();
@@ -16321,6 +16321,7 @@ async function saveEditProperty(){
   const scopeFields={
     'Elevator Company':ec||'',
     'VDA Project Number':vdaNum,
+    'Client Project #':clientProjectNum||null,
     'ST Rate':coRateST,
     'OT Rate':coRateOT,
     'Material Markup':coMaterialMarkup!=null?coMaterialMarkup/100:null,
@@ -16338,14 +16339,14 @@ async function saveEditProperty(){
   p.elevatorCount=elevators;p.escalatorCount=escalators;
   p.liftCount=lifts;p.otherCount=other;
   // Legacy fallback on property object so old render sites still work
-  p.ec=ec;p.vda=vdaNum;
+  p.ec=ec;p.vda=vdaNum;p.clientProjectNum=clientProjectNum;
   p.coRateST=coRateST;p.coRateOT=coRateOT;
   p.coMaterialMarkup=coMaterialMarkup;p.coOPMarkup=coOPMarkup;
   p.retainagePct=retainagePct;
 
   // Update currentScope in-memory
   if(sc){
-    sc.ec=ec;sc.vdaNum=vdaNum;
+    sc.ec=ec;sc.vdaNum=vdaNum;sc.clientProjectNum=clientProjectNum;
     sc.coRateST=coRateST;sc.coRateOT=coRateOT;
     sc.coMaterialMarkup=coMaterialMarkup;sc.coOPMarkup=coOPMarkup;
     sc.retainagePct=retainagePct;sc.contractAwardValue=contractAwardValue;
