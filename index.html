@@ -2214,7 +2214,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38g</div>
     </div>
   </nav>
 
@@ -8866,17 +8866,40 @@ async function saveCO(){
   renderDashboard();
 }
 
-async function updateCOStatus(coId,newStatus){
+// v38g — used by the Pending Review queue's Approve button so the
+// navigation to the property's Change Orders tab only happens after the
+// approval is actually confirmed and written, not the instant the button
+// is clicked (see note on showCOStatusNoteModal for the bug this fixes).
+function approveQueueCO(coId,propName){
+  updateCOStatus(coId,'Approved',()=>{
+    openProperty(propName);
+    setTimeout(()=>switchPropTab('changeorders',document.querySelector('.tab-btn[onclick*="changeorders"]')),300);
+  });
+}
+window.approveQueueCO=approveQueueCO;
+
+async function updateCOStatus(coId,newStatus,onDone){
   const co=(window.CO_SAVINGS||[]).find(c=>c.id===coId);
   if(!co)return;
   // Show note modal for Approved and Rejected
   if(newStatus==='Approved'||newStatus==='Rejected'){
-    showCOStatusNoteModal(coId,newStatus);
+    showCOStatusNoteModal(coId,newStatus,onDone);
     return;
   }
   await _applyUpdateCOStatus(coId,newStatus,'');
+  if(typeof onDone==='function')onDone();
 }
-function showCOStatusNoteModal(coId,newStatus){
+// v38g — onDone is an optional callback fired only after the change order's
+// status has actually been written (Airtable + local state), never before.
+// Fixes a bug where the Pending Review queue's Approve button chained
+// openProperty(...) directly onto the same click that opens this modal —
+// since updateCOStatus() returns immediately for Approved/Rejected (it only
+// opens this confirmation modal, the real write happens on _submitCOStatusNote
+// below), that chained navigation fired before the modal was ever confirmed,
+// stranding the modal and making Approve look like it silently did nothing.
+window._coNoteModalOnDone=null;
+function showCOStatusNoteModal(coId,newStatus,onDone){
+  window._coNoteModalOnDone=(typeof onDone==='function')?onDone:null;
   const isApproved=newStatus==='Approved';
   const overlay=document.createElement('div');
   overlay.id='co-note-overlay';
@@ -8892,7 +8915,7 @@ function showCOStatusNoteModal(coId,newStatus){
       <textarea class="form-input" id="co-note-input" rows="3" placeholder="e.g. ${isApproved?'Approved — scope verified and pricing is within contract parameters.':'Rejected — scope is included in original contract. Please review section 4.2.'}" style="resize:vertical"></textarea>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn" onclick="document.getElementById('co-note-overlay').remove()">Cancel</button>
+      <button class="btn" onclick="window._coNoteModalOnDone=null;document.getElementById('co-note-overlay').remove()">Cancel</button>
       <button class="btn ${isApproved?'btn-success':'btn-delete'}" onclick="_submitCOStatusNote('${coId}','${newStatus}')">
         <i class="ti ti-check"></i>${isApproved?'Approve':'Reject'}
       </button>
@@ -8904,6 +8927,9 @@ async function _submitCOStatusNote(coId,newStatus){
   const note=document.getElementById('co-note-input')?.value.trim()||'';
   document.getElementById('co-note-overlay')?.remove();
   await _applyUpdateCOStatus(coId,newStatus,note);
+  const onDone=window._coNoteModalOnDone;
+  window._coNoteModalOnDone=null;
+  if(typeof onDone==='function')onDone();
 }
 async function _applyUpdateCOStatus(coId,newStatus,note){
   const co=(window.CO_SAVINGS||[]).find(c=>c.id===coId);
@@ -17123,7 +17149,7 @@ function refreshQueue(){
         <span style="color:var(--gray-mid)">Savings: <strong style="color:var(--green)">${co.savings>0?fmtCurrency(co.savings):'—'}</strong></span>
       </div>
       <div class="queue-actions">
-        <button class="btn btn-success" style="font-size:11px" onclick="updateCOStatus('${co.id}','Approved');openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',document.querySelector('.tab-btn[onclick*=\"changeorders\"]')),300)"><i class="ti ti-check"></i>Approve</button>
+        <button class="btn btn-success" style="font-size:11px" onclick="approveQueueCO('${co.id}','${co.property.replace(/'/g,"\\'")}')"><i class="ti ti-check"></i>Approve</button>
         <button class="btn btn-delete" style="font-size:11px" onclick="updateCOStatus('${co.id}','Rejected')">Reject</button>
       </div>
     </div>`).join('');
@@ -19401,12 +19427,22 @@ const TOUR_STEPS = {
       'Step 2: Approve publishes the update and archives it to Documents automatically.',
       'Step 3: Return with Note sends it back to the consultant with your feedback for revision.',
       'Step 4: If a consultant flags a follow-up action, you\u2019ll see a flag icon. Open the submission to either Publish it as a real Action Item, or Dismiss it if it\u2019s already being handled — you can add a private note explaining why.',
-      'Step 5: Pending Change Orders also appear here, marked separately from field updates. Approve moves the change order forward in the property\u2019s Change Order log; Reject returns it to that status without affecting the rest of the submission queue.'
+      'Step 5: Pending Change Orders also appear here, marked separately from field updates. Approve moves the change order forward in the property\u2019s Change Order log; Reject returns it to that status without affecting the rest of the submission queue.',
+      'Step 6: A change order can be linked to the specific units it applies to, or flagged \u201cApplies to Whole Project\u201d for something like an accelerated schedule that isn\u2019t tied to individual units \u2014 this is documentation only and doesn\u2019t affect savings totals, which still roll up at the property/portfolio level.'
     ]},
     {target:'#nav-pm [onclick*="\'comments\'"]',view:'comments',title:'Client Comments',body:['Where client-raised questions and flags show up for your response.']},
+    {target:'#nav-pm [onclick*="\'pmupdates\'"]',view:'pmupdates',title:'PM Updates',body:[
+      'Step 1: A one-way broadcast channel to the client \u2014 separate from Client Comments, which is a two-way conversation. Use PM Updates to post a status note the client just needs to see, not respond to.',
+      'Step 2: Write an update tied to a property (and optionally a specific project/scope), then Save Draft or Publish to Client. Drafts stay internal until you publish them \u2014 the client never sees a draft.',
+      'Step 3: Published updates can be unpublished later if needed. The draft count badge in the sidebar shows how many updates are waiting to be reviewed and published.'
+    ]},
     {target:'#nav-pm [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates in one calendar view.']},
     {target:'#nav-pm [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your portfolio in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself — so this tour is always the best place to come back to.']},
-    {target:'#nav-pm [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:['Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.']},
+    {target:'#nav-pm [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:[
+      'Step 1: Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.',
+      'Step 2: Click any bar or segment on these charts to open a list of the properties (and, on Forecasted Spend, the specific units and dollar amounts) behind that number.',
+      'Step 3: Properties flagged Complete at program launch always show as Complete here, even before their milestone history is fully built out — Active Projects by Stage stays consistent with what you\u2019d see on Portfolio View for the same property.'
+    ]},
     {target:'#nav-pm [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
       'Step 1: Generate a report anytime, on demand, for any property or your full portfolio.',
       'Step 2: Every Monday, PULSE automatically generates a report with an AI-written summary and emails it to you for review.',
@@ -19442,10 +19478,16 @@ const TOUR_STEPS = {
     ]},
     {target:'#nav-consultant [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:['A working view of recent activity across your properties — open actions, upcoming meetings, and recent field updates, with scope badges showing which contract each item belongs to.']},
     {target:'#nav-consultant [onclick*="\'comments\'"]',view:'comments',title:'Client Comments',body:['Client-raised questions and flags relevant to your properties.']},
+    {target:'#nav-consultant [onclick*="\'pmupdates\'"]',view:'pmupdates',title:'PM Updates',body:[
+      'Step 1: A one-way broadcast channel to the client — separate from Client Comments, which is a two-way conversation. Use it to post a status note the client just needs to see, not respond to.',
+      'Step 2: Write an update tied to a property (and optionally a specific project/scope), then Save Draft or Publish to Client. Drafts stay internal until published — the client never sees a draft.',
+      'Step 3: You can publish and unpublish your own updates directly from the feed.'
+    ]},
     {target:'#nav-consultant [onclick*="\'submit\'"]',view:'submit',title:'Submit Update',body:[
       'Step 1: This is where you log your weekly field update — property, units, phase, progress, and notes.',
-      'Step 2: If something needs follow-up beyond your notes — like an issue another party needs to resolve — check the flag toggle to attach a draft action. Describe it, set an owner and priority, and your PM will review it.',
-      'Step 3: Submit sends it to your PM for review. You\u2019ll see its status in My Updates.'
+      'Step 2: Check off the specific units this update covers from the list, or check "Applies to Whole Project" if it\u2019s not tied to individual units — this keeps your unit records accurate for the property.',
+      'Step 3: If something needs follow-up beyond your notes — like an issue another party needs to resolve — check the flag toggle to attach a draft action. Describe it, set an owner and priority, and your PM will review it.',
+      'Step 4: Submit sends it to your PM for review. You\u2019ll see its status in My Updates.'
     ]},
     {target:'#nav-consultant [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates for your properties.']},
     {target:'#nav-consultant [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your properties in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself.']},
@@ -19454,7 +19496,10 @@ const TOUR_STEPS = {
   client: [
     {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
     {target:'#nav-client [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — a snapshot of progress across your properties.']},
-    {target:'#nav-client [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:['Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.']},
+    {target:'#nav-client [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:[
+      'Step 1: Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.',
+      'Step 2: Click any bar or segment to see the properties (and, on Forecasted Spend, the units and dollar amounts) behind that number.'
+    ]},
     {target:'#nav-client [onclick*="\'portfolio\'"]',view:'portfolio',title:'Portfolio View',body:['Every property in your portfolio, in one list. Click into any property for its full detail.']},
     {target:'.tab-row',title:'Property Detail',isPropertyDetail:true,propTab:'overview',body:[
       'Step 1: Opening any property gives you the same full detail view your VDA project team works from — organized into tabs across the top.',
@@ -19485,6 +19530,7 @@ const TOUR_STEPS = {
       'Step 3: Track the status of anything you\u2019ve raised right here — you\u2019ll see it update once there\u2019s a response.'
     ]},
     {target:'#nav-client [onclick*="\'documents\'"]',view:'documents',title:'Documents',body:['Field updates, meeting minutes, and reports relevant to your properties are archived here automatically.']},
+    {target:'#nav-client [onclick*="\'pmupdates\'"]',view:'pmupdates',title:'PM Updates',body:['Status updates your VDA project team has published for you — a quick read-only feed, separate from Comments & Flags where you can ask questions or raise something yourself.']},
     {target:'#nav-client [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates across your portfolio.']},
     {target:'#nav-client [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your portfolio in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself.']},
     {target:'#nav-client [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
