@@ -1482,6 +1482,9 @@ async function loadAllData() {
       loggedBy: r.fields['Logged By']||'',
       date: r.fields['Date']||'',
       notes: r.fields['Notes']||'',
+      // v38d — documentation/traceability only, no rollup math depends on these.
+      linkedUnitIds: r.fields['Linked Units']||[],
+      appliesToWholeProject: !!r.fields['Applies to Whole Project'],
     })).sort((a,b)=>new Date(b.date)-new Date(a.date));
     AT_CONNECTED = true;
     console.log('AT_CONNECTED set to true - updating UI');
@@ -1964,6 +1967,22 @@ window.PROPERTIES_SEED = [
     <label class="form-label">Elevator Company</label>
     <input class="form-input" type="text" id="co-ec" placeholder="e.g. Otis">
   </div>
+  <!-- v38d — Linked Units + Applies to Whole Project. Documentation/
+  traceability only (per direct instruction: savings still roll up at
+  portfolio/property level only, no per-unit math). Checking "Applies to
+  Whole Project" (e.g. an accelerated-schedule CO) hides the unit
+  checklist and clears any selections, rather than requiring every unit
+  on the property to be checked individually. -->
+  <div class="form-group">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
+      <input type="checkbox" id="co-whole-project" onchange="toggleCOWholeProject()">
+      Applies to Whole Project
+    </label>
+  </div>
+  <div class="form-group" id="co-units-group">
+    <label class="form-label">Linked Units</label>
+    <div id="co-units-list" style="max-height:140px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
+  </div>
   <div class="form-group">
     <label class="form-label">Notes</label>
     <textarea class="form-input" id="co-notes" rows="2" placeholder="Optional notes…" style="resize:vertical"></textarea>
@@ -2189,7 +2208,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38d</div>
     </div>
   </nav>
 
@@ -8591,6 +8610,51 @@ async function saveBidSubmissionForm(asDraft){
 }
 
 
+// v38d — Change Order unit-linking state. coUnitAssign holds the set of
+// checked unit ids for the CO currently open in the modal (mirrors the
+// splitUnitAssign pattern used by the Scope split modal, line ~12265).
+let coUnitAssign={};
+
+function renderCOUnitsList(){
+  const listEl=document.getElementById('co-units-list');
+  if(!listEl)return;
+  const propName=currentProp?.n||'';
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  if(units.length===0){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units in Unit Inventory List for this property yet.</div>';
+    return;
+  }
+  listEl.innerHTML=units.map(u=>{
+    const checked=!!coUnitAssign[u.id];
+    const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
+    return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
+      <input type="checkbox" ${checked?'checked':''} onchange="toggleCOUnit('${u.id}',this.checked)">
+      <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+      ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
+    </label>`;
+  }).join('');
+}
+window.renderCOUnitsList=renderCOUnitsList;
+
+function toggleCOUnit(unitId,checked){
+  if(checked)coUnitAssign[unitId]=true;
+  else delete coUnitAssign[unitId];
+}
+window.toggleCOUnit=toggleCOUnit;
+
+function toggleCOWholeProject(){
+  const whole=document.getElementById('co-whole-project').checked;
+  const group=document.getElementById('co-units-group');
+  if(whole){
+    coUnitAssign={};
+    group.style.display='none';
+  }else{
+    group.style.display='block';
+    renderCOUnitsList();
+  }
+}
+window.toggleCOWholeProject=toggleCOWholeProject;
+
 function openCOModal(editId){
   initCurrencyInput('co-original');
   initCurrencyInput('co-negotiated');
@@ -8612,7 +8676,11 @@ function openCOModal(editId){
     document.getElementById('co-material-cost').value='';
     document.getElementById('co-op-claimed').value='';
     document.getElementById('co-savings-preview').style.display='none';
+    coUnitAssign={};
+    document.getElementById('co-whole-project').checked=false;
+    document.getElementById('co-units-group').style.display='block';
   }
+  renderCOUnitsList();
   // Build 4a — Contract Rates reference block. Reference only, never used to
   // validate/flag the entries above (Section 10: Reference vs. Validation).
   const refBlock=document.getElementById('co-contract-rates-ref');
@@ -8670,7 +8738,14 @@ function editCO(coId){
   document.getElementById('co-ot-hours').value=co.otHours!=null?co.otHours:'';
   document.getElementById('co-material-cost').value=co.materialCost!=null?co.materialCost:'';
   document.getElementById('co-op-claimed').value=co.opClaimed!=null?co.opClaimed:'';
+  // v38d — repopulate unit-linking state from the existing record before
+  // openCOModal renders the checklist.
+  coUnitAssign={};
+  (co.linkedUnitIds||[]).forEach(id=>{coUnitAssign[id]=true;});
   openCOModal(coId);
+  document.getElementById('co-whole-project').checked=!!co.appliesToWholeProject;
+  toggleCOWholeProject();
+  if(!co.appliesToWholeProject)renderCOUnitsList();
   updateCOSavingsPreview();
 }
 
@@ -8691,6 +8766,10 @@ async function saveCO(){
   const otHours=otHoursRaw!==''?parseFloat(otHoursRaw):null;
   const materialCost=getCurrencyValue('co-material-cost')||null;
   const opClaimed=getCurrencyValue('co-op-claimed')||null;
+  // v38d — Linked Units / Applies to Whole Project. Documentation only;
+  // does not feed any savings rollup math.
+  const appliesToWholeProject=document.getElementById('co-whole-project').checked;
+  const linkedUnitIds=appliesToWholeProject?[]:Object.keys(coUnitAssign);
   if(!desc){showToast('Please enter a change order description','warn');return;}
   if(!orig){showToast('Please enter the original CO amount','warn');return;}
   const savings=orig-neg;
@@ -8700,9 +8779,9 @@ async function saveCO(){
   if(demoMode){
     if(editId){
       const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed});}
+      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject});}
     }else{
-      const newCO={id:'co_'+Date.now(),property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed};
+      const newCO={id:'co_'+Date.now(),property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject};
       window.CO_SAVINGS.push(newCO);
       if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
     }
@@ -8717,9 +8796,11 @@ async function saveCO(){
       'Elevator Company':ec||undefined,
       'Logged By':loggedBy,
       'Notes':notes||undefined,
+      'Applies to Whole Project':appliesToWholeProject,
     };
     if(date)fields['Date']=date;
     if(scopeId)fields['Linked Scope']=[scopeId];
+    if(linkedUnitIds.length>0)fields['Linked Units']=linkedUnitIds;
     if(stHours!=null&&!isNaN(stHours))fields['ST Hours']=stHours;
     if(otHours!=null&&!isNaN(otHours))fields['OT Hours']=otHours;
     if(materialCost!=null&&!isNaN(materialCost))fields['Material Cost']=materialCost;
@@ -8728,10 +8809,10 @@ async function saveCO(){
       if(editId){
         await atUpdate('Change Order Savings Log',editId,fields);
         const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed});
+        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject});
       }else{
         const rec=await atCreate('Change Order Savings Log',fields);
-        const newCO={id:rec.id,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed};
+        const newCO={id:rec.id,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject};
         if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
         window.CO_SAVINGS.push(newCO);
         if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
@@ -8751,6 +8832,8 @@ async function saveCO(){
           otHours:r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
           materialCost:r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
           opClaimed:r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
+          linkedUnitIds:r.fields['Linked Units']||[],
+          appliesToWholeProject:!!r.fields['Applies to Whole Project'],
         })).sort((a,b)=>new Date(b.date)-new Date(a.date));
       }
     }catch(e){showToast('Error saving change order','error');return;}
