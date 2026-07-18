@@ -1132,6 +1132,12 @@ async function loadAllData() {
       submittedAt: r.fields['Submitted Date']||'',
       reviewStatus: (r.fields['Review Status']||'Pending').toLowerCase(),
       returnNote: r.fields['Return Note']||'',
+      // v38e — documentation/traceability only, mirrors Change Order Savings
+      // Log's Linked Units/Applies to Whole Project. Legacy free-text
+      // 'units' above stays populated (auto-derived from these when set) for
+      // every display spot that still reads it directly.
+      linkedUnitIds: r.fields['Linked Units']||[],
+      appliesToWholeProject: !!r.fields['Applies to Whole Project'],
       // Draft action — consultant-flagged follow-up attached to this
       // submission, not yet a live Action Item until a PM publishes it.
       draftAction: r.fields['Draft Action Description']?{
@@ -2208,7 +2214,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38e</div>
     </div>
   </nav>
 
@@ -3122,11 +3128,27 @@ window.PROPERTIES_SEED = [
           <div class="card">
             <div class="form-row">
               <div class="form-group"><label class="form-label">Property</label>
-                <select class="form-select" id="f-property"><option value="">Select a property...</option><option>Casa Marina Key West</option><option>The Reach Curio</option><option>Royal Palm South Beach</option><option>New York Hilton Midtown</option><option>Hilton Denver City Center</option><option>Hilton New Orleans Riverside</option><option>JW Marriott San Francisco</option><option>Hilton McLean Tysons Corner</option><option>HHV Tapa</option><option>Waikoloa Makai Tower</option><option>Hilton Waikoloa Village</option><option>Hilton Lake Buena Vista</option></select>
+                <select class="form-select" id="f-property" onchange="renderFUUnitsList()"><option value="">Select a property...</option><option>Casa Marina Key West</option><option>The Reach Curio</option><option>Royal Palm South Beach</option><option>New York Hilton Midtown</option><option>Hilton Denver City Center</option><option>Hilton New Orleans Riverside</option><option>JW Marriott San Francisco</option><option>Hilton McLean Tysons Corner</option><option>HHV Tapa</option><option>Waikoloa Makai Tower</option><option>Hilton Waikoloa Village</option><option>Hilton Lake Buena Vista</option></select>
               </div>
               <div class="form-group"><label class="form-label">Report week</label><input class="form-input" type="date" id="f-week" value="2026-05-13"></div>
             </div>
             <div class="form-group"><label class="form-label">Unit(s) updated</label><input class="form-input" type="text" id="f-units" placeholder="e.g. PE6, PE7, All"></div>
+            <!-- v38e — Linked Units + Applies to Whole Project, mirroring the
+            Change Order pattern (documentation/traceability only — nothing
+            downstream computes off Units Updated today, per code review; the
+            legacy free-text f-units field above stays untouched for now and
+            keeps being sent as a fallback display string). Checking "Applies
+            to Whole Project" hides the checklist and clears selections. -->
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
+                <input type="checkbox" id="fu-whole-project" onchange="toggleFUWholeProject()">
+                Applies to Whole Project
+              </label>
+            </div>
+            <div class="form-group" id="fu-units-group">
+              <label class="form-label">Linked Units</label>
+              <div id="fu-units-list" style="max-height:140px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
+            </div>
             <div class="form-row">
               <div class="form-group"><label class="form-label">Project phase</label><select class="form-select" id="f-phase"><option>Pre-Construction</option><option selected>Construction</option><option>Post Construction</option><option>Closeout</option></select></div>
               <div class="form-group"><label class="form-label">Progress status</label><select class="form-select" id="f-status"><option>Not Started</option><option selected>In Progress</option><option>Complete</option></select></div>
@@ -17544,6 +17566,11 @@ function resetSubmitForm(){
   document.getElementById('submit-page-sub').textContent='Enters PM review queue before publishing to client';
   document.getElementById('submit-btn-primary').innerHTML='<i class="ti ti-upload"></i>Submit for review';
   document.getElementById('submit-btn-cancel').style.display='none';
+  // v38e — reset unit-linking state for a fresh submission.
+  fuUnitAssign={};
+  document.getElementById('fu-whole-project').checked=false;
+  document.getElementById('fu-units-group').style.display='block';
+  renderFUUnitsList();
 }
 function cancelEditSubmission(){
   resetSubmitForm();
@@ -17566,6 +17593,12 @@ function editSubmission(id){
   document.getElementById('f-week').value=s.week;
   document.getElementById('f-week').disabled=true;
   document.getElementById('f-units').value=s.units||'';
+  // v38e — repopulate unit-linking state from the existing submission.
+  fuUnitAssign={};
+  (s.linkedUnitIds||[]).forEach(id=>{fuUnitAssign[id]=true;});
+  document.getElementById('fu-whole-project').checked=!!s.appliesToWholeProject;
+  toggleFUWholeProject();
+  if(!s.appliesToWholeProject)renderFUUnitsList();
   document.getElementById('f-phase').value=s.phase||'Construction';
   document.getElementById('f-status').value=s.status||'In Progress';
   document.getElementById('f-notes').value=s.notes||'';
@@ -17599,12 +17632,74 @@ function editSubmission(id){
   document.getElementById('submit-btn-cancel').style.display='inline-flex';
   gotoView('submit',null);
 }
+// v38e — Field Update unit-linking state, same pattern as coUnitAssign for
+// Change Orders (line ~8600).
+let fuUnitAssign={};
+
+function renderFUUnitsList(){
+  const listEl=document.getElementById('fu-units-list');
+  if(!listEl)return;
+  const propName=document.getElementById('f-property')?.value||'';
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  if(!propName){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a property first.</div>';
+    return;
+  }
+  if(units.length===0){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units in Unit Inventory List for this property yet.</div>';
+    return;
+  }
+  listEl.innerHTML=units.map(u=>{
+    const checked=!!fuUnitAssign[u.id];
+    const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
+    return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
+      <input type="checkbox" ${checked?'checked':''} onchange="toggleFUUnit('${u.id}',this.checked)">
+      <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+      ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
+    </label>`;
+  }).join('');
+}
+window.renderFUUnitsList=renderFUUnitsList;
+
+function toggleFUUnit(unitId,checked){
+  if(checked)fuUnitAssign[unitId]=true;
+  else delete fuUnitAssign[unitId];
+}
+window.toggleFUUnit=toggleFUUnit;
+
+function toggleFUWholeProject(){
+  const whole=document.getElementById('fu-whole-project').checked;
+  const group=document.getElementById('fu-units-group');
+  if(whole){
+    fuUnitAssign={};
+    group.style.display='none';
+  }else{
+    group.style.display='block';
+    renderFUUnitsList();
+  }
+}
+window.toggleFUWholeProject=toggleFUWholeProject;
+
 async function submitUpdate(){
   const property=document.getElementById('f-property').value;if(!property){alert('Please select a property.');return;}
   const notes=document.getElementById('f-notes').value.trim();if(!notes){alert('Please add weekly notes.');return;}
   const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const week=document.getElementById('f-week').value;
-  const units=document.getElementById('f-units').value||'All';
+  // v38e — Linked Units / Applies to Whole Project. Documentation only
+  // (nothing downstream computes off unit names today, per code review).
+  // The legacy free-text f-units field stays as the fallback display
+  // string for anywhere in the app that still reads s.units directly;
+  // when the structured picker has real data, auto-derive that string
+  // from it instead of trusting whatever's typed in f-units.
+  const appliesToWholeProject=document.getElementById('fu-whole-project').checked;
+  const linkedUnitIds=appliesToWholeProject?[]:Object.keys(fuUnitAssign);
+  let units=document.getElementById('f-units').value||'All';
+  if(appliesToWholeProject){
+    units='All';
+  }else if(linkedUnitIds.length>0){
+    const unitNames=linkedUnitIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)?.name).filter(Boolean);
+    if(unitNames.length>0)units=unitNames.join(', ');
+  }
   const phase=document.getElementById('f-phase').value;
   const status=document.getElementById('f-status').value;
   const commentType=document.getElementById('f-comment-type').value;
@@ -17644,7 +17739,9 @@ async function submitUpdate(){
     'Draft Action Owner':draftAction&&draftAction.owner?draftAction.owner:null,
     'Draft Action Priority':draftAction?draftAction.priority:null,
     'Draft Action Due':draftAction&&draftAction.due?draftAction.due:null,
+    'Applies to Whole Project':appliesToWholeProject,
   };
+  if(linkedUnitIds.length>0)fields['Linked Units']=linkedUnitIds;
   // Draft Action Published is a checkbox field — Airtable checkbox semantics
   // for null aren't documented in our landmines list, so omit entirely
   // rather than risk an invalid write; only set explicitly to false when a
@@ -17660,7 +17757,7 @@ async function submitUpdate(){
     fields['Review Status']='Pending';
     fields['Submitted Date']=dateStr;
     if(existing.atId)await atUpdate('Field Updates',existing.atId,fields);
-    Object.assign(existing,{units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',draftAction});
+    Object.assign(existing,{units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',draftAction,linkedUnitIds,appliesToWholeProject});
     updateQueueBadge();
     const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} resubmitted. You'll be notified once reviewed.`;
     se.classList.remove('hidden');
@@ -17677,7 +17774,7 @@ async function submitUpdate(){
     'Review Status':'Pending',
   });
   const atId=res?.records?.[0]?.id||null;
-  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName,draftAction});
+  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName,draftAction,linkedUnitIds,appliesToWholeProject});
   updateQueueBadge();
   const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
   se.classList.remove('hidden');
