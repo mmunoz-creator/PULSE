@@ -707,6 +707,23 @@ function propertyConsultantsDisplay(propName){
   const list=propertyConsultants(propName);
   return list.length>0?list.join(', '):'TBD';
 }
+// v37h — Elevator Company, same Projects-first/Property-fallback pattern
+// as propertyConsultants() above. Fixes the Analytics "Elevator Company
+// Performance" chart, which was reading the stale Property-level p.ec
+// field directly — the exact same root cause already fixed for
+// consultants, just never applied to elevator company. Real elevator
+// companies live on Scope/Project records (s.ec) once a property has
+// real Projects; the Property-level field is the pre-Projects legacy
+// value, kept only as a fallback for properties with no Project-level
+// value set yet.
+function propertyElevatorCos(propName){
+  const scopeECs=(window.SCOPES||[])
+    .filter(s=>s.property===propName&&s.ec&&s.ec.trim()!==''&&s.ec.trim()!=='TBD')
+    .map(s=>s.ec.trim());
+  if(scopeECs.length>0) return [...new Set(scopeECs)];
+  const prop=(window.PORTFOLIO||[]).find(p=>p.n===propName);
+  return (prop&&prop.ec&&prop.ec!=='TBD')?[prop.ec.trim()]:[];
+}
 function propertyHasConsultant(propName,consultantName){
   if(!consultantName)return false;
   const target=consultantName.trim().toLowerCase();
@@ -10521,9 +10538,10 @@ function cfClearAll(){
 function getMilestoneCategoryForProp(propName){
   const ms=getMilestonesForProp(propName);
   const complete=ms.filter(m=>m.status==='Complete').length;
-  if(complete>=18)return'Complete';
-  if(complete>=12)return'Project Closeout';
-  if(complete>=4)return'Construction';
+  const expectedTotal=getMsExpectedTotal(propName);
+  if(complete>=expectedTotal)return'Complete';
+  if(complete>=Math.ceil((12/18)*expectedTotal))return'Project Closeout';
+  if(complete>=Math.ceil((4/18)*expectedTotal))return'Construction';
   return'Pre-Construction';
 }
 
@@ -12680,14 +12698,17 @@ function renderCharts(){
   const elevCoSource=CF.property.length>0?chartFiltered:active.filter(p=>p.st==='In Progress');
   const elevCoMap={};
   elevCoSource.forEach(p=>{
-    const ec=(p.ec&&p.ec!=='TBD'&&p.ec.trim()!=='')?p.ec:'TBD';
-    if(!elevCoMap[ec])elevCoMap[ec]={name:ec,complete:0,onTrack:0,atRisk:0,notStarted:0,total:0};
-    elevCoMap[ec].total++;
+    const ecList=propertyElevatorCos(p.n);
+    const ecs=ecList.length>0?ecList:['TBD'];
     const propStatus=derivePropertyStatusFromPhases(p.n);
-    if(propStatus==='Complete')elevCoMap[ec].complete++;
-    else if(propStatus==='At Risk')elevCoMap[ec].atRisk++;
-    else if(propStatus==='In Progress'||propStatus==='Ahead')elevCoMap[ec].onTrack++;
-    else elevCoMap[ec].notStarted++;
+    ecs.forEach(ec=>{
+      if(!elevCoMap[ec])elevCoMap[ec]={name:ec,complete:0,onTrack:0,atRisk:0,notStarted:0,total:0};
+      elevCoMap[ec].total++;
+      if(propStatus==='Complete')elevCoMap[ec].complete++;
+      else if(propStatus==='At Risk')elevCoMap[ec].atRisk++;
+      else if(propStatus==='In Progress'||propStatus==='Ahead')elevCoMap[ec].onTrack++;
+      else elevCoMap[ec].notStarted++;
+    });
   });
   const elevCoData=Object.values(elevCoMap).sort((a,b)=>{
     if(a.name==='TBD')return 1;if(b.name==='TBD')return -1;
@@ -12710,11 +12731,20 @@ function renderCharts(){
     const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
     let latest=null;
     phases.forEach(ph=>{if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!latest||d>latest)latest=d;}});
-    if(!latest)return;
-    const yr=latest.getFullYear();
-    const mo=latest.getFullYear()+'-'+(latest.getMonth()+1);
+    let yr=latest?latest.getFullYear():null;
+    if(!yr){
+      // v37h — fall back to the Scope's own planned year when no Unit
+      // Phase has a plannedCompletion date set yet, instead of silently
+      // dropping the property from the Forecasted Spend chart entirely.
+      const propScopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.year);
+      if(propScopes.length>0)yr=Math.max(...propScopes.map(s=>s.year));
+    }
+    if(!yr)return;
+    if(latest){
+      const mo=latest.getFullYear()+'-'+(latest.getMonth()+1);
+      fcByMonth[mo]=(fcByMonth[mo]||0)+1;
+    }
     fcByYear[yr]=(fcByYear[yr]||0)+1;
-    fcByMonth[mo]=(fcByMonth[mo]||0)+1;
   });
   const fcYears=Object.keys(fcByYear).map(Number).sort();
   const fcMonthKeys=Object.keys(fcByMonth).filter(k=>k.startsWith(fcDrillYear)).sort();
@@ -12731,8 +12761,15 @@ function renderCharts(){
     const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n);
     let latest=null;
     phases.forEach(ph=>{if(ph.plannedCompletion){const d=new Date(ph.plannedCompletion);if(!latest||d>latest)latest=d;}});
-    if(!latest)return;
-    const yr=latest.getFullYear();
+    let yr=latest?latest.getFullYear():null;
+    if(!yr){
+      // v37h — fall back to the Scope's own planned year when no Unit
+      // Phase has a plannedCompletion date set yet, instead of silently
+      // dropping the property from the Forecasted Spend chart entirely.
+      const propScopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.year);
+      if(propScopes.length>0)yr=Math.max(...propScopes.map(s=>s.year));
+    }
+    if(!yr)return;
     fsByYear[yr]=(fsByYear[yr]||0)+remaining;
     fsByYearUnits[yr]=(fsByYearUnits[yr]||0)+(parseInt(p.units)||0);
   });
