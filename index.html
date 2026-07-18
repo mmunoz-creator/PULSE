@@ -905,6 +905,23 @@ async function atUpdate(table, id, fields) {
 // send an array containing the property's record ID rather than its name.
 // The Properties table's own "Property Name" field is unaffected — it
 // remains the primary text field that IS the name (nothing for it to link to).
+// v37e — Property name sanitizer. Fixes a real reported bug: a Property
+// Name in Airtable with an embedded line break (typically pasted in from
+// Excel/a PDF cell that had a manual line break) silently broke every
+// onclick="openProperty('...')" attribute built from that name — a raw
+// newline inside a quoted JS string literal in an HTML attribute is a
+// syntax error, so the browser just drops the click handler with no
+// console error at all. Confirmed live: Boston Marriott Newton, several
+// DoubleTree properties, etc. all had this exact issue. Misty hand-fixed
+// the affected Airtable records, but nothing stopped a future paste from
+// reintroducing the same problem, so every property name is now run
+// through this the moment it's loaded (see the Property Name load site
+// below) — collapses any run of whitespace containing a line break down
+// to a single space, then trims. Safe on already-clean names (no-op).
+function sanitizePropertyName(name){
+  if(!name)return '';
+  return String(name).replace(/\s*[\r\n]+\s*/g,' ').trim();
+}
 function resolvePropertyLink(fieldVal){
   if(!fieldVal)return '';
   const id=Array.isArray(fieldVal)?fieldVal[0]:fieldVal;
@@ -997,7 +1014,10 @@ async function loadAllData() {
       // Build PORTFOLIO entirely from Airtable — Airtable is sole source of truth for Park Hotels
       const livePortfolio = props.map(r => ({
         id: r.id,
-        n: r.fields['Property Name']||'',
+        // v37e — sanitized at load, the single point every property name
+        // flows through before anything else (rendering, onclick
+        // attributes, resolvePropertyLink lookups) ever touches it.
+        n: sanitizePropertyName(r.fields['Property Name']||''),
         s: r.fields['State']||'',
         ec: r.fields['Elevator Company']||'TBD',
         st: r.fields['Status']||'Planned',
@@ -1230,7 +1250,10 @@ async function loadAllData() {
     // deliberately presentational text, not a relational link, but the
     // Property field itself IS a real Link to Properties).
     const propIdToName={};
-    props.forEach(r=>{propIdToName[r.id]=r.fields['Property Name']||'';});
+    // v37e — same sanitizer as the main Property Name load above, applied
+    // here too since this builds its own independent id->name map straight
+    // from raw Airtable fields rather than going through window.PORTFOLIO.
+    props.forEach(r=>{propIdToName[r.id]=sanitizePropertyName(r.fields['Property Name']||'');});
     window.SCOPES = scopes.map(r=>{
       const propLink=r.fields['Property']||[];
       const propId=Array.isArray(propLink)?propLink[0]:propLink;
@@ -5229,7 +5252,21 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // this guard and immediately reveal wherever real progress landed.
   if(scope.status==='On Hold'&&!(opts&&opts.force))return;
   const msData=(window.MILESTONES||[]).filter(m=>m.scopeId===scopeId);
-  if(msData.length===0)return;
+  // v37d — Units-Complete override. Onboarding an already-in-progress
+  // program means some Scopes have real, already-finished work whose
+  // Milestones were never tracked step-by-step in PULSE (0 of 14, exactly
+  // like a Scope that's never been touched). Previously this function only
+  // ever looked at Milestones, so it kept silently overwriting a
+  // manually-corrected 'Complete' status back to 'Planned' on every visit
+  // — a real reported bug, not just a display glitch. Fix: if every unit
+  // actually linked to this Scope (via Unit Inventory List's own Linked
+  // Scope field, matched here through scopeId) is independently marked
+  // Complete, honor that and treat the Scope as Complete too, regardless
+  // of what its own Milestones say. Requires at least one linked unit —
+  // an empty scope with zero units is not "complete by vacuity."
+  const scopeUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId);
+  const allUnitsComplete=scopeUnits.length>0&&scopeUnits.every(u=>u.status==='Complete');
+  if(msData.length===0&&!allUnitsComplete)return;
   const ms1=msData.find(m=>m.milestoneNumber===1);
   const finalMsNum=MILESTONES_DEF.length;
   const msFinal=msData.find(m=>m.milestoneNumber===finalMsNum);
@@ -5243,6 +5280,10 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   let newStatus=scope.status==='Capital Plan'?'Capital Plan':'Planned';
   if(msFinal&&(msFinal.completionDate||msFinal.actualDate))newStatus='Complete';
   else if(ms1&&ms1.actualDate)newStatus='In Progress';
+  // v37d — Units-Complete override takes priority over whatever Milestones
+  // alone would have derived, since real completed-unit data is more
+  // trustworthy than an untouched Milestones list for pre-existing work.
+  if(allUnitsComplete)newStatus='Complete';
   const statusChanged=scope.status!==newStatus;
   if(statusChanged){
     scope.status=newStatus;
