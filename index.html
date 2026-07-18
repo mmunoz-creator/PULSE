@@ -626,6 +626,26 @@ same two fields again is gone as dead code, along with
 showConsultantPicker()/cancelConsultantPicker()/confirmConsultant() below. -->
 
 <script>
+// v37b — TEMPORARY diagnostic listener, added to chase down a recurring
+// "SyntaxError: Unexpected EOF" seen live in the IT Admin console right
+// after loadAllData() completes. Every atGet/atCreate/atUpdate/atDelete
+// call already has its own try/catch (confirmed by direct code review),
+// so this error is either an unhandled promise rejection from a fetch not
+// routed through those helpers, or a real syntax error somewhere being
+// misreported by the browser as line 1. This listener surfaces the real
+// error object/message/stack the next time it fires, instead of the
+// generic "(anonymous function) at elevatorpulse.com:1" Chrome shows by
+// default for unhandled rejections. Safe to remove once the real source
+// is identified and fixed — does not change any app behavior, console-only.
+window.addEventListener('unhandledrejection', function(ev){
+  console.error('[DIAGNOSTIC] Unhandled promise rejection:', ev.reason);
+  if(ev.reason && ev.reason.stack) console.error('[DIAGNOSTIC] Stack:', ev.reason.stack);
+  if(ev.reason && ev.reason.message) console.error('[DIAGNOSTIC] Message:', ev.reason.message);
+});
+window.addEventListener('error', function(ev){
+  console.error('[DIAGNOSTIC] Uncaught error:', ev.message, 'at', ev.filename+':'+ev.lineno+':'+ev.colno);
+  if(ev.error && ev.error.stack) console.error('[DIAGNOSTIC] Stack:', ev.error.stack);
+});
 // ── AIRTABLE VIA CLOUDFLARE WORKER ───────────────────────────────────
 const WORKER_URL = 'https://pulse-api.misty-munoz.workers.dev';
 let AT_CONNECTED = false;
@@ -2068,7 +2088,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v36m</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v37b</div>
     </div>
   </nav>
 
@@ -5528,7 +5548,7 @@ function renderScopeCards(p){
     // scopes" modal as the primary edit path for financial fields that
     // were previously only reachable through the ambiguous currentScope-
     // targeted section buried in Edit Property.
-    const editBtn=canEdit?`<button onclick="event.stopPropagation();openScopeEditModal('${s.id}')" title="Edit this scope" aria-label="Edit this scope" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;flex-shrink:0"><i class="ti ti-pencil" style="font-size:13px"></i></button>`:'';
+    const editBtn=canEdit?`<button onclick="event.stopPropagation();openScopeEditModal('${s.id}')" title="Edit this project" aria-label="Edit this project" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;flex-shrink:0"><i class="ti ti-pencil" style="font-size:13px"></i></button>`:'';
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
@@ -5664,6 +5684,11 @@ function renderScopeEditModal(s,p){
       <button onclick="document.getElementById('scope-edit-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
     </div>
     <div style="padding:20px 22px">
+      <!-- v37c — Project Name, added to this modal (previously the only
+      way to rename a project was via Split Into Projects, even though this
+      modal's own title implied you could rename from here). Same 'Scope
+      Name' Airtable field Split Into Projects already writes to. -->
+      <div class="form-group"><label class="form-label">Project Name</label><input class="form-input" id="se-name" type="text" value="${(s.name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Elevators, Escalators"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group"><label class="form-label">Consultant</label><input class="form-input" id="se-consultant" type="text" value="${(s.v||p.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
         <div class="form-group"><label class="form-label">Elevator Co.</label><input class="form-input" id="se-ec" type="text" value="${(s.ec||p.ec||'').replace(/"/g,'&quot;')}" placeholder="e.g. Otis, Schindler"></div>
@@ -5718,6 +5743,10 @@ async function saveScopeEditModal(scopeId){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const p=port.find(pp=>pp.n===s.property);
 
+  // v37c — Project Name, same required-field validation Split Into
+  // Projects already applies (a project needs a name).
+  const scopeName=document.getElementById('se-name').value.trim();
+  if(!scopeName){showToast('Project name is required','warn');return;}
   const consultant=document.getElementById('se-consultant').value.trim();
   const ec=document.getElementById('se-ec').value.trim();
   const vdaNum=document.getElementById('se-vdanum').value.trim();
@@ -5738,6 +5767,7 @@ async function saveScopeEditModal(scopeId){
   const contractAwardValue=contractAwardRaw!==''?parseFloat(contractAwardRaw):null;
 
   const scopeFields={
+    'Scope Name':scopeName,
     'VDA Consultant':consultant||null,
     'Elevator Company':ec||'',
     'VDA Project Number':vdaNum||null,
@@ -5750,7 +5780,7 @@ async function saveScopeEditModal(scopeId){
     'Retainage':retainagePct!=null?retainagePct/100:null,
     'Contract Award Value':contractAwardValue,
   };
-  s.v=consultant;s.ec=ec;s.vdaNum=vdaNum;s.clientProjectNum=clientProjectNum;s.priority=scopePriority(priorityDisplay);
+  s.name=scopeName;s.v=consultant;s.ec=ec;s.vdaNum=vdaNum;s.clientProjectNum=clientProjectNum;s.priority=scopePriority(priorityDisplay);
   s.coRateST=coRateST;s.coRateOT=coRateOT;
   s.coMaterialMarkup=coMaterialMarkup;s.coOPMarkup=coOPMarkup;
   s.retainagePct=retainagePct;s.contractAwardValue=contractAwardValue;
