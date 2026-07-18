@@ -694,6 +694,19 @@ function propertyConsultants(propName){
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===propName);
   return (prop&&prop.v&&prop.v!=='TBD')?[prop.v.trim()]:[];
 }
+// v37f — Portfolio View's Consultant column was reading the raw, stale
+// Property-level p.v field directly, independent of who's actually
+// assigned on that property's real Projects — exactly the mismatch
+// Misty ran into (Projects said Dane Carollo, the table still showed an
+// old different name). Reuses the already-correct propertyConsultants()
+// logic (Projects first, Property-level field only as fallback for
+// properties with no Project-level consultant yet), joining multiple
+// names if a property has Projects assigned to different people rather
+// than picking just one arbitrarily.
+function propertyConsultantsDisplay(propName){
+  const list=propertyConsultants(propName);
+  return list.length>0?list.join(', '):'TBD';
+}
 function propertyHasConsultant(propName,consultantName){
   if(!consultantName)return false;
   const target=consultantName.trim().toLowerCase();
@@ -1277,6 +1290,12 @@ async function loadAllData() {
         // v37a — Client Project #, same pattern as VDA Project #/vdaNum
         // just above. Displayed on the Project card next to VDA Project #.
         clientProjectNum: r.fields['Client Project #']||'',
+        // v37g — Status Changed Date, powers the Activity Feed's Scope-
+        // status entries (see deriveAndWriteScopeStatus/setScopeOnHold,
+        // which stamp this field every time a Scope's status actually
+        // changes). Blank for any Scope that hasn't changed status since
+        // this field was added — no retroactive backfill.
+        statusChangedDate: r.fields['Status Changed Date']||'',
         coRateST: r.fields['ST Rate']!=null?Number(r.fields['ST Rate']):null,
         coRateOT: r.fields['OT Rate']!=null?Number(r.fields['OT Rate']):null,
         coMaterialMarkup: r.fields['Material Markup']!=null?Number(r.fields['Material Markup'])*100:null,
@@ -4722,7 +4741,10 @@ function renderPropertyView(p){
   document.getElementById('prop-hero-meta').innerHTML=
     `<div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px"><i class="ti ti-map-pin"></i></span><span style="color:rgba(255,255,255,.9)">${_addrParts.join(', ')}</span></div>
      <div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px"><i class="ti ti-elevator"></i></span><span style="color:rgba(255,255,255,.9)">${currentScope?.ec||p.ec}</span></div>
-     <div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px">Consultant:</span><span style="color:rgba(255,255,255,.9)">${p.v}</span></div>
+     <!-- v37f — same fix as the elevator company pill just above (currentScope
+     first, property fallback): was showing raw p.v, the stale Property-level
+     field, ignoring whichever Project is actually open. -->
+     <div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px">Consultant:</span><span style="color:rgba(255,255,255,.9)">${currentScope?.v||propertyConsultantsDisplay(p.n)}</span></div>
      ${elevCount||escCount||liftCount||otherCount?`<div class="prop-hero-pill" style="margin-left:6px;padding-left:10px;border-left:1px solid rgba(255,255,255,.15);gap:12px;align-items:center">
        ${elevCount>0?`<span style="display:flex;align-items:center;gap:4px"><i class="ti ti-elevator" style="color:var(--blue-light);font-size:18px"></i><span style="color:rgba(255,255,255,.9);font-size:13px;font-weight:600">${elevCount}</span><span style="color:rgba(255,255,255,.45);font-size:11px">Elev</span></span>`:''}
        ${escCount>0?`<span style="display:flex;align-items:center;gap:4px"><i class="ti ti-stairs-up" style="color:var(--blue-light);font-size:18px"></i><span style="color:rgba(255,255,255,.9);font-size:13px;font-weight:600">${escCount}</span><span style="color:rgba(255,255,255,.45);font-size:11px">Esc</span></span>`:''}
@@ -5287,10 +5309,16 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   const statusChanged=scope.status!==newStatus;
   if(statusChanged){
     scope.status=newStatus;
+    // v37g — Status Changed Date, stamped alongside every real status
+    // change (both here and in setScopeOnHold below), feeds the Activity
+    // Feed's Scope-status entries. Local ISO date is enough precision for
+    // an activity feed; not trying to capture time-of-day.
+    const _statusChangedDate=new Date().toISOString().split('T')[0];
+    scope.statusChangedDate=_statusChangedDate;
     // Only write to Airtable in live mode — demo mode still updates
     // the in-memory Scope so status badges and rollups reflect reality
     // without requiring a page reload or live Airtable connection.
-    if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':newStatus});
+    if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':newStatus,'Status Changed Date':_statusChangedDate});
   }
   // v34l — a Scope's status change is exactly what flips its units between
   // Active and Planned. Recompute regardless of whether newStatus actually
@@ -5310,7 +5338,9 @@ async function setScopeOnHold(scopeId,onHold){
   if(!scope)return;
   if(onHold){
     scope.status='On Hold';
-    if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':'On Hold'});
+    const _statusChangedDate=new Date().toISOString().split('T')[0];
+    scope.statusChangedDate=_statusChangedDate;
+    if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':'On Hold','Status Changed Date':_statusChangedDate});
     // v34l — On Hold still counts as "not Capital Plan" for unit-status
     // derivation purposes (units read Active, matching the Scope card's
     // own On Hold display convention — a frozen display state, not a
@@ -11012,7 +11042,7 @@ function renderCapitalPlan(){
               <td style="font-size:12px">${(()=>{const scU=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id).length;return scU>0?scU:(s.unitList||'—');})()}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total"></i>`:''}</td>
               <td style="font-size:12px;font-weight:600;color:var(--navy)">${(()=>{const b=scopeUnitBudgetTotal(s.id);return b?fmtCurrency(b):'TBD';})()}</td>
               <td>${budgetStatusBadge(s.budgetStatus)}</td>
-              <td style="font-size:12px">${p.v||'—'}</td>
+              <td style="font-size:12px">${s.v||p.v||'—'}</td>
               <td style="font-size:12px">${m1Date||'<span style="color:var(--gray-mid)">Not set</span>'}</td>
               ${canEdit?`<td><div style="display:flex;gap:4px"><button class="btn btn-icon" title="Split into Projects" style="color:var(--blue-dark);border-color:var(--blue-dark)" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork" style="font-size:13px"></i></button><button class="btn btn-icon" onclick="openCapitalPlanEdit('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:13px"></i></button></div></td>`:''}
             </tr>`;
@@ -11059,7 +11089,7 @@ function renderCapitalPlan(){
             <td style="font-size:12px">${p.units||'—'}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Project units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
             <td style="font-size:12px;font-weight:600;color:var(--navy)">${g.totalBudget?fmtCurrency(g.totalBudget):'TBD'}</td>
             <td>${bsDisplay}</td>
-            <td style="font-size:12px">${p.v||'—'}</td>
+            <td style="font-size:12px">${propertyConsultantsDisplay(p.n)}</td>
             <td style="font-size:11px;color:var(--gray-mid)">See projects</td>
             ${canEdit?`<td onclick="event.stopPropagation()"><div style="display:flex;gap:4px"><button class="btn btn-icon" title="Split into Projects" style="color:var(--blue-dark);border-color:var(--blue-dark)" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork" style="font-size:13px"></i></button></div></td>`:''}
           </tr>
@@ -14090,13 +14120,23 @@ function renderAnalytics(){
   const sortedEC=Object.entries(ecCounts).sort((a,b)=>b[1]-a[1]);
   const maxEC=sortedEC[0]?.[1]||1;
   // Consultant assignments
+  // v37f — was counting only the raw, stale Property-level p.v field
+  // (one consultant per property, undercounting/misattributing anywhere
+  // a property's real consultant lives on its Projects instead — the
+  // exact same gap fixed on the Portfolio View table and property hero
+  // pill). Now attributes each property to EVERY real consultant assigned
+  // via propertyConsultants() — a property with two Projects on two
+  // different consultants counts toward both, same as reality.
   const consultCounts={};const consultActive={};const consultStates={};
   port.forEach(p=>{
-    const c=p.v||'TBD';if(!c||c==='TBD')return;
-    consultCounts[c]=(consultCounts[c]||0)+1;
-    if(['In Progress'].includes(p.st))consultActive[c]=(consultActive[c]||0)+1;
-    if(!consultStates[c])consultStates[c]=new Set();
-    if(p.s)consultStates[c].add(p.s);
+    const consultants=propertyConsultants(p.n);
+    if(consultants.length===0)return;
+    consultants.forEach(c=>{
+      consultCounts[c]=(consultCounts[c]||0)+1;
+      if(['In Progress'].includes(p.st))consultActive[c]=(consultActive[c]||0)+1;
+      if(!consultStates[c])consultStates[c]=new Set();
+      if(p.s)consultStates[c].add(p.s);
+    });
   });
   const sortedConsultants=Object.entries(consultCounts).sort((a,b)=>b[1]-a[1]);
   const container=document.getElementById('reports-body')||document.getElementById('analytics-body');if(!container)return;
@@ -14195,7 +14235,7 @@ function renderDashboard(){
       <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${p.units||'—'} units</td>
       <td>${renderStatusBadge(p.st)}</td>
       <td>${renderHealthBadge(p.n)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${p.v||'—'}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
     </tr>`;
   }).join('');
   // Heat map data for dashboard
@@ -14490,13 +14530,55 @@ function renderDashboard(){
       feedItems.push({_date:d,_type:'Action Closed',_icon:'ti-circle-check',_color:'var(--green)',
         _title:a.title||a.description||'Action Item',_sub:`${a.property||'—'} · ${a.owner||'—'}`,_prop:a.property||''});
     });
-    // Sort newest first, take top 10
-    feedItems.sort((a,b)=>b._date-a._date);
-    const feed=feedItems.slice(0,10);
+    // v37g — Milestone completions. Uses each Milestone's own real
+    // actualDate/completionDate (already tracked, no new field needed) —
+    // "M6 — First Phase Start completed on July 12" is genuinely
+    // derivable from existing data, not new tracking.
+    ;(window.MILESTONES||[]).filter(m=>m.status==='Complete'&&(m.actualDate||m.completionDate)).forEach(m=>{
+      const dateStr=m.completionDate||m.actualDate;
+      const d=new Date(dateStr);
+      feedItems.push({_date:d,_type:'Milestone',_icon:'ti-flag-check',_color:'var(--indigo)',
+        _title:`M${m.milestoneNumber} — ${m.milestoneName}`,_sub:`${m.property||'—'} · ${dateStr}`,_prop:m.property||''});
+    });
+    // v37g — Unit Phase start/completion. Same approach — Unit Groups
+    // already carry real actualStart/actualCompletion dates, surfaced
+    // here as two separate feed entries (a phase starting and a phase
+    // completing are both worth seeing, and often happen weeks apart).
+    ;(window.UNIT_GROUPS||[]).forEach(g=>{
+      if(g.actualCompletion){
+        feedItems.push({_date:new Date(g.actualCompletion),_type:'Phase Complete',_icon:'ti-checks',_color:'var(--green)',
+          _title:`${g.phase||'Phase'} complete`,_sub:`${g.property||'—'} · ${g.actualCompletion}`,_prop:g.property||''});
+      }
+      if(g.actualStart){
+        feedItems.push({_date:new Date(g.actualStart),_type:'Phase Started',_icon:'ti-player-play',_color:'var(--blue-dark)',
+          _title:`${g.phase||'Phase'} started`,_sub:`${g.property||'—'} · ${g.actualStart}`,_prop:g.property||''});
+      }
+    });
+    // v37g — Scope status changes. Requires the new Status Changed Date
+    // field (stamped in deriveAndWriteScopeStatus/setScopeOnHold) — a
+    // Scope that changed status before this field existed simply won't
+    // have an entry here, no retroactive backfill possible.
+    ;(window.SCOPES||[]).filter(s=>s.statusChangedDate).forEach(s=>{
+      feedItems.push({_date:new Date(s.statusChangedDate),_type:'Project Status',_icon:'ti-git-fork',_color:'var(--purple)',
+        _title:`${s.name||'Project'} → ${s.status}`,_sub:`${s.property||'—'} · ${s.statusChangedDate}`,_prop:s.property||''});
+    });
+    // v37g — 7-day lookback window, per direct instruction: show up to 10
+    // most recent items, but only from the last 7 days — a quiet week
+    // shows fewer than 10 rather than padding out with older activity
+    // just to fill the slot.
+    // Note: date-only strings (e.g. '2026-07-12') parse as UTC midnight,
+    // while _feedCutoff uses local midnight — items exactly on the 7-day
+    // boundary can land on either side depending on the viewer's timezone.
+    // Acceptable imprecision for an activity feed, not treated as a bug.
+    const _feedCutoff=new Date();_feedCutoff.setDate(_feedCutoff.getDate()-7);_feedCutoff.setHours(0,0,0,0);
+    const recentFeedItems=feedItems.filter(item=>item._date instanceof Date&&!isNaN(item._date)&&item._date>=_feedCutoff);
+    // Sort newest first, take top 10 within the window
+    recentFeedItems.sort((a,b)=>b._date-a._date);
+    const feed=recentFeedItems.slice(0,10);
     feedEl.innerHTML=`<div class="card">
-      <div class="card-header"><div class="card-title">Activity Feed</div><div class="card-sub" style="font-size:11px;color:var(--gray-mid)">Recent portfolio activity</div></div>
+      <div class="card-header"><div class="card-title">Activity Feed</div><div class="card-sub" style="font-size:11px;color:var(--gray-mid)">Last 7 days · portfolio activity</div></div>
       ${feed.length===0
-        ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No recent activity.</div>'
+        ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No activity in the last 7 days.</div>'
         :feed.map(item=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(item._prop||'').replace(/'/g,"\\'")}')">
           <div style="width:28px;height:28px;border-radius:50%;background:${item._color}22;display:flex;align-items:center;justify-content:center;flex-shrink:0">
             <i class="ti ${item._icon}" style="font-size:13px;color:${item._color}"></i>
@@ -14800,7 +14882,7 @@ function showScorecardGapDrilldown(){
       <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
       <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
       <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
-      <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${p.v||'—'}</td>
+      <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
     </tr>`;
   }).join('');
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:620px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
@@ -16100,7 +16182,7 @@ function populatePortfolio(){
       <td>${renderStatusBadge(p.st)}</td>
       <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${p.v||'TBD'}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
     </tr>`;
   });
@@ -16645,7 +16727,7 @@ function sortPortfolioByPriority(th){
       <td>${renderStatusBadge(p.st)}</td>
       <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${p.v||'TBD'}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${p.budget?fmtCurrency(p.budget):'—'}</td>
     </tr>`;
   });
