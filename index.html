@@ -2189,7 +2189,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38c</div>
     </div>
   </nav>
 
@@ -10622,6 +10622,15 @@ function cfClearAll(){
 // ── MILESTONE CATEGORY HELPER ─────────────────────────────────────────
 // Pre-Construction: milestones 1-4, Construction: 5-12, Project Closeout: 13-17, Complete: 18
 function getMilestoneCategoryForProp(propName){
+  // v38c — properties manually flagged Complete at program launch (no real
+  // milestone data behind them yet) now short-circuit to Complete here too,
+  // mirroring the same override derivePropertyStatusFromPhases() already
+  // uses (line ~9343). Reversible any time by editing that property's
+  // Status field — not a one-way flag. Every other property's category
+  // still comes purely from actual milestone completions, unchanged.
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const prop=port.find(p=>p.n===propName);
+  if(prop&&prop.st==='Complete')return'Complete';
   const ms=getMilestonesForProp(propName);
   const complete=ms.filter(m=>m.status==='Complete').length;
   const expectedTotal=getMsExpectedTotal(propName);
@@ -12870,6 +12879,17 @@ function renderCharts(){
     if(yr==='TBD')return;
     fsPipelineByYear[yr]=capitalByYear[yr].budget||0;
   });
+  // v38c — pipeline/Capital Plan properties contributing dollars to a
+  // year's bar via fsPipelineByYear above were never counted into
+  // fsByYearUnits (that loop only ever touched fsSource, i.e. active
+  // properties with billing). A bar that's mostly/entirely pipeline
+  // dollars was showing "0 units" as a result. Add their units in too.
+  const allPortForFsUnits=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  allPortForFsUnits.filter(p=>p.st==='Capital Plan'&&p.plannedYear).forEach(p=>{
+    const yr=String(p.plannedYear);
+    if(fsPipelineByYear[yr]===undefined)return;
+    fsByYearUnits[yr]=(fsByYearUnits[yr]||0)+(parseInt(p.units)||0);
+  });
   const fsYears=[...new Set([...Object.keys(fsByYear),...Object.keys(fsPipelineByYear)])].map(Number).sort((a,b)=>a-b);
 
 
@@ -13663,28 +13683,55 @@ function showBarDrilldown(type,value){
     });
     title=`Properties with Billing on Record (${props.length})`;
   }
-  if(props.length===0)return;
   const overlay=document.createElement('div');
   overlay.id='bar-drill-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
-  const rows=props.map(p=>{
-    const health=derivePropertyStatusFromPhases(p.n);
-    const healthColor=health==='At Risk'?'var(--red)':health==='Ahead'?'var(--green)':health==='Complete'?'#3DAA7A':'var(--blue-dark)';
-    return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
-      <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
-      <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
-      <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
-      <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${p.units||'—'}</td>
-      <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--gray-mid)">${p.budget?fmtBudget(p.budget):'—'}</td>
-    </tr>`;
-  }).join('');
-  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:620px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
-    <div style="padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:14px;font-weight:600;color:var(--navy)">${title}</div>
-      <button onclick="document.getElementById('bar-drill-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px"><i class="ti ti-x"></i></button>
-    </div>
-    <div style="overflow-y:auto;flex:1">
-      <table style="width:100%;border-collapse:collapse">
+  // v38c — Forecasted Spend drilldowns (fs-active-year / fs-pipeline-year)
+  // get their own per-unit breakdown: each property row lists the unit
+  // names contributing to that bar and the sum of unitEffectiveValue()
+  // across just those units, instead of the generic per-property budget
+  // figure every other chart's drilldown uses. Per direct instruction:
+  // "ABC Property - units 1,2,3,4 - $5M" (sum of the individual units,
+  // not each unit's own amount shown separately).
+  const isFsDrill=(type==='fs-active-year'||type==='fs-pipeline-year');
+  let bodyHtml;
+  if(props.length===0){
+    // v38c — previously silently did nothing (`if(props.length===0)return`)
+    // which looked like the click had stopped working. Now always renders
+    // the modal, with an explicit empty-state message.
+    bodyHtml=`<div style="padding:24px;text-align:center;font-size:12px;color:var(--gray-mid)">No properties match this selection.</div>`;
+  }else if(isFsDrill){
+    const rows=props.map(p=>{
+      const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+      const unitNames=units.map(u=>u.name).filter(Boolean);
+      const total=units.reduce((a,u)=>a+unitEffectiveValue(u),0);
+      return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
+        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
+        <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${unitNames.length?unitNames.join(', '):'—'}</td>
+        <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${fmtCurrency(total)}</td>
+      </tr>`;
+    }).join('');
+    bodyHtml=`<table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--gray-xpale)">
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Property</th>
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Units</th>
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:right">Total</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }else{
+    const rows=props.map(p=>{
+      const health=derivePropertyStatusFromPhases(p.n);
+      const healthColor=health==='At Risk'?'var(--red)':health==='Ahead'?'var(--green)':health==='Complete'?'#3DAA7A':'var(--blue-dark)';
+      return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
+        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
+        <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
+        <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
+        <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${p.units||'—'}</td>
+        <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--gray-mid)">${p.budget?fmtBudget(p.budget):'—'}</td>
+      </tr>`;
+    }).join('');
+    bodyHtml=`<table style="width:100%;border-collapse:collapse">
         <thead><tr style="background:var(--gray-xpale)">
           <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Property</th>
           <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">State</th>
@@ -13693,9 +13740,15 @@ function showBarDrilldown(type,value){
           <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:right">Budget</th>
         </tr></thead>
         <tbody>${rows}</tbody>
-      </table>
+      </table>`;
+  }
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:620px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:14px;font-weight:600;color:var(--navy)">${title}</div>
+      <button onclick="document.getElementById('bar-drill-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px"><i class="ti ti-x"></i></button>
     </div>
-    <div style="padding:10px 20px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">Click any row to open the property</div>
+    <div style="overflow-y:auto;flex:1">${bodyHtml}</div>
+    <div style="padding:10px 20px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${props.length?'Click any row to open the property':''}</div>
   </div>`;
   document.body.appendChild(overlay);
 }
