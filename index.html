@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38o</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39a</div>
     </div>
   </nav>
 
@@ -5653,6 +5653,26 @@ function renderScopeTabs(containerId, propName){
 // scopes are visible nested under the property itself rather than
 // surfacing as separate Capital Plan rows (which getCapitalPlanScopes
 // now deliberately excludes once a property has 2+ Scopes).
+// v39a — live unit-name chips on a Scope card. Always reads
+// window.UNIT_INVENTORY filtered by scopeId (never a cached/typed field),
+// same "always derive live" pattern as coScopeIds()/unitGroupYear() above.
+// Small scopes (<=8 units) show every chip; larger scopes show the first 8
+// plus a "Show all N" toggle so a 20+ unit card doesn't blow out vertically.
+function scopeUnitChipsHtml(s){
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id);
+  if(units.length===0)return '';
+  const chip=u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;background:var(--gray-xpale);border-radius:4px;padding:3px 8px;color:var(--navy)">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>`;
+  const PREVIEW_COUNT=8;
+  const collapsedId='su-'+s.id;
+  const showToggle=units.length>PREVIEW_COUNT;
+  return `<div style="border-top:0.5px solid var(--border);padding-top:10px;margin-bottom:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em">Units</div>
+      ${showToggle?`<span style="font-size:11px;color:var(--blue-dark);cursor:pointer" onclick="event.stopPropagation();const el=document.getElementById('${collapsedId}');const collapsed=el.dataset.collapsed==='1';el.dataset.collapsed=collapsed?'0':'1';el.innerHTML=collapsed?${JSON.stringify(units.map(chip).join(''))}:${JSON.stringify(units.slice(0,PREVIEW_COUNT).map(chip).join('')+`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;color:var(--gray-mid)">+${units.length-PREVIEW_COUNT} more</span>`)};this.textContent=collapsed?'Show fewer':'Show all ${units.length}';">Show all ${units.length}</span>`:''}
+    </div>
+    <div id="${collapsedId}" data-collapsed="1">${showToggle?units.slice(0,PREVIEW_COUNT).map(chip).join('')+`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;color:var(--gray-mid)">+${units.length-PREVIEW_COUNT} more</span>`:units.map(chip).join('')}</div>
+  </div>`;
+}
 function renderScopeCards(p){
   const container=document.getElementById('prop-scope-cards');
   if(!container)return;
@@ -5819,6 +5839,7 @@ function renderScopeCards(p){
           <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Contract Rates</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap">${ratesHtml}</div>
         </div>
+        ${scopeUnitChipsHtml(s)}
         <div style="border-top:0.5px solid var(--border);padding-top:10px">
           <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">VDA Milestones</div>
           ${(s.status==='Complete'||s.isCompleteBucket)?`
@@ -5836,6 +5857,32 @@ function renderScopeCards(p){
       </div>
     </div>`;
   };
+  // v39a — property-level unit reconciliation banner. Two independent,
+  // live-derived checks (never compared against the typed p.units field,
+  // same reasoning as the Capital Plan unitMismatch check at ~line 11240 —
+  // p.units can drift stale, two live UNIT_INVENTORY counts can't):
+  //   1. Shortfall — units linked to the property but not linked to any
+  //      of its scopes (nobody's assigned them to a project yet).
+  //   2. Duplicates — a single unit linked to more than one scope for
+  //      this property (accidental double-assignment).
+  // Both recompute on every render, same as coScopeIds()/unitMismatch.
+  const _propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+  const _propScopeIds=new Set(scopes.map(s=>s.id));
+  const _scopeCountByUnit=new Map();
+  _propUnits.forEach(u=>{
+    if(u.scopeId&&_propScopeIds.has(u.scopeId)){
+      _scopeCountByUnit.set(u.id,(_scopeCountByUnit.get(u.id)||0)+1);
+    }
+  });
+  const _unassigned=_propUnits.filter(u=>!u.scopeId||!_propScopeIds.has(u.scopeId));
+  const _duplicated=_propUnits.filter(u=>(_scopeCountByUnit.get(u.id)||0)>1);
+  const reconcileBanner=(_unassigned.length>0||_duplicated.length>0)?`<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff7ed;border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px">
+    <i class="ti ti-alert-triangle" style="font-size:16px;color:#b45309;flex-shrink:0"></i>
+    <div style="flex:1;font-size:12px;color:#b45309">
+      ${_unassigned.length>0?`<div>Unit mismatch: property has <strong>${_propUnits.length}</strong> units, projects account for only <strong>${_propUnits.length-_unassigned.length}</strong> (${_unassigned.length} unlinked)</div>`:''}
+      ${_duplicated.length>0?`<div>${_duplicated.length} unit${_duplicated.length===1?'':'s'} linked to more than one project</div>`:''}
+    </div>
+  </div>`:'';
   // Header bar — property-level fields always shown above cards
   const headerBar=`<div style="display:flex;align-items:center;gap:20px;padding:8px 14px;background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px;flex-wrap:wrap">
     <span class="prop-overview-priority-line" style="font-size:12px;color:var(--gray-mid)">Priority <span style="font-weight:600;color:var(--navy)">${(p.priority||'—').split(':')[1]?.trim()||p.priority||'—'}</span></span>
@@ -5845,7 +5892,7 @@ function renderScopeCards(p){
       ${manageBtn}
     </span>
   </div>`;
-  container.innerHTML=headerBar+`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">${scopes.length?scopes.map(scopeCard).join(''):'<div style="font-size:13px;color:var(--gray-mid);padding:20px;text-align:center">No projects yet — use Manage Projects to add one</div>'}</div>`;
+  container.innerHTML=reconcileBanner+headerBar+`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">${scopes.length?scopes.map(scopeCard).join(''):'<div style="font-size:13px;color:var(--gray-mid);padding:20px;text-align:center">No projects yet — use Manage Projects to add one</div>'}</div>`;
   applyPriorityDisplaySetting();
 }
 
