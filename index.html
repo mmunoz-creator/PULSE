@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39b</div>
     </div>
   </nav>
 
@@ -5676,14 +5676,23 @@ function scopeUnitChipsHtml(s){
 function renderScopeCards(p){
   const container=document.getElementById('prop-scope-cards');
   if(!container)return;
+  // v39a — Complete-status scopes now sort to the very end of the card
+  // grid, after Capital Plan. Finished projects are the least actionable
+  // thing on this page; Capital Plan (not yet started) still reads as
+  // "needs attention" so it stays ahead of Complete.
   const scopes=(window.SCOPES||[]).filter(s=>s.property===p.n)
     .slice().sort((a,b)=>{
+      const aDone=a.status==='Complete'?1:0;
+      const bDone=b.status==='Complete'?1:0;
+      if(aDone!==bDone)return aDone-bDone;
       const aCP=a.status==='Capital Plan'?1:0;
       const bCP=b.status==='Capital Plan'?1:0;
       return aCP-bCP||(a.year||9999)-(b.year||9999);
     });
   const canEdit=role==='pm'||role==='admin';
-  const manageBtn=canEdit?`<button class="btn btn-edit" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork"></i>Manage projects</button>`:'';
+  // v39a — relabeled "Manage projects" → "Manage Projects" and switched to
+  // the same green btn-success style used elsewhere (e.g. CO Approve).
+  const manageBtn=canEdit?`<button class="btn btn-success" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork"></i>Manage Projects</button>`:'';
   const statusBadge=st=>{
     const cfg={'Capital Plan':{bg:'var(--gray-pale)',c:'var(--gray-mid)'},'Planned':{bg:'var(--blue-xpale)',c:'var(--blue-dark)'},'In Progress':{bg:'#dcfce7',c:'#15803d'},'Complete':{bg:'var(--green-pale)',c:'var(--green)'},'On Hold':{bg:'#fff7ed',c:'#b45309'}};
     const s=cfg[st]||cfg['Capital Plan'];
@@ -5876,11 +5885,20 @@ function renderScopeCards(p){
   });
   const _unassigned=_propUnits.filter(u=>!u.scopeId||!_propScopeIds.has(u.scopeId));
   const _duplicated=_propUnits.filter(u=>(_scopeCountByUnit.get(u.id)||0)>1);
-  const reconcileBanner=(_unassigned.length>0||_duplicated.length>0)?`<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff7ed;border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px">
+  // v39b — third check: empty scopes. A non-Complete Scope with 0 linked
+  // units is a real signal something's stale (most often the tail end of
+  // a manual merge — e.g. moving a Scope's only unit into a Unit Group
+  // under a different Scope, which does NOT auto-delete the now-empty
+  // Scope; deletion is always a deliberate, separate action in this app).
+  // Doesn't touch Complete scopes — a finished project legitimately has
+  // no forward unit assignment to track.
+  const _emptyScopes=scopes.filter(s=>s.status!=='Complete'&&!_propUnits.some(u=>u.scopeId===s.id));
+  const reconcileBanner=(_unassigned.length>0||_duplicated.length>0||_emptyScopes.length>0)?`<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff7ed;border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px">
     <i class="ti ti-alert-triangle" style="font-size:16px;color:#b45309;flex-shrink:0"></i>
     <div style="flex:1;font-size:12px;color:#b45309">
       ${_unassigned.length>0?`<div>Unit mismatch: property has <strong>${_propUnits.length}</strong> units, projects account for only <strong>${_propUnits.length-_unassigned.length}</strong> (${_unassigned.length} unlinked)</div>`:''}
       ${_duplicated.length>0?`<div>${_duplicated.length} unit${_duplicated.length===1?'':'s'} linked to more than one project</div>`:''}
+      ${_emptyScopes.length>0?`<div>${_emptyScopes.length} project${_emptyScopes.length===1?'':'s'} with no units linked — ${_emptyScopes.map(s=>s.name||'Untitled').join(', ')}</div>`:''}
     </div>
   </div>`:'';
   // Header bar — property-level fields always shown above cards
