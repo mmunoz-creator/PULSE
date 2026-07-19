@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38l</div>
     </div>
   </nav>
 
@@ -7240,6 +7240,45 @@ function getCurrencyValue(id){
   if(!el)return 0;
   return parseFloat(el.value.replace(/[^0-9.]/g,''))||0;
 }
+// v38k — Derives the set of Scope IDs a Change Order actually belongs to,
+// for cases where the CO's own "Linked Scope" field is blank. Misty is
+// backfilling historical CO data while reconciling units against Scopes
+// that aren't finalized yet — units get linked to a CO before the CO
+// itself gets an explicit Linked Scope, which was making the CO invisible
+// under every scope tab (it only ever matched c.scopeId===scopeId, and a
+// blank scopeId never matches a specific tab). Rule:
+//  - If the CO has its own explicit scopeId, that always wins (a PM who
+//    goes back and sets Linked Scope directly is not fighting this).
+//  - Else if Applies to Whole Project, or the linked units span more than
+//    one Scope, the CO belongs to ALL of those Scopes and should show
+//    under every one of their tabs (a property can have multiple real
+//    projects/Scopes running at once — confirmed).
+//  - Else (single Scope derivable from the linked units) it belongs to
+//    just that one. This is computed live every render, so once Misty
+//    reconciles unit-to-Scope assignments and both units land in the same
+//    Scope, the CO automatically narrows to that one tab with no manual
+//    CO edit required.
+function coScopeIds(co){
+  if(co.scopeId)return[co.scopeId];
+  const unitIds=co.linkedUnitIds||[];
+  if(unitIds.length===0)return[];
+  const inv=window.UNIT_INVENTORY||[];
+  const ids=new Set();
+  unitIds.forEach(uid=>{
+    const u=inv.find(x=>x.id===uid);
+    if(u&&u.scopeId)ids.add(u.scopeId);
+  });
+  return[...ids];
+}
+function coMatchesScope(co,scopeId){
+  if(!scopeId)return true;
+  // Applies to Whole Project always shows under every Scope tab for the
+  // property, regardless of which units happen to be linked so far.
+  if(co.appliesToWholeProject)return true;
+  const ids=coScopeIds(co);
+  if(ids.length===0)return true; // no scope info at all — show everywhere rather than hide
+  return ids.includes(scopeId);
+}
 // ── CHANGE ORDER SAVINGS LOG ──────────────────────────────────────────
 function renderChangeOrdersTab(p){
   renderScopeTabs('co-scope-tabs',p.n);
@@ -7252,7 +7291,10 @@ function renderChangeOrdersTab(p){
     document.getElementById('co-ec').value=p.ec||'';
   }
   // v28l: filtered by currentScope.id — each Scope is a separate contract
-  const cos=(window.CO_SAVINGS||[]).filter(c=>c.property===p.n&&(!scopeId||c.scopeId===scopeId));
+  // v38k: scope match now goes through coMatchesScope() so COs whose own
+  // Linked Scope is blank are matched via their linked units' Scopes instead
+  // of silently disappearing from every tab (see coScopeIds() note above).
+  const cos=(window.CO_SAVINGS||[]).filter(c=>c.property===p.n&&coMatchesScope(c,scopeId));
   const approved=cos.filter(c=>c.status==='Approved'||c.status==='Client Approved');
   const totalSavings=approved.reduce((a,c)=>a+Math.max(0,(parseFloat(c.originalAmount)||0)-(parseFloat(c.negotiatedAmount)||0)),0);
   const totalOriginal=cos.reduce((a,c)=>a+c.originalAmount,0);
@@ -8874,15 +8916,16 @@ async function saveCO(){
   renderDashboard();
 }
 
-// v38g — used by the Pending Review queue's Approve button so the
-// navigation to the property's Change Orders tab only happens after the
-// approval is actually confirmed and written, not the instant the button
-// is clicked (see note on showCOStatusNoteModal for the bug this fixes).
+// v38k — Approve from the Pending Review queue now stays on the queue
+// instead of navigating to the property. Misty's workflow is approve one,
+// see the next one drop into place, approve that one, etc. — the old
+// openProperty()+switchPropTab() jump also caused the "CO isn't showing on
+// the property" symptom, since it fired against currentProp/CO_SAVINGS
+// state that hadn't settled yet. The eye icon on each queue item still
+// opens the property's Change Orders tab on demand if she wants to look
+// at one first.
 function approveQueueCO(coId,propName){
-  updateCOStatus(coId,'Approved',()=>{
-    openProperty(propName);
-    setTimeout(()=>switchPropTab('changeorders',document.querySelector('.tab-btn[onclick*="changeorders"]')),300);
-  });
+  updateCOStatus(coId,'Approved');
 }
 window.approveQueueCO=approveQueueCO;
 
