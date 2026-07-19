@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39c</div>
     </div>
   </nav>
 
@@ -5658,21 +5658,49 @@ function renderScopeTabs(containerId, propName){
 // same "always derive live" pattern as coScopeIds()/unitGroupYear() above.
 // Small scopes (<=8 units) show every chip; larger scopes show the first 8
 // plus a "Show all N" toggle so a 20+ unit card doesn't blow out vertically.
+// v39c — fixed a real rendering bug: the toggle used to build its onclick
+// by JSON.stringify-ing a full chunk of chip HTML directly into an inline
+// HTML attribute. The chip markup's own double-quoted style="..." attributes
+// broke out of the onclick="..." attribute the instant the browser's HTML
+// parser hit the first embedded quote, which is exactly what produced the
+// jumbled "UNITSAG1AG3KG1..." text seen on any scope with >8 units (2027
+// Project, 2040 Project, etc.) — small scopes never hit this because the
+// toggle branch only exists past the 8-unit threshold. Fixed by moving the
+// toggle to a named function (toggleScopeUnitChips) that re-derives the
+// unit list live from scopeId at click time instead of inlining HTML into
+// an attribute at all.
 function scopeUnitChipsHtml(s){
   const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id);
   if(units.length===0)return '';
-  const chip=u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;background:var(--gray-xpale);border-radius:4px;padding:3px 8px;color:var(--navy)">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>`;
   const PREVIEW_COUNT=8;
   const collapsedId='su-'+s.id;
   const showToggle=units.length>PREVIEW_COUNT;
   return `<div style="border-top:0.5px solid var(--border);padding-top:10px;margin-bottom:10px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em">Units</div>
-      ${showToggle?`<span style="font-size:11px;color:var(--blue-dark);cursor:pointer" onclick="event.stopPropagation();const el=document.getElementById('${collapsedId}');const collapsed=el.dataset.collapsed==='1';el.dataset.collapsed=collapsed?'0':'1';el.innerHTML=collapsed?${JSON.stringify(units.map(chip).join(''))}:${JSON.stringify(units.slice(0,PREVIEW_COUNT).map(chip).join('')+`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;color:var(--gray-mid)">+${units.length-PREVIEW_COUNT} more</span>`)};this.textContent=collapsed?'Show fewer':'Show all ${units.length}';">Show all ${units.length}</span>`:''}
+      ${showToggle?`<span id="${collapsedId}-toggle" style="font-size:11px;color:var(--blue-dark);cursor:pointer" onclick="event.stopPropagation();toggleScopeUnitChips('${s.id.replace(/'/g,"\\'")}')">Show all ${units.length}</span>`:''}
     </div>
-    <div id="${collapsedId}" data-collapsed="1">${showToggle?units.slice(0,PREVIEW_COUNT).map(chip).join('')+`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;color:var(--gray-mid)">+${units.length-PREVIEW_COUNT} more</span>`:units.map(chip).join('')}</div>
+    <div id="${collapsedId}" data-collapsed="1">${scopeUnitChipsInner(units,showToggle,PREVIEW_COUNT,false)}</div>
   </div>`;
 }
+function scopeUnitChipsInner(units,showToggle,previewCount,expanded){
+  const chip=u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;background:var(--gray-xpale);border-radius:4px;padding:3px 8px;color:var(--navy)">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>`;
+  if(!showToggle||expanded)return units.map(chip).join('');
+  return units.slice(0,previewCount).map(chip).join('')+`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;color:var(--gray-mid)">+${units.length-previewCount} more</span>`;
+}
+function toggleScopeUnitChips(scopeId){
+  const collapsedId='su-'+scopeId;
+  const el=document.getElementById(collapsedId);
+  const toggleEl=document.getElementById(collapsedId+'-toggle');
+  if(!el)return;
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId);
+  const PREVIEW_COUNT=8;
+  const wasCollapsed=el.dataset.collapsed==='1';
+  el.dataset.collapsed=wasCollapsed?'0':'1';
+  el.innerHTML=scopeUnitChipsInner(units,true,PREVIEW_COUNT,wasCollapsed);
+  if(toggleEl)toggleEl.textContent=wasCollapsed?'Show fewer':`Show all ${units.length}`;
+}
+window.toggleScopeUnitChips=toggleScopeUnitChips;
 function renderScopeCards(p){
   const container=document.getElementById('prop-scope-cards');
   if(!container)return;
