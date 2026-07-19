@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v38n</div>
     </div>
   </nav>
 
@@ -5923,7 +5923,13 @@ function renderScopeEditModal(s,p){
       <!-- v37a — Client Project #, same field pattern as VDA Project # above. -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input" id="se-client-project-num" type="text" value="${(s.clientProjectNum||'').replace(/"/g,'&quot;')}" placeholder="Client's own project number"></div>
-        <div class="form-group"></div>
+        <!-- v38m — Planned Year, previously only editable via the Capital
+        Plan modal (which only applies pre-graduation) or directly in
+        Airtable. A graduated project's Year/Budget Cycle had no in-app
+        edit path at all once it left Capital Plan status — this was a
+        real gap, not by design. Same field, same 'Year/Budget Cycle'
+        Airtable column, just exposed here too. -->
+        <div class="form-group"><label class="form-label">Planned Year</label><input class="form-input" type="number" id="se-year" value="${s.year||''}" placeholder="e.g. 2026" min="2020" max="2045"></div>
       </div>
       <label class="form-label" style="display:block;margin-bottom:6px">Units In This Project — Check To Include</label>
       <div id="se-units-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:12px">${unitRows}</div>
@@ -5988,6 +5994,9 @@ async function saveScopeEditModal(scopeId){
   const retainagePct=retainageRaw!==''?parseFloat(retainageRaw):null;
   const contractAwardRaw=document.getElementById('se-contract-award').value.replace(/[^0-9.]/g,'');
   const contractAwardValue=contractAwardRaw!==''?parseFloat(contractAwardRaw):null;
+  // v38m — Planned Year, see note on the se-year input above.
+  const yearRaw=document.getElementById('se-year')?.value.trim()||'';
+  const year=yearRaw!==''?parseInt(yearRaw):null;
 
   const scopeFields={
     'Scope Name':scopeName,
@@ -6002,11 +6011,12 @@ async function saveScopeEditModal(scopeId){
     'O&P Markup':coOPMarkup!=null?coOPMarkup/100:null,
     'Retainage':retainagePct!=null?retainagePct/100:null,
     'Contract Award Value':contractAwardValue,
+    'Year/Budget Cycle':year,
   };
   s.name=scopeName;s.v=consultant;s.ec=ec;s.vdaNum=vdaNum;s.clientProjectNum=clientProjectNum;s.priority=scopePriority(priorityDisplay);
   s.coRateST=coRateST;s.coRateOT=coRateOT;
   s.coMaterialMarkup=coMaterialMarkup;s.coOPMarkup=coOPMarkup;
-  s.retainagePct=retainagePct;s.contractAwardValue=contractAwardValue;
+  s.retainagePct=retainagePct;s.contractAwardValue=contractAwardValue;s.year=year;
 
   overlay.remove();
   showToast('Saving scope...','info');
@@ -11941,25 +11951,72 @@ function renderBudgetOutlook(){
   // status (active/on hold/pipeline/complete) in the export — the same
   // shared classifier every other screen uses, not a new one-off.
   const unitItems=[];
+  // v38l — Budget Outlook year-splitting by Unit Group. Misty's real-world
+  // model: a Scope's "Year/Budget Cycle" is really a start point, not a
+  // single-year snapshot of all its spend — a 20-unit Scope planned to
+  // start in 2027 will actually execute in waves (Unit Groups) that spread
+  // into 2028 and beyond. Each Unit Group already carries its own real
+  // Planned/Actual Start date and its own Linked Units (see
+  // window.UNIT_GROUPS above), so Budget Outlook now buckets a Scope's
+  // dollars by each Unit Group's own start year instead of dumping the
+  // whole Scope total into one year. Units not covered by any Unit Group
+  // (or whose Unit Group has no date yet) fall back to the Scope's own
+  // year — nothing disappears mid-reconciliation, it just doesn't split
+  // yet until real Unit Group dates are entered.
+  function unitGroupYear(ug){
+    const d=ug.actualStart||ug.plannedStart;
+    if(!d)return null;
+    const y=new Date(d).getFullYear();
+    return isNaN(y)?null:y;
+  }
   allScopes.forEach(sc=>{
     if(sc.status==='Complete')return;
     if(sc.year==null)return;
     const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===sc.id);
     const unitNames=units.map(u=>u.name).filter(Boolean);
-    if(sc.contractAwardValue>0){
-      items.push({year:sc.year,amount:sc.contractAwardValue,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:true,source:'scope',unitCount:units.length,unitNames});
-      const anyUnitAwarded=units.some(u=>u.awardValue>0);
-      units.forEach(u=>{
-        const amt=(!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
-        unitItems.push({year:sc.year,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',amount:amt,isCommitted:true,status:unitLifecycleBucket(u)});
+    const isCommitted=sc.contractAwardValue>0;
+    const anyUnitAwarded=units.some(u=>u.awardValue>0);
+    const scopeGroups=(window.UNIT_GROUPS||[]).filter(ug=>ug.scopeId===sc.id);
+    // Map each unit to its Unit Group's year, if it belongs to one with a
+    // usable date; otherwise it stays in the Scope-year bucket below.
+    const unitToYear=new Map();
+    scopeGroups.forEach(ug=>{
+      const y=unitGroupYear(ug);
+      if(y==null)return;
+      (ug.linkedUnitIds||[]).forEach(uid=>unitToYear.set(uid,y));
+    });
+    // Bucket units by resolved year (Unit Group year if known, else Scope year)
+    const byYear=new Map();
+    units.forEach(u=>{
+      const y=unitToYear.has(u.id)?unitToYear.get(u.id):sc.year;
+      if(!byYear.has(y))byYear.set(y,[]);
+      byYear.get(y).push(u);
+    });
+    if(units.length===0)byYear.set(sc.year,[]);
+    byYear.forEach((yearUnits,yr)=>{
+      let yearAmount;
+      if(isCommitted){
+        yearAmount=(!anyUnitAwarded&&units.length>0)
+          ?sc.contractAwardValue*(yearUnits.length/units.length)
+          :yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
+      }else{
+        yearAmount=yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
+      }
+      if(yearAmount<=0)return;
+      items.push({year:yr,amount:yearAmount,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted,source:isCommitted?'scope':'estimate',unitCount:yearUnits.length,unitNames:yearUnits.map(u=>u.name).filter(Boolean)});
+      yearUnits.forEach(u=>{
+        const amt=(isCommitted&&!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
+        unitItems.push({year:yr,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',amount:amt,isCommitted,status:unitLifecycleBucket(u)});
       });
-    }else{
+    });
+    // Scope has no real Unit Inventory rows yet but does have an estimate
+    // total (legacy path, e.g. scopeUnitBudgetTotal from allocations) —
+    // preserve the old single-year fallback so nothing already showing
+    // disappears just because this Scope has zero units entered.
+    if(units.length===0&&!isCommitted){
       const est=scopeUnitBudgetTotal(sc.id);
       if(est>0){
-        items.push({year:sc.year,amount:est,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:false,source:'estimate',unitCount:units.length,unitNames});
-        units.forEach(u=>{
-          unitItems.push({year:sc.year,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',amount:unitEffectiveValue(u),isCommitted:false,status:unitLifecycleBucket(u)});
-        });
+        items.push({year:sc.year,amount:est,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted:false,source:'estimate',unitCount:0,unitNames:[]});
       }
     }
   });
