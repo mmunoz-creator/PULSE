@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39g</div>
     </div>
   </nav>
 
@@ -6361,8 +6361,25 @@ function renderMilestones(p){
 }
 
 
+// v39g — fixed a real race-condition bug: editing a date field fires an
+// async write-then-DOM-patch sequence, but nothing prevented two overlapping
+// calls (e.g. clearing a date then immediately re-entering it, or editing
+// two fields in quick succession) from resolving out of order. Whichever
+// network response happened to land LAST won the DOM patch — not
+// necessarily the most recent edit — so the visible AT RISK/Complete pill
+// could end up reflecting a stale intermediate state even though the final
+// saved value in Airtable was correct (confirmed via console: the Airtable
+// write itself always succeeded with the right status, only the on-screen
+// badge was wrong). Fixed with a per-milestone request token: each call
+// stamps window._msFieldReqToken[msId] with its own token before awaiting,
+// and only applies its DOM patch if that token is still the latest one
+// issued for that milestone by the time its await resolves — a call that
+// got superseded by a newer edit simply skips its own now-stale patch.
+if(!window._msFieldReqToken)window._msFieldReqToken={};
 async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
   if(window._msRendering)return; // guard against onchange firing during render
+  const myToken=(window._msFieldReqToken[msId]||0)+1;
+  window._msFieldReqToken[msId]=myToken;
   const fields={[fieldName]:value};
   // Re-derive status whenever a date field changes (calendar-driven milestones only;
   // phase-linked milestones don't expose these inputs in the UI at all)
@@ -6377,6 +6394,11 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
     fields['Status']=deriveCalendarStatus(plannedDate,actualDate,completionDate);
   }
   await updateMilestone(msId,fields,propName);
+  // If a newer edit to this same milestone was issued while this write was
+  // in flight, this call is stale — don't let it clobber the DOM with an
+  // outdated status. The newer call's own patch (or a future one) is the
+  // one that should win.
+  if(window._msFieldReqToken[msId]!==myToken)return;
   // M4 — Contract Award: auto-create a real Action Item the moment this
   // milestone newly transitions to Complete (not on re-saves of an already-
   // complete milestone). Silent, no PM confirmation needed (confirmed design
