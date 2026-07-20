@@ -1421,6 +1421,12 @@ async function loadAllData() {
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       deviceLocation: r.fields['Device Location']||'',
       unitType: r.fields['Unit Type']||'',
+      // Equipment Type — the specific drive/product subtype (MRL Elevator,
+      // Geared Elevator, Gearless Elevator, Hydraulic Elevator, Escalator,
+      // Wheelchair Lift, Other), used only for the phase Product Type
+      // mismatch guardrail below. Distinct from the broader Unit Type field
+      // (Elevator/Escalator/Wheelchair Lift) used for bucket counts elsewhere.
+      equipmentType: r.fields['Equipment Type']||'',
       // v34j — Unit Inventory List creation/editing UI. These fields exist
       // in Airtable (added this session) but were never read into the app.
       // Total Work Est. is an Airtable formula field (blank-safe sum of the
@@ -2220,7 +2226,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39i</div>
     </div>
   </nav>
 
@@ -3683,6 +3689,19 @@ const PHASE_MILESTONE_TEMPLATES={
     'Final (AHJ) Inspection',
     'Owner Acceptance',
   ],
+  'Gearless Elevator':[
+    'Submittal & Shop Drawing Review',
+    'Procurement & Manufacturing',
+    'Mobilization & Demolition',
+    'Installation: Machine Room & Hoistway',
+    'Installation: Electrical & System Upgrades',
+    'Installation: Cab Upgrade & Hall Fixtures',
+    'Adjusting & Testing',
+    'Pre-Test Fire Life Safety',
+    'Punch List Complete',
+    'Final (AHJ) Inspection',
+    'Owner Acceptance',
+  ],
   'Hydraulic Elevator':[
     'Submittal & Shop Drawing Review',
     'Procurement & Manufacturing',
@@ -3706,6 +3725,17 @@ const PHASE_MILESTONE_TEMPLATES={
     'Owner Acceptance',
   ],
   'Wheelchair Lift':[
+    'Engineering Site Survey',
+    'Submittal & Shop Drawing Review',
+    'Procurement & Manufacturing',
+    'Mobilization & Demolition',
+    'Installation',
+    'Adjusting & Test',
+    'Punch List Complete',
+    'Final (AHJ) Inspection',
+    'Owner Acceptance',
+  ],
+  'Other':[
     'Engineering Site Survey',
     'Submittal & Shop Drawing Review',
     'Procurement & Manufacturing',
@@ -4294,6 +4324,10 @@ async function renderUnitsTab(p){
 // later build; until that ships, Status stays editable exactly as it is on
 // the Unit Inventory List Airtable table today.
 const UNIT_TYPE_OPTIONS=['Elevator','Escalator','Wheelchair Lift','Other'];
+// Equipment Type — the specific drive/product subtype, mirrors the Airtable
+// single-select and the phase Product Type dropdown options exactly (see
+// PHASE_MILESTONE_TEMPLATES keys) so the phase mismatch guardrail works.
+const EQUIPMENT_TYPE_OPTIONS=['MRL Elevator','Geared Elevator','Gearless Elevator','Hydraulic Elevator','Escalator','Wheelchair Lift','Other'];
 // v34l — UNIT_STATUS_OPTIONS removed: Active/Planned are now derived,
 // not selectable from a fixed list; see computeDerivedUnitStatus().
 let uimPendingDeleteIds=[];
@@ -4341,7 +4375,7 @@ function renderUnitInventoryManagerModal(propName){
         <table class="data-table" style="table-layout:auto">
           <thead><tr>
             <th style="width:24px" id="uim-th-check"></th>
-            <th>Unit Name</th><th>Device Location</th><th>Unit Type</th><th>Priority</th><th>Status</th><th>CapEx Year</th>
+            <th>Unit Name</th><th>Device Location</th><th>Unit Type</th><th>Equipment Type</th><th>Priority</th><th>Status</th><th>CapEx Year</th>
             <th style="text-align:right">Elevator Mod Est.</th><th style="text-align:right">Related Work Est.</th><th style="text-align:right">Cab Interior Est.</th><th style="text-align:right">Contingency Fee Est.</th><th style="text-align:right">Total Work Est.</th><th style="text-align:right">Award Value</th>
           </tr></thead>
           <tbody id="uim-tbody"></tbody>
@@ -4767,13 +4801,14 @@ function renderUimTable(propName){
   const units=uimUnitsFor(propName);
   if(thCheck)thCheck.innerHTML=uimDeleteMode?'':'';
   if(units.length===0){
-    tbody.innerHTML=`<tr><td colspan="12" style="text-align:center;padding:2rem;color:var(--gray-mid)">No units yet. Set Total Units above to add rows.</td></tr>`;
+    tbody.innerHTML=`<tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--gray-mid)">No units yet. Set Total Units above to add rows.</td></tr>`;
     return;
   }
   const esc=s=>String(s==null?'':s).replace(/'/g,"\\'");
   tbody.innerHTML=units.map(u=>{
     const checkCell=uimDeleteMode?`<td><input type="checkbox" ${uimPendingDeleteIds.includes(u.id)?'checked':''} onchange="uimToggleDeleteSelect('${u.id}')"></td>`:'<td></td>';
     const typeOpts=UNIT_TYPE_OPTIONS.map(t=>`<option value="${t}" ${u.unitType===t?'selected':''}>${t}</option>`).join('');
+    const equipTypeOpts=EQUIPMENT_TYPE_OPTIONS.map(t=>`<option value="${t}" ${u.equipmentType===t?'selected':''}>${t}</option>`).join('');
     // v34l — Status Model Reconciliation. Active/Planned are auto-derived
     // (never directly selectable); the dropdown's first option always
     // reflects the current computed value and choosing it clears any
@@ -4787,6 +4822,7 @@ function renderUimTable(propName){
       <td><input class="form-input" style="min-width:120px" value="${esc(u.name)}" onchange="uimSaveTextField('${u.id}','Unit Name','name',this.value)"></td>
       <td><input class="form-input" style="min-width:110px" value="${esc(u.deviceLocation)}" onchange="uimSaveTextField('${u.id}','Device Location','deviceLocation',this.value)"></td>
       <td><select class="form-input" style="min-width:120px" onchange="uimSaveSelectField('${u.id}','Unit Type','unitType',this.value,this)"><option value="">—</option>${typeOpts}</select></td>
+      <td><select class="form-input" style="min-width:140px" onchange="uimSaveSelectField('${u.id}','Equipment Type','equipmentType',this.value,this)"><option value="">—</option>${equipTypeOpts}</select></td>
       <td><select class="form-input" style="width:60px" onchange="uimSaveSelectField('${u.id}','Priority','priority',this.value,this)"><option value="">—</option>${priOpts}</select></td>
       <td><select class="form-input" style="min-width:140px" onchange="uimSaveManualStatus('${u.id}',this.value)">
         <option value="" ${!isOverridden?'selected':''}>Auto (${derivedStatus||'—'})</option>
@@ -10292,7 +10328,7 @@ function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhase
     const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
     const claim=!checked&&claimedElsewhere[u.id]?`<span style="color:var(--amber);font-size:10px" title="Already in ${claimedElsewhere[u.id]}"><i class="ti ti-alert-triangle"></i> in ${claimedElsewhere[u.id]}</span>`:'';
     return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
-      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${(u.unitType||'').replace(/"/g,'&quot;')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
+      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${(u.equipmentType||'').replace(/"/g,'&quot;')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
       <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
       ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
       ${claim}
@@ -10368,7 +10404,7 @@ async function saveNewPhase(){
   // free-typed unit names (which could only pattern-match on naming
   // conventions like "PE1"/"ESC1" and would miss anything that didn't
   // follow them).
-  const mismatched=pickedUnits.filter(u=>u.unitType&&u.unitType!==productType);
+  const mismatched=pickedUnits.filter(u=>u.equipmentType&&u.equipmentType!==productType);
   if(mismatched.length>0){
     const names=mismatched.map(u=>u.name||'(unnamed)').join(', ');
     const proceed=confirm(`Warning: ${mismatched.length} checked unit${mismatched.length===1?'':'s'} (${names}) ${mismatched.length===1?"doesn't":"don't"} match this phase's Product Type (${productType}).\n\nEach phase should contain only one product type with concurrent units.\n\nClick OK to save anyway, or Cancel to review.`);
@@ -10552,7 +10588,7 @@ async function saveEditPhase(){
   if(!name){showToast('Phase name required','warn');return;}
   // Real per-unit type-mismatch check, same as saveNewPhase — confirm
   // rather than silently save if a checked unit's real type doesn't match.
-  const mismatched=pickedUnits.filter(u=>u.unitType&&productType&&u.unitType!==productType);
+  const mismatched=pickedUnits.filter(u=>u.equipmentType&&productType&&u.equipmentType!==productType);
   if(mismatched.length>0){
     const names=mismatched.map(u=>u.name||'(unnamed)').join(', ');
     const proceed=confirm(`Warning: ${mismatched.length} checked unit${mismatched.length===1?'':'s'} (${names}) ${mismatched.length===1?"doesn't":"don't"} match this phase's Product Type (${productType}).\n\nEach phase should contain only one product type with concurrent units.\n\nClick OK to save anyway, or Cancel to review.`);
