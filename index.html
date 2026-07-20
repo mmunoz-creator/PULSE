@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39e</div>
     </div>
   </nav>
 
@@ -5168,17 +5168,24 @@ function getDerivedDatesForMilestone(propName,milestoneNumber,scopeId){
 // through to its empty-data default of "Not Started", and since that never
 // matches a manually-set "Complete" status already sitting in Airtable, this
 // function wrote 'Not Started' back over real data with zero user action and
-// zero visible error. Confirmed root cause of a real data-loss report: Misty
-// manually set all 14 milestones on "Completed Project" (Hilton Chicago) to
-// Complete in Airtable, then simply opened the property's Milestones tab —
-// no click on that specific scope was even required — and the sweep reverted
-// all 14 records back to Not Started with blank dates. Fix: skip any
-// milestone whose Scope is isCompleteBucket:true, matching the same guard
-// already used for rendering (~line 6183) and for autoPopulateMilestones
-// (~line 6208) — those scopes should never be recalculated, only trusted
-// as-is once marked Complete.
+// zero visible error.
+// v39e — the v39d fix above used isCompleteBucket, which turned out to be
+// dead for this exact case: isCompleteBucket is ONLY ever set to true inside
+// newScope() (~line 4565) when a Scope is created fresh through the app's
+// own "split into scopes" flow. The Airtable load path that builds
+// window.SCOPES from real records (~line 1321) never sets isCompleteBucket
+// at all — confirmed by reading that mapping directly, it sets isTbd but has
+// no isCompleteBucket line. So any pre-existing Scope loaded from Airtable,
+// including Hilton Chicago's real "Completed Project" record, always has
+// isCompleteBucket===undefined regardless of its actual Status, and the v39d
+// guard never engaged for it — confirmed live: the milestone-revert stopped
+// (a separate, real fix that IS working), but the drift banner on the
+// Overview card kept firing because ITS guard used the same dead flag.
+// Correct, reliable fix: key off s.status==='Complete' instead — a real,
+// always-populated field for every Scope regardless of how it was created,
+// and exactly the field Misty is already using to mark a project done.
 async function recalculateAllMilestoneStatuses(propName){
-  const completeBucketScopeIds=new Set((window.SCOPES||[]).filter(s=>s.property===propName&&s.isCompleteBucket).map(s=>s.id));
+  const completeBucketScopeIds=new Set((window.SCOPES||[]).filter(s=>s.property===propName&&(s.isCompleteBucket||s.status==='Complete')).map(s=>s.id));
   const ms=(window.MILESTONES||[]).filter(m=>m.property===propName&&!completeBucketScopeIds.has(m.scopeId));
   let anyChanged=false;
   const changedScopeIds=new Set();
@@ -5794,15 +5801,28 @@ function renderScopeCards(p){
     // Misty's decision this session: surface the disagreement, don't
     // silently auto-correct it, since manual Airtable edits are a normal
     // part of her workflow and an auto-write could re-clobber a
-    // deliberate status change (the same mechanism already fixed once
-    // this session for Completed-bucket scopes).
+    // deliberate status change.
+    // v39e — milestonesJustify previously only trusted msFinal's date
+    // fields (completionDate/actualDate) to conclude "Complete", never the
+    // milestone's own Status field. Misty's real workflow for older/backfill
+    // scopes is to set Status=Complete on all 14 milestones directly without
+    // populating dates (confirmed this session on Hilton Chicago's
+    // "Completed Project" scope) — a completely reasonable way to mark
+    // historical work done. That meant milestonesJustify always fell
+    // through to 'Planned' for those scopes even after a correct Complete
+    // edit, producing a permanent false-positive drift banner. Also
+    // replaced the isCompleteBucket guard here (same dead-flag problem as
+    // the v39d Milestones-sweep fix — isCompleteBucket is never set on
+    // Scopes loaded from Airtable, only on ones created fresh in-app) with
+    // a direct check: if the Scope is already marked Complete and its final
+    // milestone's Status also says Complete, there's nothing to flag.
     const realMs=(window.MILESTONES||[]).filter(m=>m.scopeId===s.id);
     let driftMsg=null;
-    if(realMs.length>0&&!s.isCompleteBucket){
+    if(realMs.length>0){
       const finalMsNum=MILESTONES_DEF.length;
       const msFinal=realMs.find(m=>m.milestoneNumber===finalMsNum);
       const ms1Real=realMs.find(m=>m.milestoneNumber===1);
-      const milestonesJustify=(msFinal&&(msFinal.completionDate||msFinal.actualDate))?'Complete'
+      const milestonesJustify=(msFinal&&(msFinal.completionDate||msFinal.actualDate||msFinal.status==='Complete'))?'Complete'
         :(ms1Real&&ms1Real.actualDate)?'In Progress'
         :(s.status==='Capital Plan'?'Capital Plan':'Planned');
       if(milestonesJustify!==s.status&&!(s.status==='On Hold')){
