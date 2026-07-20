@@ -2234,7 +2234,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v41a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v41b</div>
     </div>
   </nav>
 
@@ -12380,6 +12380,60 @@ function renderBudgetOutlook(){
     }
   });
 
+  // v41b — Data Entry export needs every unit, not just the ones with
+  // real dollars/an active dated Scope. The main unitItems loop above
+  // skips a whole year-bucket when yearAmount<=0, and skips a Scope
+  // entirely when it's Complete or has no Year set, since those gates
+  // make sense for the on-screen chart and the Client Report (both meant
+  // to reflect actual planned/committed spend). But that same skip meant
+  // exactly the units missing dollar data - the ones Data Entry exists to
+  // fill in - never showed up in the file at all (452 in PULSE vs 365 in
+  // the export). allUnitItems rebuilds the same per-unit rows with none
+  // of those three gates, used only by exportBudgetOutlookDataEntry();
+  // the chart, allocs, and Client Report all keep reading unitItems/items
+  // unchanged.
+  const allUnitItems=[];
+  allScopes.forEach(sc=>{
+    const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===sc.id);
+    const isCommitted=sc.contractAwardValue>0;
+    const anyUnitAwarded=units.some(u=>u.awardValue>0);
+    const scopeGroups=(window.UNIT_GROUPS||[]).filter(ug=>ug.scopeId===sc.id);
+    const unitToYear=new Map();
+    scopeGroups.forEach(ug=>{
+      const y=unitGroupYear(ug);
+      if(y==null)return;
+      (ug.linkedUnitIds||[]).forEach(uid=>unitToYear.set(uid,y));
+    });
+    const scopeMilestone=scopeCurrentMilestoneLabel(sc.id);
+    const propForEc=(window.PORTFOLIO||[]).find(p=>p.n===sc.property);
+    const elevatorCoResolved=sc.ec||propForEc?.ec||'';
+    units.forEach(u=>{
+      const yr=unitToYear.has(u.id)?unitToYear.get(u.id):sc.year;
+      const amt=(isCommitted&&!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
+      allUnitItems.push({
+        year:yr,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',
+        amount:amt,isCommitted,status:unitLifecycleBucket(u),
+        unitId:u.id,
+        unitType:u.unitType||'',
+        equipmentType:u.equipmentType||'',
+        priority:u.priority||'',
+        vdaNum:sc.vdaNum||'',
+        clientProjectNum:sc.clientProjectNum||'',
+        elevatorCo:elevatorCoResolved,
+        milestone:scopeMilestone,
+        consultant:sc.v||'',
+        deviceLocation:u.deviceLocation||'',
+        elevEst:u.elevEst||0,
+        relatedEst:u.relatedEst||0,
+        cabEst:u.cabEst||0,
+        contingencyEst:u.contingencyEst||0,
+        targetCompletion:u.capexYear||'',
+        awardValue:u.awardValue||0,
+      });
+    });
+  });
+  window._boAllUnitItems=allUnitItems;
+
   // v36j — "Active properties" was filtering on isCommitted (real Contract
   // Award Value), which reads as "committed dollars," a distinction already
   // shown by the Committed/Planned bar-color legend above. Per the
@@ -12515,12 +12569,24 @@ const _boStatusLabel={active:'Active',onhold:'On Hold',pipeline:'Pipeline',compl
 function _boSortedUnitItems(){
   return (window._boUnitItems||[]).slice().sort((a,b)=>a.year-b.year||(a.property||'').localeCompare(b.property||'')||(a.unitName||'').localeCompare(b.unitName||''));
 }
+// v41b — Data Entry export reads window._boAllUnitItems (no $0/Complete/
+// no-year gates, see the builder in renderBudgetOutlook) instead of the
+// filtered _boUnitItems the chart and Client Report use, so units with no
+// dollars entered yet actually show up in the file meant to fill them in.
+// year can be null here (no-year Scope), so the sort pushes those last
+// instead of throwing off a numeric a.year-b.year subtraction.
+function _boSortedAllUnitItems(){
+  return (window._boAllUnitItems||[]).slice().sort((a,b)=>{
+    const ay=a.year==null?Infinity:a.year, by=b.year==null?Infinity:b.year;
+    return ay-by||(a.property||'').localeCompare(b.property||'')||(a.unitName||'').localeCompare(b.unitName||'');
+  });
+}
 function _boSetCurrencyCell(ws,addr){
   if(ws[addr])ws[addr].z='$#,##0';
 }
 function _boAddDropdown(ws,colLetter,firstRow,lastRow,values){
-  if(!ws['!dataValidation'])ws['!dataValidation']=[];
-  ws['!dataValidation'].push({
+  if(!ws['!dataValidations'])ws['!dataValidations']=[];
+  ws['!dataValidations'].push({
     sqref:`${colLetter}${firstRow}:${colLetter}${lastRow}`,
     type:'list',
     formula1:`"${values.join(',')}"`,
@@ -12582,12 +12648,12 @@ window.exportBudgetOutlookClientReport=exportBudgetOutlookClientReport;
 function exportBudgetOutlookDataEntry(){
   if(typeof XLSX==='undefined'){showToast('Excel export library failed to load — check your connection and try again','error');return;}
   const d=window._boData;
-  const sorted=_boSortedUnitItems();
-  if(!d||!sorted.length){showToast('No budget data to export','error');return;}
+  const sorted=_boSortedAllUnitItems();
+  if(!sorted.length){showToast('No budget data to export','error');return;}
   const milestoneLabels=MILESTONES_DEF.map((name,i)=>`M${i+1} - ${name}`);
   const statusLabels=['Active','On Hold','Pipeline','Complete'];
   const rows=sorted.map(u=>({
-    'Year':u.year,
+    'Year':u.year==null?'':u.year,
     'Property':u.property||'',
     'Unit':u.unitName||'',
     'Unit Type':u.unitType||'',
