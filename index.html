@@ -2220,7 +2220,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v39d</div>
     </div>
   </nav>
 
@@ -5158,8 +5158,28 @@ function getDerivedDatesForMilestone(propName,milestoneNumber,scopeId){
 // Re-derive and write status for all milestones of a property.
 // Call this whenever Phase Tasks change, or on milestone render, to keep
 // phase-linked milestones accurate without requiring manual field edits.
+// v39d — CRITICAL FIX. This function pulls every Milestone record for the
+// whole property with no scope filter, and previously had no isCompleteBucket
+// check at all. That meant viewing the Milestones tab for ANY scope on a
+// property would also sweep and silently overwrite a Completed-bucket scope's
+// milestones (e.g. a synthetic "Completed Project" scope used to represent
+// historical/pre-PULSE work), because those scopes have no real Unit Group/
+// Phase Task data behind them — every phase-linked derivation rule falls
+// through to its empty-data default of "Not Started", and since that never
+// matches a manually-set "Complete" status already sitting in Airtable, this
+// function wrote 'Not Started' back over real data with zero user action and
+// zero visible error. Confirmed root cause of a real data-loss report: Misty
+// manually set all 14 milestones on "Completed Project" (Hilton Chicago) to
+// Complete in Airtable, then simply opened the property's Milestones tab —
+// no click on that specific scope was even required — and the sweep reverted
+// all 14 records back to Not Started with blank dates. Fix: skip any
+// milestone whose Scope is isCompleteBucket:true, matching the same guard
+// already used for rendering (~line 6183) and for autoPopulateMilestones
+// (~line 6208) — those scopes should never be recalculated, only trusted
+// as-is once marked Complete.
 async function recalculateAllMilestoneStatuses(propName){
-  const ms=(window.MILESTONES||[]).filter(m=>m.property===propName);
+  const completeBucketScopeIds=new Set((window.SCOPES||[]).filter(s=>s.property===propName&&s.isCompleteBucket).map(s=>s.id));
+  const ms=(window.MILESTONES||[]).filter(m=>m.property===propName&&!completeBucketScopeIds.has(m.scopeId));
   let anyChanged=false;
   const changedScopeIds=new Set();
   for(const m of ms){
