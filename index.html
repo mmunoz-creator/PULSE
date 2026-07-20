@@ -2234,7 +2234,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v41b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v41c</div>
     </div>
   </nav>
 
@@ -12584,14 +12584,15 @@ function _boSortedAllUnitItems(){
 function _boSetCurrencyCell(ws,addr){
   if(ws[addr])ws[addr].z='$#,##0';
 }
-function _boAddDropdown(ws,colLetter,firstRow,lastRow,values){
-  if(!ws['!dataValidations'])ws['!dataValidations']=[];
-  ws['!dataValidations'].push({
-    sqref:`${colLetter}${firstRow}:${colLetter}${lastRow}`,
-    type:'list',
-    formula1:`"${values.join(',')}"`,
-  });
-}
+// v41c — real Excel dropdown validation (ws['!dataValidations']) is a
+// SheetJS Pro feature; the free xlsx.full.min.js build we load from cdnjs
+// silently drops it on write (confirmed directly: writing the same call
+// through a local install of the same 0.18.5 free build produces no
+// <dataValidations> in the output XML at all). _boAddDropdown and every
+// call to it are removed rather than left in dead. In its place,
+// exportBudgetOutlookDataEntry() adds a second sheet, "Valid values",
+// listing the allowed options for each constrained column side by side,
+// so the team has something to type from even without real enforcement.
 function exportBudgetOutlookClientReport(){
   if(typeof XLSX==='undefined'){showToast('Excel export library failed to load — check your connection and try again','error');return;}
   const d=window._boData;
@@ -12681,12 +12682,26 @@ function exportBudgetOutlookDataEntry(){
   for(let r=2;r<=lastRow;r++){
     ['K','L','P','Q','R','S'].forEach(col=>_boSetCurrencyCell(ws,`${col}${r}`));
   }
-  _boAddDropdown(ws,'D',2,lastRow,UNIT_TYPE_OPTIONS);
-  _boAddDropdown(ws,'I',2,lastRow,milestoneLabels);
-  _boAddDropdown(ws,'J',2,lastRow,statusLabels);
-  _boAddDropdown(ws,'O',2,lastRow,EQUIPMENT_TYPE_OPTIONS);
   ws['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0}];
   XLSX.utils.book_append_sheet(wb,ws,'Data entry');
+  // v41c — no real dropdown enforcement available (see comment above
+  // _boSetCurrencyCell), so a reference sheet lists the allowed values for
+  // every column that's a real selector in the Manage Unit Inventory UI,
+  // side by side, for the team to type from.
+  const validValueCols=[
+    ['Unit Type',UNIT_TYPE_OPTIONS],
+    ['Milestone',milestoneLabels],
+    ['Status',statusLabels],
+    ['Equipment Type',EQUIPMENT_TYPE_OPTIONS],
+  ];
+  const maxLen=Math.max(...validValueCols.map(c=>c[1].length));
+  const validRows=[validValueCols.map(c=>c[0])];
+  for(let i=0;i<maxLen;i++){
+    validRows.push(validValueCols.map(c=>c[1][i]||''));
+  }
+  const wsValid=XLSX.utils.aoa_to_sheet(validRows);
+  wsValid['!cols']=validValueCols.map(()=>({wch:26}));
+  XLSX.utils.book_append_sheet(wb,wsValid,'Valid values');
   const stamp=new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb,`PULSE_Budget_Outlook_Data_Entry_${d.filter||'all'}_${stamp}.xlsx`);
   showToast('Data entry export downloaded','success');
