@@ -601,6 +601,14 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .gantt-today-line{position:absolute;top:0;bottom:0;width:2px;background:var(--red);opacity:.7;z-index:5;pointer-events:none}
 .gantt-grid-line{position:absolute;top:0;bottom:0;width:1px;background:var(--border);z-index:1;pointer-events:none}
 </style>
+<!-- v41a — SheetJS, first external script dependency in this file. Needed
+for real .xlsx output (multiple tabs, formulas, currency number formats,
+dropdown data validation) for the Budget Outlook client report and data
+entry exports — none of that is achievable in CSV, which is what this app
+used exclusively until now. Loaded from cdnjs.cloudflare.com, the same
+trusted CDN already used for the Tabler icon font. Confirmed with Misty
+before adding. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -2226,7 +2234,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v40b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v41a</div>
     </div>
   </nav>
 
@@ -2848,7 +2856,15 @@ window.PROPERTIES_SEED = [
             <div class="header-actions">
               <button class="btn no-print" onclick="closeBudgetOutlook()"><i class="ti ti-arrow-left"></i>Back to Analytics</button>
               <button class="btn btn-success no-print" onclick="showReforecastView()"><i class="ti ti-calendar-repeat"></i>Reforecast</button>
-              <button class="btn btn-success no-print" onclick="exportBudgetOutlookExcel()"><i class="ti ti-file-spreadsheet"></i>Export to Excel</button>
+              <!-- v41a — Export to Excel split into two role-gated exports.
+              Client sees only bo-export-client-btn, relabeled "Export
+              Report" for that role (same file exportBudgetOutlookClientReport()
+              produces either way). PM/Admin/Consultant see both buttons.
+              Visibility set in renderBudgetOutlook() below, following the
+              existing role==='X' ? '' : 'none' toggle pattern used
+              throughout this file rather than separate markup per role. -->
+              <button id="bo-export-client-btn" class="btn btn-success no-print" onclick="exportBudgetOutlookClientReport()"><i class="ti ti-file-spreadsheet"></i>Export Client Report</button>
+              <button id="bo-export-data-entry-btn" class="btn btn-success no-print" onclick="exportBudgetOutlookDataEntry()"><i class="ti ti-clipboard-list"></i>Export for Data Entry</button>
               <button class="btn btn-primary no-print" onclick="printBudgetOutlook()"><i class="ti ti-printer"></i>Print / PDF</button>
             </div>
           </div>
@@ -12185,6 +12201,20 @@ window.discardReforecastChanges=discardReforecastChanges;
 function renderBudgetOutlook(){
   const pillsEl=document.getElementById('bo-filter-pills');
   if(!pillsEl)return;
+  // v41a — role-gated export buttons, same toggle pattern used elsewhere
+  // in this file (e.g. line ~3596-3599). Client only ever sees the client
+  // report button, relabeled "Export Report" since there's no second
+  // button on that role's screen to distinguish it from. PM/Admin/
+  // Consultant see both, with their fuller labels.
+  const boClientBtn=document.getElementById('bo-export-client-btn');
+  const boDataEntryBtn=document.getElementById('bo-export-data-entry-btn');
+  if(boClientBtn){
+    boClientBtn.style.display='';
+    boClientBtn.innerHTML=role==='client'
+      ?'<i class="ti ti-file-spreadsheet"></i>Export Report'
+      :'<i class="ti ti-file-spreadsheet"></i>Export Client Report';
+  }
+  if(boDataEntryBtn)boDataEntryBtn.style.display=role==='client'?'none':'';
   // v35g — relabeled "All properties" → "All scheduled". This pill was
   // never a true portfolio-wide view — items (below) deliberately excludes
   // Complete-status scopes and no-year/TBD scopes by design (v34p: a
@@ -12248,6 +12278,25 @@ function renderBudgetOutlook(){
     const y=new Date(d).getFullYear();
     return isNaN(y)?null:y;
   }
+  // v41a — Scope-level current milestone, for the Budget Outlook exports'
+  // Milestone column. Same "find the in-progress one, else count complete"
+  // pattern already used by populateMilestonesTable() (~line 6501-6504),
+  // just re-scoped from property to a single Scope's own milestone records
+  // (window.MILESTONES filtered by scopeId) since a property can have
+  // multiple Scopes/Projects each on a different milestone. Returns the
+  // full "M{n} - {name}" label using the real 14-entry MILESTONES_DEF list.
+  // This is a Project-level value — every unit under the same Scope shows
+  // the same Milestone in the export, since PULSE doesn't track milestone
+  // status per individual unit today.
+  function scopeCurrentMilestoneLabel(scopeId){
+    const msData=(window.MILESTONES||[]).filter(m=>m.scopeId===scopeId);
+    if(msData.length===0)return'';
+    const complete=msData.filter(m=>m.status==='Complete').length;
+    const inprog=msData.find(m=>m.status==='In Progress'||m.status==='At Risk'||m.status==='inprog'||m.status==='atrisk');
+    if(inprog)return`M${inprog.milestoneNumber} - ${inprog.milestoneName}`;
+    if(complete>0&&complete<=MILESTONES_DEF.length)return`M${complete} - ${MILESTONES_DEF[complete-1]}`;
+    return`M1 - ${MILESTONES_DEF[0]}`;
+  }
   allScopes.forEach(sc=>{
     if(sc.status==='Complete')return;
     if(sc.year==null)return;
@@ -12283,9 +12332,40 @@ function renderBudgetOutlook(){
       }
       if(yearAmount<=0)return;
       items.push({year:yr,amount:yearAmount,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted,source:isCommitted?'scope':'estimate',unitCount:yearUnits.length,unitNames:yearUnits.map(u=>u.name).filter(Boolean)});
+      // v41a — carries the field set both Budget Outlook exports need:
+      // Unit Type/Equipment Type/Priority/Consultant/Device Location/cost
+      // estimates/Target Completion straight off the real Unit Inventory
+      // record; VDA #/Client #/Elevator Co. off the unit's linked Scope
+      // (falling back to the property's Elevator Co. same as
+      // renderScopeEditModal already does); Milestone via the new
+      // scopeCurrentMilestoneLabel() helper above; unitId is the real
+      // Airtable record id, reserved for a future re-import match-back
+      // step, not surfaced in either export's visible columns yet.
+      const scopeMilestone=scopeCurrentMilestoneLabel(sc.id);
+      const propForEc=(window.PORTFOLIO||[]).find(p=>p.n===sc.property);
+      const elevatorCoResolved=sc.ec||propForEc?.ec||'';
       yearUnits.forEach(u=>{
         const amt=(isCommitted&&!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
-        unitItems.push({year:yr,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',amount:amt,isCommitted,status:unitLifecycleBucket(u)});
+        unitItems.push({
+          year:yr,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',
+          amount:amt,isCommitted,status:unitLifecycleBucket(u),
+          unitId:u.id,
+          unitType:u.unitType||'',
+          equipmentType:u.equipmentType||'',
+          priority:u.priority||'',
+          vdaNum:sc.vdaNum||'',
+          clientProjectNum:sc.clientProjectNum||'',
+          elevatorCo:elevatorCoResolved,
+          milestone:scopeMilestone,
+          consultant:sc.v||'',
+          deviceLocation:u.deviceLocation||'',
+          elevEst:u.elevEst||0,
+          relatedEst:u.relatedEst||0,
+          cabEst:u.cabEst||0,
+          contingencyEst:u.contingencyEst||0,
+          targetCompletion:u.capexYear||'',
+          awardValue:u.awardValue||0,
+        });
       });
     });
     // Scope has no real Unit Inventory rows yet but does have an estimate
@@ -12421,63 +12501,131 @@ function renderBudgetOutlook(){
   // selected years the on-screen chart/table are currently showing.
   window._boUnitItems=boYearSelection?unitItems.filter(u=>boYearSelection.has(u.year)):unitItems;
 }
-// v34i — Export to Excel. CSV, not a real .xlsx: this codebase has zero
-// external script dependencies today (no CDN libraries anywhere), and CSV
-// opens directly in Excel with no new dependency or library weight added.
-// Flagged to Misty as a deliberate choice, not a silent shortcut.
-function exportBudgetOutlookExcel(){
-  const d=window._boData;
-  const unitItems=window._boUnitItems||[];
-  if(!d||!d.years||d.years.length===0){showToast('No budget data to export','error');return;}
-  const esc=v=>{
-    const s=String(v==null?'':v);
-    return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
-  };
-  // v36l — rebuilt from one row per YEAR (properties/unit names jammed
-  // into single semicolon-joined cells, unreadable once a year had 7+
-  // properties) to one row per UNIT — Property, Scope, Unit, and that
-  // unit's own dollar value each get their own column/row instead of being
-  // squashed together. Also adds Status (unitLifecycleBucket() — the same
-  // shared active/on hold/pipeline/complete classifier every other screen
-  // uses, not a new one-off), per direct request. Sorted by year then
-  // property so it reads top-to-bottom the same way the on-screen table
-  // groups by year. Still a real .csv, not a true .xlsx — this codebase
-  // has zero external script dependencies today by deliberate prior
-  // decision, and adding a CDN library (SheetJS) just for this felt like
-  // unnecessary new risk while other higher-priority fixes were in
-  // progress same session. CSV opens directly in Excel on Mac and Windows
-  // either way — only difference is it isn't Excel's own native format.
-  const statusLabel={active:'Active',onhold:'On Hold',pipeline:'Pipeline',complete:'Complete'};
-  const rows=[['Year','Property','Scope','Unit','Status','Committed','Planned','Total']];
-  const sorted=unitItems.slice().sort((a,b)=>a.year-b.year||(a.property||'').localeCompare(b.property||'')||(a.unitName||'').localeCompare(b.unitName||''));
-  sorted.forEach(u=>{
-    rows.push([
-      u.year,
-      u.property||'',
-      u.scopeName||'',
-      u.unitName||'',
-      statusLabel[u.status]||u.status||'',
-      u.isCommitted?(u.amount||0):0,
-      u.isCommitted?0:(u.amount||0),
-      u.amount||0
-    ]);
-  });
-  const totalCommitted=sorted.filter(u=>u.isCommitted).reduce((s,u)=>s+(u.amount||0),0);
-  const totalPlanned=sorted.filter(u=>!u.isCommitted).reduce((s,u)=>s+(u.amount||0),0);
-  rows.push(['Total','','','','',totalCommitted,totalPlanned,totalCommitted+totalPlanned]);
-  const csv=rows.map(r=>r.map(esc).join(',')).join('\r\n');
-  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  const stamp=new Date().toISOString().slice(0,10);
-  a.href=url;
-  a.download=`PULSE_Budget_Outlook_Units_${d.filter||'all'}_${stamp}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  showToast('Budget Outlook exported','success');
+// v41a — Budget Outlook exports rebuilt around SheetJS as real .xlsx files.
+// exportBudgetOutlookExcel() (CSV, one file, Committed/Planned/Total
+// columns) is retired and replaced by two purpose-built exports:
+// exportBudgetOutlookClientReport() (external, 2 tabs, formula-linked
+// Summary) and exportBudgetOutlookDataEntry() (internal, dropdown-validated
+// fill-in fields, hidden ID column). Both read the same live
+// window._boUnitItems the on-screen table already computed — no separate
+// data pipeline. Shared status-label map and sort order kept identical to
+// the retired function so existing habits (year then property then unit)
+// carry over.
+const _boStatusLabel={active:'Active',onhold:'On Hold',pipeline:'Pipeline',complete:'Complete'};
+function _boSortedUnitItems(){
+  return (window._boUnitItems||[]).slice().sort((a,b)=>a.year-b.year||(a.property||'').localeCompare(b.property||'')||(a.unitName||'').localeCompare(b.unitName||''));
 }
+function _boSetCurrencyCell(ws,addr){
+  if(ws[addr])ws[addr].z='$#,##0';
+}
+function _boAddDropdown(ws,colLetter,firstRow,lastRow,values){
+  if(!ws['!dataValidation'])ws['!dataValidation']=[];
+  ws['!dataValidation'].push({
+    sqref:`${colLetter}${firstRow}:${colLetter}${lastRow}`,
+    type:'list',
+    formula1:`"${values.join(',')}"`,
+  });
+}
+function exportBudgetOutlookClientReport(){
+  if(typeof XLSX==='undefined'){showToast('Excel export library failed to load — check your connection and try again','error');return;}
+  const d=window._boData;
+  const sorted=_boSortedUnitItems();
+  if(!d||!sorted.length){showToast('No budget data to export','error');return;}
+  const milestoneLabels=MILESTONES_DEF.map((name,i)=>`M${i+1} - ${name}`);
+  const detailRows=sorted.map(u=>({
+    'Year':u.year,
+    'Property':u.property||'',
+    'Unit':u.unitName||'',
+    'Unit Type':u.unitType||'',
+    'Project':u.scopeName||'',
+    'VDA Project #':u.vdaNum||'',
+    'Client Project #':u.clientProjectNum||'',
+    'Elevator Company':u.elevatorCo||'',
+    'Milestone':u.milestone||'',
+    'Status':_boStatusLabel[u.status]||u.status||'',
+    'Award Value':u.isCommitted?(u.amount||0):0,
+    'Estimate Value':u.isCommitted?0:(u.amount||0),
+  }));
+  const wb=XLSX.utils.book_new();
+  const wsDetail=XLSX.utils.json_to_sheet(detailRows);
+  const lastRow=detailRows.length+1;
+  for(let r=2;r<=lastRow;r++){_boSetCurrencyCell(wsDetail,`K${r}`);_boSetCurrencyCell(wsDetail,`L${r}`);}
+  wsDetail['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13}];
+  XLSX.utils.book_append_sheet(wb,wsDetail,'Unit detail');
+  const summaryRows=[
+    ['Key portfolio metrics',''],
+    ['Total units',{f:`COUNTA('Unit detail'!B2:B${lastRow})`}],
+    ['Total award value',{f:`SUM('Unit detail'!K2:K${lastRow})`,z:'$#,##0'}],
+    ['Total estimate value',{f:`SUM('Unit detail'!L2:L${lastRow})`,z:'$#,##0'}],
+    ['',''],
+    ['Milestone stage breakdown',''],
+  ];
+  milestoneLabels.forEach(label=>{
+    summaryRows.push([label,{f:`COUNTIF('Unit detail'!I2:I${lastRow},"${label}")`}]);
+  });
+  const wsSummary=XLSX.utils.aoa_to_sheet(summaryRows.map(r=>[r[0],typeof r[1]==='object'?'':r[1]]));
+  summaryRows.forEach((row,i)=>{
+    if(typeof row[1]==='object'){
+      const addr=`B${i+1}`;
+      wsSummary[addr]={t:'n',f:row[1].f};
+      if(row[1].z)wsSummary[addr].z=row[1].z;
+    }
+  });
+  wsSummary['!cols']=[{wch:30},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,wsSummary,'Summary');
+  const stamp=new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb,`PULSE_Budget_Outlook_Client_Report_${d.filter||'all'}_${stamp}.xlsx`);
+  showToast('Client report exported','success');
+}
+window.exportBudgetOutlookClientReport=exportBudgetOutlookClientReport;
+
+function exportBudgetOutlookDataEntry(){
+  if(typeof XLSX==='undefined'){showToast('Excel export library failed to load — check your connection and try again','error');return;}
+  const d=window._boData;
+  const sorted=_boSortedUnitItems();
+  if(!d||!sorted.length){showToast('No budget data to export','error');return;}
+  const milestoneLabels=MILESTONES_DEF.map((name,i)=>`M${i+1} - ${name}`);
+  const statusLabels=['Active','On Hold','Pipeline','Complete'];
+  const rows=sorted.map(u=>({
+    'Year':u.year,
+    'Property':u.property||'',
+    'Unit':u.unitName||'',
+    'Unit Type':u.unitType||'',
+    'Project':u.scopeName||'',
+    'VDA Project #':u.vdaNum||'',
+    'Client Project #':u.clientProjectNum||'',
+    'Elevator Company':u.elevatorCo||'',
+    'Milestone':u.milestone||'',
+    'Status':_boStatusLabel[u.status]||u.status||'',
+    'Award Value':u.awardValue||0,
+    'Estimate Value':u.isCommitted?0:(u.amount||0),
+    'Consultant':u.consultant||'',
+    'Device Location':u.deviceLocation||'',
+    'Equipment Type':u.equipmentType||'',
+    'Elevator Mod Est.':u.elevEst||0,
+    'Related Work Est.':u.relatedEst||0,
+    'Cab Interior Est.':u.cabEst||0,
+    'Contingency Fee Est.':u.contingencyEst||0,
+    'Target Completion':u.targetCompletion||'',
+    'Unit ID':u.unitId||'',
+  }));
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.json_to_sheet(rows);
+  const lastRow=rows.length+1;
+  for(let r=2;r<=lastRow;r++){
+    ['K','L','P','Q','R','S'].forEach(col=>_boSetCurrencyCell(ws,`${col}${r}`));
+  }
+  _boAddDropdown(ws,'D',2,lastRow,UNIT_TYPE_OPTIONS);
+  _boAddDropdown(ws,'I',2,lastRow,milestoneLabels);
+  _boAddDropdown(ws,'J',2,lastRow,statusLabels);
+  _boAddDropdown(ws,'O',2,lastRow,EQUIPMENT_TYPE_OPTIONS);
+  ws['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0}];
+  XLSX.utils.book_append_sheet(wb,ws,'Data entry');
+  const stamp=new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb,`PULSE_Budget_Outlook_Data_Entry_${d.filter||'all'}_${stamp}.xlsx`);
+  showToast('Data entry export downloaded','success');
+}
+window.exportBudgetOutlookDataEntry=exportBudgetOutlookDataEntry;
 function deleteCapitalEntry(propId, propName){
   const overlay=document.createElement('div');
   overlay.id='delete-capital-overlay';
