@@ -2189,7 +2189,9 @@ window.PROPERTIES_SEED = [
         <div class="nav-section-label">Operations</div>
         <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-consultant" class="nav-badge hidden" style="background:var(--red)">0</span></button>
-        <button class="nav-item" onclick="gotoView('pmupdates',this)"><i class="ti ti-broadcast"></i>PM Updates<span id="pmu-badge-consultant" class="nav-badge hidden">0</span></button>
+        <!-- v42h — PM Updates nav item removed for Consultant per Misty's
+             explicit request (view and compose access both revoked, not
+             just compose). Admin/PM/Client nav blocks are untouched. -->
         <button class="nav-item" onclick="gotoView('submit',this)"><i class="ti ti-upload"></i>Submit Update</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
@@ -2239,7 +2241,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42i</div>
     </div>
   </nav>
 
@@ -3890,6 +3892,18 @@ async function doLogin(){
       currentConsultantName=result.name;
       sessionStorage.setItem('pulse_consultant',result.name);
     }
+    // v42h — persist just enough to restore this session after a browser
+    // refresh (role, client, display name, and the Access PINs recordId so
+    // a restored session can be re-verified as still Active — see
+    // restorePulseSession() below). sessionStorage clears when the tab/
+    // window actually closes, so this doesn't create a permanent login;
+    // it only survives an accidental or intentional page reload, which is
+    // the specific complaint this fixes.
+    try{
+      sessionStorage.setItem('pulse_session',JSON.stringify({
+        role,client,userName:result.name,recordId:result.recordId||null,
+      }));
+    }catch(e){/* sessionStorage unavailable — session restore just won't work, not fatal */}
   }
   // v30e: store previous login time before updating (for Portfolio Activity feed)
   try{
@@ -3898,6 +3912,45 @@ async function doLogin(){
     localStorage.setItem('pulse_last_login_time',new Date().toISOString());
   }catch(e){window._prevLoginTime=null;}
   _finishLogin();
+}
+// v42h — Restore a session after a browser refresh. Re-verifies the saved
+// Access PINs recordId is still Active before trusting it (so a
+// deactivated user's old session can't silently keep working just because
+// sessionStorage remembers it), then re-enters the same _finishLogin()
+// path a fresh login would use. Returns true if a session was restored
+// (caller should skip showing the login screen), false otherwise.
+async function tryRestorePulseSession(){
+  let saved=null;
+  try{
+    const raw=sessionStorage.getItem('pulse_session');
+    if(raw)saved=JSON.parse(raw);
+  }catch(e){return false;}
+  if(!saved||!saved.role||!saved.client)return false;
+  role=saved.role;
+  client=saved.client;
+  window._userName=saved.userName||null;
+  if(role==='consultant'){
+    currentConsultantName=sessionStorage.getItem('pulse_consultant')||saved.userName||'';
+  }
+  // Admin has no per-user recordId to re-check (shared PIN, see
+  // verifyPinLogin) — trust the saved role for Admin without a lookup.
+  if(saved.recordId&&role!=='admin'){
+    try{
+      const recs=await atGet('Access PINs');
+      const match=recs.find(r=>r.id===saved.recordId);
+      if(!match||!match.fields['Active']){
+        sessionStorage.removeItem('pulse_session');
+        return false;
+      }
+    }catch(e){
+      // Can't verify right now (offline/Worker down) — fail safe to a
+      // real login screen rather than trust an unverifiable session.
+      return false;
+    }
+  }
+  document.getElementById('login-screen').style.display='none';
+  _finishLogin();
+  return true;
 }
 async function _finishLogin(){
   // v31r: this login's own token. Any loadAllData() resolution that fires
@@ -4042,6 +4095,7 @@ function doLogout(){
   currentConsultantName='';
   window._userName=null;
   sessionStorage.removeItem('pulse_consultant');
+  sessionStorage.removeItem('pulse_session');
   demoMode=false;
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
@@ -6254,6 +6308,14 @@ async function saveScopeEditModal(scopeId){
   s.coMaterialMarkup=coMaterialMarkup;s.coOPMarkup=coOPMarkup;
   s.retainagePct=retainagePct;s.contractAwardValue=contractAwardValue;s.year=year;
 
+  // v42i — real bug: this checkbox read used to happen AFTER overlay.remove()
+  // below, but #se-units-list (where every .se-unit-check box lives) is
+  // INSIDE that same overlay — removing it from the DOM first meant
+  // querySelectorAll('.se-unit-check') always found zero boxes, so no unit
+  // add/remove ever actually applied on save, silently. Reading the
+  // checkbox states before removing the overlay is the actual fix.
+  const boxes=[...document.querySelectorAll('.se-unit-check')];
+
   overlay.remove();
   showToast('Saving scope...','info');
   if(!demoMode&&s.id)await atUpdate('Scopes',s.id,scopeFields);
@@ -6263,7 +6325,6 @@ async function saveScopeEditModal(scopeId){
   // unit that was in this scope and got unchecked gets released to
   // unassigned (matching the manual-reassignment behavior already used by
   // Split Into Scopes — deliberate action, no per-unit confirmation).
-  const boxes=[...document.querySelectorAll('.se-unit-check')];
   for(const box of boxes){
     const unitId=box.dataset.unitId;
     const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===unitId);
@@ -19508,6 +19569,9 @@ function renderClientProjectUpdates(){
 // ever see Published items, which have nothing "pending" about them).
 function updatePMUpdatesBadge(){
   const draftCount=(window.PM_UPDATES||[]).filter(u=>u.status==='Draft').length;
+  // v42h — 'pmu-badge-consultant' no longer exists (PM Updates nav item
+  // removed for Consultant); left in this list harmlessly since the
+  // getElementById guard below already no-ops on a missing element.
   ['pmu-badge-admin','pmu-badge-pm','pmu-badge-consultant'].forEach(id=>{
     const el=document.getElementById(id);
     if(!el)return;
@@ -21136,11 +21200,9 @@ const TOUR_STEPS = {
     ]},
     {target:'#nav-consultant [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:['A working view of recent activity across your properties — open actions, upcoming meetings, and recent field updates, with project badges showing which contract each item belongs to.']},
     {target:'#nav-consultant [onclick*="\'comments\'"]',view:'comments',title:'Client Comments',body:['Client-raised questions and flags relevant to your properties.']},
-    {target:'#nav-consultant [onclick*="\'pmupdates\'"]',view:'pmupdates',title:'PM Updates',body:[
-      'Step 1: A one-way broadcast channel to the client — separate from Client Comments, which is a two-way conversation. Use it to post a status note the client just needs to see, not respond to.',
-      'Step 2: Write an update tied to a property (and optionally a specific project), then Save Draft or Publish to Client. Drafts stay internal until published — the client never sees a draft.',
-      'Step 3: You can publish and unpublish your own updates directly from the feed.'
-    ]},
+    // v42h — Consultant's "PM Updates" tour step removed along with the
+    // nav item itself (see nav-consultant above) — Consultant no longer
+    // has any PM Updates access, view or compose.
     {target:'#nav-consultant [onclick*="\'submit\'"]',view:'submit',title:'Submit Update',body:[
       'Step 1: This is where you log your weekly field update — property, units, phase, progress, and notes.',
       'Step 2: Check off the specific units this update covers from the list, or check "Applies to Whole Project" if it’s not tied to individual units — this keeps your unit records accurate for the property.',
@@ -21379,7 +21441,7 @@ function _tourPositionPopover(pop,anchor){
 </script>
 <script>
 // On page load — pre-fill token input if saved, show setup if never configured
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
   // Status updates once loadAllData completes
   const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
   if(dot)dot.style.background='#EF9F27';if(lbl)lbl.textContent='Connecting...';
@@ -21391,6 +21453,12 @@ window.addEventListener('load', () => {
     setupLink.innerHTML = `<span style="color:#5DCAA5;font-size:11px;font-family:'Plus Jakarta Sans',sans-serif">✓ elevatorpulse.com</span>`;
     loginCard.appendChild(setupLink);
   }
+  // v42h — restore an existing session after a refresh instead of always
+  // showing the login screen. Only takes effect if a real prior login this
+  // browser tab set sessionStorage.pulse_session; a genuinely new tab/
+  // window (or one after actual logout) still lands on the login screen
+  // as before.
+  await tryRestorePulseSession();
 });
 
 // Debug helper - call window.debugPulse() in console to test connection
