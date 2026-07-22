@@ -2241,7 +2241,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42l</div>
     </div>
   </nav>
 
@@ -3949,6 +3949,11 @@ async function tryRestorePulseSession(){
     }
   }
   document.getElementById('login-screen').style.display='none';
+  // v42l — tell _finishLogin() this is a restored session, not a fresh
+  // login, so it can route to the page the user was last on (pulse_last_view)
+  // instead of always landing on Dashboard. Read once and cleared immediately
+  // so it never leaks into a later fresh login on the same page.
+  window._restoringSession=true;
   _finishLogin();
   return true;
 }
@@ -3981,8 +3986,42 @@ async function _finishLogin(){
   renderDashboard(); // will show loading state if no data
   // v31t: Consultant now lands on Dashboard, same as PM/Admin/Client —
   // previously routed straight to the Submit/Field Update view.
-  gotoView('dashboard',null);
-  setFirstNavActive('dashboard');updateQueueBadge();refreshDashActions();
+  // v42l — a restored session (browser refresh) should return to the page
+  // the user was actually on instead of resetting to Dashboard every time.
+  // A genuinely fresh login still always lands on Dashboard, unchanged.
+  // window._restoringSession is set only by tryRestorePulseSession() right
+  // before it calls _finishLogin(), and is cleared immediately below so it
+  // can never leak into a later fresh login in the same tab.
+  let _restoredToView=false;
+  if(window._restoringSession){
+    window._restoringSession=false;
+    let lastView=null;
+    try{
+      const raw=sessionStorage.getItem('pulse_last_view');
+      if(raw)lastView=JSON.parse(raw);
+    }catch(e){lastView=null;}
+    if(lastView&&lastView.viewId==='property'&&lastView.propName){
+      // openProperty() looks up the property by name in window.PORTFOLIO,
+      // which for Park is still empty at this point (Airtable load hasn't
+      // resolved yet) unless the sessionStorage portfolio cache below
+      // populated it first. Guard so a missing/renamed property can't throw
+      // and strand the user on a blank screen — falls through to Dashboard.
+      try{
+        if(typeof openProperty==='function'){openProperty(lastView.propName);_restoredToView=true;}
+      }catch(e){console.error('Session restore: openProperty failed, falling back to Dashboard:',e);}
+    } else if(lastView&&lastView.viewId&&lastView.viewId!=='dashboard'){
+      try{
+        gotoView(lastView.viewId,null);
+        setFirstNavActive(lastView.viewId);
+        _restoredToView=true;
+      }catch(e){console.error('Session restore: gotoView failed, falling back to Dashboard:',e);}
+    }
+  }
+  if(!_restoredToView){
+    gotoView('dashboard',null);
+    setFirstNavActive('dashboard');
+  }
+  updateQueueBadge();refreshDashActions();
   document.getElementById('login-screen').style.display='none';
   pushHistoryState();
   // Build 2 — auto-launch Orientation Tour on first real login only.
@@ -4197,6 +4236,13 @@ function handleHelpBtnClick() {
 function gotoView(viewId,btn){
   closeSidebar();
   window._inPropertyView = false;
+  // v42l — remember the current top-level view (and clear any saved
+  // property, since gotoView means we've left property-detail context) so
+  // a refresh can restore here instead of always landing back on
+  // Dashboard. See tryRestorePulseSession() / _finishLogin() for the read
+  // side. Best-effort only — never blocks navigation if sessionStorage is
+  // unavailable.
+  try{sessionStorage.setItem('pulse_last_view',JSON.stringify({viewId,propName:null}));}catch(e){}
   // v42g — leaving any view stops whatever background poll was running for
   // the view being left (Comments & Flags / Project Updates). Each poll is
   // (re)started below only if we're navigating into that specific view, so
@@ -4274,6 +4320,11 @@ function openProperty(name){
   const prop=port.find(p=>p.n===name);if(!prop)return;
   console.log('openProperty: id='+prop.id+' name='+prop.n);
   currentProp=prop;
+  // v42l — remember the open property (viewId 'property' plus its name) so
+  // a refresh can restore straight back into this property's detail view
+  // instead of landing on Dashboard. See gotoView()'s matching save and
+  // tryRestorePulseSession()/_finishLogin() for the read side.
+  try{sessionStorage.setItem('pulse_last_view',JSON.stringify({viewId:'property',propName:name}));}catch(e){}
   // v31j: show help button for property detail (PM/Admin only)
   window._inPropertyView = true;
   window._currentPropHelpTopic = 'property-overview';
@@ -5853,7 +5904,9 @@ function renderScopeTabs(containerId, propName){
 // unit list live from scopeId at click time instead of inlining HTML into
 // an attribute at all.
 function scopeUnitChipsHtml(s){
-  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id);
+  // v42k — sortUnitsByName so unit chips read in natural name order
+  // (PE1, PE2 ... PE10) instead of raw Airtable load order.
+  const units=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id));
   if(units.length===0)return '';
   const PREVIEW_COUNT=8;
   const collapsedId='su-'+s.id;
@@ -5876,7 +5929,9 @@ function toggleScopeUnitChips(scopeId){
   const el=document.getElementById(collapsedId);
   const toggleEl=document.getElementById(collapsedId+'-toggle');
   if(!el)return;
-  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId);
+  // v42k — sortUnitsByName, matching scopeUnitChipsHtml's initial render so
+  // expanding "Show all" doesn't jump back to unsorted order.
+  const units=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId));
   const PREVIEW_COUNT=8;
   const wasCollapsed=el.dataset.collapsed==='1';
   el.dataset.collapsed=wasCollapsed?'0':'1';
@@ -10605,7 +10660,7 @@ async function saveNewPhase(){
   // unitNames is derived display text only (kept for anything still reading
   // the old field, e.g. printed reports), never typed directly again.
   const linkedUnitIds=getCheckedPhaseUnitIds();
-  const pickedUnits=(window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id));
+  const pickedUnits=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id)));
   const unitNames=pickedUnits.map(u=>u.name).filter(Boolean).join(', ');
   const units=linkedUnitIds.length;
   const plannedStart=document.getElementById('phase-planned-start').value;
@@ -10783,7 +10838,7 @@ async function saveEditPhase(){
   // same as saveNewPhase. Required-field validation (v21a) still applies —
   // a phase with 0 checked units doesn't make sense.
   const linkedUnitIds=getCheckedPhaseUnitIds();
-  const pickedUnits=(window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id));
+  const pickedUnits=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id)));
   const unitNames=pickedUnits.map(u=>u.name).filter(Boolean).join(', ');
   const units=linkedUnitIds.length;
   if(units<=0){showToast('Please check at least one unit for this phase','warn');return;}
@@ -11375,6 +11430,49 @@ function scopeUnitBudgetTotal(scopeId){
 // number on its own.
 function unitEffectiveValue(u){
   return(u.awardValue>0?u.awardValue:(u.totalWorkEst||0));
+}
+// v42k — Shared natural-sort helper for unit names, used everywhere unit
+// names are listed (Project/Scope Card unit chips, Budget Outlook table
+// and export, Unit Phases picker mismatch warnings, Portfolio Field
+// Updates unit tags). Plain string sort would put "PE10" before "PE2"
+// (compares '1' vs '2' character-by-character); this instead splits each
+// name into text/number runs and compares number runs numerically, so
+// PE1, PE2, PE3 ... PE10, PE11 reads the way a person expects. Falls back
+// to a plain string compare for any two names whose text runs differ.
+function naturalUnitNameCompare(a,b){
+  const re=/(\d+)|(\D+)/g;
+  const partsA=(a||'').match(re)||[];
+  const partsB=(b||'').match(re)||[];
+  const len=Math.max(partsA.length,partsB.length);
+  for(let i=0;i<len;i++){
+    const pa=partsA[i]||'';const pb=partsB[i]||'';
+    const na=/^\d+$/.test(pa)?parseInt(pa,10):null;
+    const nb=/^\d+$/.test(pb)?parseInt(pb,10):null;
+    if(na!==null&&nb!==null){
+      if(na!==nb)return na-nb;
+    }else{
+      const c=pa.localeCompare(pb);
+      if(c!==0)return c;
+    }
+  }
+  return 0;
+}
+// Sorts an array of unit objects (each with a .name) by natural unit-name
+// order, in place, and returns it for chaining. Units with no name sort
+// last rather than throwing off the comparison of named units.
+function sortUnitsByName(units){
+  return (units||[]).slice().sort((a,b)=>{
+    const an=a?.name||'';const bn=b?.name||'';
+    if(!an&&!bn)return 0;
+    if(!an)return 1;
+    if(!bn)return -1;
+    return naturalUnitNameCompare(an,bn);
+  });
+}
+// Same idea but for a plain array of name strings (some call sites already
+// have .map(u=>u.name) done by the time sorting matters).
+function sortUnitNames(names){
+  return (names||[]).slice().sort(naturalUnitNameCompare);
 }
 // v34p — Completed band. Mirrors getCapitalPlanScopes()'s structure and
 // visibility scoping exactly, filtering status==='Complete' instead of
@@ -12473,7 +12571,9 @@ function renderBudgetOutlook(){
         yearAmount=yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
       }
       if(yearAmount<=0)return;
-      items.push({year:yr,amount:yearAmount,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted,source:isCommitted?'scope':'estimate',unitCount:yearUnits.length,unitNames:yearUnits.map(u=>u.name).filter(Boolean)});
+      // v42k — sortUnitNames so the table/tooltip's unit list reads in
+      // natural order (PE1, PE2 ... PE10) instead of raw bucket order.
+      items.push({year:yr,amount:yearAmount,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted,source:isCommitted?'scope':'estimate',unitCount:yearUnits.length,unitNames:sortUnitNames(yearUnits.map(u=>u.name).filter(Boolean))});
       // v41a — carries the field set both Budget Outlook exports need:
       // Unit Type/Equipment Type/Priority/Consultant/Device Location/cost
       // estimates/Target Completion straight off the real Unit Inventory
@@ -15213,7 +15313,8 @@ function showBarDrilldown(type,value){
   }else if(isFsDrill){
     const rows=props.map(p=>{
       const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
-      const unitNames=units.map(u=>u.name).filter(Boolean);
+      // v42k — sortUnitNames for natural unit-name order in this drilldown.
+      const unitNames=sortUnitNames(units.map(u=>u.name).filter(Boolean));
       const total=units.reduce((a,u)=>a+unitEffectiveValue(u),0);
       return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
         <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
@@ -17169,7 +17270,14 @@ async function saveScheduledMeeting(){
   const notifyClient=document.getElementById('smtg-notify-client')?.value.trim()||'';
   if(!propName||!date){showToast('Please select a property and date','warn');return;}
   const agendaStr=topics.join('\n');
-  const consultantName=(role==='consultant'?currentConsultantName:null)||'PM User';
+  // v42j — real bug: for any non-Consultant role (PM, Admin) this always
+  // fell through to the hardcoded 'PM User' string, because the ternary's
+  // else-branch was a literal null rather than window._userName (the
+  // actual logged-in display name, already set at login — see doLogin()).
+  // 'PM User' wasn't a fallback for a missing name, it was unconditionally
+  // what every PM/Admin-sent meeting request showed as "Logged By" in the
+  // notification email, regardless of who was actually logged in.
+  const consultantName=(role==='consultant'?currentConsultantName:window._userName)||'PM User';
   const smtgScopeId=document.getElementById('smtg-scope')?.value||'';
   const fields={
     'Property Name':propertyNameToLink(propName),
@@ -19169,7 +19277,8 @@ async function submitUpdate(){
   if(appliesToWholeProject){
     units='All';
   }else if(linkedUnitIds.length>0){
-    const unitNames=linkedUnitIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)?.name).filter(Boolean);
+    // v42k — sortUnitNames for natural unit-name order in this derived string.
+    const unitNames=sortUnitNames(linkedUnitIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)?.name).filter(Boolean));
     if(unitNames.length>0)units=unitNames.join(', ');
   }
   const phase=document.getElementById('f-phase').value;
