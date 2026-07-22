@@ -12029,10 +12029,18 @@ function showBudgetOutlook(){
   document.getElementById('analytics-main-view').style.display='none';
   document.getElementById('budget-outlook-view').style.display='';
   renderBudgetOutlook();
+  // v42d — Budget Outlook has its own HELP_VIEW_META entry now (see
+  // help:budget-outlook). gotoView('charts',...) above already set
+  // window._helpActiveView to 'analytics' via updateGlobalHelpBtn(), so
+  // override it here since Budget Outlook is a sub-panel on top of
+  // Analytics, not its own gotoView() target.
+  window._helpActiveView = 'budget-outlook';
 }
 function closeBudgetOutlook(){
   document.getElementById('budget-outlook-view').style.display='none';
   document.getElementById('analytics-main-view').style.display='';
+  // v42d — restore Analytics' own help topic on the way back out.
+  window._helpActiveView = 'analytics';
 }
 function setBoFilter(f){
   boFilter=f;
@@ -20164,6 +20172,18 @@ window._helpCurrentView = null;
 const HELP_VIEW_META = {
   'dashboard':          { title: 'Dashboard',         sub: 'Portfolio health and daily triage',        tabs: null },
   'analytics':          { title: 'Analytics',          sub: 'Portfolio performance and breakdown',      tabs: null },
+  // v42d — was missing entirely, so opening help from Capital Plan silently
+  // fell through to the generic {title:'Help'} default below regardless of
+  // whatever KV content existed for help:capital. Found while tracking down
+  // why the help drawer title wasn't identifying which page's help it was
+  // showing.
+  'capital':            { title: 'Capital Plan',       sub: 'Pipeline planning and multi-year budget management', tabs: null },
+  // v42d — Budget Outlook is a sub-panel overlay on top of Analytics, not
+  // its own gotoView() target, so it needs its own HELP_VIEW_META entry
+  // even though there's no matching top-level view id for it. Activated
+  // directly by showBudgetOutlook()/closeBudgetOutlook() below, which swap
+  // window._helpActiveView between 'budget-outlook' and 'analytics'.
+  'budget-outlook':     { title: 'Budget Outlook',      sub: 'Committed and planned spend by year, across every project', tabs: null },
   'scorecard':          { title: 'Scorecard',          sub: 'Portfolio-wide performance KPIs',          tabs: null },
   'pmupdates':          { title: 'PM Updates',         sub: 'Status updates shared with the client',    tabs: null },
   'property-overview':  { title: 'Property Detail',   sub: 'Overview tab',                             tabs: ['property-overview','property-milestones','property-budget','property-bids'] },
@@ -20215,12 +20235,17 @@ async function fetchHelpContent() {
 
 function renderHelpContent(viewKey) {
   window._helpCurrentView = viewKey;
-  const meta = HELP_VIEW_META[viewKey] || { title: 'Help', sub: '', tabs: null };
+  // v42d — fallback changed from a plain, indistinguishable {title:'Help'}
+  // to a title that visibly says the lookup failed, per Misty's request
+  // that the drawer title identify which page's help it's showing (e.g.
+  // "Analytics Help") so a missing/mismatched HELP_VIEW_META entry is
+  // obvious immediately instead of silently rendering generic content.
+  const meta = HELP_VIEW_META[viewKey] || { title: `Unknown view (${viewKey || 'none'})`, sub: '', tabs: null };
   const titleEl = document.getElementById('hd-title');
   const subEl = document.getElementById('hd-sub');
   const tabsEl = document.getElementById('hd-tabs');
   const bodyEl = document.getElementById('hd-body');
-  if (titleEl) titleEl.textContent = meta.title;
+  if (titleEl) titleEl.textContent = `${meta.title} Help`;
   if (subEl) subEl.textContent = meta.sub;
   // Render drawer tabs for property detail
   if (tabsEl) {
