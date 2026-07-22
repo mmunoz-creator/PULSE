@@ -2915,7 +2915,7 @@ window.PROPERTIES_SEED = [
             <div id="bo-chart" style="margin-bottom:24px"></div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th style="width:24px"></th><th style="text-align:center;width:22%">Year</th><th style="text-align:center;width:11%">Award</th><th style="text-align:center;width:11%">Estimate</th><th style="text-align:center;width:11%">Total</th><th style="text-align:center;width:7%">Units</th><th style="text-align:center;width:34%">Unit names</th></tr></thead>
+                <thead><tr><th style="width:24px"></th><th style="text-align:left;width:22%">Year</th><th style="text-align:center;width:11%">Award</th><th style="text-align:center;width:11%">Estimate</th><th style="text-align:center;width:11%">Total</th><th style="text-align:center;width:7%">Units</th><th style="text-align:left;width:34%">Unit names</th></tr></thead>
                 <tbody id="bo-tbody"></tbody>
               </table>
             </div>
@@ -12354,8 +12354,23 @@ function renderBudgetOutlook(){
     if(complete>0&&complete<=MILESTONES_DEF.length)return`M${complete} - ${MILESTONES_DEF[complete-1]}`;
     return`M1 - ${MILESTONES_DEF[0]}`;
   }
+  // v42d fix — Casa Marina bug: its Property record's own Status field
+  // (p.st) is 'Complete', which is what the Dashboard Heat Map reads
+  // (Heat Map filters on p.st, not Scope status), and that's what
+  // correctly shows Casa Marina as done/green there. But this loop was
+  // only checking sc.status==='Complete' — the Scope's own status field,
+  // a separate value that hadn't been updated to Complete even though
+  // the property itself was finished. Budget Outlook kept plotting real
+  // dollars for a property everyone already considers done. Now excludes
+  // a Scope if EITHER its own status says Complete OR its Property's
+  // status says Complete, so neither record being stale can leak a
+  // finished property back into a forward-looking budget chart.
+  const _boPropByName={};
+  (window.PORTFOLIO||[]).forEach(p=>{_boPropByName[p.n]=p;});
   allScopes.forEach(sc=>{
     if(sc.status==='Complete')return;
+    const _boProp=_boPropByName[sc.property];
+    if(_boProp&&_boProp.st==='Complete')return;
     if(sc.year==null)return;
     const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===sc.id);
     const unitNames=units.map(u=>u.name).filter(Boolean);
@@ -12587,16 +12602,16 @@ function renderBudgetOutlook(){
       return `
       <tr style="background:var(--gray-pale)">
         <td></td>
-        <td style="text-align:center;font-size:12px;color:var(--gray-mid);padding-left:20px">${it.property} — ${it.scopeName}</td>
+        <td style="text-align:left;font-size:12px;color:var(--gray-mid);padding-left:20px">${it.property} — ${it.scopeName}</td>
         <td style="text-align:center;font-size:12px;color:var(--blue-dark)">${it.isCommitted?fmtCurrency(it.amount):'<span style="color:var(--gray-light)">—</span>'}</td>
         <td style="text-align:center;font-size:12px;color:var(--blue-mid)">${!it.isCommitted?fmtCurrency(it.amount):'<span style="color:var(--gray-light)">—</span>'}</td>
         <td style="text-align:center;font-size:12px;font-weight:500">${fmtCurrency(it.amount)}</td>
         <td style="text-align:center;font-size:12px;color:var(--gray-mid)">${it.unitCount||'—'}</td>
-        <td style="text-align:center;font-size:12px;color:var(--gray-mid)">${namesText}</td>
+        <td style="text-align:left;font-size:12px;color:var(--gray-mid)">${namesText}</td>
       </tr>`;}).join(''):'';
     return `<tr style="cursor:pointer" onclick="toggleBoYear(${y})">
       <td class="no-print"><i class="ti ti-chevron-${isOpen?'down':'right'}" style="font-size:14px;color:var(--gray-mid)"></i></td>
-      <td style="text-align:center;font-weight:600">${y}</td>
+      <td style="text-align:left;font-weight:600">${y}</td>
       <td style="text-align:center;color:var(--blue-dark)">${cell(d.committed)}</td>
       <td style="text-align:center;color:var(--blue-mid)">${cell(d.planned)}</td>
       <td style="text-align:center;font-weight:600">${fmtCurrency(d.committed+d.planned)}</td>
