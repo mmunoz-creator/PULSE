@@ -2239,7 +2239,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42g</div>
     </div>
   </nav>
 
@@ -4143,6 +4143,11 @@ function handleHelpBtnClick() {
 function gotoView(viewId,btn){
   closeSidebar();
   window._inPropertyView = false;
+  // v42g — leaving any view stops whatever background poll was running for
+  // the view being left (Comments & Flags / Project Updates). Each poll is
+  // (re)started below only if we're navigating into that specific view, so
+  // there's never more than one live interval per feed at a time.
+  stopLivePolling();
   // v37i — Analytics has its own internal sub-panels (Budget Outlook,
   // Reforecast) that live on top of analytics-main-view rather than as
   // separate top-level views. Leaving Analytics for any other tab used to
@@ -4191,9 +4196,13 @@ function gotoView(viewId,btn){
   }
   if(viewId==='comments'){
     renderCommentsView();
+    startLivePolling('comments');
   }
   if(viewId==='pmupdates')renderPMUpdates();
-  if(viewId==='clientprojectupdates')renderClientProjectUpdates();
+  if(viewId==='clientprojectupdates'){
+    renderClientProjectUpdates();
+    startLivePolling('clientprojectupdates');
+  }
   if(viewId==='reports')renderAnalytics();
   if(viewId==='charts'||viewId==='analytics')renderCharts();
   if(viewId==='calendar')renderCalendar();
@@ -17875,7 +17884,7 @@ function populatePortfolio(){
       <td><span class="geo">${p.s||'—'}</span></td>
       <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type||'—'}</span></td>
       <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
-      <td style="font-size:11px">${p.ec||'TBD'}</td>
+      <td style="font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
       <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
       <td>${renderStatusBadge(p.st)}</td>
       <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
@@ -19260,20 +19269,30 @@ async function submitFlag(){
   // Send email notification to PM/VDA team
   if(!demoMode){
     try{
-      await fetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          to:'noreply@elevatorpulse.com',
-          subject:`[PULSE] Client flag raised — ${prop} (${type})`,
-          html:`<p><strong>A client flag has been raised in PULSE.</strong></p>
-            <p><strong>Property:</strong> ${prop}<br>
-            <strong>Concern Type:</strong> ${type}<br>
-            <strong>Visibility:</strong> ${visibility}<br>
-            <strong>Message:</strong> ${msg}</p>
-            <p>Please log in to PULSE to review and respond. If you are a consultant, please connect with your Project Manager to coordinate a response — only the PM can resolve flags in PULSE.</p>
-            <p style="font-size:11px;color:#888">This notification was sent from noreply@elevatorpulse.com via PULSE Portal — Park Hotels & Resorts Modernization Program.</p>`
-        })
-      });
+      let pmEmails=[];
+      try{
+        const recs=await atGet('Access PINs');
+        pmEmails=recs.filter(r=>r.fields['Active']&&r.fields['Email']&&r.fields['Role']==='Project Manager')
+          .map(r=>r.fields['Email']);
+      }catch(e){console.error('Flag notify — could not load PM recipients:',e);}
+      if(pmEmails.length>0){
+        await fetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            to:pmEmails,
+            subject:`[PULSE] Client flag raised — ${prop} (${type})`,
+            html:`<p><strong>A client flag has been raised in PULSE.</strong></p>
+              <p><strong>Property:</strong> ${prop}<br>
+              <strong>Concern Type:</strong> ${type}<br>
+              <strong>Visibility:</strong> ${visibility}<br>
+              <strong>Message:</strong> ${msg}</p>
+              <p>Please log in to PULSE to review and respond. If you are a consultant, please connect with your Project Manager to coordinate a response — only the PM can resolve flags in PULSE.</p>
+              <p style="font-size:11px;color:#888">This notification was sent from noreply@elevatorpulse.com via PULSE Portal — Park Hotels & Resorts Modernization Program.</p>`
+          })
+        });
+      }else{
+        console.error('Flag notify — no active PM recipients found, email not sent');
+      }
     }catch(e){/* silent fail */}
   }
 }
@@ -19600,6 +19619,106 @@ window.publishNewPMUpdate=publishNewPMUpdate;
 window.publishPMUpdate=publishPMUpdate;
 window.unpublishPMUpdate=unpublishPMUpdate;
 window.deletePMUpdate=deletePMUpdate;
+
+// v42g — Live polling for Comments & Flags and Project Updates. Both feeds
+// previously only ever showed what was loaded at login (or added locally
+// during the session) — another user's new flag, reply, or published
+// update never appeared until a manual logout/login. This re-fetches just
+// the one Airtable table each feed actually needs (not the full
+// loadAllData() boot sequence) on a fixed interval, only while that view is
+// actually visible, for every role. Interval is stopped by gotoView()
+// whenever the user navigates to any other view, and by stopLivePolling()
+// directly, so at most one interval ever runs at a time.
+const LIVE_POLL_INTERVAL_MS=45000;
+let _livePollTimer=null;
+let _livePollView=null;
+function startLivePolling(viewId){
+  stopLivePolling();
+  if(demoMode)return;
+  _livePollView=viewId;
+  _livePollTimer=setInterval(()=>{
+    // Guard against a stray tick firing after the user already navigated
+    // away (setInterval doesn't know about SPA view changes).
+    if(_livePollView!==viewId)return;
+    if(viewId==='comments')pollClientComments();
+    if(viewId==='clientprojectupdates')pollProjectUpdates();
+  },LIVE_POLL_INTERVAL_MS);
+}
+function stopLivePolling(){
+  if(_livePollTimer){clearInterval(_livePollTimer);_livePollTimer=null;}
+  _livePollView=null;
+}
+async function pollClientComments(){
+  try{
+    const recs=await atGet('Client Comments');
+    window.CLIENT_COMMENTS=recs.map(r=>({
+      id:r.id,
+      property:resolvePropertyLink(r.fields['Property Name']),
+      threadId:r.fields['Thread ID']||'',
+      authorRole:r.fields['Author Role']||'',
+      authorName:r.fields['Author Name']||'',
+      message:r.fields['Message']||'',
+      flagType:r.fields['Flag Type']||'General',
+      status:r.fields['Status']||'Open',
+      visibility:r.fields['Visibility']||'PM Only',
+      created:r.fields['Created']||'',
+      read:r.fields['Read']||false,
+      readByPM:r.fields['Read by PM']||false,
+      readByClient:r.fields['Read by Client']||false,
+      readByConsultant:r.fields['Read by Consultant']||false,
+    })).sort((a,b)=>new Date(a.created)-new Date(b.created));
+    if(document.getElementById('view-comments')&&!document.getElementById('view-comments').classList.contains('hidden')){
+      renderCommentsView();
+      updateClientCommentsBadge();
+    }
+  }catch(e){console.error('Comments & Flags poll failed:',e);}
+}
+async function pollProjectUpdates(){
+  try{
+    const [pmRecs,fieldRecs]=await Promise.all([atGet('PM Updates'),atGet('Field Updates')]);
+    window.PM_UPDATES=pmRecs.map(r=>({
+      id:r.id,
+      property:resolvePropertyLink(r.fields['Property Name']),
+      scopeId:(r.fields['Linked Scope']||[])[0]||'',
+      author:r.fields['Author']||'',
+      text:r.fields['Update Text']||'',
+      status:r.fields['Status']||'Draft',
+      created:r.fields['Created Date']||'',
+      published:r.fields['Published Date']||'',
+    })).sort((a,b)=>new Date(b.created)-new Date(a.created));
+    // approvedAt is set client-side only (never written to Airtable — see
+    // approveSubmission()), so a poll re-fetch can't read it from r.fields.
+    // Preserve it from whatever's already in memory for a submission that
+    // was already approved before this poll tick, keyed by record id.
+    const _priorApprovedAt=new Map(submissions.map(s=>[s.id,s.approvedAt]));
+    submissions=fieldRecs.map(r=>({
+      id:r.id,atId:r.id,
+      property:resolvePropertyLink(r.fields['Property Name']),
+      consultant:r.fields['Consultant Name']||'',
+      units:r.fields['Units Updated']||'',
+      phase:r.fields['Project Phase']||'',
+      status:r.fields['Progress Status']||'',
+      week:r.fields['Report Week']||'',
+      notes:r.fields['Weekly Notes']||'',
+      commentType:r.fields['Comment Type']||'General',
+      issueStatus:r.fields['Issue Status']||'N/A',
+      savings:r.fields['Savings Identified']||'',
+      submittedAt:r.fields['Submitted Date']||'',
+      reviewStatus:(r.fields['Review Status']||'Pending').toLowerCase(),
+      returnNote:r.fields['Return Note']||'',
+      linkedUnitIds:r.fields['Linked Units']||[],
+      appliesToWholeProject:!!r.fields['Applies to Whole Project'],
+      // Fall back to Submitted Date if this was approved in a different
+      // session/tab (no local approvedAt to carry forward) — keeps it
+      // visible in the 30-day feed instead of silently disappearing just
+      // because this poll wasn't the one that approved it.
+      approvedAt:_priorApprovedAt.get(r.id)||((r.fields['Review Status']||'')==='Approved'?(r.fields['Submitted Date']||new Date().toISOString()):''),
+    }));
+    if(document.getElementById('view-clientprojectupdates')&&!document.getElementById('view-clientprojectupdates').classList.contains('hidden')){
+      renderClientProjectUpdates();
+    }
+  }catch(e){console.error('Project Updates poll failed:',e);}
+}
 
 function renderCommentsView(expandedThreads){
   const isClient=role==='client';
