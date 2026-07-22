@@ -266,6 +266,13 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .chat-head-title{font-size:13px;font-weight:600;color:white}
 .chat-head-sub{font-size:11px;color:rgba(255,255,255,.4);font-family:'Plus Jakarta Sans',sans-serif}
 .chat-status{width:7px;height:7px;border-radius:50%;background:#5DCAA5;margin-left:auto;flex-shrink:0}
+.chat-feedback{display:flex;gap:2px;margin-left:auto;flex-shrink:0}
+.chat-feedback.hidden{display:none}
+.chat-feedback-btn{background:none;border:none;cursor:pointer;color:rgba(255,255,255,.4);padding:4px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color .12s,background .12s}
+.chat-feedback-btn i{font-size:14px}
+.chat-feedback-btn:hover{color:rgba(255,255,255,.8);background:rgba(255,255,255,.08)}
+.chat-feedback-btn.active-up{color:#5DCAA5}
+.chat-feedback-btn.active-down{color:#E8837E}
 .chat-messages{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--gray-xpale)}
 .chat-msg{display:flex;gap:9px;align-items:flex-start}
 .chat-msg.user-msg{flex-direction:row-reverse}
@@ -2248,7 +2255,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42n</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42p</div>
     </div>
   </nav>
 
@@ -3164,7 +3171,21 @@ window.PROPERTIES_SEED = [
                  live count from window.PORTFOLIO the moment this view is
                  actually opened, which happens before a user can see this
                  text in practice. -->
-            <div class="chat-head"><div class="chat-head-icon"><i class="ti ti-robot"></i></div><div><div class="chat-head-title">MARLI — Portfolio Assistant</div><div class="chat-head-sub" id="chat-head-sub">Live data · Smart responses</div></div><div class="chat-status"></div></div>
+            <div class="chat-head">
+              <div class="chat-head-icon"><i class="ti ti-robot"></i></div>
+              <div><div class="chat-head-title">MARLI — Portfolio Assistant</div><div class="chat-head-sub" id="chat-head-sub">Live data · Smart responses</div></div>
+              <!-- v42o — session-level thumbs up/down. Hidden until the
+                   first question of a session gets a real answer (see
+                   sendLiveChat()) so it never shows for a session that
+                   hasn't started yet. Persistent for the rest of the login
+                   — vote can be set or changed any time, not locked in
+                   after the first click. See sendMarliSessionFeedback(). -->
+              <div class="chat-feedback hidden" id="chat-feedback" title="Rate this conversation">
+                <button class="chat-feedback-btn" id="chat-feedback-up" onclick="sendMarliSessionFeedback('up')" title="This conversation was helpful" aria-label="Thumbs up"><i class="ti ti-thumb-up"></i></button>
+                <button class="chat-feedback-btn" id="chat-feedback-down" onclick="sendMarliSessionFeedback('down')" title="This conversation was not helpful" aria-label="Thumbs down"><i class="ti ti-thumb-down"></i></button>
+              </div>
+              <div class="chat-status"></div>
+            </div>
             <div class="chat-messages" id="chat-messages"><div class="chat-msg"><div class="msg-av ai-av">M</div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — I'm MARLI, your Modernization Advisory assistant. I have full visibility into your Park Hotels &amp; Resorts portfolio. Ask me about any property, schedule risk, budget, milestones, or elevator company performance. For questions about how PULSE features work, tap the ? button in any view header to open the Help panel.</div></div></div>
             <div class="chat-chips" id="chat-chips">
               <span class="chip" onclick="askQ('Which properties are behind schedule?')">Behind schedule?</span>
@@ -3913,9 +3934,18 @@ async function doLogin(){
     // window actually closes, so this doesn't create a permanent login;
     // it only survives an accidental or intentional page reload, which is
     // the specific complaint this fixes.
+    // v42o — generate this login's MARLI session ID here (before the
+    // sessionStorage write below) so it can be persisted and later restored
+    // by tryRestorePulseSession() after a refresh, same lifetime as the
+    // rest of this session's identity. window._marliRecordId isn't set yet
+    // at this point in doLogin() (that still happens down in _finishLogin(),
+    // gated on window._lastLoginResult) so this reads result.recordId
+    // directly rather than window._marliRecordId.
+    window._marliSessionId=(result.recordId||'anon')+':'+Date.now();
     try{
       sessionStorage.setItem('pulse_session',JSON.stringify({
         role,client,userName:result.name,recordId:result.recordId||null,
+        marliSessionId:window._marliSessionId,
       }));
     }catch(e){/* sessionStorage unavailable — session restore just won't work, not fatal */}
   }
@@ -3962,6 +3992,22 @@ async function tryRestorePulseSession(){
       return false;
     }
   }
+  // v42o — window._marliRecordId previously was only ever set on the fresh
+  // login path (inside _finishLogin()'s window._lastLoginResult branch,
+  // which a restored session never takes). That meant every MARLI question
+  // silently failed with "Could not verify your session" after any browser
+  // refresh, even though the rest of the app correctly restored. saved.
+  // recordId has already been re-verified as Active just above (or this
+  // function would have returned false already), so it's safe to trust
+  // here the same way a fresh login trusts it.
+  window._marliRecordId=saved.recordId||null;
+  // v42o — restore the same MARLI session ID this login already had,
+  // rather than generating a new one, so a refresh doesn't fragment one
+  // ongoing conversation's feedback into two separate scored sessions. If
+  // this is an older sessionStorage entry from before marliSessionId
+  // existed, fall back to generating one now — better than leaving it
+  // undefined and having every vote silently fail to save.
+  window._marliSessionId=saved.marliSessionId||((saved.recordId||'anon')+':'+Date.now());
   document.getElementById('login-screen').style.display='none';
   // v42l — tell _finishLogin() this is a restored session, not a fresh
   // login, so it can route to the page the user was last on (pulse_last_view)
@@ -4047,6 +4093,11 @@ async function _finishLogin(){
     // separately from window._lastLoginResult, which is a one-time signal
     // consumed and cleared right below for the tour auto-trigger only.
     window._marliRecordId=window._lastLoginResult.recordId||null;
+    // v42o — window._marliSessionId (for session-level thumbs up/down
+    // feedback, scored login-to-logout — see sendMarliSessionFeedback())
+    // was already generated in doLogin(), before this point, and persisted
+    // into sessionStorage's pulse_session blob. Nothing to do here; it's
+    // restored from that blob on a refresh by tryRestorePulseSession().
     maybeAutoStartTour(role,window._lastLoginResult);
     window._lastLoginResult=null;
   }
@@ -4171,6 +4222,13 @@ function doLogout(){
   // v42m — clear MARLI's remembered conversation on logout so the next
   // login (any role, any person) never inherits a stranger's chat context.
   window._marliHistory=[];
+  // v42o — clear session identity too, so a stale recordId/sessionId from
+  // this login can never be used by whoever logs in next, and so the
+  // thumbs up/down control (which checks _marliSessionId to decide whether
+  // to render) correctly disappears until a new session starts.
+  window._marliRecordId=null;
+  window._marliSessionId=null;
+  window._marliFeedbackGiven=null;
   const chips=document.getElementById('chat-chips');
   if(chips)chips.innerHTML=`
     <span class="chip" onclick="askQ('Which properties are behind schedule?')">Behind schedule?</span>
@@ -4326,7 +4384,16 @@ function gotoView(viewId,btn){
     // unchanged.
     const livePropCount=(window.PORTFOLIO||[]).length;
     const chatSubEl=document.getElementById('chat-head-sub');
-    if(chatSubEl)chatSubEl.textContent=`${livePropCount} properties · Live data · Smart responses`;
+    if(chatSubEl){
+      chatSubEl.textContent=`${livePropCount} properties · Live data · Smart responses`;
+      // v42o — clear any stale "N of 7 questions today" suffix's base-text
+      // cache too. Re-entering this view resets chat-head-sub's visible
+      // text above; without also clearing dataset.baseText, the next
+      // successful answer would append the counter onto this fresh base —
+      // that's actually fine — but leaving a mismatched cached base from a
+      // *previous* property count around is what this guards against.
+      delete chatSubEl.dataset.baseText;
+    }
     const chatIntroEl=document.getElementById('chat-intro');
     if(chatIntroEl)chatIntroEl.textContent=`Hi — I'm MARLI, your Modernization Advisory assistant. I have full visibility into the ${livePropCount}-property Park Hotels & Resorts portfolio. Ask me about any property, schedule risk, budget, milestones, or elevator company performance. For questions about how PULSE features work, tap the ? button in any view header to open the Help panel.`;
   }
@@ -16860,11 +16927,20 @@ async function renderMarliInsights(){
   _marliInsightsCache=data;
 
   // --- Stat cards ---
+  // v42o — sessionFeedback: {up,down,total} tally of session-level thumbs
+  // up/down votes in this same date window (one vote per login session,
+  // latest vote wins if changed — see logMarliSessionFeedback() in the
+  // Worker). Shown as a plain-language ratio rather than raw counts so it
+  // reads at a glance; "No feedback yet" avoids a misleading 0/0.
+  const sf=data.sessionFeedback||{up:0,down:0,total:0};
+  const sfSub=sf.total===0?'no feedback yet':`${sf.up} up · ${sf.down} down`;
+  const sfColor=sf.total===0?'var(--gray-mid)':(sf.down>sf.up?'var(--red)':'var(--green)');
   const cards=[
     {label:'Total queries',val:data.totalQueries,sub:`last ${data.windowDays} days`,color:'var(--blue-dark)'},
     {label:'Unique users',val:data.uniqueUsers,sub:'asked MARLI a question',color:'var(--blue-mid)'},
     {label:'Avg per active user',val:data.avgPerActiveUser,sub:`queries / ${data.windowDays} days`,color:'var(--green)'},
     {label:'Flagged responses',val:data.flaggedPendingCount,sub:'awaiting review',color:'var(--red)'},
+    {label:'Session feedback',val:sf.total,sub:sfSub,color:sfColor},
   ];
   const cardsHtml=cards.map(c=>`
     <div class="stat-card" style="border-top:3px solid ${c.color};text-align:left;align-items:stretch;justify-content:flex-start;display:block">
@@ -19135,8 +19211,16 @@ function updateClientCommentsBadge(){
   // PM badge: open thread where no record has readByPM=true
   const pmUnread=threadList.filter(t=>t.some(c=>c.status==='Open'||c.status==='open')&&!t.some(c=>c.readByPM)).length;
   ['cc-badge-pm','cc-badge-admin'].forEach(id=>{const el=document.getElementById(id);if(el){el.textContent=pmUnread;el.classList.toggle('hidden',pmUnread===0);}});
-  // Consultant badge: open thread where no record has readByConsultant=true
-  const conUnread=threadList.filter(t=>t.some(c=>c.status==='Open'||c.status==='open')&&!t.some(c=>c.readByConsultant)).length;
+  // Consultant badge: open thread where no record has readByConsultant=true.
+  // v42n — must also exclude threads not visible to the Consultant (default
+  // visibility on a client flag is 'PM Only'; only 'VDA Team' threads are
+  // ever shown to a Consultant — see renderCommentsView()'s matching
+  // filter). Previously this badge counted every open/unread thread
+  // regardless of visibility, so a 'PM Only' flag could show "1" here even
+  // though the Consultant's list (correctly) never displays it — confirmed
+  // this was the cause of the badge/empty-list mismatch Misty reported.
+  const conVisible=threadList.filter(t=>t.some(c=>c.visibility==='VDA Team'));
+  const conUnread=conVisible.filter(t=>t.some(c=>c.status==='Open'||c.status==='open')&&!t.some(c=>c.readByConsultant)).length;
   const ccbCon=document.getElementById('cc-badge-consultant');
   if(ccbCon){ccbCon.textContent=conUnread;ccbCon.classList.toggle('hidden',conUnread===0);}
   // Client badge: thread has PM/consultant reply AND no record has readByClient=true
@@ -20523,6 +20607,27 @@ async function sendLiveChat(msg){
         if(window._marliHistory.length>MARLI_HISTORY_MAX_TURNS*2){
           window._marliHistory=window._marliHistory.slice(-MARLI_HISTORY_MAX_TURNS*2);
         }
+        // v42o — quiet running counter of today's question usage, filled in
+        // from data the Worker already returns on every successful answer
+        // (queriesUsedToday/dailyLimit) but which the client previously
+        // discarded entirely. Nobody knew they were approaching the daily
+        // cap until they were denied on the question that would have used
+        // it. Appended to the existing chat-head-sub text, not replacing
+        // it, so "Live data · Smart responses" stays visible too.
+        if(typeof data.queriesUsedToday==='number'&&typeof data.dailyLimit==='number'){
+          const subEl=document.getElementById('chat-head-sub');
+          if(subEl){
+            const baseSub=subEl.dataset.baseText||subEl.textContent;
+            subEl.dataset.baseText=baseSub;
+            subEl.textContent=`${baseSub} · ${data.queriesUsedToday} of ${data.dailyLimit} questions today`;
+          }
+        }
+        // v42o — reveal the session thumbs up/down after the first real
+        // answer. Hidden before this point so it never shows for a session
+        // that technically exists (login happened) but hasn't actually
+        // started a MARLI conversation yet.
+        const fbEl=document.getElementById('chat-feedback');
+        if(fbEl)fbEl.classList.remove('hidden');
       }else{
         el.querySelector('.msg-bubble').textContent=data.message||'MARLI could not generate a response — please try again.';
       }
@@ -20532,6 +20637,51 @@ async function sendLiveChat(msg){
     if(el)el.querySelector('.msg-bubble').textContent='Connection error — please try again.';
   }
   msgs.scrollTop=msgs.scrollHeight;
+}
+// v42o — session-level MARLI feedback. Scores the whole login-to-logout
+// conversation, not individual responses (Misty's call — with the daily
+// question limit as low as 7, and MARLI now able to reference earlier
+// turns via _marliHistory, a single reply is rarely the right unit to
+// judge; a clarifying question mid-conversation might read as "bad" in
+// isolation but lead to a great final answer). window._marliSessionId is
+// generated once per login (see doLogin()) and survives a browser refresh
+// (see tryRestorePulseSession()), so votes from before and after a refresh
+// land on the same session record. The vote can be changed any time during
+// the session — this isn't a one-shot submit, clicking again just
+// overwrites the prior vote server-side.
+async function sendMarliSessionFeedback(vote){
+  if(!window._marliSessionId||!window._marliRecordId){
+    showToast('Could not verify your session — please try again','warn');
+    return;
+  }
+  const upBtn=document.getElementById('chat-feedback-up');
+  const downBtn=document.getElementById('chat-feedback-down');
+  // Optimistic UI — reflect the click immediately, revert only if the save
+  // actually fails. A vote is low-stakes enough that waiting on the network
+  // round-trip before showing any feedback would feel unresponsive.
+  const prevUp=upBtn?.classList.contains('active-up');
+  const prevDown=downBtn?.classList.contains('active-down');
+  if(upBtn)upBtn.classList.toggle('active-up',vote==='up');
+  if(downBtn)downBtn.classList.toggle('active-down',vote==='down');
+  try{
+    const response=await fetch(`${WORKER_URL}/marli-session-feedback`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({sessionId:window._marliSessionId,recordId:window._marliRecordId,role,vote})
+    });
+    const data=await response.json();
+    if(!data.ok){
+      if(upBtn)upBtn.classList.toggle('active-up',prevUp);
+      if(downBtn)downBtn.classList.toggle('active-down',prevDown);
+      showToast('Could not save feedback — please try again','warn');
+      return;
+    }
+    window._marliFeedbackGiven=vote;
+  }catch(e){
+    if(upBtn)upBtn.classList.toggle('active-up',prevUp);
+    if(downBtn)downBtn.classList.toggle('active-down',prevDown);
+    showToast('Could not save feedback — please try again','warn');
+  }
 }
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebar-overlay').classList.toggle('active');}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('sidebar-overlay').classList.remove('active');}
