@@ -2262,7 +2262,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42r</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42s</div>
     </div>
   </nav>
 
@@ -7052,6 +7052,52 @@ async function autoCreateContractRatesAction(propName){
   showToast(`Contract Award complete — action created: enter Contract Rates for ${propName}`,'info');
 }
 
+// v42r — Action Item assignment email notification. No atCreate('Action
+// Items',...) call site anywhere in the app previously sent an email —
+// confirmed by checking every one this session: saveActionItem() (the
+// standalone Action Item form), the two meeting action-item save loops
+// (draft and publish), publishDraftAction() (Consultant-flagged action
+// published by a PM), and pmuCreate()'s new live-action path. Owner is a
+// free-typed text field, not a linked Access PINs record, so the only way
+// to find a real email is an exact case-insensitive Name match against
+// active Access PINs — same lookup shape as submitFlag()'s PM-recipient
+// resolution above. Silently no-ops (with a console note, not a user-
+// facing error) if the owner is blank or doesn't match anyone active —
+// action items are routinely created with no owner yet (e.g.
+// autoCreateContractRatesAction) or with an owner name that doesn't
+// resolve to a PULSE login (an elevator company contact, say), and neither
+// case should block the action item itself from being created.
+async function notifyActionItemOwner(ownerName,description,propName,due,priority){
+  const trimmedOwner=(ownerName||'').trim();
+  if(!trimmedOwner)return;
+  if(demoMode)return;
+  try{
+    const recs=await atGet('Access PINs');
+    const match=recs.find(r=>r.fields['Active']&&r.fields['Email']&&
+      (r.fields['Name']||'').trim().toLowerCase()===trimmedOwner.toLowerCase());
+    if(!match){
+      console.log(`Action Item notify — no active PULSE user matches owner "${trimmedOwner}", email not sent`);
+      return;
+    }
+    const dueLabel=due&&due!=='TBD'?new Date(due+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'Not set';
+    await fetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        to:match.fields['Email'],
+        subject:`[PULSE] Action item assigned to you — ${propName}`,
+        html:`<p><strong>An action item has been assigned to you in PULSE.</strong></p>
+          <p><strong>Property:</strong> ${propName}<br>
+          <strong>Description:</strong> ${description}<br>
+          <strong>Due:</strong> ${dueLabel}<br>
+          <strong>Priority:</strong> ${priority||'Medium'}</p>
+          <p>Log in to PULSE to view this and your other open action items.</p>
+          <p style="font-size:11px;color:#888">This notification was sent from noreply@elevatorpulse.com via PULSE Portal — Park Hotels &amp; Resorts Modernization Program.</p>`
+      })
+    });
+  }catch(e){
+    console.error('Action Item notify — email send failed:',e);
+  }
+}
 async function saveActionItem(){
   const propEl=document.getElementById('ai-property');
   const property=propEl?.value||'';
@@ -7068,6 +7114,7 @@ async function saveActionItem(){
   if(res?.error){console.error('saveActionItem Airtable error:',res);}
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
   actionItems.push({id:newId,property,description,owner,due,priority,status:'Open',meetingId:null,scopeId:aiScopeId||''});
+  notifyActionItemOwner(owner,description,property,due,priority);
   document.getElementById('action-item-overlay')?.remove();
   refreshDashActions();
   renderAllMeetings();
@@ -7193,10 +7240,16 @@ async function saveMeetingDraft(){
   const actionRows=document.querySelectorAll('#action-items-list .action-row');
   for(const row of actionRows){
     const desc=row.querySelector('[id$="-desc"]')?.value?.trim();if(!desc)continue;
-    const owner=row.querySelector('[id$="-owner"]')?.value||'PM';
+    // v42r — 'PM' below is a display fallback for a blank owner field, not
+    // a real name — notifyActionItemOwner() must only fire on an actually-
+    // typed owner, or it'll try (and fail) to match a PULSE user literally
+    // named "PM".
+    const ownerTyped=row.querySelector('[id$="-owner"]')?.value?.trim()||'';
+    const owner=ownerTyped||'PM';
     const due=row.querySelector('[id$="-due"]')?.value||'TBD';
     const priority=row.querySelector('[id$="-priority"]')?.value||'Medium';
     await atCreate('Action Items',{'Property Name':propertyNameToLink(propName),'Meeting ID':atId||'','Description':desc,'Owner':owner,'Due Date':due,'Priority':priority,'Status':'Open'});
+    if(ownerTyped)notifyActionItemOwner(ownerTyped,desc,propName,due,priority);
   }
   closePanel(false); // keep draft ID so re-opening panel updates same record
   renderAllMeetings();
@@ -7312,7 +7365,13 @@ async function saveMeeting(){
     const desc=row.querySelector('[id$="-desc"]')?.value?.trim();
     if(!desc)continue;
     // Skip if this action item was already saved (draft re-open scenario)
-    const owner=row.querySelector('[id$="-owner"]')?.value||'PM';
+    // v42r — 'PM' below is a display fallback for a blank owner field, not
+    // a real name — notifyActionItemOwner() must only fire on an actually-
+    // typed owner, and only for genuinely new items (gated the same way as
+    // the local-array push below), so republishing an already-saved draft
+    // doesn't re-notify the same owner every time.
+    const ownerTyped=row.querySelector('[id$="-owner"]')?.value?.trim()||'';
+    const owner=ownerTyped||'PM';
     const due=row.querySelector('[id$="-due"]')?.value||'TBD';
     const priority=row.querySelector('[id$="-priority"]')?.value||'Medium';
     const aRes=await atCreate('Action Items',{
@@ -7332,6 +7391,7 @@ async function saveMeeting(){
         meetingId:atId||'',property:propName,
         description:desc,owner,due,priority,status:'Open',createdAt:dateStr,
       });
+      if(ownerTyped)notifyActionItemOwner(ownerTyped,desc,propName,due,priority);
     }
   }
   document.getElementById('editing-draft-id').value='';
@@ -19180,6 +19240,7 @@ async function publishDraftAction(subId){
   const res=demoMode?null:await atCreate('Action Items',fields);
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
   actionItems.push({id:newId,property:s.property,description:d.description,owner:d.owner||'',due:d.due||'TBD',priority:d.priority||'Medium',status:'Open',meetingId:null});
+  if(d.owner)notifyActionItemOwner(d.owner,d.description,s.property,d.due,d.priority);
   s.draftAction.published=true;
   if(s.atId)await atUpdate('Field Updates',s.atId,{'Draft Action Published':true});
   refreshDashActions();
@@ -20173,6 +20234,7 @@ async function pmuCreate(status){
       const aiRes=await atCreate('Action Items',aiFields);
       const aiId=aiRes?.records?.[0]?.id||'ai_'+Date.now();
       actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
+      if(draftAction.owner)notifyActionItemOwner(draftAction.owner,draftAction.description,propName,draftAction.due,draftAction.priority);
       refreshDashActions();
     }
   }
