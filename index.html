@@ -2262,7 +2262,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42q</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42r</div>
     </div>
   </nav>
 
@@ -3298,9 +3298,57 @@ window.PROPERTIES_SEED = [
             <div class="card-title" style="margin-bottom:1rem">New Update</div>
             <div class="form-row">
               <div class="form-group"><label class="form-label">Property</label><select class="form-select" id="pmu-property" onchange="pmuPopulateScopes()"></select></div>
-              <div class="form-group"><label class="form-label">Project (optional)</label><select class="form-select" id="pmu-scope"><option value="">All Projects</option></select></div>
+              <!-- v42r — Project stays optional here (unlike the Consultant
+              form, where it's required) — "All Projects" is a real,
+              intentional use case for a general property-wide note with no
+              specific units/phase/status attached. Selecting a real project
+              reveals the same structured fields the Consultant form has;
+              leaving it on "All Projects" keeps this a simple freeform post,
+              same as before this rebuild. See pmuPopulateScopes()/
+              onPmuScopeChange() for the show/hide logic. -->
+              <div class="form-group"><label class="form-label">Project (optional)</label><select class="form-select" id="pmu-scope" onchange="onPmuScopeChange()"><option value="">All Projects</option></select>
+                <div id="pmu-scope-vdanum" style="font-size:11px;color:var(--gray-mid);margin-top:4px;display:none"><i class="ti ti-hash" style="font-size:11px"></i> <span id="pmu-scope-vdanum-text"></span></div>
+              </div>
+            </div>
+            <div id="pmu-structured-fields" style="display:none">
+              <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
+                  <input type="checkbox" id="pmu-whole-project" onchange="togglePmuWholeProject()">
+                  Applies to Whole Project
+                </label>
+              </div>
+              <div class="form-group" id="pmu-units-group">
+                <label class="form-label">Linked Units</label>
+                <div id="pmu-units-list" style="max-height:140px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
+              </div>
+              <div class="form-row">
+                <div class="form-group"><label class="form-label">Project phase</label><select class="form-select" id="pmu-phase"><option>Pre-Construction</option><option selected>Construction</option><option>Post Construction</option><option>Closeout</option></select></div>
+                <div class="form-group"><label class="form-label">Progress status</label><select class="form-select" id="pmu-status"><option>Not Started</option><option selected>In Progress</option><option>Complete</option></select></div>
+              </div>
+              <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="pmu-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
             </div>
             <div class="form-group"><label class="form-label">Update</label><textarea class="form-input" id="pmu-text" rows="4" placeholder="What's the latest on this property?"></textarea></div>
+            <!-- v42r — flagged follow-up action. Distinct from the
+            Consultant form's version: a PM authoring their own action has
+            no reviewer to wait on, so this creates a live Action Item
+            immediately on publish — no Draft Action Published field/step,
+            no staged/pending state. Saving as a Draft update does NOT yet
+            create the action (nothing has been published/confirmed) — see
+            pmuCreate() for the exact timing. -->
+            <div class="form-group" style="margin-top:8px;padding-top:12px;border-top:1px solid var(--border)">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:var(--navy)">
+                <input type="checkbox" id="pmu-draft-action-toggle" onchange="document.getElementById('pmu-draft-action-fields').style.display=this.checked?'block':'none'">
+                Flag a follow-up action for review
+              </label>
+              <div id="pmu-draft-action-fields" style="display:none;margin-top:10px">
+                <div class="form-group"><label class="form-label">Description</label><input class="form-input" type="text" id="pmu-draft-action-desc" placeholder="e.g. Schedule punch list walkthrough"></div>
+                <div class="form-row">
+                  <div class="form-group"><label class="form-label">Owner</label><input class="form-input" type="text" id="pmu-draft-action-owner" placeholder="e.g. Sarah Chen"></div>
+                  <div class="form-group"><label class="form-label">Priority</label><select class="form-select" id="pmu-draft-action-priority"><option>Low</option><option selected>Medium</option><option>High</option></select></div>
+                </div>
+                <div class="form-group"><label class="form-label">Due date</label><input class="form-input" type="date" id="pmu-draft-action-due"></div>
+              </div>
+            </div>
             <div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn" onclick="saveDraftPMUpdate()"><i class="ti ti-device-floppy"></i>Save Draft</button>
               <button class="btn btn-primary" onclick="publishNewPMUpdate()"><i class="ti ti-send"></i>Publish to Client</button>
@@ -19794,9 +19842,82 @@ function pmuPopulateScopes(){
   if(!propSel||!scopeSel)return;
   const propName=propSel.value;
   const scopes=(window.SCOPES||[]).filter(s=>s.property===propName);
+  const current=scopeSel.value;
   scopeSel.innerHTML='<option value="">All Projects</option>'+
-    scopes.map(s=>`<option value="${s.id}">${s.name||'Project'}</option>`).join('');
+    scopes.map(s=>`<option value="${s.id}"${s.id===current?' selected':''}>${(s.name||'Project').replace(/</g,'&lt;')}</option>`).join('');
+  onPmuScopeChange();
 }
+// v42r — same pattern as onSubmitScopeChange() on the Consultant form:
+// selecting "All Projects" keeps this a simple freeform post (structured
+// fields hidden — pmu-structured-fields), selecting a real project reveals
+// the unit picker/phase/status/comment-type fields and shows its VDA
+// Project #. Changing the project clears any checked units, since they'd
+// no longer be valid against the newly-selected project's unit list.
+function onPmuScopeChange(){
+  const scopeSel=document.getElementById('pmu-scope');
+  const scopeId=scopeSel?.value||'';
+  const scope=scopeId?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  const structuredFields=document.getElementById('pmu-structured-fields');
+  const vdaWrap=document.getElementById('pmu-scope-vdanum');
+  const vdaText=document.getElementById('pmu-scope-vdanum-text');
+  if(structuredFields)structuredFields.style.display=scope?'block':'none';
+  if(vdaWrap&&vdaText){
+    if(scope){
+      vdaText.textContent=`VDA Project #${scope.vdaNum||'—'}`;
+      vdaWrap.style.display='block';
+    }else{
+      vdaWrap.style.display='none';
+    }
+  }
+  pmuUnitAssign={};
+  if(scope)renderPmuUnitsList();
+}
+window.onPmuScopeChange=onPmuScopeChange;
+// v42r — unit-linking state for the PM Updates composer, same pattern as
+// fuUnitAssign for the Consultant form (Field Update submissions).
+let pmuUnitAssign={};
+function renderPmuUnitsList(){
+  const listEl=document.getElementById('pmu-units-list');
+  if(!listEl)return;
+  const propName=document.getElementById('pmu-property')?.value||'';
+  const scopeId=document.getElementById('pmu-scope')?.value||'';
+  if(!propName||!scopeId){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a project first.</div>';
+    return;
+  }
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName&&u.scopeId===scopeId).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  if(units.length===0){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units linked to this project in Unit Inventory List yet.</div>';
+    return;
+  }
+  listEl.innerHTML=units.map(u=>{
+    const checked=!!pmuUnitAssign[u.id];
+    const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
+    return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
+      <input type="checkbox" ${checked?'checked':''} onchange="togglePmuUnit('${u.id}',this.checked)">
+      <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+      ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
+    </label>`;
+  }).join('');
+}
+window.renderPmuUnitsList=renderPmuUnitsList;
+function togglePmuUnit(unitId,checked){
+  if(checked)pmuUnitAssign[unitId]=true;
+  else delete pmuUnitAssign[unitId];
+}
+window.togglePmuUnit=togglePmuUnit;
+function togglePmuWholeProject(){
+  const whole=document.getElementById('pmu-whole-project').checked;
+  const group=document.getElementById('pmu-units-group');
+  if(whole){
+    pmuUnitAssign={};
+    group.style.display='none';
+  }else{
+    group.style.display='block';
+    renderPmuUnitsList();
+  }
+}
+window.togglePmuWholeProject=togglePmuWholeProject;
 function renderPMUpdates(){
   const composer=document.getElementById('pmu-composer');
   const sub=document.getElementById('pmu-header-sub');
@@ -19963,12 +20084,50 @@ async function archivePMUpdateToDocuments(u){
   });
   if(typeof renderDocFolders==='function')renderDocFolders();
 }
+// v42r — rebuilt to write the same structured fields the Consultant form
+// does (Units Updated, Project Phase, Progress Status, Comment Type,
+// Applies to Whole Project, Linked Units), but only when a real project is
+// selected — "All Projects" stays a simple freeform post, per Misty's
+// explicit call to keep Project optional here unlike the Consultant form.
+// The flagged follow-up action is also handled differently from the
+// Consultant form: a PM authoring their own action has no reviewer to wait
+// on, so publishing creates a LIVE Action Item immediately — no Draft
+// Action Published field/step exists on this table at all (Misty's
+// explicit design decision). Saving as a Draft does not create the action;
+// nothing has been confirmed/published yet, so there's nothing to act on
+// yet either — the action item is only created at the moment of publish.
 async function pmuCreate(status){
   const propName=document.getElementById('pmu-property')?.value;
   const scopeId=document.getElementById('pmu-scope')?.value||'';
   const text=document.getElementById('pmu-text')?.value.trim();
   if(!propName){showToast('Select a property','warn');return;}
   if(!text){showToast('Enter an update','warn');return;}
+  const hasProject=!!scopeId;
+  const scope=hasProject?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  const appliesToWholeProject=hasProject&&document.getElementById('pmu-whole-project').checked;
+  const linkedUnitIds=hasProject&&!appliesToWholeProject?Object.keys(pmuUnitAssign):[];
+  let units='';
+  if(hasProject){
+    units='All';
+    if(!appliesToWholeProject&&linkedUnitIds.length>0){
+      const unitNames=sortUnitNames(linkedUnitIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)?.name).filter(Boolean));
+      if(unitNames.length>0)units=unitNames.join(', ');
+    }else if(!appliesToWholeProject&&linkedUnitIds.length===0){
+      alert('Please check at least one unit, or select "Applies to Whole Project".');
+      return;
+    }
+  }
+  const phase=hasProject?document.getElementById('pmu-phase').value:'';
+  const progressStatus=hasProject?document.getElementById('pmu-status').value:'';
+  const commentType=hasProject?document.getElementById('pmu-comment-type').value:'';
+  const hasDraftAction=document.getElementById('pmu-draft-action-toggle').checked;
+  const draftAction=hasDraftAction?{
+    description:document.getElementById('pmu-draft-action-desc').value.trim(),
+    owner:document.getElementById('pmu-draft-action-owner').value.trim(),
+    priority:document.getElementById('pmu-draft-action-priority').value,
+    due:document.getElementById('pmu-draft-action-due').value,
+  }:null;
+  if(hasDraftAction&&!draftAction.description){showToast('Please enter a description for the follow-up action, or uncheck the flag','warn');return;}
   const authorName=role==='consultant'?(currentConsultantName||'Consultant'):(window._userName||'PM User');
   const todayStr=new Date().toISOString().split('T')[0];
   const fields={
@@ -19980,6 +20139,20 @@ async function pmuCreate(status){
   };
   if(scopeId)fields['Linked Scope']=[scopeId];
   if(status==='Published')fields['Published Date']=todayStr;
+  if(hasProject){
+    fields['Units Updated']=units;
+    fields['Project Phase']=phase;
+    fields['Progress Status']=progressStatus;
+    fields['Comment Type']=commentType;
+    fields['Applies to Whole Project']=appliesToWholeProject;
+    if(linkedUnitIds.length>0)fields['Linked Units']=linkedUnitIds;
+  }
+  if(hasDraftAction){
+    fields['Draft Action Description']=draftAction.description;
+    fields['Draft Owner']=draftAction.owner||null;
+    fields['Draft Action Priority']=draftAction.priority;
+    fields['Draft Action Due']=draftAction.due||null;
+  }
   const res=await atCreate('PM Updates',fields);
   if(!res){showToast('Error saving update','error');return;}
   const newId=res.records?.[0]?.id||res.id;
@@ -19987,11 +20160,30 @@ async function pmuCreate(status){
   const newUpdate={
     id:newId,property:propName,scopeId,author:authorName,text,status,
     created:todayStr,published:status==='Published'?todayStr:'',
+    units,phase,progressStatus,commentType,appliesToWholeProject,linkedUnitIds,
   };
   window.PM_UPDATES.unshift(newUpdate);
-  if(status==='Published')await archivePMUpdateToDocuments(newUpdate);
+  if(status==='Published'){
+    await archivePMUpdateToDocuments(newUpdate);
+    // Live Action Item, created now — not staged. Same atCreate('Action
+    // Items',...) pattern as every other creation path in the app.
+    if(hasDraftAction){
+      const aiFields={'Property Name':propertyNameToLink(propName),'Description':draftAction.description,'Owner':draftAction.owner||'','Due Date':draftAction.due||null,'Priority':draftAction.priority||'Medium','Status':'Open'};
+      if(scopeId)aiFields['Linked Scope']=[scopeId];
+      const aiRes=await atCreate('Action Items',aiFields);
+      const aiId=aiRes?.records?.[0]?.id||'ai_'+Date.now();
+      actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
+      refreshDashActions();
+    }
+  }
   document.getElementById('pmu-text').value='';
-  showToast(status==='Published'?'Update published':'Draft saved','success');
+  document.getElementById('pmu-draft-action-toggle').checked=false;
+  document.getElementById('pmu-draft-action-fields').style.display='none';
+  ['pmu-draft-action-desc','pmu-draft-action-owner','pmu-draft-action-due'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('pmu-draft-action-priority').value='Medium';
+  pmuUnitAssign={};
+  document.getElementById('pmu-whole-project').checked=false;
+  showToast(status==='Published'?(hasDraftAction?'Update published, action item created':'Update published'):'Draft saved','success');
   renderPMUpdates();
 }
 function saveDraftPMUpdate(){pmuCreate('Draft');}
