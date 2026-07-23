@@ -2206,6 +2206,7 @@ window.PROPERTIES_SEED = [
         <div class="nav-section-label">Intelligence</div>
         <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('marliinsights',this)"><i class="ti ti-shield-check"></i>MARLI Insights</button>
+        <button class="nav-item" onclick="gotoView('weeklyreportfeedback',this)"><i class="ti ti-thumb-up"></i>Weekly Report Feedback</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Reports</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
@@ -2366,6 +2367,21 @@ window.PROPERTIES_SEED = [
         </div>
         <div class="page-body" id="marli-insights-body">
           <!-- Populated by renderMarliInsights() -->
+        </div>
+      </div>
+
+      <!-- WEEKLY REPORT FEEDBACK (v43a) — Admin-only. Thumbs up/down on
+           each week's AI-generated executive summary, with an optional
+           reason on a down vote, so the summary prompt can be tuned over
+           time from real feedback instead of guesswork. Sourced from the
+           Worker's /weekly-report-feedback endpoint. See
+           renderWeeklyReportFeedback(). -->
+      <div id="view-weeklyreportfeedback" class="hidden">
+        <div class="page-header">
+          <div class="page-header-left"><h1>Weekly Report Feedback</h1><p>Rate each week's AI summary to help improve future reports · Admin only</p></div>
+        </div>
+        <div class="page-body" id="weekly-report-feedback-body">
+          <!-- Populated by renderWeeklyReportFeedback() -->
         </div>
       </div>
 
@@ -4464,6 +4480,7 @@ function gotoView(viewId,btn){
   if(viewId==='queue'){refreshQueue();loadDueDaySetting();}
   if(viewId==='scorecard')renderScorecard();
   if(viewId==='marliinsights')renderMarliInsights();
+  if(viewId==='weeklyreportfeedback')renderWeeklyReportFeedback();
   if(viewId==='my-updates')refreshMyUpdates();
   if(viewId==='report')renderReportLibrary();
   if(viewId==='documents'){docNavLevel=0;docNavProperty='';docNavSubfolder='';docSearchQuery='';renderDocFolders();}
@@ -5073,7 +5090,7 @@ async function recomputeStatusesForScope(scopeId){
 window.computeDerivedUnitStatus=computeDerivedUnitStatus;
 window.recomputeStatusesForScope=recomputeStatusesForScope;
 
-async function linkUnitToScope(unit,scope){
+async function linkUnitToScope(unit,scope,oldScope){
   scope.linkedUnitIds=[...new Set([...(scope.linkedUnitIds||[]),unit.id])];
   unit.scopeId=scope.id;
   const countFields=recomputeScopeTypeCounts(scope);
@@ -5103,6 +5120,18 @@ async function linkUnitToScope(unit,scope){
   // scopeYearKeyFor() (which does check unit.status!=='Complete'), then
   // immediately stomped back to Planned by this function right after.
   // Complete now wins here exactly like Dormant already did.
+  // v45c — narrower exception to the Complete protection above, per
+  // Misty's explicit direction: a unit moved OUT of a Completed project
+  // (oldScope.status==='Complete') INTO an Active project
+  // (scope.status==='In Progress') should reset to Planned, not stay
+  // Complete. This is intentionally narrow — Complete still wins in every
+  // other transition (e.g. Complete moved to another Capital Plan/Planned
+  // scope, or a unit that was already Planned/Active moving around).
+  // oldScope is undefined on first assignment (see autoDeriveScopeForUnit's
+  // "else" branch), so this only ever fires on a real move.
+  if(unit.status==='Complete'&&oldScope&&oldScope.status==='Complete'&&scope.status==='In Progress'){
+    unit.status='Planned';
+  }
   let statusFields={};
   if(unit.status!=='Dormant'&&unit.status!=='Complete'){
     const derivedStatus=computeDerivedUnitStatus(unit);
@@ -5146,7 +5175,7 @@ async function autoDeriveScopeForUnit(unitId){
     if(!confirmed){showToast('Capex year saved — scope assignment left unchanged','info');return;}
     if(!targetScope)targetScope=await createScopeForYearKey(unit.property,prop.id,yearKey);
     await unlinkUnitFromScope(unit,oldScope);
-    await linkUnitToScope(unit,targetScope);
+    await linkUnitToScope(unit,targetScope,oldScope);
     showToast(`Moved to ${targetScope.name}`,'success');
   }else{
     // First assignment — no prior scope to warn about leaving.
@@ -16751,10 +16780,15 @@ function renderDashboard(){
     // property-first). _sub now carries only date/secondary info, no
     // longer duplicates the property name.
     // Field updates (approved)
+    // v45c — s.week is a raw ISO date string (Report Week is a type=date
+    // field); was rendering unformatted ("Week of 2026-05-13") here and in
+    // Operations Center's Recent Field Updates. Both now format it the
+    // same way other Activity Feed dates display, per Misty's request.
+    const fmtWeek=d=>{try{return d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';}catch(e){return d||'—';}};
     ;(submissions||[]).filter(s=>s.reviewStatus==='approved').forEach(s=>{
       const d=new Date(s.submittedAt||s.week||0);
       feedItems.push({_date:d,_type:'Field Update',_icon:'ti-file-check',_color:'var(--green)',
-        _title:`${s.property} — Field Update`,_sub:`Week of ${s.week||'—'} · ${s.consultant||'—'}`,_prop:s.property});
+        _title:`${s.property} — Field Update`,_sub:`Week of ${fmtWeek(s.week)} · ${s.consultant||'—'}`,_prop:s.property});
     });
     // Meetings (logged)
     ;(meetings||[]).filter(m=>m.status!=='Scheduled').forEach(m=>{
@@ -17390,6 +17424,101 @@ async function renderMarliInsights(){
     <div style="margin-top:10px;font-size:11px;color:var(--gray-mid)">Click a row to see the full question, MARLI's response, and the portfolio snapshot she was given — so you can judge for yourself whether the flag is a real problem.</div>
   `;
 }
+
+// v43a — Weekly Report Feedback. Admin votes thumbs up/down on each
+// week's AI-generated executive summary (the same aiSummary text that
+// went out in that Monday's email, saved by generateWeeklyReport() in the
+// Worker). Purpose: build a real body of "good" vs "bad" examples over
+// time so the summary prompt can eventually be tuned from actual
+// feedback instead of guesswork. A vote can be changed any time — not a
+// one-shot submit, same pattern as MARLI session feedback.
+async function fetchWeeklyReportFeedback(){
+  try{
+    const res = await fetch(`${WORKER_URL}/weekly-report-feedback?limit=12`);
+    if(!res.ok)return null;
+    return await res.json();
+  }catch(e){
+    console.error('fetchWeeklyReportFeedback failed:',e);
+    return null;
+  }
+}
+
+function _wrfFmtDate(d){
+  if(!d)return '—';
+  try{return new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});}catch(e){return d;}
+}
+
+async function renderWeeklyReportFeedback(){
+  const body=document.getElementById('weekly-report-feedback-body');
+  if(!body)return;
+  body.innerHTML=`<div style="padding:2rem;text-align:center;color:var(--gray-mid);font-size:13px">Loading weekly report feedback...</div>`;
+
+  const data=await fetchWeeklyReportFeedback();
+  if(!data||!data.ok){
+    body.innerHTML=`<div style="padding:2rem;text-align:center;color:var(--red);font-size:13px">Could not load weekly report feedback — check connection and try again.</div>`;
+    return;
+  }
+  const rows=data.rows||[];
+  if(rows.length===0){
+    body.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-message-2-off"></i><div class="empty-state-title">No weekly reports yet</div><div class="empty-state-sub">Summaries appear here after the first Monday send.</div></div>`;
+    return;
+  }
+  body.innerHTML=rows.map(r=>{
+    const isUp=r.vote==='Up';
+    const isDown=r.vote==='Down';
+    return `<div class="card" style="margin-bottom:12px" id="wrf-row-${r.id}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700;color:var(--navy)">${_wrfFmtDate(r.reportDate)}</div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button aria-label="Thumbs up" onclick="voteWeeklyReportFeedback('${r.id}','up')" style="width:32px;height:32px;padding:0;border-radius:6px;border:0.5px solid var(--border-strong);background:${isUp?'var(--green-pale)':'white'};color:${isUp?'var(--green)':'var(--gray-mid)'};cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-thumb-up" style="font-size:15px"></i></button>
+          <button aria-label="Thumbs down" onclick="voteWeeklyReportFeedback('${r.id}','down')" style="width:32px;height:32px;padding:0;border-radius:6px;border:0.5px solid var(--border-strong);background:${isDown?'#fdecea':'white'};color:${isDown?'var(--red)':'var(--gray-mid)'};cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-thumb-down" style="font-size:15px"></i></button>
+        </div>
+      </div>
+      <div style="font-size:13px;line-height:1.55;color:var(--gray-dark);white-space:pre-wrap;margin-bottom:10px">${(r.summaryText||'No summary recorded.').replace(/</g,'&lt;')}</div>
+      <div id="wrf-notes-${r.id}" style="${isDown?'':'display:none'}">
+        <textarea class="form-input" id="wrf-notes-input-${r.id}" placeholder="What was wrong with this summary? (optional, but helpful for tuning future reports)" style="font-size:12px;min-height:56px;width:100%" onblur="saveWeeklyReportFeedbackNotes('${r.id}')">${(r.notes||'').replace(/</g,'&lt;')}</textarea>
+      </div>
+    </div>`;
+  }).join('');
+}
+window.renderWeeklyReportFeedback=renderWeeklyReportFeedback;
+
+async function voteWeeklyReportFeedback(feedbackRecordId,vote){
+  const rowEl=document.getElementById(`wrf-row-${feedbackRecordId}`);
+  const notesEl=document.getElementById(`wrf-notes-${feedbackRecordId}`);
+  if(notesEl)notesEl.style.display=vote==='down'?'':'none';
+  try{
+    const response=await fetch(`${WORKER_URL}/weekly-report-feedback`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({feedbackRecordId,recordId:window._marliRecordId,vote,notes:''})
+    });
+    const data=await response.json();
+    if(!data.ok){
+      showToast('Could not save feedback — please try again','warn');
+      return;
+    }
+    renderWeeklyReportFeedback();
+  }catch(e){
+    showToast('Could not save feedback — please try again','warn');
+  }
+}
+window.voteWeeklyReportFeedback=voteWeeklyReportFeedback;
+
+async function saveWeeklyReportFeedbackNotes(feedbackRecordId){
+  const input=document.getElementById(`wrf-notes-input-${feedbackRecordId}`);
+  if(!input)return;
+  try{
+    await fetch(`${WORKER_URL}/weekly-report-feedback`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({feedbackRecordId,recordId:window._marliRecordId,vote:'down',notes:input.value.trim()})
+    });
+  }catch(e){
+    showToast('Could not save your note — please try again','warn');
+  }
+}
+window.saveWeeklyReportFeedbackNotes=saveWeeklyReportFeedbackNotes;
 
 // Detail drilldown for a single flagged item — reuses the same overlay
 // pattern as showBarDrilldown/showScorecardGapDrilldown. Reads from the
@@ -21987,7 +22116,7 @@ function renderOpsCenter(){
           ?'<div style="font-size:12px;color:var(--gray-mid)">No approved field updates yet.</div>'
           :recentUpdates.map(s=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')">
             <div class="action-dot" style="background:var(--green)"></div>
-            <div class="action-desc" style="flex:1"><strong>${s.property}</strong><br><span style="color:var(--gray-mid)">Week of ${s.week} · ${s.consultant}</span></div>
+            <div class="action-desc" style="flex:1"><strong>${s.property}</strong><br><span style="color:var(--gray-mid)">Week of ${fmtShort(s.week)} · ${s.consultant}</span></div>
             <i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px;flex-shrink:0"></i>
           </div>`).join('')
         }
