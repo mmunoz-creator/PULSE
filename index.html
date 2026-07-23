@@ -1335,6 +1335,14 @@ async function loadAllData() {
       completionDate: r.fields['Completion Date']||'',
       variance: r.fields['Variance']||null,
       notes: r.fields['Notes']||'',
+      // v44a — Last Modified Time, Airtable-computed field watching Status
+      // and Completion Date, added specifically so the Activity Feed can
+      // tell a genuinely-recent milestone completion apart from a
+      // historical date being backfilled during client data upload — a
+      // milestone completed 6 months ago that's just been entered today
+      // should still surface as recent activity for a few days, which its
+      // own Completion Date alone can't signal.
+      lastModified: r.fields['Last Modified Time']||'',
     })); // newest first
     // Scopes — v28a. Property field is an Airtable Link (array of record
     // IDs); resolve to property NAME here using the just-fetched `props`
@@ -2281,7 +2289,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v43c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v44b</div>
     </div>
   </nav>
 
@@ -16530,8 +16538,18 @@ function renderDashboard(){
   const overdueActions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today2);
   const due30Actions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)>=today2&&new Date(a.due)<=d30);
   const pendingReviewCount=submissions.filter(s=>s.reviewStatus==='pending').length+((window.CO_SAVINGS||[]).filter(c=>c.status==='Pending').length);
-  const recentAdded2=[...allPort].filter(p=>p.dateAdded&&!p.dateRemoved&&p.st!=='Removed').sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,3);
-  const recentRemoved2=[...allPort].filter(p=>p.dateRemoved||p.st==='Removed').sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,3);
+  // v44c — this tile had NO date filter at all (unlike Operations Center's
+  // own version, which at least tried a login-time filter that turned out
+  // to be broken on refresh — see that fix for the full story). This one
+  // just always showed the 3 most recent adds/removes ever, with no
+  // expiry, which is the direct cause of the Portfolio Changes badge count
+  // staying stuck on stale test data (e.g. "dev", "hilton new oil") long
+  // after it should have cleared. Now uses the same fixed 4-day rolling
+  // window as Operations Center's Recently Added/Removed, so the badge
+  // count and the underlying list can never disagree.
+  const _recentCutoff2=new Date();_recentCutoff2.setDate(_recentCutoff2.getDate()-4);_recentCutoff2.setHours(0,0,0,0);
+  const recentAdded2=[...allPort].filter(p=>p.dateAdded&&!p.dateRemoved&&p.st!=='Removed'&&new Date(p.dateAdded)>=_recentCutoff2).sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,3);
+  const recentRemoved2=[...allPort].filter(p=>(p.dateRemoved||p.st==='Removed')&&p.dateRemoved&&new Date(p.dateRemoved)>=_recentCutoff2).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,3);
 
   const attEl=document.getElementById('dash-attention-section');
   if(attEl){
@@ -16610,39 +16628,77 @@ function renderDashboard(){
     const isPM=role==='pm'||role==='admin';
     const isConsultant=role==='consultant';
     const isClient=role==='client';
+    // v44a — property-first title format applied across every category
+    // below, per Misty's explicit direction: "Property — detail" instead
+    // of the previous mixed formats (some type-first, some already
+    // property-first). _sub now carries only date/secondary info, no
+    // longer duplicates the property name.
     // Field updates (approved)
     ;(submissions||[]).filter(s=>s.reviewStatus==='approved').forEach(s=>{
       const d=new Date(s.submittedAt||s.week||0);
       feedItems.push({_date:d,_type:'Field Update',_icon:'ti-file-check',_color:'var(--green)',
-        _title:s.property,_sub:`Week of ${s.week||'—'} · ${s.consultant||'—'}`,_prop:s.property});
+        _title:`${s.property} — Field Update`,_sub:`Week of ${s.week||'—'} · ${s.consultant||'—'}`,_prop:s.property});
     });
     // Meetings (logged)
     ;(meetings||[]).filter(m=>m.status!=='Scheduled').forEach(m=>{
       const d=new Date(m.date||0);
       feedItems.push({_date:d,_type:'Meeting',_icon:'ti-notes',_color:'var(--blue-dark)',
-        _title:`${m.type?m.type+' — ':''}${m.property}`,_sub:`${m.date||'—'}${m.elevco?' · '+m.elevco:''}`,_prop:m.property});
+        _title:`${m.property} — ${m.type||'Meeting'}`,_sub:`${m.date||'—'}${m.elevco?' · '+m.elevco:''}`,_prop:m.property});
     });
     // Site visits
     ;(siteVisits||[]).forEach(v=>{
       const d=new Date(v.date||0);
       feedItems.push({_date:d,_type:'Site Visit',_icon:'ti-building',_color:'var(--teal)',
-        _title:`Site Visit — ${v.property}`,_sub:`${v.date||'—'}${v.consultant?' · '+v.consultant:''}`,_prop:v.property});
+        _title:`${v.property} — Site Visit`,_sub:`${v.date||'—'}${v.consultant?' · '+v.consultant:''}`,_prop:v.property});
     });
     // Action items closed
     ;(actionItems||[]).filter(a=>a.status==='Closed'||a.status==='closed').forEach(a=>{
       const d=new Date(a.due||0);
       feedItems.push({_date:d,_type:'Action Closed',_icon:'ti-circle-check',_color:'var(--green)',
-        _title:a.title||a.description||'Action Item',_sub:`${a.property||'—'} · ${a.owner||'—'}`,_prop:a.property||''});
+        _title:`${a.property||'—'} — Action Closed: ${a.title||a.description||'Action Item'}`,_sub:`${a.owner||'—'}`,_prop:a.property||''});
     });
     // v37g — Milestone completions. Uses each Milestone's own real
     // actualDate/completionDate (already tracked, no new field needed) —
     // "M6 — First Phase Start completed on July 12" is genuinely
     // derivable from existing data, not new tracking.
+    // v44a — two changes, both per Misty's direct instruction while bulk
+    // client data was being uploaded into PULSE:
+    // (1) Recency now checks BOTH completionDate AND the new
+    //     lastModified field (Airtable Last Modified Time, watching
+    //     Status + Completion Date — added this session specifically for
+    //     this). A milestone backfilled today with a completion date from
+    //     months ago wouldn't otherwise ever surface here; it now shows as
+    //     recent activity for a few days after entry, keyed off whichever
+    //     of the two dates is more recent, same as a genuinely-fresh
+    //     completion would.
+    // (2) Grouping: multiple milestones completed for the same property on
+    //     the same completionDate collapse into a single "N milestones
+    //     updated" entry instead of flooding the feed one row per
+    //     milestone during a bulk backfill. A lone milestone for a
+    //     property/date still shows its specific title. Grouping is keyed
+    //     on completionDate specifically (not lastModified) — two
+    //     milestones backfilled in the same sitting but completed on
+    //     different real-world dates stay as separate entries.
+    const _msGroups={};
     ;(window.MILESTONES||[]).filter(m=>m.status==='Complete'&&(m.actualDate||m.completionDate)).forEach(m=>{
       const dateStr=m.completionDate||m.actualDate;
-      const d=new Date(dateStr);
-      feedItems.push({_date:d,_type:'Milestone',_icon:'ti-flag-check',_color:'var(--indigo)',
-        _title:`M${m.milestoneNumber} — ${m.milestoneName}`,_sub:`${m.property||'—'} · ${dateStr}`,_prop:m.property||''});
+      const completedDate=new Date(dateStr);
+      const modifiedDate=m.lastModified?new Date(m.lastModified):null;
+      const mostRecent=(modifiedDate&&!isNaN(modifiedDate)&&modifiedDate>completedDate)?modifiedDate:completedDate;
+      const groupKey=`${m.property||''}|${m.completionDate||dateStr}`;
+      if(!_msGroups[groupKey])_msGroups[groupKey]={property:m.property||'',dateStr:m.completionDate||dateStr,items:[],_date:mostRecent};
+      _msGroups[groupKey].items.push(m);
+      if(mostRecent>_msGroups[groupKey]._date)_msGroups[groupKey]._date=mostRecent;
+    });
+    Object.values(_msGroups).forEach(g=>{
+      if(g.items.length>1){
+        feedItems.push({_date:g._date,_type:'Milestone',_icon:'ti-flag-check',_color:'var(--indigo)',
+          _title:`${g.property} — ${g.items.length} milestones updated`,_sub:g.dateStr,_prop:g.property});
+      }else{
+        const m=g.items[0];
+        feedItems.push({_date:g._date,_type:'Milestone',_icon:'ti-flag-check',_color:'var(--indigo)',
+          _title:`${g.property} — M${m.milestoneNumber}: ${m.milestoneName} Complete`,_sub:g.dateStr,_prop:g.property});
+      }
     });
     // v37g — Unit Phase start/completion. Same approach — Unit Groups
     // already carry real actualStart/actualCompletion dates, surfaced
@@ -16651,11 +16707,11 @@ function renderDashboard(){
     ;(window.UNIT_GROUPS||[]).forEach(g=>{
       if(g.actualCompletion){
         feedItems.push({_date:new Date(g.actualCompletion),_type:'Phase Complete',_icon:'ti-checks',_color:'var(--green)',
-          _title:`${g.phase||'Phase'} complete`,_sub:`${g.property||'—'} · ${g.actualCompletion}`,_prop:g.property||''});
+          _title:`${g.property||'—'} — ${g.phase||'Phase'} complete`,_sub:`${g.actualCompletion}`,_prop:g.property||''});
       }
       if(g.actualStart){
         feedItems.push({_date:new Date(g.actualStart),_type:'Phase Started',_icon:'ti-player-play',_color:'var(--blue-dark)',
-          _title:`${g.phase||'Phase'} started`,_sub:`${g.property||'—'} · ${g.actualStart}`,_prop:g.property||''});
+          _title:`${g.property||'—'} — ${g.phase||'Phase'} started`,_sub:`${g.actualStart}`,_prop:g.property||''});
       }
     });
     // v37g — Scope status changes. Requires the new Status Changed Date
@@ -16664,7 +16720,7 @@ function renderDashboard(){
     // have an entry here, no retroactive backfill possible.
     ;(window.SCOPES||[]).filter(s=>s.statusChangedDate).forEach(s=>{
       feedItems.push({_date:new Date(s.statusChangedDate),_type:'Project Status',_icon:'ti-git-fork',_color:'var(--purple)',
-        _title:`${s.name||'Project'} → ${s.status}`,_sub:`${s.property||'—'} · ${s.statusChangedDate}`,_prop:s.property||''});
+        _title:`${s.property||'—'} — ${s.name||'Project'} → ${s.status}`,_sub:`${s.statusChangedDate}`,_prop:s.property||''});
     });
     // v37g — 7-day lookback window, per direct instruction: show up to 10
     // most recent items, but only from the last 7 days — a quiet week
@@ -16680,7 +16736,7 @@ function renderDashboard(){
     recentFeedItems.sort((a,b)=>b._date-a._date);
     const feed=recentFeedItems.slice(0,10);
     feedEl.innerHTML=`<div class="card">
-      <div class="card-header"><div class="card-title">Activity Feed</div><div class="card-sub" style="font-size:11px;color:var(--gray-mid)">Last 7 days · portfolio activity</div></div>
+      <div class="card-header"><div><div class="card-title">Activity Feed</div><div class="card-sub" style="font-size:11px;color:var(--gray-mid)">Last 7 days · portfolio activity</div></div><span style="font-size:11px;color:var(--gray-mid);font-weight:400;cursor:pointer" onclick="gotoView('opscenter',null)">View Operations Center →</span></div>
       ${feed.length===0
         ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No activity in the last 7 days.</div>'
         :feed.map(item=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(item._prop||'').replace(/'/g,"\\'")}')">
@@ -21591,17 +21647,27 @@ function renderOpsCenter(){
   }
 
     // Recently added/removed
-  // v30e: filter by last login time so Activity shows what changed since user was last here
-  const _prevLogin=window._prevLoginTime||null;
+  // v44c — replaced the v30e last-login-time filter entirely. That
+  // approach depended on window._prevLoginTime, which only ever got set on
+  // a fresh PIN login (doLogin()) — a session restored after a browser
+  // refresh (tryRestorePulseSession()) never set it at all, so any
+  // mid-session refresh silently reset this section back to "first login
+  // ever, show everything" for the rest of that session. Confirmed live:
+  // Misty had logged in and out repeatedly over several days and stale
+  // entries never cleared, because normal usage includes refreshes.
+  // Per Misty's direct call: drop the login-tracking dependency entirely
+  // and use a fixed rolling window instead — an add/remove simply falls
+  // off 4 days after the date of the action, same rolling-window pattern
+  // the Activity Feed already uses (7 days there). No session-state
+  // dependency left to break.
+  const _recentCutoff=new Date();_recentCutoff.setDate(_recentCutoff.getDate()-4);_recentCutoff.setHours(0,0,0,0);
   const recentAdded=[...port].filter(p=>{
     if(!p.dateAdded||p.dateRemoved||p.st==='Removed'||!propFilter(p.n))return false;
-    if(!_prevLogin)return true; // first login — show all with a date
-    return new Date(p.dateAdded)>_prevLogin;
+    return new Date(p.dateAdded)>=_recentCutoff;
   }).sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,4);
   const recentRemoved=[...port].filter(p=>{
     if(!(p.dateRemoved||p.st==='Removed')||!propFilter(p.n))return false;
-    if(!_prevLogin)return p.dateRemoved?true:false;
-    return p.dateRemoved&&new Date(p.dateRemoved)>_prevLogin;
+    return p.dateRemoved&&new Date(p.dateRemoved)>=_recentCutoff;
   }).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,4);
   const fmtShort=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
 
