@@ -2281,7 +2281,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v43b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v43c</div>
     </div>
   </nav>
 
@@ -18386,13 +18386,51 @@ function openEditPropertyPanel(){
   document.getElementById('ep-type').value=p.type||'Core';
   document.getElementById('ep-priority').value=p.priority||'';
   document.getElementById('ep-budget').value=p.budget?Number(p.budget).toLocaleString('en-US'):'';
-  document.getElementById('ep-units').value=p.units||'';
-  document.getElementById('ep-elevators').value=p.elevatorCount||'';
-  document.getElementById('ep-escalators').value=p.escalatorCount||'';
-  document.getElementById('ep-lifts').value=p.liftCount||'';
-  document.getElementById('ep-other').value=p.otherCount||'';
   document.getElementById('ep-notes').value=p.comment||'';
   document.getElementById('ep-consultant').value=p.v||'';
+
+  // v43c hotfix — the count fields below were still reading straight from
+  // p.elevatorCount/p.units etc. (the manually-typed Properties fields),
+  // never checking real Unit Inventory the way renderPropertyView() does.
+  // Confirmed via Misty's screenshot: property hero correctly showed
+  // "11 Elev · 2 Lift" from real inventory, but these fields all showed 0
+  // because the manual Properties-level fields were never populated to
+  // begin with. Same categorizeUnitType/override logic renderPropertyView()
+  // uses at lines ~5254-5273, so the modal matches what's actually shown
+  // elsewhere on the page instead of a stale/never-set manual field.
+  const epUnitsInv=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+  const epCategorize=t=>{
+    const s=(t||'').toLowerCase();
+    if(s.includes('escalator'))return 'esc';
+    if(s.includes('lift')||s.includes('wheelchair'))return 'lift';
+    if(s.includes('other'))return 'other';
+    return 'elev';
+  };
+  let epUnits,epElev,epEsc,epLift,epOther;
+  if(epUnitsInv.length>0){
+    epUnits=epUnitsInv.length;
+    epElev=epUnitsInv.filter(u=>epCategorize(u.unitType)==='elev').length;
+    epEsc=epUnitsInv.filter(u=>epCategorize(u.unitType)==='esc').length;
+    epLift=epUnitsInv.filter(u=>epCategorize(u.unitType)==='lift').length;
+    epOther=epUnitsInv.filter(u=>epCategorize(u.unitType)==='other').length;
+  }else{
+    epUnits=p.units||'';epElev=p.elevatorCount||'';epEsc=p.escalatorCount||'';
+    epLift=p.liftCount||'';epOther=p.otherCount||'';
+  }
+  document.getElementById('ep-units').value=epUnits;
+  document.getElementById('ep-elevators').value=epElev;
+  document.getElementById('ep-escalators').value=epEsc;
+  document.getElementById('ep-lifts').value=epLift;
+  document.getElementById('ep-other').value=epOther;
+  // These four fields are display-only once real inventory exists — save
+  // logic already skips writing them back to Airtable in that case (see
+  // saveEditProperty()), but disable them here too so it's visually clear
+  // in the UI, not just silently ignored on save.
+  const epCountFields=['ep-units','ep-elevators','ep-escalators','ep-lifts','ep-other'];
+  epCountFields.forEach(id=>{
+    const el=document.getElementById(id);
+    if(el)el.disabled=epUnitsInv.length>0;
+  });
 
   renderEditPropertyUnitStats(p);
 
