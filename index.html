@@ -1134,6 +1134,11 @@ async function loadAllData() {
         // Budget Variance KPI. Optional/not required for the pilot — blank
         // means Budget Variance shows N/A for that property until filled in.
         contractAwardValue: r.fields['Contract Award Value']!=null?Number(r.fields['Contract Award Value']):null,
+        // v44e — Milestone Manual Override, permanent feature, PM-controlled
+        // per property. When on, all 14 milestones render as editable date
+        // fields regardless of MILESTONE_DERIVATION type. Does not touch the
+        // underlying Unit Phase auto-calc logic — see renderMilestones().
+        milestoneManualOverride: r.fields['Milestone Manual Override']===true,
         ms: [], // milestones now from MILESTONES table
       })).filter(p=>p.n).sort((a,b)=>a.n.localeCompare(b.n));
       window.PORTFOLIO = livePortfolio;
@@ -1181,6 +1186,10 @@ async function loadAllData() {
     }));
     meetings = meets.map(r => ({
       id: r.id, atId: r.id,
+      // v44d — Airtable's REST response always includes createdTime on every
+      // record regardless of fields selected. Used by updateOpsCenterBadge()
+      // to detect items new since the PM last opened Operations Center.
+      createdTime: r.createdTime||'',
       property: resolvePropertyLink(r.fields['Property Name']),
       date: r.fields['Meeting Date']||'',
       type: r.fields['Meeting Type']||'',
@@ -1201,6 +1210,7 @@ async function loadAllData() {
     }));
     actionItems = actions.map(r => ({
       id: r.id,
+      createdTime: r.createdTime||'',
       property: resolvePropertyLink(r.fields['Property Name']),
       meetingId: r.fields['Meeting ID']||'',
       description: r.fields['Description']||'',
@@ -1218,6 +1228,7 @@ async function loadAllData() {
     }));
     siteVisits = visits.map(r => ({
       id: r.id,
+      createdTime: r.createdTime||'',
       property: resolvePropertyLink(r.fields['Property Name']),
       date: r.fields['Visit Date']||'',
       consultant: r.fields['Consultant Name']||'',
@@ -2183,7 +2194,7 @@ window.PROPERTIES_SEED = [
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Operations</div>
-        <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
+        <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center<span id="opscenter-badge-admin" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('queue',this)"><i class="ti ti-inbox"></i>Pending Review<span id="queue-badge-admin" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-admin" class="nav-badge hidden" style="background:var(--red)">0</span></button>
         <button class="nav-item" onclick="gotoView('pmupdates',this)"><i class="ti ti-broadcast"></i>PM Updates<span id="pmu-badge-admin" class="nav-badge hidden">0</span></button>
@@ -2209,7 +2220,7 @@ window.PROPERTIES_SEED = [
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Operations</div>
-        <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
+        <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center<span id="opscenter-badge-pm" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('queue',this)"><i class="ti ti-inbox"></i>Pending Review<span id="queue-badge" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-pm" class="nav-badge hidden" style="background:var(--red)">0</span></button>
         <button class="nav-item" onclick="gotoView('pmupdates',this)"><i class="ti ti-broadcast"></i>PM Updates<span id="pmu-badge-pm" class="nav-badge hidden">0</span></button>
@@ -2235,7 +2246,7 @@ window.PROPERTIES_SEED = [
       </div>
       <div class="nav-section">
         <div class="nav-section-label">Operations</div>
-        <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center</button>
+        <button class="nav-item" onclick="gotoView('opscenter',this)"><i class="ti ti-activity"></i>Operations Center<span id="opscenter-badge-consultant" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('comments',this)"><i class="ti ti-message-circle"></i>Client Comments<span id="cc-badge-consultant" class="nav-badge hidden" style="background:var(--red)">0</span></button>
         <!-- v42h — PM Updates nav item removed for Consultant per Misty's
              explicit request (view and compose access both revoked, not
@@ -2289,7 +2300,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v44b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v44e</div>
     </div>
   </nav>
 
@@ -2361,6 +2372,10 @@ window.PROPERTIES_SEED = [
         <div class="page-header">
           <div class="page-header-left"><h1>Portfolio View</h1><p id="portfolio-sub">Loading properties...</p></div>
           <div class="header-actions">
+            <div class="no-print" style="position:relative;display:flex;align-items:center">
+              <i class="ti ti-search" style="position:absolute;left:10px;font-size:14px;color:var(--gray-mid);pointer-events:none"></i>
+              <input type="text" id="pf-search" placeholder="Search properties..." oninput="pfApply()" style="font-size:12px;padding:7px 10px 7px 30px;border:1px solid var(--border);border-radius:6px;color:var(--navy);outline:none;width:180px">
+            </div>
             <button class="btn no-print" id="priority-display-toggle-btn" onclick="togglePriorityDisplaySetting()" style="display:none" title="Show or hide Priority across PULSE for all users"><i class="ti ti-flag"></i><span id="priority-display-toggle-label">Priority: On</span></button>
             <button class="btn no-print" onclick="pfTogglePanel()" id="pf-panel-toggle-btn" style="position:relative"><i class="ti ti-adjustments-horizontal"></i> Filters <span id="pf-badge" style="display:none;position:absolute;top:-5px;right:-5px;background:var(--blue-dark);color:white;border-radius:10px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center"></span></button>
             <button class="btn btn-primary no-print" onclick="printPortfolio()"><i class="ti ti-printer"></i>Print / PDF</button>
@@ -2697,6 +2712,7 @@ window.PROPERTIES_SEED = [
           </div>
           <div id="prop-tab-milestones" class="tab-content">
             <div id="ms-scope-tabs"></div>
+            <div id="ms-manual-override-banner"></div>
             <div class="card"><div class="card-header"><div><div class="card-title">Modernization Milestone Tracker</div><div class="card-sub">Planned vs Actual — Click to Edit Inline</div></div><span id="ms-progress-badge" class="badge b-cip">0%</span></div><div id="prop-milestones-list"></div></div>
           </div>
           <div id="prop-tab-bids" class="tab-content">
@@ -6618,6 +6634,39 @@ function renderMilestones(p){
   const msList=document.getElementById('prop-milestones-list');
   const canEdit=role==='pm'||role==='admin';
   const canConsultant=role==='consultant';
+
+  // v44e — Milestone Manual Override banner. Permanent feature (relabeled
+  // from v44d's "temporary" language per Misty's direction). PM/Admin only.
+  // Toggling this writes 'Milestone Manual Override' on the Properties
+  // record via toggleMilestoneManualOverride() below, which is the sole
+  // source of truth this reads from (p.milestoneManualOverride, loaded from
+  // Airtable at login and re-read on every property open/refresh — not
+  // session or localStorage state, so it persists across logins, refreshes,
+  // and switching between properties exactly like any other Property field).
+  // Does not touch MILESTONE_DERIVATION or the Unit Phase auto-calc logic —
+  // see the isCalendar check further down in this function.
+  const overrideBannerEl=document.getElementById('ms-manual-override-banner');
+  if(overrideBannerEl){
+    if(canEdit){
+      const isOn=!!p.milestoneManualOverride;
+      overrideBannerEl.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;background:${isOn?'#FAEEDA':'var(--gray-xpale)'};border-radius:8px;padding:10px 14px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <i class="ti ti-adjustments" style="font-size:18px;color:${isOn?'#854F0B':'var(--gray-mid)'}"></i>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:${isOn?'#854F0B':'var(--navy)'}">Manual entry override</div>
+            <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">Lets you enter all 14 milestones by hand. Unit Phase auto-calculation stays off for this property until you turn this back off.</div>
+          </div>
+        </div>
+        <label style="position:relative;display:inline-block;width:38px;height:22px;flex-shrink:0;cursor:pointer">
+          <input type="checkbox" ${isOn?'checked':''} id="ms-override-checkbox" onchange="toggleMilestoneManualOverride('${p.n.replace(/'/g,"\\'")}',this.checked)" style="opacity:0;width:0;height:0;position:absolute">
+          <span style="position:absolute;inset:0;background:${isOn?'#EF9F27':'#CBD5E1'};border-radius:22px;transition:background .15s"></span>
+          <span style="position:absolute;top:3px;${isOn?'right':'left'}:3px;width:16px;height:16px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
+        </label>
+      </div>`;
+    }else{
+      overrideBannerEl.innerHTML='';
+    }
+  }
   // v28b — scoped to currentScope when the property has one selected
   // (always true except the demo-mode zero-Scope fallback case).
   const scopeId=currentScope?.id;
@@ -6730,7 +6779,16 @@ function renderMilestones(p){
       `<span style="color:var(--gray-mid);font-size:10px;margin-left:4px">on plan</span>`):'';
 
     const rule=MILESTONE_DERIVATION[m.milestoneNumber]||{type:'calendar'};
-    const isCalendar=rule.type==='calendar';
+    // v44e — Milestone Manual Override, permanent feature.
+    // p.milestoneManualOverride is a PM-controlled toggle (Properties
+    // table, persists across sessions/logins — see renderMilestones'
+    // banner above). When on, every milestone renders as a plain editable
+    // date field, same as the calendar-type milestones always have.
+    // MILESTONE_DERIVATION, computeDerivedUnitStatus, and
+    // getDerivedDatesForMilestone are NOT modified — this only changes
+    // what's displayed as editable vs locked. Turning the toggle back off
+    // restores normal auto-calc display immediately, no data loss.
+    const isCalendar=rule.type==='calendar'||p.milestoneManualOverride;
     const derivedDates=isCalendar?null:getDerivedDatesForMilestone(p.n,m.milestoneNumber,m.scopeId);
     const statusBadge=`<span style="display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;background:${circleColor};color:${textColor};text-transform:uppercase;letter-spacing:.03em">${m.status}</span>`;
 
@@ -6789,6 +6847,38 @@ function renderMilestones(p){
   requestAnimationFrame(()=>{window._msRendering=false;});
 }
 
+// v44e — Milestone Manual Override toggle handler. Permanent feature.
+// Writes the flag to the Properties record ('Milestone Manual Override'
+// checkbox field), which is what persists it — window.PORTFOLIO is only
+// the in-memory mirror, loaded fresh from Airtable at every login and every
+// property open, so the saved value is what actually survives refresh,
+// logout/login, and switching properties. Does not touch MILESTONE_DERIVATION,
+// computeDerivedUnitStatus, or getDerivedDatesForMilestone — turning this
+// back off restores normal auto-calc display with no data loss, since those
+// functions keep running in the background regardless of this flag.
+// v44e fix: the checkbox previously updated optimistically even if the
+// Airtable write failed (e.g. network blip), silently showing "on" in the
+// UI when nothing had actually saved. Now rolls the checkbox back and
+// re-renders on a failed write so the visible state always matches what's
+// actually saved.
+async function toggleMilestoneManualOverride(propName,newVal){
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const p=port.find(x=>x.n===propName);
+  if(!p)return;
+  const previousVal=!!p.milestoneManualOverride;
+  p.milestoneManualOverride=newVal;
+  if(currentProp&&currentProp.n===propName)renderMilestones(p);
+  if(!demoMode&&p.id){
+    try{
+      await atUpdate('Properties',p.id,{'Milestone Manual Override':newVal});
+    }catch(e){
+      console.error('Failed to update Milestone Manual Override — reverting toggle',e);
+      p.milestoneManualOverride=previousVal;
+      if(currentProp&&currentProp.n===propName)renderMilestones(p);
+      alert('Could not save the Milestone Manual Override change. Please try again.');
+    }
+  }
+}
 
 // v39g — fixed a real race-condition bug: editing a date field fires an
 // async write-then-DOM-patch sequence, but nothing prevented two overlapping
@@ -18775,7 +18865,7 @@ async function saveEditProperty(){
 function filterTable(){pfApply();} // legacy alias
 
 // PORTFOLIO FILTER PANEL
-const PF={status:'all',health:'all',type:'all',priority:'all',state:'all',ec:'all',consultant:'all'};
+const PF={status:'all',health:'all',type:'all',priority:'all',state:'all',ec:'all',consultant:'all',search:''};
 
 function pfTogglePanel(){
   const panel=document.getElementById('pf-side-panel');
@@ -18846,6 +18936,11 @@ function pfApply(){
   PF.state=document.getElementById('pf-state')?.value||'all';
   PF.ec=document.getElementById('pf-ec')?.value||'all';
   PF.consultant=document.getElementById('pf-consultant')?.value||'all';
+  // v44d — Portfolio search bar. Kept separate from the other PF.* filter
+  // fields (which default to 'all' and feed pfUpdateBadge's active-filter
+  // count / pfUpdateSubheader's "no filter active" check) since search is
+  // typed text, not a dropdown selection — defaults to '' instead of 'all'.
+  PF.search=(document.getElementById('pf-search')?.value||'').trim().toLowerCase();
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const useActiveScopeCount=PF.status==='In Progress';
   document.querySelectorAll('#portfolio-tbody tr').forEach(row=>{
@@ -18853,7 +18948,8 @@ function pfApply(){
     const p=port.find(x=>x.n===propName);
     if(!p){row.style.display='none';return;}
     let show=true;
-    if(PF.status!=='all')show=p.st===PF.status;
+    if(PF.search)show=propName.toLowerCase().includes(PF.search);
+    if(PF.status!=='all')show=show&&p.st===PF.status;
     if(PF.type!=='all')show=show&&p.type===PF.type;
     if(PF.state!=='all')show=show&&p.s===PF.state;
     if(PF.ec!=='all')show=show&&p.ec===PF.ec;
@@ -18905,7 +19001,8 @@ function pfUpdateSubheader(){
   // portfolio total, so the breakdown wouldn't mean anything). No
   // mismatch check anymore — under the unit-driven rule every property
   // is Active or Pipeline by construction, nothing to flag.
-  const noFilterActive=Object.values(PF).every(v=>v==='all');
+  // v44d — same PF.search exclusion as pfUpdateBadge above.
+  const noFilterActive=Object.entries(PF).every(([k,v])=>k==='search'?!v:v==='all');
   let breakdownNote='';
   if(noFilterActive&&rows.length>0&&!demoMode){
     const _pfPc=getPortfolioClassification();
@@ -18915,15 +19012,19 @@ function pfUpdateSubheader(){
 }
 
 function pfClearAll(){
-  PF.status='all';PF.health='all';PF.type='all';PF.priority='all';PF.state='all';PF.ec='all';PF.consultant='all';
+  PF.status='all';PF.health='all';PF.type='all';PF.priority='all';PF.state='all';PF.ec='all';PF.consultant='all';PF.search='';
   ['pf-status','pf-health','pf-type','pf-priority','pf-state','pf-ec','pf-consultant'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.value='all';
   });
+  const searchEl=document.getElementById('pf-search');if(searchEl)searchEl.value='';
   pfApply();
 }
 
 function pfUpdateBadge(){
-  const active=Object.values(PF).filter(v=>v!=='all').length;
+  // v44d — PF.search defaults to '' (not 'all', like the dropdown filters),
+  // so it's excluded here to avoid inflating the Filters badge count while
+  // the search box is simply empty.
+  const active=Object.entries(PF).filter(([k,v])=>k!=='search'&&v!=='all').length;
   const badge=document.getElementById('pf-badge');
   if(badge){badge.textContent=active||'';badge.style.display=active?'inline':'none';}
 }
@@ -19485,6 +19586,46 @@ function updateQueueBadge(){
   ['queue-badge','queue-badge-admin'].forEach(id=>{const qb=document.getElementById(id);if(qb){qb.textContent=qc;qb.classList.toggle('hidden',qc===0);}});
   updateMyUpdatesBadge();
   updateClientCommentsBadge();
+  updateOpsCenterBadge();
+}
+// v44d — Operations Center nav badge. Counts overdue actions plus newly
+// scheduled meetings/site visits (the same items that populate the Operations
+// Center's horizon lists) whose relevant date falls after the last time this
+// PM actually opened Operations Center — not since login. Opening the view
+// (see renderOpsCenter) stamps 'pulse_opscenter_last_seen' to now and clears
+// the badge immediately, even though the underlying items are still shown in
+// the Operations Center lists. New items after that point make it climb
+// again, independent of anything happening at login/session-restore.
+function updateOpsCenterBadge(){
+  let lastSeen=0;
+  try{lastSeen=parseInt(localStorage.getItem('pulse_opscenter_last_seen')||'0',10)||0;}catch(e){}
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const isConsultant=role==='consultant';
+  const consultantProps=isConsultant
+    ? new Set(port.filter(p=>propertyHasConsultant(p.n,currentConsultantName)).map(p=>p.n))
+    : null;
+  const propFilter=prop=>!isConsultant||consultantProps.has(prop);
+  const allActions=actionItems||(window.ACTION_ITEMS||[]);
+  const today=new Date();today.setHours(0,0,0,0);
+  let count=0;
+  allActions.filter(a=>(a.status==='Open'||a.status==='open')&&propFilter(a.property)).forEach(a=>{
+    if(a.due&&a.due!=='TBD'&&new Date(a.due)<today){
+      const created=a.createdTime?new Date(a.createdTime).getTime():0;
+      if(created>lastSeen)count++;
+    }
+  });
+  (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)).forEach(m=>{
+    const created=m.createdTime?new Date(m.createdTime).getTime():0;
+    if(created>lastSeen)count++;
+  });
+  (siteVisits||[]).filter(v=>v.date&&propFilter(v.property)).forEach(v=>{
+    const created=v.createdTime?new Date(v.createdTime).getTime():0;
+    if(created>lastSeen)count++;
+  });
+  ['opscenter-badge-admin','opscenter-badge-pm','opscenter-badge-consultant'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){el.textContent=count;el.classList.toggle('hidden',count===0);}
+  });
 }
 function populateSubmitDropdown(){
   const sel=document.getElementById('f-property');
@@ -21572,6 +21713,12 @@ function renderGantt() {
 function renderOpsCenter(){
   const container=document.getElementById('opscenter-body');
   if(!container)return;
+  // v44d — Stamp last-seen the moment this view actually renders, then
+  // clear the nav badge. Items that were counted stay visible in the lists
+  // below (nothing here filters what's shown), but they won't count toward
+  // the badge again until something newer comes in after this timestamp.
+  try{localStorage.setItem('pulse_opscenter_last_seen',String(Date.now()));}catch(e){}
+  updateOpsCenterBadge();
   const today=new Date();today.setHours(0,0,0,0);
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const allActions=actionItems||(window.ACTION_ITEMS||[]);
@@ -21929,6 +22076,7 @@ const TOUR_STEPS = {
     {target:'.tab-btn[onclick*="milestones"]',title:'Milestones',isPropertyDetail:true,propTab:'milestones',body:[
       'Step 1: Milestones outline the end-to-end project lifecycle — 14 checkpoints from initial survey through closeout, overseen by your VDA project team.',
       'Step 2: Some milestones are dates you enter directly. Others — like construction progress checkpoints — calculate themselves automatically from the work tracked in Unit Phases, so they’re always a true reflection of what’s actually happening on site.',
+      'Step 3: The Manual Entry Override toggle above the milestone list lets you enter all 14 milestones by hand for a property, bypassing the automatic Unit Phase calculation. Useful when you\'re bulk-entering or correcting historical data. It stays on until someone turns it back off.',
       'Step 3: Planned vs. Actual is shown side-by-side for every milestone, so you can see at a glance whether a property is on schedule, ahead, or falling behind.'
     ]},
     {target:'#nav-pm [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:[
@@ -22050,6 +22198,7 @@ const TOUR_STEPS = {
     {target:'.tab-btn[onclick*="milestones"]',title:'Milestones',isPropertyDetail:true,propTab:'milestones',body:[
       'Step 1: Milestones outline the end-to-end project lifecycle — 14 checkpoints from initial survey through closeout, overseen by your VDA project team.',
       'Step 2: Some milestones are calendar dates your project team enters directly. Others — like construction progress checkpoints — update themselves automatically as work is tracked in Unit Phases, so what you see always reflects what’s actually happening on site.',
+      'Step 3: The Manual Entry Override toggle above the milestone list lets your project team enter all 14 milestones by hand for a property, bypassing the automatic calculation. It stays on until someone turns it back off.',
       'Step 3: Planned vs. Actual is shown side-by-side for every milestone, so you can see at a glance whether a property is on schedule, ahead, or falling behind — no need to ask for a status update.'
     ]},
     {target:'#nav-client [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:['View budget and capital planning by year across your portfolio.']},
