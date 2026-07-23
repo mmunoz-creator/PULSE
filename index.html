@@ -279,10 +279,9 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .msg-av{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
 .msg-av.ai-av{background:var(--blue-dark);color:white}
 .msg-av.u-av{background:var(--navy);color:white}
-/* v44f — bumped from 12px to 14px per Misty's direct feedback (too small
-   to read comfortably). line-height left as-is; still reads cleanly at the
-   larger size. */
-.msg-bubble{max-width:78%;padding:9px 13px;border-radius:12px;font-size:14px;line-height:1.6;color:var(--gray-dark)}
+/* v44f bumped 12px to 14px; v44g bumped again to 15px per Misty's follow-up
+   feedback (still wanted it a bit larger). line-height left as-is. */
+.msg-bubble{max-width:78%;padding:9px 13px;border-radius:12px;font-size:15px;line-height:1.6;color:var(--gray-dark)}
 .msg-bubble.ai-bubble{background:white;border:1px solid var(--border);border-bottom-left-radius:3px}
 .msg-bubble.u-bubble{background:var(--blue-dark);color:white;border-bottom-right-radius:3px}
 .chat-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px;border-top:1px solid var(--border);background:white;flex-shrink:0}
@@ -2303,7 +2302,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v44f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v44g</div>
     </div>
   </nav>
 
@@ -16649,9 +16648,13 @@ function renderDashboard(){
   // after it should have cleared. Now uses the same fixed 4-day rolling
   // window as Operations Center's Recently Added/Removed, so the badge
   // count and the underlying list can never disagree.
-  const _recentCutoff2=new Date();_recentCutoff2.setDate(_recentCutoff2.getDate()-4);_recentCutoff2.setHours(0,0,0,0);
-  const recentAdded2=[...allPort].filter(p=>p.dateAdded&&!p.dateRemoved&&p.st!=='Removed'&&new Date(p.dateAdded)>=_recentCutoff2).sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,3);
-  const recentRemoved2=[...allPort].filter(p=>(p.dateRemoved||p.st==='Removed')&&p.dateRemoved&&new Date(p.dateRemoved)>=_recentCutoff2).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,3);
+  // v44g — same fencepost fix as Operations Center's version (see there for
+  // the full explanation): strict > against an exact 4*24h-ago timestamp,
+  // not >= against a rounded midnight, so this drops off exactly 4 days
+  // after the action date, not 5.
+  const _recentCutoff2=new Date(Date.now()-4*24*60*60*1000);
+  const recentAdded2=[...allPort].filter(p=>p.dateAdded&&!p.dateRemoved&&p.st!=='Removed'&&new Date(p.dateAdded)>_recentCutoff2).sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,3);
+  const recentRemoved2=[...allPort].filter(p=>(p.dateRemoved||p.st==='Removed')&&p.dateRemoved&&new Date(p.dateRemoved)>_recentCutoff2).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,3);
 
   const attEl=document.getElementById('dash-attention-section');
   if(attEl){
@@ -21819,14 +21822,22 @@ function renderOpsCenter(){
   // off 4 days after the date of the action, same rolling-window pattern
   // the Activity Feed already uses (7 days there). No session-state
   // dependency left to break.
-  const _recentCutoff=new Date();_recentCutoff.setDate(_recentCutoff.getDate()-4);_recentCutoff.setHours(0,0,0,0);
+  // v44g — fencepost fix. setDate(-4) + setHours(0,0,0,0) landed the cutoff
+  // at midnight 4 calendar days back, and the >= comparison against that
+  // midnight meant an item removed/added exactly 4 days ago was still
+  // included (its own date was >= the cutoff's midnight) — an effective
+  // 5-day window, not 4. Confirmed live: today 7/22, an item removed 7/18
+  // was still showing. Cutoff is now the exact moment 4*24h ago, compared
+  // with a strict > instead of >=, so an item falls off exactly 4 days
+  // after its action date, not 5.
+  const _recentCutoff=new Date(Date.now()-4*24*60*60*1000);
   const recentAdded=[...port].filter(p=>{
     if(!p.dateAdded||p.dateRemoved||p.st==='Removed'||!propFilter(p.n))return false;
-    return new Date(p.dateAdded)>=_recentCutoff;
+    return new Date(p.dateAdded)>_recentCutoff;
   }).sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,4);
   const recentRemoved=[...port].filter(p=>{
     if(!(p.dateRemoved||p.st==='Removed')||!propFilter(p.n))return false;
-    return p.dateRemoved&&new Date(p.dateRemoved)>=_recentCutoff;
+    return p.dateRemoved&&new Date(p.dateRemoved)>_recentCutoff;
   }).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,4);
   const fmtShort=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
 
