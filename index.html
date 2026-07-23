@@ -6424,6 +6424,7 @@ function renderScopeCards(p){
     <span style="margin-left:auto;display:flex;gap:8px">
       ${canEdit?`<button class="btn btn-edit" onclick="openEditPropertyPanel()" style="font-size:12px"><i class="ti ti-pencil"></i>Edit Property</button>`:''}
       ${manageBtn}
+      ${role==='client'?`<button class="btn btn-success" onclick="openClientUnitInventoryView('${p.n.replace(/'/g,"\\'")}')"><i class="ti ti-list-details"></i>View Unit Inventory</button>`:''}
     </span>
   </div>`;
   container.innerHTML=reconcileBanner+headerBar+`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">${scopes.length?scopes.map(scopeCard).join(''):'<div style="font-size:13px;color:var(--gray-mid);padding:20px;text-align:center">No projects yet — use Manage Projects to add one</div>'}</div>`;
@@ -18664,6 +18665,89 @@ function renderEditPropertyUnitStats(p){
 }
 window.renderEditPropertyUnitStats=renderEditPropertyUnitStats;
 
+// v45a — Client-facing read-only Unit Inventory view. Client role lost
+// access to unit-level detail when the Units tab was removed in v43a,
+// since unit management moved into Edit Property, which is PM/Admin-gated.
+// This gives Client role its own entry point: same stat-card summary as
+// the Edit Property block, plus a table (no edit controls, no Priority or
+// Equipment Type columns, cost estimate columns included per Misty's
+// request). Reads from the same window.UNIT_INVENTORY source as the PM
+// Manage Unit Inventory modal — no separate data path to drift out of
+// sync.
+function openClientUnitInventoryView(propName){
+  const existing=document.getElementById('client-uiv-overlay');
+  if(existing)existing.remove();
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName);
+  const active=units.filter(u=>u.status==='Active').length;
+  const planned=units.filter(u=>u.status==='Planned').length;
+  const complete=units.filter(u=>u.status==='Complete').length;
+  const dormant=units.filter(u=>u.status==='Dormant').length;
+  const fmtMoney=n=>{
+    const v=Number(n)||0;
+    return v?`$${v.toLocaleString()}`:'—';
+  };
+  const rows=units.length?units.map(u=>`<tr style="border-top:0.5px solid var(--border)">
+      <td style="padding:6px 8px">${u.name||'(unnamed)'}</td>
+      <td style="padding:6px 8px">${u.deviceLocation||'—'}</td>
+      <td style="padding:6px 8px">${u.unitType||'—'}</td>
+      <td style="padding:6px 8px">${u.status||'—'}</td>
+      <td style="padding:6px 8px">${u.capexYear||'—'}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtMoney(u.elevEst)}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtMoney(u.relatedEst)}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtMoney(u.cabEst)}</td>
+      <td style="padding:6px 8px;text-align:right">${fmtMoney(u.contingencyEst)}</td>
+      <td style="padding:6px 8px;text-align:right;font-weight:600">${fmtMoney(u.totalWorkEst)}</td>
+    </tr>`).join(''):`<tr><td colspan="10" style="padding:20px;text-align:center;color:var(--gray-mid);font-size:12px">No units in Unit Inventory List yet.</td></tr>`;
+  const overlay=document.createElement('div');
+  overlay.id='client-uiv-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:1200px;box-shadow:var(--shadow-md);margin:auto">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-list-details" style="font-size:14px;margin-right:6px;color:var(--green)"></i>Unit Inventory</div>
+        <div style="font-size:12px;color:var(--gray-mid);margin-top:2px">${propName}</div>
+      </div>
+      <button onclick="document.getElementById('client-uiv-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
+    </div>
+    <div style="padding:16px 22px;border-bottom:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        <div style="background:var(--surface-1,#f6f7f9);border-radius:8px;padding:10px 8px;text-align:center">
+          <div style="font-size:11px;color:var(--blue-dark);margin-bottom:4px">Active</div>
+          <div style="font-size:18px;font-weight:700;color:var(--blue-dark)">${active}</div>
+        </div>
+        <div style="background:var(--surface-1,#f6f7f9);border-radius:8px;padding:10px 8px;text-align:center">
+          <div style="font-size:11px;color:var(--blue-dark);margin-bottom:4px">Planned</div>
+          <div style="font-size:18px;font-weight:700;color:var(--blue-dark)">${planned}</div>
+        </div>
+        <div style="background:var(--surface-1,#f6f7f9);border-radius:8px;padding:10px 8px;text-align:center">
+          <div style="font-size:11px;color:var(--green);margin-bottom:4px">Complete</div>
+          <div style="font-size:18px;font-weight:700;color:var(--green)">${complete}</div>
+        </div>
+        <div style="background:var(--surface-1,#f6f7f9);border-radius:8px;padding:10px 8px;text-align:center">
+          <div style="font-size:11px;color:var(--gray-mid);margin-bottom:4px">Dormant</div>
+          <div style="font-size:18px;font-weight:700;color:var(--gray-mid)">${dormant}</div>
+        </div>
+      </div>
+    </div>
+    <div style="padding:20px 22px">
+      <div class="table-wrap" style="max-height:55vh;overflow-y:auto">
+        <table class="data-table" style="table-layout:auto">
+          <thead><tr>
+            <th>Unit Name</th><th>Device Location</th><th>Unit Type</th><th>Status</th><th>CapEx Year</th>
+            <th style="text-align:right">Elevator Mod Est.</th><th style="text-align:right">Related Work Est.</th><th style="text-align:right">Cab Interior Est.</th><th style="text-align:right">Contingency Fee Est.</th><th style="text-align:right">Total Work Est.</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div style="padding:12px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('client-uiv-overlay').remove()">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+window.openClientUnitInventoryView=openClientUnitInventoryView;
+
 async function deleteProperty(){
   // If called from property detail, pre-select current property
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
@@ -22220,7 +22304,8 @@ const TOUR_STEPS = {
     {target:'.tab-row',title:'Property Detail',isPropertyDetail:true,propTab:'overview',body:[
       'Step 1: Opening any property gives you the same full detail view your VDA project team works from — organized into tabs across the top.',
       'Step 2: Overview shows a card for each project — consultant, elevator company, budget, and milestone progress — so you can see the full picture for a multi-project property at a glance. Single-project properties show one full-width card. Milestones and Unit Phases track progress against schedule. Budget Performance, Change Orders, Meetings & Actions, Field Updates, and Documents give you the same record-keeping visibility your project team has.',
-      'Step 3: Click any tab to explore — we’ll look closer at Milestones next.'
+      'Step 3: The green View Unit Inventory button above the project cards shows every unit on this property — status, device location, CapEx year, and cost estimates — in one read-only view.',
+      'Step 4: Click any tab to explore — we’ll look closer at Milestones next.'
     ]},
     {target:'.tab-btn[onclick*="milestones"]',title:'Milestones',isPropertyDetail:true,propTab:'milestones',body:[
       'Step 1: Milestones outline the end-to-end project lifecycle — 14 checkpoints from initial survey through closeout, overseen by your VDA project team.',
