@@ -1159,6 +1159,13 @@ async function loadAllData() {
       // 'units' above stays populated (auto-derived from these when set) for
       // every display spot that still reads it directly.
       linkedUnitIds: r.fields['Linked Units']||[],
+      // v42q — same convention as every other table's Linked Scope field
+      // (Milestones, Action Items, Unit Inventory List, etc.): single-value
+      // link stored as the first (only) record ID in the array. Older
+      // submissions made before this rebuild will have this blank —
+      // editSubmission() and renderFUUnitsList() both handle that
+      // gracefully rather than erroring.
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
       appliesToWholeProject: !!r.fields['Applies to Whole Project'],
       // Draft action — consultant-flagged follow-up attached to this
       // submission, not yet a live Action Item until a PM publishes it.
@@ -2255,7 +2262,7 @@ window.PROPERTIES_SEED = [
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42p</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v42q</div>
     </div>
   </nav>
 
@@ -3209,17 +3216,30 @@ window.PROPERTIES_SEED = [
           <div class="card">
             <div class="form-row">
               <div class="form-group"><label class="form-label">Property</label>
-                <select class="form-select" id="f-property" onchange="renderFUUnitsList()"><option value="">Select a property...</option><option>Casa Marina Key West</option><option>The Reach Curio</option><option>Royal Palm South Beach</option><option>New York Hilton Midtown</option><option>Hilton Denver City Center</option><option>Hilton New Orleans Riverside</option><option>JW Marriott San Francisco</option><option>Hilton McLean Tysons Corner</option><option>HHV Tapa</option><option>Waikoloa Makai Tower</option><option>Hilton Waikoloa Village</option><option>Hilton Lake Buena Vista</option></select>
+                <!-- v42q — was a hardcoded <option> list that had drifted out
+                of sync with the real portfolio (missing/renamed properties
+                would never show here even though populateSubmitDropdown()
+                already exists to fill this from window.PORTFOLIO). Left
+                empty now; populateSubmitDropdown() (called from gotoView()
+                and after loadAllData() resolves) is the single source of
+                truth for these options going forward. -->
+                <select class="form-select" id="f-property" onchange="populateSubmitProjectDropdown();renderFUUnitsList()"><option value="">Select a property...</option></select>
               </div>
               <div class="form-group"><label class="form-label">Report week</label><input class="form-input" type="date" id="f-week" value="2026-05-13"></div>
             </div>
-            <div class="form-group"><label class="form-label">Unit(s) updated</label><input class="form-input" type="text" id="f-units" placeholder="e.g. PE6, PE7, All"></div>
-            <!-- v38e — Linked Units + Applies to Whole Project, mirroring the
-            Change Order pattern (documentation/traceability only — nothing
-            downstream computes off Units Updated today, per code review; the
-            legacy free-text f-units field above stays untouched for now and
-            keeps being sent as a fallback display string). Checking "Applies
-            to Whole Project" hides the checklist and clears selections. -->
+            <!-- v42q — Project picker, scoped to the selected property's
+            Scopes. Replaces the old typed "Unit(s) updated" free-text field
+            entirely (per Misty: remove it, the linked-unit checklist below
+            already covers this and typing unit names by hand was error-
+            prone and untraceable). Selecting a project both narrows the
+            unit checklist below to that project's units and shows its VDA
+            Project # for confirmation, so a consultant can tell at a glance
+            they've picked the right one before checking any units. -->
+            <div class="form-group">
+              <label class="form-label">Project</label>
+              <select class="form-select" id="f-scope" onchange="onSubmitScopeChange()"><option value="">Select a property first...</option></select>
+              <div id="f-scope-vdanum" style="font-size:11px;color:var(--gray-mid);margin-top:4px;display:none"><i class="ti ti-hash" style="font-size:11px"></i> <span id="f-scope-vdanum-text"></span></div>
+            </div>
             <div class="form-group">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
                 <input type="checkbox" id="fu-whole-project" onchange="toggleFUWholeProject()">
@@ -4414,7 +4434,16 @@ function gotoView(viewId,btn){
   if(viewId==='glossary')renderGlossary();
   if(viewId==='schedule')renderGantt();
   if(viewId==='opscenter')renderOpsCenter();
-  if(viewId==='submit')populateSubmitDropdown();
+  if(viewId==='submit'){
+    populateSubmitDropdown();
+    // v42q — repopulate the Project dropdown too on every entry into this
+    // view, not just from editSubmission(). Covers a fresh (non-edit) visit
+    // where f-property may already have a value carried over from a prior
+    // visit this session — without this, the Project list would silently
+    // stay stuck on whatever it last showed instead of matching the
+    // currently-selected property.
+    populateSubmitProjectDropdown();
+  }
 }
 
 function openProperty(name){
@@ -19261,7 +19290,10 @@ function populateSubmitDropdown(){
     filtered.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===current?' selected':''}>${p.n}</option>`).join('');
 }
 function resetSubmitForm(){
-  ['f-property','f-units','f-notes','f-draft-action-desc','f-draft-action-owner','f-draft-action-due'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  // v42q — 'f-units' (the old typed field) removed from this reset list —
+  // the element itself no longer exists in the form. 'f-scope' reset here
+  // too, alongside its own dropdown repopulation below.
+  ['f-property','f-notes','f-draft-action-desc','f-draft-action-owner','f-draft-action-due'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('f-editing-id').value='';
   document.getElementById('f-property').disabled=false;
   document.getElementById('f-week').disabled=false;
@@ -19277,7 +19309,11 @@ function resetSubmitForm(){
   fuUnitAssign={};
   document.getElementById('fu-whole-project').checked=false;
   document.getElementById('fu-units-group').style.display='block';
-  renderFUUnitsList();
+  // v42q — clear the project picker back to its empty state; property is
+  // blank at this point too (cleared above), so populateSubmitProjectDropdown()
+  // correctly falls back to "Select a property first..." rather than
+  // showing stale options from whatever property was last selected.
+  populateSubmitProjectDropdown();
 }
 function cancelEditSubmission(){
   resetSubmitForm();
@@ -19299,8 +19335,22 @@ function editSubmission(id){
   document.getElementById('f-property').disabled=true;
   document.getElementById('f-week').value=s.week;
   document.getElementById('f-week').disabled=true;
-  document.getElementById('f-units').value=s.units||'';
+  // v42q — 'Unit(s) updated' typed field removed from the form; s.units
+  // (the derived display string) is preserved untouched in the data model
+  // and still shown everywhere else (print/PDF, Pending Review, My
+  // Updates) — only the form input for typing it by hand is gone.
+  // Repopulate the Project dropdown for this property, then select the
+  // submission's own scope if it has one recorded (older submissions made
+  // before this rebuild won't — s.scopeId will be blank and the picker
+  // just falls back to "Select a project..." rather than erroring).
+  populateSubmitProjectDropdown();
+  document.getElementById('f-scope').value=s.scopeId||'';
+  onSubmitScopeChange();
   // v38e — repopulate unit-linking state from the existing submission.
+  // onSubmitScopeChange() above already cleared fuUnitAssign and
+  // re-rendered the (now project-scoped) unit list once — re-apply the
+  // submission's real checked units after that, then render once more so
+  // the checkboxes reflect them.
   fuUnitAssign={};
   (s.linkedUnitIds||[]).forEach(id=>{fuUnitAssign[id]=true;});
   document.getElementById('fu-whole-project').checked=!!s.appliesToWholeProject;
@@ -19343,17 +19393,66 @@ function editSubmission(id){
 // Change Orders (line ~8600).
 let fuUnitAssign={};
 
+// v42q — Project (Scope) picker for the Submit Weekly Update form. Same
+// property-filter pattern pmuPopulateScopes() already uses for PM Updates
+// (s.property===propName, s.name for the label, s.id for the value) so
+// both forms behave identically. Selecting a project narrows the unit
+// checklist below to that project's units (via u.scopeId, the canonical
+// unit-to-project link used everywhere else in the app — Budget Outlook,
+// Capital Plan, etc. — confirmed this session, not s.linkedUnitIds) and
+// shows its VDA Project # for the consultant to confirm at a glance.
+function populateSubmitProjectDropdown(){
+  const propSel=document.getElementById('f-property');
+  const scopeSel=document.getElementById('f-scope');
+  if(!propSel||!scopeSel)return;
+  const propName=propSel.value;
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===propName);
+  const current=scopeSel.value;
+  scopeSel.innerHTML=(propName?'<option value="">Select a project...</option>':'<option value="">Select a property first...</option>')+
+    scopes.map(s=>`<option value="${s.id}"${s.id===current?' selected':''}>${(s.name||'Project').replace(/</g,'&lt;')}</option>`).join('');
+  onSubmitScopeChange();
+}
+window.populateSubmitProjectDropdown=populateSubmitProjectDropdown;
+
+function onSubmitScopeChange(){
+  const scopeSel=document.getElementById('f-scope');
+  const vdaWrap=document.getElementById('f-scope-vdanum');
+  const vdaText=document.getElementById('f-scope-vdanum-text');
+  const scopeId=scopeSel?.value||'';
+  const scope=scopeId?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  if(vdaWrap&&vdaText){
+    if(scope){
+      vdaText.textContent=`VDA Project #${scope.vdaNum||'—'}`;
+      vdaWrap.style.display='block';
+    }else{
+      vdaWrap.style.display='none';
+    }
+  }
+  // Changing the project invalidates any units checked against the
+  // previous project — clear the selection rather than silently keeping
+  // checkmarks on units that are about to disappear from the (now
+  // re-filtered) list below.
+  fuUnitAssign={};
+  renderFUUnitsList();
+}
+window.onSubmitScopeChange=onSubmitScopeChange;
+
 function renderFUUnitsList(){
   const listEl=document.getElementById('fu-units-list');
   if(!listEl)return;
   const propName=document.getElementById('f-property')?.value||'';
-  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  const scopeId=document.getElementById('f-scope')?.value||'';
   if(!propName){
     listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a property first.</div>';
     return;
   }
+  if(!scopeId){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a project first.</div>';
+    return;
+  }
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName&&u.scopeId===scopeId).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
   if(units.length===0){
-    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units in Unit Inventory List for this property yet.</div>';
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units linked to this project in Unit Inventory List yet.</div>';
     return;
   }
   listEl.innerHTML=units.map(u=>{
@@ -19389,24 +19488,32 @@ window.toggleFUWholeProject=toggleFUWholeProject;
 
 async function submitUpdate(){
   const property=document.getElementById('f-property').value;if(!property){alert('Please select a property.');return;}
+  // v42q — Project (Scope) is now required. The old typed "Unit(s)
+  // updated" field is gone entirely, and the unit picker below is scoped
+  // to whichever project is selected here, so without a project there's no
+  // valid way to indicate which units this update applies to.
+  const scopeId=document.getElementById('f-scope').value;if(!scopeId){alert('Please select a project.');return;}
   const notes=document.getElementById('f-notes').value.trim();if(!notes){alert('Please add weekly notes.');return;}
   const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const week=document.getElementById('f-week').value;
-  // v38e — Linked Units / Applies to Whole Project. Documentation only
-  // (nothing downstream computes off unit names today, per code review).
-  // The legacy free-text f-units field stays as the fallback display
-  // string for anywhere in the app that still reads s.units directly;
-  // when the structured picker has real data, auto-derive that string
-  // from it instead of trusting whatever's typed in f-units.
+  // v42q — 'units' (Airtable's 'Units Updated' text field) is now always
+  // derived, never typed — the old free-text f-units input is gone from
+  // the form. Every other display spot that still reads s.units directly
+  // (print/PDF, Pending Review, My Updates tags) keeps working unchanged
+  // since this string is still written to the same field.
   const appliesToWholeProject=document.getElementById('fu-whole-project').checked;
   const linkedUnitIds=appliesToWholeProject?[]:Object.keys(fuUnitAssign);
-  let units=document.getElementById('f-units').value||'All';
-  if(appliesToWholeProject){
-    units='All';
-  }else if(linkedUnitIds.length>0){
+  let units='All';
+  if(!appliesToWholeProject&&linkedUnitIds.length>0){
     // v42k — sortUnitNames for natural unit-name order in this derived string.
     const unitNames=sortUnitNames(linkedUnitIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)?.name).filter(Boolean));
     if(unitNames.length>0)units=unitNames.join(', ');
+  }else if(!appliesToWholeProject&&linkedUnitIds.length===0){
+    // Neither "whole project" nor any individual units checked — don't
+    // silently write 'All' (that would misrepresent scope); require an
+    // explicit choice instead.
+    alert('Please check at least one unit, or select "Applies to Whole Project".');
+    return;
   }
   const phase=document.getElementById('f-phase').value;
   const status=document.getElementById('f-status').value;
@@ -19450,6 +19557,10 @@ async function submitUpdate(){
     'Applies to Whole Project':appliesToWholeProject,
   };
   if(linkedUnitIds.length>0)fields['Linked Units']=linkedUnitIds;
+  // v42q — Linked Scope, same linked-record convention as Linked Units
+  // just above (array of record IDs; single-value in practice). scopeId
+  // is validated non-empty at the top of this function.
+  fields['Linked Scope']=[scopeId];
   // Draft Action Published is a checkbox field — Airtable checkbox semantics
   // for null aren't documented in our landmines list, so omit entirely
   // rather than risk an invalid write; only set explicitly to false when a
@@ -19465,7 +19576,7 @@ async function submitUpdate(){
     fields['Review Status']='Pending';
     fields['Submitted Date']=dateStr;
     if(existing.atId)await atUpdate('Field Updates',existing.atId,fields);
-    Object.assign(existing,{units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',draftAction,linkedUnitIds,appliesToWholeProject});
+    Object.assign(existing,{units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',draftAction,linkedUnitIds,scopeId,appliesToWholeProject});
     updateQueueBadge();
     const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} resubmitted. You'll be notified once reviewed.`;
     se.classList.remove('hidden');
@@ -19482,7 +19593,7 @@ async function submitUpdate(){
     'Review Status':'Pending',
   });
   const atId=res?.records?.[0]?.id||null;
-  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName,draftAction,linkedUnitIds,appliesToWholeProject});
+  submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName,draftAction,linkedUnitIds,scopeId,appliesToWholeProject});
   updateQueueBadge();
   const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
   se.classList.remove('hidden');
@@ -20007,6 +20118,13 @@ async function pollProjectUpdates(){
       reviewStatus:(r.fields['Review Status']||'Pending').toLowerCase(),
       returnNote:r.fields['Return Note']||'',
       linkedUnitIds:r.fields['Linked Units']||[],
+      // v42q — same convention as every other table's Linked Scope field
+      // (Milestones, Action Items, Unit Inventory List, etc.): single-value
+      // link stored as the first (only) record ID in the array. Older
+      // submissions made before this rebuild will have this blank —
+      // editSubmission() and renderFUUnitsList() both handle that
+      // gracefully rather than erroring.
+      scopeId:(r.fields['Linked Scope']||[])[0]||'',
       appliesToWholeProject:!!r.fields['Applies to Whole Project'],
       // Fall back to Submitted Date if this was approved in a different
       // session/tab (no local approvedAt to carry forward) — keeps it
