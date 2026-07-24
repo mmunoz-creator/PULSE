@@ -4111,12 +4111,44 @@ async function doLogin(){
   }catch(e){window._prevLoginTime=null;}
   _finishLogin();
 }
+// v45m — background half of the optimistic restore in
+// tryRestorePulseSession(). Runs after the page has already been shown,
+// so it never delays anything the user sees. If the account was
+// deactivated since this session started (the only case this actually
+// catches), doLogout() clears all local state and a reload puts the
+// user on a genuine login screen rather than trying to patch a partially
+// logged-in UI back to a logged-out one mid-render. If the Airtable call
+// itself fails (offline, Worker down), fail open — an unreachable
+// verification check isn't grounds to kick out an already-restored
+// session; the next real action that needs live data will surface its
+// own error if the Worker is actually down.
+async function verifyRestoredSessionStillActive(recordId){
+  try{
+    const recs=await atGet('Access PINs');
+    const match=recs.find(r=>r.id===recordId);
+    if(!match||!match.fields['Active']){
+      doLogout();
+      location.reload();
+    }
+  }catch(e){/* can't verify right now — fail open, don't punish an already-restored session for a transient network issue */}
+}
 // v42h — Restore a session after a browser refresh. Re-verifies the saved
 // Access PINs recordId is still Active before trusting it (so a
 // deactivated user's old session can't silently keep working just because
 // sessionStorage remembers it), then re-enters the same _finishLogin()
 // path a fresh login would use. Returns true if a session was restored
 // (caller should skip showing the login screen), false otherwise.
+// v45m — restore is now optimistic: the saved session is trusted
+// immediately (no network wait before hiding the login screen), and the
+// Active-status re-check that used to block this happens afterward in
+// the background via verifyRestoredSessionStillActive(). Previously this
+// function awaited an Airtable round trip before ever hiding the login
+// screen, so every refresh showed a visible 2-3 second flash of the
+// login page even for a valid, already-authenticated session. The
+// security intent (a deactivated user's old session shouldn't keep
+// working just because sessionStorage remembers it) is preserved, it
+// just no longer sits on the critical path to showing the page the user
+// was already on.
 async function tryRestorePulseSession(){
   let saved=null;
   try{
@@ -4130,30 +4162,20 @@ async function tryRestorePulseSession(){
   if(role==='consultant'){
     currentConsultantName=sessionStorage.getItem('pulse_consultant')||saved.userName||'';
   }
+  // Background verification (fire-and-forget, does not block restore).
   // Admin has no per-user recordId to re-check (shared PIN, see
-  // verifyPinLogin) — trust the saved role for Admin without a lookup.
+  // verifyPinLogin) — nothing to verify for that role.
   if(saved.recordId&&role!=='admin'){
-    try{
-      const recs=await atGet('Access PINs');
-      const match=recs.find(r=>r.id===saved.recordId);
-      if(!match||!match.fields['Active']){
-        sessionStorage.removeItem('pulse_session');
-        return false;
-      }
-    }catch(e){
-      // Can't verify right now (offline/Worker down) — fail safe to a
-      // real login screen rather than trust an unverifiable session.
-      return false;
-    }
+    verifyRestoredSessionStillActive(saved.recordId);
   }
   // v42o — window._marliRecordId previously was only ever set on the fresh
   // login path (inside _finishLogin()'s window._lastLoginResult branch,
   // which a restored session never takes). That meant every MARLI question
   // silently failed with "Could not verify your session" after any browser
-  // refresh, even though the rest of the app correctly restored. saved.
-  // recordId has already been re-verified as Active just above (or this
-  // function would have returned false already), so it's safe to trust
-  // here the same way a fresh login trusts it.
+  // refresh, even though the rest of the app correctly restored. Trusted
+  // optimistically here (v45m — Active-status verification now happens
+  // in the background via verifyRestoredSessionStillActive() above,
+  // not before this point), the same way a fresh login trusts it.
   window._marliRecordId=saved.recordId||null;
   // v42o — restore the same MARLI session ID this login already had,
   // rather than generating a new one, so a refresh doesn't fragment one
