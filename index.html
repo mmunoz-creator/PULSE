@@ -17785,6 +17785,11 @@ function showSiteVisitForm(){
       <input class="form-input" type="text" id="visit-purpose-input" placeholder="e.g. Monthly site inspection">
     </div>
     <div style="border-top:1px solid var(--border);margin:14px 0 12px;padding-top:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:10px"><i class="ti ti-users" style="font-size:12px;margin-right:4px;color:var(--green)"></i>Attendees <span style="font-weight:400;color:var(--gray-mid)">(optional)</span></div>
+      <div id="visit-attendee-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
+      <button type="button" onclick="addVisitAttendeeRow()" style="background:none;border:1px dashed var(--border);border-radius:6px;padding:5px 10px;font-size:12px;color:var(--indigo);cursor:pointer;width:100%;text-align:left"><i class="ti ti-plus" style="font-size:11px;margin-right:4px"></i>Add attendee</button>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:14px 0 12px;padding-top:14px">
       <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:10px"><i class="ti ti-mail" style="font-size:12px;margin-right:4px;color:var(--green)"></i>Notify Attendees <span style="font-weight:400;color:var(--gray-mid)">(optional — enter name or email)</span></div>
       <div class="form-group" style="margin-bottom:8px">
         <label class="form-label">Consultant 1</label>
@@ -17805,6 +17810,39 @@ function showSiteVisitForm(){
     </div>
   </div>`;
   document.body.appendChild(overlay);
+  addVisitAttendeeRow();
+}
+// v45j — same dynamic Attendee row pattern as the Schedule Meeting modal
+// (role/name/email, writes to the shared Meeting Attendees table). Kept
+// as separate id-prefixed functions (visit- vs smtg-) rather than a
+// shared helper since the two modals build/tear down independently and
+// sharing DOM lookups across them risked one modal's Cancel button
+// clearing the other's rows if both were ever open at once.
+function addVisitAttendeeRow(){
+  const list=document.getElementById('visit-attendee-list');if(!list)return;
+  const rowId='visit-att-'+Date.now()+'-'+Math.random().toString(36).slice(2,6);
+  const row=document.createElement('div');
+  row.id=rowId;
+  row.style.cssText='display:grid;grid-template-columns:1fr 1.3fr 1.3fr auto;gap:8px;align-items:center';
+  row.innerHTML=`<select class="form-input" id="${rowId}-role" style="font-size:13px">
+      <option value="VDA">VDA</option>
+      <option value="Elevator Co.">Elevator Co.</option>
+      <option value="Client">Client</option>
+      <option value="Other">Other</option>
+    </select>
+    <input class="form-input" type="text" id="${rowId}-name" placeholder="Full name" style="font-size:13px">
+    <input class="form-input" type="email" id="${rowId}-email" placeholder="name@company.com" style="font-size:13px">
+    <button type="button" onclick="document.getElementById('${rowId}').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px;padding:0 2px;line-height:1">&times;</button>`;
+  list.appendChild(row);
+}
+function getVisitAttendees(){
+  const rows=[...document.querySelectorAll('#visit-attendee-list > div')];
+  return rows.map(row=>{
+    const role=row.querySelector('select')?.value||'Other';
+    const name=row.querySelector('input[type="text"]')?.value.trim()||'';
+    const email=row.querySelector('input[type="email"]')?.value.trim()||'';
+    return {role,name,email};
+  }).filter(a=>a.name||a.email);
 }
 function openScheduleMeetingModal(prefillPropName){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
@@ -17813,7 +17851,7 @@ function openScheduleMeetingModal(prefillPropName){
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
   const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}" ${prefillPropName&&p.n===prefillPropName?'selected':''}>${p.n}</option>`).join('');
   const tzOptions=`<option value="America/New_York">Eastern (ET)</option><option value="America/Chicago">Central (CT)</option><option value="America/Denver">Mountain (MT)</option><option value="America/Los_Angeles">Pacific (PT)</option><option value="America/Anchorage">Alaska (AKT)</option><option value="Pacific/Honolulu">Hawaii (HT)</option>`;
-  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:480px;box-shadow:var(--shadow-md);padding:24px;margin:auto">
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:640px;box-shadow:var(--shadow-md);padding:24px;margin:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div style="font-size:15px;font-weight:600;color:var(--navy)"><i class="ti ti-calendar-plus" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>Schedule a Meeting</div>
       <button onclick="document.getElementById('schedule-mtg-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
@@ -17830,7 +17868,7 @@ function openScheduleMeetingModal(prefillPropName){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
       <div class="form-group">
         <label class="form-label">Meeting Date</label>
-        <input class="form-input" type="date" id="smtg-date" value="${new Date().toISOString().split('T')[0]}">
+        <input class="form-input" type="date" id="smtg-date" value="${new Date().toISOString().split('T')[0]}" onchange="buildSmtgWeekdayPicker();refreshSmtgRecurrenceSummary()">
       </div>
       <div class="form-group">
         <label class="form-label">Time</label>
@@ -17848,36 +17886,76 @@ function openScheduleMeetingModal(prefillPropName){
         <option>Site Walkthrough</option><option>Client Update</option><option>Internal Review</option><option>Other</option>
       </select>
     </div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label">Video Call Link <span style="font-weight:400;color:var(--gray-mid)">(optional — paste a Teams or Zoom link)</span></label>
+      <input class="form-input" type="url" id="smtg-video-link" placeholder="https://teams.microsoft.com/... or https://zoom.us/j/...">
+    </div>
     <div class="form-group" style="margin-bottom:6px">
       <label class="form-label">Agenda Topics</label>
       <div id="smtg-agenda-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
       <button type="button" onclick="addSmtgAgendaTopic()" style="background:none;border:1px dashed var(--border);border-radius:6px;padding:5px 10px;font-size:12px;color:var(--indigo);cursor:pointer;width:100%;text-align:left"><i class="ti ti-plus" style="font-size:11px;margin-right:4px"></i>Add agenda topic</button>
     </div>
     <div style="border-top:1px solid var(--border);margin:14px 0 12px;padding-top:14px">
-      <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:10px"><i class="ti ti-users" style="font-size:12px;margin-right:4px;color:var(--indigo)"></i>Attendees <span style="font-weight:400;color:var(--gray-mid)">(optional)</span></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
-        <div class="form-group" style="margin-bottom:0"><label class="form-label">VDA</label><input class="form-input" type="text" id="smtg-att-vda" placeholder="Name"></div>
-        <div class="form-group" style="margin-bottom:0"><label class="form-label">Elevator Co.</label><input class="form-input" type="text" id="smtg-att-elev" placeholder="Name"></div>
-        <div class="form-group" style="margin-bottom:0"><label class="form-label">Client</label><input class="form-input" type="text" id="smtg-att-client" placeholder="Name"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:600;color:var(--navy)"><i class="ti ti-users" style="font-size:12px;margin-right:4px;color:var(--indigo)"></i>Attendees <span style="font-weight:400;color:var(--gray-mid)">(optional)</span></div>
       </div>
+      <div id="smtg-attendee-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
+      <button type="button" onclick="addSmtgAttendeeRow()" style="background:none;border:1px dashed var(--border);border-radius:6px;padding:5px 10px;font-size:12px;color:var(--indigo);cursor:pointer;width:100%;text-align:left"><i class="ti ti-plus" style="font-size:11px;margin-right:4px"></i>Add attendee</button>
     </div>
     <div style="border-top:1px solid var(--border);margin:14px 0 12px;padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--blue-dark);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:4px">Notify Attendees <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">(optional — name or email)</span></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <div class="form-group" style="margin-bottom:0"><label class="form-label">Consultant 1</label><input class="form-input" type="text" id="smtg-notify1" placeholder="Email"></div>
-        <div class="form-group" style="margin-bottom:0"><label class="form-label">Consultant 2</label><input class="form-input" type="text" id="smtg-notify2" placeholder="Email"></div>
-        <div class="form-group" style="margin-bottom:0"><label class="form-label">Client</label><input class="form-input" type="text" id="smtg-notify-client" placeholder="Email"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <input type="checkbox" id="smtg-recur-toggle" onchange="toggleSmtgRecurrence()" style="width:15px;height:15px">
+        <label for="smtg-recur-toggle" style="font-size:12px;font-weight:600;color:var(--navy);cursor:pointer"><i class="ti ti-repeat" style="font-size:12px;margin-right:4px;color:var(--indigo)"></i>Recurring meeting</label>
+      </div>
+      <div id="smtg-recur-body" style="display:none;background:var(--gray-xpale,#F7F8FA);border-radius:8px;padding:12px 14px">
+        <div class="form-group" style="margin-bottom:10px">
+          <label class="form-label">Repeats</label>
+          <select class="form-input" id="smtg-recur-freq" onchange="refreshSmtgRecurrenceFields()">
+            <option value="daily">Daily</option>
+            <option value="weekly" selected>Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+          <span style="font-size:13px;color:var(--gray-mid)">Recur every</span>
+          <input class="form-input" type="number" min="1" id="smtg-recur-interval" value="1" style="width:60px" onchange="refreshSmtgRecurrenceSummary()">
+          <span style="font-size:13px;color:var(--gray-mid)" id="smtg-recur-interval-unit">week(s)</span>
+        </div>
+        <div id="smtg-recur-weekly" style="margin-bottom:10px">
+          <label class="form-label" style="margin-bottom:6px;display:block">Weekly on</label>
+          <div id="smtg-recur-days" style="display:flex;gap:5px"></div>
+        </div>
+        <div id="smtg-recur-monthly" style="display:none;margin-bottom:10px">
+          <label class="form-label" style="margin-bottom:6px;display:block">Monthly pattern</label>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray-dark)"><input type="radio" name="smtg-recur-monthly-mode" value="date" id="smtg-recur-monthly-date" checked onchange="refreshSmtgRecurrenceSummary()"><span id="smtg-recur-monthly-date-label">On day of the month</span></label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray-dark)"><input type="radio" name="smtg-recur-monthly-mode" value="weekday" id="smtg-recur-monthly-weekday" onchange="refreshSmtgRecurrenceSummary()"><span id="smtg-recur-monthly-weekday-label">On the Nth weekday</span></label>
+          </div>
+        </div>
+        <label class="form-label" style="margin-bottom:6px;display:block">Ends</label>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray-dark)"><input type="radio" name="smtg-recur-end" value="never" id="smtg-recur-end-never" onchange="refreshSmtgRecurrenceSummary()">No end date</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray-dark)"><input type="radio" name="smtg-recur-end" value="count" id="smtg-recur-end-count" checked onchange="refreshSmtgRecurrenceSummary()">End after <input class="form-input" type="number" min="1" id="smtg-recur-count" value="8" style="width:56px;margin:0 4px" onchange="refreshSmtgRecurrenceSummary()"> occurrences</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray-dark)"><input type="radio" name="smtg-recur-end" value="date" id="smtg-recur-end-date" onchange="refreshSmtgRecurrenceSummary()">End by <input class="form-input" type="date" id="smtg-recur-until" style="width:150px;margin-left:4px" onchange="refreshSmtgRecurrenceSummary()"></label>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:8px">
+          <div id="smtg-recur-summary" style="font-size:12px;color:var(--gray-mid)"><i class="ti ti-info-circle" style="font-size:13px;margin-right:4px"></i></div>
+        </div>
       </div>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
       <button class="btn" onclick="document.getElementById('schedule-mtg-overlay').remove()">Cancel</button>
-      <button class="btn btn-add" onclick="saveScheduledMeeting()"><i class="ti ti-check"></i>Finish & Save</button>
+      <button class="btn btn-add" onclick="saveScheduledMeeting()"><i class="ti ti-send"></i>Schedule and Send</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
   // Pre-populate scope dropdown for pre-filled property
   if(prefillPropName)populateSmtgScopes();
   else document.getElementById('smtg-scope-group').style.display='none';
+  buildSmtgWeekdayPicker();
+  refreshSmtgRecurrenceFields();
+  addSmtgAttendeeRow();
   // Add one blank topic to start
   addSmtgAgendaTopic();
 }
@@ -17901,6 +17979,146 @@ function populateSmtgScopes(){
   sel.innerHTML='<option value="">All projects / property-level</option>'+scopes.map(s=>`<option value="${s.id}">${s.name||'Project'}</option>`).join('');
   document.getElementById('smtg-scope-group').style.display=scopes.length>0?'':'none';
 }
+// v45h — dynamic Attendee rows replacing the fixed VDA/Elevator Co./Client
+// name-only fields. Each row requires a Role (VDA, Elevator Co., Client,
+// Other — matching the Meeting Attendees Airtable single-select options
+// exactly), Name, and Email. Rows write to the new Meeting Attendees table
+// as linked records rather than plain-text fields on Meetings.
+function addSmtgAttendeeRow(){
+  const list=document.getElementById('smtg-attendee-list');if(!list)return;
+  const rowId='smtg-att-'+Date.now()+'-'+Math.random().toString(36).slice(2,6);
+  const row=document.createElement('div');
+  row.id=rowId;
+  row.style.cssText='display:grid;grid-template-columns:1fr 1.3fr 1.3fr auto;gap:8px;align-items:center';
+  row.innerHTML=`<select class="form-input" id="${rowId}-role" style="font-size:13px">
+      <option value="VDA">VDA</option>
+      <option value="Elevator Co.">Elevator Co.</option>
+      <option value="Client">Client</option>
+      <option value="Other">Other</option>
+    </select>
+    <input class="form-input" type="text" id="${rowId}-name" placeholder="Full name" style="font-size:13px">
+    <input class="form-input" type="email" id="${rowId}-email" placeholder="name@company.com" style="font-size:13px">
+    <button type="button" onclick="document.getElementById('${rowId}').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px;padding:0 2px;line-height:1">&times;</button>`;
+  list.appendChild(row);
+}
+function getSmtgAttendees(){
+  const rows=[...document.querySelectorAll('#smtg-attendee-list > div')];
+  return rows.map(row=>{
+    const role=row.querySelector('select')?.value||'Other';
+    const name=row.querySelector('input[type="text"]')?.value.trim()||'';
+    const email=row.querySelector('input[type="email"]')?.value.trim()||'';
+    return {role,name,email};
+  }).filter(a=>a.name||a.email);
+}
+// v45h — Recurrence controls, structured to mirror Outlook/Apple Calendar:
+// a Repeats type, an explicit "every N" interval, type-specific pattern
+// controls (weekly day picker; monthly fixed-date vs Nth-weekday), and a
+// three-way Ends choice (never / after N / by date). All monthly labels
+// derive from whatever Meeting Date is currently set, so there's no
+// separate config that can drift out of sync with the date field above.
+const SMTG_WEEKDAY_LABELS=['S','M','T','W','T','F','S'];
+function buildSmtgWeekdayPicker(){
+  const wrap=document.getElementById('smtg-recur-days');if(!wrap)return;
+  const dateEl=document.getElementById('smtg-date');
+  const selectedDow=dateEl&&dateEl.value?new Date(dateEl.value+'T12:00:00').getDay():new Date().getDay();
+  wrap.innerHTML=SMTG_WEEKDAY_LABELS.map((lbl,i)=>`<button type="button" class="smtg-dow-btn" data-dow="${i}" onclick="toggleSmtgDow(this)" style="width:34px;height:30px;padding:0;font-size:12px;border-radius:6px;border:1px solid var(--border);background:${i===selectedDow?'var(--indigo)':'white'};color:${i===selectedDow?'white':'var(--gray-dark)'};cursor:pointer">${lbl}</button>`).join('');
+}
+function toggleSmtgDow(btn){
+  const active=btn.style.background==='var(--indigo)';
+  btn.style.background=active?'white':'var(--indigo)';
+  btn.style.color=active?'var(--gray-dark)':'white';
+  refreshSmtgRecurrenceSummary();
+}
+function toggleSmtgRecurrence(){
+  const on=document.getElementById('smtg-recur-toggle')?.checked;
+  const body=document.getElementById('smtg-recur-body');
+  if(body)body.style.display=on?'':'none';
+  if(on)refreshSmtgRecurrenceFields();
+}
+function refreshSmtgRecurrenceFields(){
+  const freq=document.getElementById('smtg-recur-freq')?.value||'weekly';
+  const unitEl=document.getElementById('smtg-recur-interval-unit');
+  const unitMap={daily:'day(s)',weekly:'week(s)',monthly:'month(s)',yearly:'year(s)'};
+  if(unitEl)unitEl.textContent=unitMap[freq]||'';
+  document.getElementById('smtg-recur-weekly').style.display=freq==='weekly'?'':'none';
+  document.getElementById('smtg-recur-monthly').style.display=freq==='monthly'?'':'none';
+  updateSmtgMonthlyLabels();
+  refreshSmtgRecurrenceSummary();
+}
+function getSmtgOrdinal(n){
+  if(n===1)return '1st';if(n===2)return '2nd';if(n===3)return '3rd';return n+'th';
+}
+function updateSmtgMonthlyLabels(){
+  const dateEl=document.getElementById('smtg-date');
+  if(!dateEl||!dateEl.value)return;
+  const d=new Date(dateEl.value+'T12:00:00');
+  const dayOfMonth=d.getDate();
+  const dow=d.getDay();
+  const dowName=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dow];
+  const nth=Math.ceil(dayOfMonth/7);
+  const dateLabel=document.getElementById('smtg-recur-monthly-date-label');
+  const wdLabel=document.getElementById('smtg-recur-monthly-weekday-label');
+  if(dateLabel)dateLabel.textContent=`On day ${dayOfMonth} of the month`;
+  if(wdLabel)wdLabel.textContent=`On the ${getSmtgOrdinal(nth)} ${dowName}`;
+}
+function getSmtgRecurrenceConfig(){
+  const on=document.getElementById('smtg-recur-toggle')?.checked;
+  if(!on)return null;
+  const freq=document.getElementById('smtg-recur-freq')?.value||'weekly';
+  const interval=parseInt(document.getElementById('smtg-recur-interval')?.value,10)||1;
+  const days=[...document.querySelectorAll('.smtg-dow-btn')].filter(b=>b.style.background==='var(--indigo)').map(b=>parseInt(b.dataset.dow,10));
+  const monthlyMode=document.getElementById('smtg-recur-monthly-weekday')?.checked?'weekday':'date';
+  const endMode=document.querySelector('input[name="smtg-recur-end"]:checked')?.value||'never';
+  const count=parseInt(document.getElementById('smtg-recur-count')?.value,10)||null;
+  const until=document.getElementById('smtg-recur-until')?.value||null;
+  return {freq,interval,days,monthlyMode,endMode,count,until};
+}
+function refreshSmtgRecurrenceSummary(){
+  updateSmtgMonthlyLabels();
+  const el=document.getElementById('smtg-recur-summary');
+  if(!el)return;
+  const cfg=getSmtgRecurrenceConfig();
+  if(!cfg){el.innerHTML='';return;}
+  const freqLabel={daily:'day',weekly:'week',monthly:'month',yearly:'year'}[cfg.freq];
+  let pattern=`Repeats every ${cfg.interval} ${freqLabel}${cfg.interval>1?'s':''}`;
+  if(cfg.freq==='weekly'&&cfg.days.length){
+    const names=cfg.days.map(i=>['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][i]).join(', ');
+    pattern+=` on ${names}`;
+  }else if(cfg.freq==='monthly'){
+    const dateEl=document.getElementById('smtg-date');
+    if(dateEl&&dateEl.value){
+      const d=new Date(dateEl.value+'T12:00:00');
+      if(cfg.monthlyMode==='date')pattern+=` on day ${d.getDate()}`;
+      else{
+        const dow=d.getDay();const dowName=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dow];
+        pattern+=` on the ${getSmtgOrdinal(Math.ceil(d.getDate()/7))} ${dowName}`;
+      }
+    }
+  }
+  let endText='';
+  if(cfg.endMode==='count'&&cfg.count)endText=`, ${cfg.count} meeting${cfg.count>1?'s':''}`;
+  else if(cfg.endMode==='date'&&cfg.until)endText=`, through ${new Date(cfg.until+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
+  el.innerHTML=`<i class="ti ti-info-circle" style="font-size:13px;margin-right:4px"></i>${pattern}${endText}`;
+}
+// v45h — describes a recurrence config in plain language for storage in
+// the Meetings 'Recurrence' field. Kept as a single readable string rather
+// than a structured object since Airtable has no native recurrence type;
+// the Worker/RSVP build in the next handoff will parse this if it needs
+// to generate future occurrences.
+function formatSmtgRecurrenceForAirtable(cfg){
+  if(!cfg)return '';
+  const freqLabel={daily:'day',weekly:'week',monthly:'month',yearly:'year'}[cfg.freq];
+  let str=`Every ${cfg.interval} ${freqLabel}${cfg.interval>1?'s':''}`;
+  if(cfg.freq==='weekly'&&cfg.days.length){
+    str+=` on ${cfg.days.map(i=>['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][i]).join(',')}`;
+  }else if(cfg.freq==='monthly'){
+    str+=cfg.monthlyMode==='date'?' on the same date':' on the same weekday position';
+  }
+  if(cfg.endMode==='count'&&cfg.count)str+=`; ends after ${cfg.count} occurrences`;
+  else if(cfg.endMode==='date'&&cfg.until)str+=`; ends ${cfg.until}`;
+  else str+='; no end date';
+  return str;
+}
 async function saveScheduledMeeting(){
   const propName=document.getElementById('smtg-property')?.value;
   const date=document.getElementById('smtg-date')?.value;
@@ -17908,12 +18126,15 @@ async function saveScheduledMeeting(){
   const tz=document.getElementById('smtg-tz')?.value||'America/New_York';
   const type=document.getElementById('smtg-type')?.value;
   const topics=getSmtgAgendaTopics();
-  const attVDA=document.getElementById('smtg-att-vda')?.value.trim()||'';
-  const attElev=document.getElementById('smtg-att-elev')?.value.trim()||'';
-  const attClient=document.getElementById('smtg-att-client')?.value.trim()||'';
-  const notify1=document.getElementById('smtg-notify1')?.value.trim()||'';
-  const notify2=document.getElementById('smtg-notify2')?.value.trim()||'';
-  const notifyClient=document.getElementById('smtg-notify-client')?.value.trim()||'';
+  const attendees=getSmtgAttendees();
+  const recurCfg=getSmtgRecurrenceConfig();
+  const recurStr=formatSmtgRecurrenceForAirtable(recurCfg);
+  // v45i — generic, provider-agnostic Video Call Link. Deliberately not
+  // Zoom- or Teams-specific: a manually pasted link works today, and once
+  // an API integration is chosen this same field (and the Airtable column
+  // it writes to) can be auto-populated instead, with no UI or downstream
+  // template changes needed.
+  const videoLink=document.getElementById('smtg-video-link')?.value.trim()||'';
   if(!propName||!date){showToast('Please select a property and date','warn');return;}
   const agendaStr=topics.join('\n');
   // v42j — real bug: for any non-Consultant role (PM, Admin) this always
@@ -17925,28 +18146,59 @@ async function saveScheduledMeeting(){
   // notification email, regardless of who was actually logged in.
   const consultantName=(role==='consultant'?currentConsultantName:window._userName)||'PM User';
   const smtgScopeId=document.getElementById('smtg-scope')?.value||'';
+  // v45h — 'VDA Attendees'/'Elevator Company Attendees'/'Client Attendees'
+  // plain-text fields retired in favor of linked rows in the new Meeting
+  // Attendees table (one row per person, with Role/Name/Email/RSVP
+  // Status). 'Recurrence' is a new plain-text summary field on Meetings.
   const fields={
     'Property Name':propertyNameToLink(propName),
     'Meeting Date':date,
     'Meeting Type':type,
     'Agenda':agendaStr,
-    'VDA Attendees':attVDA,
-    'Elevator Company Attendees':attElev,
-    'Client Attendees':attClient,
+    'Recurrence':recurStr,
     'Visibility':'Internal',
     'Logged By':consultantName,
     'Status':'Scheduled',
   };
   if(smtgScopeId)fields['Linked Scope']=[smtgScopeId];
+  if(videoLink)fields['Video Call Link']=videoLink;
   let atId=null;
   if(!demoMode){
     const res=await atCreate('Meetings',fields);
     atId=res?.records?.[0]?.id||null;
+    // Write each attendee as its own Meeting Attendees record, linked
+    // back to the Meeting. RSVP Status starts Pending. Once all rows are
+    // written, /send-meeting-invites (Worker) fans out one invite email
+    // per attendee, generating and storing each Response Token itself —
+    // the client only needs to hand over the record IDs.
+    if(atId&&attendees.length){
+      const attendeeRecordIds=[];
+      for(const a of attendees){
+        const attRes=await atCreate('Meeting Attendees',{
+          'Meeting':[atId],
+          'Name':a.name,
+          'Email':a.email,
+          'Role':a.role,
+          'RSVP Status':'Pending',
+        });
+        const attId2=attRes?.records?.[0]?.id;
+        if(attId2)attendeeRecordIds.push(attId2);
+      }
+      if(attendeeRecordIds.length){
+        try{
+          await fetch(`${WORKER_URL}/send-meeting-invites`,{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({eventTable:'Meetings',eventRecordId:atId,attendeeRecordIds}),
+          });
+        }catch(e){console.error('send-meeting-invites failed:',e);}
+      }
+    }
   }
   const meeting={
     id:atId||'m'+Date.now(),atId,property:propName,
     date,type,format:'',elevco:'',location:'',
-    attVDA,attElev,attClient,
+    attendees,recurrence:recurStr,videoLink,
     agenda:agendaStr,notes:'',
     published:false,isDraft:false,visibility:'Internal',
     status:'Scheduled',createdAt:date,
@@ -17956,8 +18208,7 @@ async function saveScheduledMeeting(){
   document.getElementById('schedule-mtg-overlay')?.remove();
   if(currentProp&&currentProp.n===propName)renderPropertyView(currentProp);
   renderCalendar();
-  showToast('Meeting scheduled','success');
-  await sendCalendarMeetingNotifications({propName,date,time,tz,type,purpose:agendaStr,notes:'',notify1,notify2,notifyClient,loggedBy:consultantName});
+  showToast(attendees.length?'Meeting scheduled and invites sent':'Meeting scheduled','success');
 }
 function buildIcsContent(summary,description,location,dateStr,timeStr,tzName,durationMinutes){
   // Convert local time to UTC for ICS
@@ -18128,20 +18379,22 @@ async function saveGlobalVisit(){
   const tz=document.getElementById('visit-tz-input')?.value||'America/New_York';
   const consultant=document.getElementById('visit-consultant-input')?.value.trim();
   const purpose=document.getElementById('visit-purpose-input')?.value.trim();
+  const attendees=getVisitAttendees();
   const notify1=document.getElementById('visit-notify1')?.value.trim()||'';
   const notify2=document.getElementById('visit-notify2')?.value.trim()||'';
   const notifyClient=document.getElementById('visit-notify-client')?.value.trim()||'';
   if(!propName||!date||!consultant||!purpose){showToast('Please fill in all fields','warn');return;}
   document.getElementById('visit-prop-overlay')?.remove();
-  await showVisitForm(propName,date,consultant,purpose,time,tz,notify1,notify2,notifyClient);
+  await showVisitForm(propName,date,consultant,purpose,time,tz,notify1,notify2,notifyClient,attendees);
 }
-async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpose,prefillTime,prefillTz,notify1,notify2,notifyClient){
+async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpose,prefillTime,prefillTz,notify1,notify2,notifyClient,attendees){
   const date=prefillDate;if(!date)return;
   const consultant=prefillConsultant;if(!consultant)return;
   const purpose=prefillPurpose;if(!purpose)return;
   const time=prefillTime||'09:00';
   const tz=prefillTz||'America/New_York';
-  const newVisit={id:'v'+Date.now(),property:propName,date,time,tz,consultant,purpose};
+  attendees=attendees||[];
+  const newVisit={id:'v'+Date.now(),property:propName,date,time,tz,consultant,purpose,attendees};
   // Write to Airtable
   if(!demoMode){
     try{
@@ -18153,6 +18406,35 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
       });
       newVisit.id=res?.records?.[0]?.id||newVisit.id;
       newVisit.atId=newVisit.id;
+      // v45j — attendees write to the shared Meeting Attendees table via
+      // the Site Visit link field (added alongside the existing Meeting
+      // link) rather than a separate table, so this same RSVP endpoint
+      // and email template serve both meetings and site visits from one
+      // place. RSVP Status starts Pending, Response Token is generated
+      // and the invite sent by /send-meeting-invites (v45k).
+      if(newVisit.atId&&attendees.length){
+        const attendeeRecordIds=[];
+        for(const a of attendees){
+          const attRes=await atCreate('Meeting Attendees',{
+            'Site Visit':[newVisit.atId],
+            'Name':a.name,
+            'Email':a.email,
+            'Role':a.role,
+            'RSVP Status':'Pending',
+          });
+          const attId2=attRes?.records?.[0]?.id;
+          if(attId2)attendeeRecordIds.push(attId2);
+        }
+        if(attendeeRecordIds.length){
+          try{
+            await fetch(`${WORKER_URL}/send-meeting-invites`,{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({eventTable:'Site Visits',eventRecordId:newVisit.atId,attendeeRecordIds}),
+            });
+          }catch(e){console.error('send-meeting-invites failed:',e);}
+        }
+      }
     }catch(e){console.error('Site visit Airtable error:',e);}
   }
   siteVisits.push(newVisit);
