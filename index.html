@@ -1522,6 +1522,13 @@ async function loadAllData() {
       priority: r.fields['Priority']!=null?r.fields['Priority']:null,
       status: r.fields['Status']||'',
       capexYear: r.fields['Client Capex Planning Year']||'',
+      // v45q — VDA Recommended Year and Client Budget, new per-unit fields.
+      // VDA Recommended Year is plain text like capexYear (typed year, not
+      // a formula). Client Budget is a real/writable dollar field, same
+      // pattern as Award Value below — never a formula, starts blank/0
+      // until PM or Admin enters it.
+      vdaRecYear: r.fields['VDA Recommended Year']||'',
+      clientBudget: r.fields['Client Budget']!=null?Number(r.fields['Client Budget']):0,
       elevEst: r.fields['Elevator Mod Est.']!=null?Number(r.fields['Elevator Mod Est.']):0,
       relatedEst: r.fields['Related Work Est.']!=null?Number(r.fields['Related Work Est.']):0,
       cabEst: r.fields['Cab Interior Est.']!=null?Number(r.fields['Cab Interior Est.']):0,
@@ -2196,6 +2203,126 @@ window.PROPERTIES_SEED = [
   </div>
 </div>
 
+<!-- v45q — NEW PROPERTY PANEL. Replaces the old centered "Add to Capital
+Plan" overlay (openCapitalPlanEntry/saveCapitalPlanEntry previously built
+a modal from scratch in JS — see the removed function bodies). Same
+slide-out mechanism as Edit Property directly above (translateX panel +
+dimmed overlay), so property creation and property editing now share one
+consistent pattern instead of two different UI treatments. VDA Consultant
+and Project Budget are intentionally absent here per direct instruction —
+VDA Consultant now lives per-project (see the Projects section below),
+and Project Budget was dropped from property-level entry entirely, this
+form no longer collects it anywhere. Unit Detail is a tile row (Elevator/
+Escalator/WC Lift/Other/Total) with stepper controls instead of the old
+plain number inputs; Total is always a computed, non-editable sum of the
+other four, never its own typed value. -->
+<div id="new-prop-overlay" onclick="closeNewPropertyPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="new-prop-panel" style="display:none;position:fixed;top:0;right:0;width:640px;max-width:95vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div style="font-size:16px;font-weight:700;color:#85B7EB">New Property</div>
+    <button onclick="closeNewPropertyPanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px">
+    <input type="hidden" id="np-edit-id" value="">
+    <div id="np-intro-note" style="font-size:12px;color:var(--gray-mid);background:var(--gray-xpale);border:0.5px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:16px;line-height:1.5">
+      Saving creates this property with a starter project ("Property Modernization") in Capital Plan status. Use <strong>Create Unit Inventory</strong> below to add real units now, or come back later via <strong>Manage Unit Inventory</strong> on the property's Overview tab.
+    </div>
+
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:10px">Property Details</div>
+    <div class="two-col" style="gap:12px">
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Property Name *</label><input class="form-input" type="text" id="np-name" placeholder="e.g. Hilton Denver City Center"></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Address</label><input class="form-input" type="text" id="np-address" placeholder="e.g. 1701 California Street, Denver, CO"></div>
+      <div class="form-group"><label class="form-label">State</label><input class="form-input" type="text" id="np-state" placeholder="e.g. CO" maxlength="2"></div>
+      <div class="form-group"><label class="form-label">Asset Type</label><select class="form-select" id="np-type"><option value="Core">Core</option><option value="Non-Core">Non-core</option></select></div>
+      <div class="form-group" id="np-priority-group"><label class="form-label">Priority</label><select class="form-select" id="np-priority"><option value="">Select priority</option><option value="1: Critical">1: Critical</option><option value="2: High">2: High</option><option value="3: Medium">3: Medium</option><option value="4: Standard">4: Standard</option></select></div>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:20px 0 10px">Unit Detail</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
+      <div class="np-unit-tile" style="background:var(--gray-xpale);border-radius:8px;padding:10px 8px;text-align:center">
+        <div style="font-size:11px;color:var(--gray-mid);margin-bottom:6px">Elevator</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('elevators',-1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-down"></i></button>
+          <span id="np-elevators-val" style="font-size:17px;font-weight:700;min-width:20px;display:inline-block">0</span>
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('elevators',1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-up"></i></button>
+        </div>
+      </div>
+      <div class="np-unit-tile" style="background:var(--gray-xpale);border-radius:8px;padding:10px 8px;text-align:center">
+        <div style="font-size:11px;color:var(--gray-mid);margin-bottom:6px">Escalator</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('escalators',-1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-down"></i></button>
+          <span id="np-escalators-val" style="font-size:17px;font-weight:700;min-width:20px;display:inline-block">0</span>
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('escalators',1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-up"></i></button>
+        </div>
+      </div>
+      <div class="np-unit-tile" style="background:var(--gray-xpale);border-radius:8px;padding:10px 8px;text-align:center">
+        <div style="font-size:11px;color:var(--gray-mid);margin-bottom:6px">WC Lift</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('lifts',-1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-down"></i></button>
+          <span id="np-lifts-val" style="font-size:17px;font-weight:700;min-width:20px;display:inline-block">0</span>
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('lifts',1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-up"></i></button>
+        </div>
+      </div>
+      <div class="np-unit-tile" style="background:var(--gray-xpale);border-radius:8px;padding:10px 8px;text-align:center">
+        <div style="font-size:11px;color:var(--gray-mid);margin-bottom:6px">Other</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('other',-1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-down"></i></button>
+          <span id="np-other-val" style="font-size:17px;font-weight:700;min-width:20px;display:inline-block">0</span>
+          <button type="button" class="btn-icon" onclick="npAdjustUnitCount('other',1)" style="border:none;background:none;cursor:pointer;color:var(--gray-mid);font-size:14px"><i class="ti ti-chevron-up"></i></button>
+        </div>
+      </div>
+      <div class="np-unit-tile" style="background:var(--blue-xpale);border-radius:8px;padding:10px 8px;text-align:center">
+        <div style="font-size:11px;color:var(--blue-dark);margin-bottom:6px">Total</div>
+        <span id="np-total-val" style="font-size:17px;font-weight:700;color:var(--blue-dark)">0</span>
+      </div>
+    </div>
+
+    <button type="button" class="btn btn-success" style="width:100%;justify-content:center;margin-bottom:20px" onclick="npCreateUnitInventory()"><i class="ti ti-list-details"></i>Create Unit Inventory</button>
+
+    <div class="form-group" style="margin-bottom:0"><label class="form-label">Comments / Status Notes</label><textarea class="form-input" id="np-notes" rows="2" style="resize:vertical" placeholder="Any notes about this property..."></textarea></div>
+  </div>
+  <div style="padding:12px 24px 24px;display:flex;flex-direction:column;gap:8px">
+    <button class="btn" style="width:100%;justify-content:center;border:1px solid var(--blue-dark);color:var(--blue-dark)" onclick="npContinueToProject()">Continue To Project<i class="ti ti-arrow-right" style="margin-left:4px"></i></button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="saveCapitalPlanEntry()"><i class="ti ti-check"></i>Save Changes</button>
+      <button class="btn" style="flex:1;justify-content:center" onclick="closeNewPropertyPanel()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- v45q — SET UP PROJECTS PANEL. Reached via Continue To Project on New
+Property (or later re-entry, once wired, from an existing property).
+Deliberately reuses the same unit-assignment mechanics as the existing
+Split Into Projects modal (splitScopeToggleUnit's shared-pool steal-on-
+check behavior, renderScopeUnitsPicker for row markup) — checking a unit
+into a new project block moves it there immediately, even if it was
+already checked into another block, matching Split Into Projects exactly
+per direct instruction. This is NOT the same field set as Split Into
+Projects though: per Misty's explicit scoping, each block here only
+collects Project Name, Year, VDA Consultant, VDA Project #, and Client
+Project # — no Budget/Priority/Budget Status/Elevator Co./Mod. Survey
+Date/Contract & Rates. Each block also shows a live cost estimate summed
+from Total Work Est. across only its currently-checked units (via
+renderScopeUnitsPicker's includeCostData option, which stamps data-cost
+from unitEffectiveValue() onto each checkbox). -->
+<div id="sup-overlay" onclick="closeSetUpProjects()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="sup-panel" style="display:none;position:fixed;top:0;right:0;width:640px;max-width:95vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div style="font-size:16px;font-weight:700;color:#85B7EB">Set Up Projects</div>
+    <button onclick="closeSetUpProjects()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px">
+    <div id="sup-subtitle" style="font-size:12px;color:var(--gray-mid);margin-bottom:16px"></div>
+    <div id="sup-blocks"></div>
+    <button type="button" class="btn" style="margin-bottom:8px" onclick="addSupProjectBlock()"><i class="ti ti-plus"></i>Add Another Project</button>
+    <div id="sup-unassigned-note" style="font-size:11px;color:var(--gray-mid);margin-bottom:16px"></div>
+  </div>
+  <div style="padding:12px 24px 24px;display:flex;gap:8px">
+    <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="saveSetUpProjects()"><i class="ti ti-check"></i>Save Projects</button>
+    <button class="btn" style="flex:1;justify-content:center" onclick="closeSetUpProjects()"><i class="ti ti-arrow-left" style="margin-right:4px"></i>Back</button>
+  </div>
+</div>
+
 <!-- PORTAL -->
 <div id="portal-screen">
   <div id="sidebar-overlay" onclick="closeSidebar()"></div>
@@ -2819,7 +2946,11 @@ window.PROPERTIES_SEED = [
               spreadsheet - onboarding a new project's full unit list in
               one pass. Lives on Capital Plan since that's where projects
               actually get created. Visibility set in renderCapitalPlan(). -->
-              <button class="btn btn-add no-print" id="capital-add-btn" onclick="openCapitalPlanEntry()"><i class="ti ti-building-skyscraper" style="font-size:14px"></i>+ Capital Plan</button>
+              <!-- v45q — renamed "+ Capital Plan" to "+ Create Property" per
+              direct instruction: this button creates a Property record, and
+              the old label described the pipeline stage it starts at, not
+              what the form actually does. Same button, same handler. -->
+              <button class="btn btn-add no-print" id="capital-add-btn" onclick="openCapitalPlanEntry()"><i class="ti ti-building-skyscraper" style="font-size:14px"></i>+ Create Property</button>
               <button id="cp-bulk-import-btn" class="btn btn-success no-print" onclick="openBulkUnitImportModal()" style="display:none"><i class="ti ti-upload"></i>Bulk Import Units</button>
             </div>
           </div>
@@ -4867,8 +4998,12 @@ function renderUnitInventoryManagerModal(propName){
         <table class="data-table" style="table-layout:auto">
           <thead><tr>
             <th style="width:24px" id="uim-th-check"></th>
-            <th>Unit Name</th><th>Device Location</th><th>Unit Type</th><th>Equipment Type</th><th>Priority</th><th>Status</th><th>CapEx Year</th>
-            <th style="text-align:right">Elevator Mod Est.</th><th style="text-align:right">Related Work Est.</th><th style="text-align:right">Cab Interior Est.</th><th style="text-align:right">Contingency Fee Est.</th><th style="text-align:right">Total Work Est.</th><th style="text-align:right">Award Value</th>
+            <th>Unit Name</th><th>Device Location</th><th>Unit Type</th><th>Equipment Type</th><th>Priority</th><th>Status</th><th>CapEx Year</th><th>VDA Rec. Year</th>
+            <!-- v45q — Client Budget added between Total Work Est. (VDA's
+            estimate) and Award Value, matching the real progression: VDA
+            estimate -> Client Budget -> Award Value (actual contract
+            number once a provider is selected). -->
+            <th style="text-align:right">Elevator Mod Est.</th><th style="text-align:right">Related Work Est.</th><th style="text-align:right">Cab Interior Est.</th><th style="text-align:right">Contingency Fee Est.</th><th style="text-align:right">Total Work Est.</th><th style="text-align:right">Client Budget</th><th style="text-align:right">Award Value</th>
           </tr></thead>
           <tbody id="uim-tbody"></tbody>
         </table>
@@ -4930,7 +5065,7 @@ async function uimApplyTotalUnits(propName){
       const res=await atCreate('Unit Inventory List',fields);
       const newId=res?.records?.[0]?.id;
       if(newId){
-        const newUnit={id:newId,name:`Unit ${nextNum}`,property:propName,scopeId:'',deviceLocation:'',unitType:'',priority:null,status:'',capexYear:'',elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0};
+        const newUnit={id:newId,name:`Unit ${nextNum}`,property:propName,scopeId:'',deviceLocation:'',unitType:'',priority:null,status:'',capexYear:'',vdaRecYear:'',elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,clientBudget:0};
         window.UNIT_INVENTORY.push(newUnit);
         if(!tbdScope&&propObj)tbdScope=await createScopeForYearKey(propName,propObj.id,'TBD');
         if(tbdScope)await linkUnitToScope(newUnit,tbdScope);
@@ -5305,7 +5440,7 @@ function renderUimTable(propName){
   const units=uimUnitsFor(propName);
   if(thCheck)thCheck.innerHTML=uimDeleteMode?'':'';
   if(units.length===0){
-    tbody.innerHTML=`<tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--gray-mid)">No units yet. Set Total Units above to add rows.</td></tr>`;
+    tbody.innerHTML=`<tr><td colspan="15" style="text-align:center;padding:2rem;color:var(--gray-mid)">No units yet. Set Total Units above to add rows.</td></tr>`;
     return;
   }
   const esc=s=>String(s==null?'':s).replace(/'/g,"\\'");
@@ -5334,11 +5469,19 @@ function renderUimTable(propName){
         <option value="Dormant" ${u.status==='Dormant'?'selected':''}>Dormant</option>
       </select></td>
       <td style="display:flex;align-items:center;gap:4px"><input class="form-input" style="width:80px" value="${esc(u.capexYear)}" onchange="uimSaveTextField('${u.id}','Client Capex Planning Year','capexYear',this.value)">${(()=>{const yr=parseInt(u.capexYear);return(yr&&yr<new Date().getFullYear()&&u.status!=='Complete')?'<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px;flex-shrink:0" title="Past CapEx year but not marked Complete — worth checking"></i>':'';})()}</td>
+      <!-- v45q — VDA Recommended Year, plain text like Client Capex
+      Planning Year above (typed year, no formula, no validation beyond
+      what capexYear already has). -->
+      <td><input class="form-input" style="width:80px" value="${esc(u.vdaRecYear)}" onchange="uimSaveTextField('${u.id}','VDA Recommended Year','vdaRecYear',this.value)"></td>
       <td><input id="uim-elev-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.elevEst?Number(u.elevEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Elevator Mod Est.','elevEst',this.value,this)"></td>
       <td><input id="uim-related-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.relatedEst?Number(u.relatedEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Related Work Est.','relatedEst',this.value,this)"></td>
       <td><input id="uim-cab-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.cabEst?Number(u.cabEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Cab Interior Est.','cabEst',this.value,this)"></td>
       <td><input id="uim-cont-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.contingencyEst?Number(u.contingencyEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Contingency Fee Est.','contingencyEst',this.value,this)"></td>
       <td id="uim-total-${u.id}" style="text-align:right;font-weight:600">${u.totalWorkEst?fmtCurrencyFull(u.totalWorkEst):"$0"}</td>
+      <!-- v45q — Client Budget: real/writable, same pattern as Award Value
+      below, never a formula. PM/Admin can edit, same access as the other
+      cost fields on this row. -->
+      <td><input id="uim-clientbudget-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.clientBudget?Number(u.clientBudget).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Client Budget','clientBudget',this.value,this)"></td>
       <td><input id="uim-award-${u.id}" class="form-input" style="width:110px;text-align:right;font-weight:600" type="text" placeholder="Not awarded" value="${u.awardValue?Number(u.awardValue).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Award Value','awardValue',this.value,this)"></td>
     </tr>`;
   }).join('');
@@ -12557,81 +12700,356 @@ function toggleCapitalGroup(groupId){
   if(chevron)chevron.style.transform=collapsed?'':'rotate(-90deg)';
 }
 
+// v45q — REWRITE. openCapitalPlanEntry() previously built a centered
+// modal from scratch in JS on every call (see prior version in file
+// history). Now it just resets and slides in the static #new-prop-panel
+// markup, same open mechanism as openEditPropertyPanel(). Function name
+// and signature (prefillId) kept as-is since Capital Plan's row-level
+// Edit button still calls openCapitalPlanEntry(propId) to edit an
+// existing entry — only the panel it opens changed.
+let npUnitCounts={elevators:0,escalators:0,lifts:0,other:0};
+function npUpdateTotalDisplay(){
+  const total=npUnitCounts.elevators+npUnitCounts.escalators+npUnitCounts.lifts+npUnitCounts.other;
+  ['elevators','escalators','lifts','other'].forEach(k=>{
+    const el=document.getElementById('np-'+k+'-val');
+    if(el)el.textContent=npUnitCounts[k];
+  });
+  const totalEl=document.getElementById('np-total-val');
+  if(totalEl)totalEl.textContent=total;
+}
+function npAdjustUnitCount(key,delta){
+  npUnitCounts[key]=Math.max(0,(npUnitCounts[key]||0)+delta);
+  npUpdateTotalDisplay();
+}
+window.npAdjustUnitCount=npAdjustUnitCount;
+
 function openCapitalPlanEntry(prefillId){
-  // v36c — initCurrencyInput('cp-budget') call removed; that input no
-  // longer exists in this form (Est. Budget/Budget Status dropped, see
-  // note above the Capital Budget section).
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const existing=prefillId?port.find(p=>(p.id||p.n)===prefillId):null;
-  const overlay=document.createElement('div');
-  overlay.id='capital-entry-overlay';
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
   const v=existing||{};
-  const priOptions=['1: Critical','2: High','3: Medium','4: Standard'].map(p=>`<option value="${p}"${(v.priority||'')==p?' selected':''}>${p}</option>`).join('');
-  const typeOptions=['Core','Non-Core'].map(t=>`<option value="${t}"${(v.type||'Core')==t?' selected':''}>${t}</option>`).join('');
-  const yrVal=v.plannedYear||'';
-  const title=existing?'Edit Capital Plan Entry':'Add to Capital Plan';
-  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:560px;box-shadow:var(--shadow-md);margin:auto">
-    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-calendar-stats" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>${title}</div>
-      <button onclick="document.getElementById('capital-entry-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
-    </div>
-    <div style="padding:20px 22px">
-      <input type="hidden" id="cp-edit-id" value="${v.id||''}">
-      ${existing?'':`<div style="font-size:12px;color:var(--gray-mid);background:var(--gray-xpale);border:0.5px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:16px;line-height:1.5">
-        <!-- v40b — Inline guidance on what Save actually does, since this
-        form otherwise gives no hint that it auto-creates a starter project.
-        Only shown on create, not on Edit Capital Plan Entry. -->
-        Saving creates this property with a starter project ("Property Modernization") in Capital Plan status. Next: add units in <strong>Manage Unit Inventory</strong>, then enter a Modernization Survey Date via <strong>Split into Projects</strong> to graduate it into the active portfolio.
-      </div>`}
+  document.getElementById('np-edit-id').value=v.id||'';
+  document.getElementById('np-name').value=v.n||'';
+  document.getElementById('np-address').value=v.addr||'';
+  document.getElementById('np-state').value=v.s||'';
+  document.getElementById('np-type').value=v.type||'Core';
+  document.getElementById('np-priority').value=v.priority||'';
+  document.getElementById('np-notes').value=v.comment||'';
+  npUnitCounts={elevators:v.elevatorCount||0,escalators:v.escalatorCount||0,lifts:v.liftCount||0,other:v.otherCount||0};
+  npUpdateTotalDisplay();
+  const introNote=document.getElementById('np-intro-note');
+  if(introNote)introNote.style.display=existing?'none':'block';
+  const titleEl=document.querySelector('#new-prop-panel > div:first-child > div:first-child');
+  if(titleEl)titleEl.textContent=existing?'Edit Property':'New Property';
 
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:10px">Property Identity</div>
-      <div class="form-group"><label class="form-label">Property Name</label><input class="form-input" type="text" id="cp-name" value="${(v.n||'').replace(/"/g,'&quot;')}" placeholder="Full hotel property name"></div>
-      <div class="form-group"><label class="form-label">Address</label><input class="form-input" type="text" id="cp-address" value="${(v.addr||'').replace(/"/g,'&quot;')}" placeholder="Street address"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">City</label><input class="form-input" type="text" id="cp-city" value="${(v.city||'').replace(/"/g,'&quot;')}" placeholder="City"></div>
-        <div class="form-group"><label class="form-label">State</label><input class="form-input" type="text" id="cp-state" value="${(v.s||'').replace(/"/g,'&quot;')}" placeholder="ST" maxlength="2"></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">Asset Type</label><select class="form-input" id="cp-type">${typeOptions}</select></div>
-        <div class="form-group"><label class="form-label">Priority</label><select class="form-input" id="cp-priority">${priOptions}</select></div>
-      </div>
-
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:16px 0 10px">Units</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">Elevators</label><input class="form-input" type="number" id="cp-elevators" value="${v.elevatorCount||''}" min="0" placeholder="0"></div>
-        <div class="form-group"><label class="form-label">Escalators</label><input class="form-input" type="number" id="cp-escalators" value="${v.escalatorCount||''}" min="0" placeholder="0"></div>
-        <div class="form-group"><label class="form-label">WC Lift</label><input class="form-input" type="number" id="cp-lifts" value="${v.liftCount||''}" min="0" placeholder="0"></div>
-        <div class="form-group"><label class="form-label">Other</label><input class="form-input" type="number" id="cp-other" value="${v.otherCount||''}" min="0" placeholder="0"></div>
-      </div>
-
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:16px 0 10px">Capital Budget</div>
-      <!-- v36c — Est. Budget ($) and Budget Status inputs removed from this
-      form per direct instruction. These fields get superseded by real
-      per-unit Total Work Est. data the moment someone fills in Manage
-      Unit Inventory (scopeUnitBudgetTotal() already drives every budget
-      rollup on Dashboard/Analytics/Capital Plan since v35j), so entering
-      a number here was duplicate data-entry that would just get
-      overwritten. Budget now always starts at 0/TBD on creation, which
-      intentionally shows as a visible $0/TBD nudge on Capital Plan until
-      unit-level estimates are entered — the workflow signal that
-      something still needs filling in, not a bug. -->
-      <div class="form-group"><label class="form-label">Planned Year</label><input class="form-input" type="number" id="cp-year" value="${yrVal}" placeholder="2026" min="2024" max="2040"></div>
-
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:16px 0 10px">Project Context</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input" type="text" id="cp-consultant" value="${(v.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
-        <div class="form-group"><label class="form-label">Elevator Company</label><input class="form-input" type="text" id="cp-ec" value="${(v.ec==='TBD'?'':v.ec||'').replace(/"/g,'&quot;')}" placeholder="TBD"></div>
-      </div>
-      <div class="form-group"><label class="form-label">Notes / Known Issues</label><textarea class="form-input" id="cp-notes" rows="2" style="resize:vertical" placeholder="Known constraints, scope notes, or blockers">${v.comment||''}</textarea></div>
-    </div>
-    <div style="padding:12px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn" onclick="document.getElementById('capital-entry-overlay').remove()">Cancel</button>
-      <button class="btn btn-add" onclick="saveCapitalPlanEntry()"><i class="ti ti-check"></i>Finish &amp; Save</button>
-    </div>
-  </div>`;
-  document.body.appendChild(overlay);
+  const overlay=document.getElementById('new-prop-overlay');
+  const panel=document.getElementById('new-prop-panel');
+  overlay.style.display='block';
+  panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
 }
+window.openCapitalPlanEntry=openCapitalPlanEntry;
+
+function closeNewPropertyPanel(){
+  const panel=document.getElementById('new-prop-panel');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{
+    panel.style.display='none';
+    document.getElementById('new-prop-overlay').style.display='none';
+  },300);
+}
+window.closeNewPropertyPanel=closeNewPropertyPanel;
+
+// v45q — Create real Unit Inventory List rows from the Unit Detail tile
+// counts, tagged with the matching Unit Type per Misty's direct
+// instruction ("Pre-populates rows based on the equipment types
+// identified"). Deliberately NOT reusing uimApplyTotalUnits() — that
+// function only creates generic untyped "Unit N" rows (it has no concept
+// of which type to assign), so this is its own creation loop, same
+// atCreate/linkUnitToScope pattern, but stamping Unit Type up front.
+async function npCreateUnitsFromCounts(propName,propId){
+  const typeMap=[['elevators',npUnitCounts.elevators,'Elevator'],['escalators',npUnitCounts.escalators,'Escalator'],['lifts',npUnitCounts.lifts,'Wheelchair Lift'],['other',npUnitCounts.other,'Other']];
+  const totalToCreate=typeMap.reduce((a,[,n])=>a+(n||0),0);
+  if(totalToCreate===0)return [];
+  const existingUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName);
+  const existingNums=existingUnits.map(u=>{const m=(u.name||'').match(/^Unit (\d+)$/);return m?parseInt(m[1]):0;});
+  let nextNum=(existingNums.length?Math.max(...existingNums):0)+1;
+  let tbdScope=findScopeForYearKey(propName,'TBD');
+  const created=[];
+  for(const [,count,unitType] of typeMap){
+    for(let i=0;i<(count||0);i++){
+      const fields={'Unit Name':`Unit ${nextNum}`,'Property Name':propertyNameToLink(propName),'Unit Type':unitType};
+      let newId='demo_unit_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+      if(!demoMode){
+        const res=await atCreate('Unit Inventory List',fields);
+        newId=res?.records?.[0]?.id||newId;
+      }
+      const newUnit={id:newId,name:`Unit ${nextNum}`,property:propName,scopeId:'',deviceLocation:'',unitType,priority:null,status:'',capexYear:'',vdaRecYear:'',elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,clientBudget:0};
+      window.UNIT_INVENTORY=(window.UNIT_INVENTORY||[]).concat([newUnit]);
+      if(!tbdScope&&propId)tbdScope=await createScopeForYearKey(propName,propId,'TBD');
+      if(tbdScope)await linkUnitToScope(newUnit,tbdScope);
+      created.push(newUnit);
+      nextNum++;
+    }
+  }
+  return created;
+}
+
+// v45q — Create Unit Inventory: saves the property first if it hasn't
+// been saved yet (skipClose=true so the panel stays open), then creates
+// real units from the tile counts, then opens the existing Manage Unit
+// Inventory modal so the new rows can be detailed immediately — same
+// entry point Edit Property already uses, not a separate screen.
+async function npCreateUnitInventory(){
+  const editId=document.getElementById('np-edit-id')?.value||'';
+  let propName=document.getElementById('np-name')?.value.trim();
+  if(!propName){showToast('Property name is required','warn');return;}
+  const totalCount=npUnitCounts.elevators+npUnitCounts.escalators+npUnitCounts.lifts+npUnitCounts.other;
+  if(totalCount===0){showToast('Set at least one unit count above first','warn');return;}
+  let propObj=(window.PORTFOLIO||[]).find(p=>p.id===editId||p.n===propName);
+  if(!propObj){
+    propObj=await saveCapitalPlanEntry(true);
+    if(!propObj)return;
+  }
+  showToast(`Creating ${totalCount} unit${totalCount===1?'':'s'}...`,'info');
+  await npCreateUnitsFromCounts(propObj.n,propObj.id);
+  showToast('Units created','success');
+  openUnitInventoryManager(propObj.n);
+}
+window.npCreateUnitInventory=npCreateUnitInventory;
+
+// v45q — Continue To Project: saves the property first if needed (same
+// skipClose pattern as Create Unit Inventory), then opens the new Set Up
+// Projects panel, seeded from whatever units already exist for this
+// property (created via Create Unit Inventory above, or already present
+// from an earlier session if this is an edit).
+async function npContinueToProject(){
+  const editId=document.getElementById('np-edit-id')?.value||'';
+  let propName=document.getElementById('np-name')?.value.trim();
+  if(!propName){showToast('Property name is required','warn');return;}
+  let propObj=(window.PORTFOLIO||[]).find(p=>p.id===editId||p.n===propName);
+  if(!propObj){
+    propObj=await saveCapitalPlanEntry(true);
+    if(!propObj)return;
+  }
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propObj.n);
+  if(units.length===0){showToast('Create Unit Inventory first — Set Up Projects needs real units to assign','warn');return;}
+  openSetUpProjects(propObj.id,propObj.n);
+}
+window.npContinueToProject=npContinueToProject;
+
+// ── SET UP PROJECTS (v45q) ──────────────────────────────────────────────
+// Reached from New Property's Continue To Project. Reuses splitUnitAssign
+// (the same module-level map Split Into Projects already uses) and
+// splitScopeToggleUnit (unchanged) so both flows share one mutual-
+// exclusivity mechanism — a unit checked into a block here is
+// automatically unchecked from wherever else it was, exactly like Split
+// Into Projects. supBlockSeq/sup-block ids are a separate namespace from
+// split-block ids so the two flows never collide if somehow both were
+// open (they can't be today, but keeping the id spaces distinct avoids a
+// latent bug if that ever changes).
+let supBlockSeq=0;
+let supPropId='';
+let supPropName='';
+
+function openSetUpProjects(propId,propName){
+  supPropId=propId;
+  supPropName=propName;
+  splitUnitAssign={};
+  document.getElementById('sup-blocks').innerHTML='';
+  const subtitle=document.getElementById('sup-subtitle');
+  const unitCount=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).length;
+  if(subtitle)subtitle.textContent=`${propName} — ${unitCount} unit${unitCount===1?'':'s'} in inventory.`;
+
+  // Seed with one block per existing non-TBD Scope for this property (so
+  // re-entering Set Up Projects on an already-split property shows what's
+  // there), or one blank block if none exist yet.
+  const existingScopes=(window.SCOPES||[]).filter(s=>s.property===propName&&!s.isTbd);
+  if(existingScopes.length>0){
+    existingScopes.forEach(sc=>addSupProjectBlock(sc));
+  } else {
+    addSupProjectBlock();
+  }
+  // Seed checklist state from each unit's real current Linked Scope.
+  const scopeIdToBlockId={};
+  [...document.querySelectorAll('.sup-block')].forEach(b=>{if(b.dataset.scopeId)scopeIdToBlockId[b.dataset.scopeId]=b.id;});
+  (window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).forEach(u=>{
+    if(u.scopeId&&scopeIdToBlockId[u.scopeId])splitUnitAssign[u.id]=scopeIdToBlockId[u.scopeId];
+  });
+  renderAllSupUnitLists();
+
+  const overlay=document.getElementById('sup-overlay');
+  const panel=document.getElementById('sup-panel');
+  overlay.style.display='block';
+  panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
+}
+window.openSetUpProjects=openSetUpProjects;
+
+function closeSetUpProjects(){
+  const panel=document.getElementById('sup-panel');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{
+    panel.style.display='none';
+    document.getElementById('sup-overlay').style.display='none';
+  },300);
+}
+window.closeSetUpProjects=closeSetUpProjects;
+
+function addSupProjectBlock(scope){
+  const id='sup-block-'+(supBlockSeq++);
+  const s=scope||{};
+  const block=document.createElement('div');
+  block.id=id;
+  block.className='sup-block';
+  block.dataset.scopeId=s.id||'';
+  block.style.cssText='border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;position:relative';
+  block.innerHTML=`
+    <button type="button" onclick="document.getElementById('${id}').remove();renderAllSupUnitLists()" style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px" title="Remove this project"><i class="ti ti-x"></i></button>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-right:24px">
+      <div id="${id}-title" style="font-size:13px;font-weight:600;color:var(--navy)">${s.name?s.name.replace(/</g,'&lt;'):'New Project'}</div>
+      <span id="${id}-estimate" class="badge" style="background:var(--blue-xpale);color:var(--blue-dark);font-weight:600">Est. $0</span>
+    </div>
+    <div class="form-group"><label class="form-label">Project Name</label><input class="form-input sup-name" type="text" value="${(s.name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Elevators, Escalators" oninput="document.getElementById('${id}-title').textContent=this.value.trim()||'New Project'"></div>
+    <div class="form-group"><label class="form-label">Year</label><input class="form-input sup-year" type="number" value="${s.year||''}" min="2024" max="2040" placeholder="2026"></div>
+    <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input sup-consultant" type="text" value="${(s.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input sup-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
+      <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input sup-clientprojectnum" type="text" value="${(s.clientProjectNum||'').replace(/"/g,'&quot;')}" placeholder="Client's own project number"></div>
+    </div>
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:10px 0 6px">Assign Units</div>
+    <div id="${id}-units-list" style="max-height:160px;overflow-y:auto;border:1px solid var(--border-light,var(--border));border-radius:6px;padding:8px"></div>
+  `;
+  document.getElementById('sup-blocks').appendChild(block);
+  renderAllSupUnitLists();
+}
+window.addSupProjectBlock=addSupProjectBlock;
+
+// v45q — Renders every block's unit checklist (via the same
+// renderScopeUnitsPicker shared renderer Split Into Projects uses,
+// includeCostData:true so each checkbox carries data-cost from
+// unitEffectiveValue()), then sums the checked boxes' data-cost per
+// block for the live "Est." badge, and computes the running unassigned
+// count/estimate footer.
+function renderAllSupUnitLists(){
+  const blocks=[...document.querySelectorAll('.sup-block')];
+  blocks.forEach(b=>{
+    renderScopeUnitsPicker(b.id+'-units-list',supPropName,{
+      mode:'multi',
+      isChecked:(uid)=>splitUnitAssign[uid]===b.id,
+      onChangeAttr:(uid)=>`splitScopeToggleUnit('${uid}','${b.id}',this.checked);renderAllSupUnitLists()`,
+      includeCostData:true,
+    });
+    const checks=[...document.querySelectorAll(`#${b.id}-units-list input[type=checkbox]:checked`)];
+    const est=checks.reduce((a,c)=>a+(parseFloat(c.dataset.cost)||0),0);
+    const estEl=document.getElementById(b.id+'-estimate');
+    if(estEl)estEl.textContent=`Est. ${fmtCurrency(est)}`;
+  });
+  const allUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===supPropName);
+  const assignedIds=new Set(Object.keys(splitUnitAssign).filter(uid=>blocks.some(b=>b.id===splitUnitAssign[uid])));
+  const unassigned=allUnits.filter(u=>!assignedIds.has(u.id));
+  const unassignedEst=unassigned.reduce((a,u)=>a+unitEffectiveValue(u),0);
+  const note=document.getElementById('sup-unassigned-note');
+  if(note)note.textContent=allUnits.length?`${unassigned.length} of ${allUnits.length} units still unassigned — unassigned est. ${fmtCurrency(unassignedEst)}`:'';
+}
+window.renderAllSupUnitLists=renderAllSupUnitLists;
+
+// v45q — Save Projects. Same core mechanics as saveSplitIntoScopes()
+// (create/update Scope records, reconcile unit-to-Scope linkage from
+// splitUnitAssign), narrowed to the smaller field set this panel actually
+// collects. No Mod. Survey Date here, so projects created through this
+// panel stay at Capital Plan status until graduated later the normal way
+// (Split Into Projects or the project card), same as any other
+// freshly-split project with no survey date entered yet.
+async function saveSetUpProjects(){
+  const blocks=[...document.querySelectorAll('.sup-block')];
+  if(blocks.length===0){showToast('Add at least one project','warn');return;}
+  const rows=blocks.map(b=>({
+    blockDomId:b.id,
+    scopeId:b.dataset.scopeId||'',
+    name:b.querySelector('.sup-name')?.value.trim()||'',
+    year:parseInt(b.querySelector('.sup-year')?.value)||null,
+    consultant:b.querySelector('.sup-consultant')?.value.trim()||'',
+    vdaNum:b.querySelector('.sup-vdanum')?.value.trim()||'',
+    clientProjectNum:b.querySelector('.sup-clientprojectnum')?.value.trim()||'',
+  }));
+  if(rows.some(r=>!r.name)){showToast('Each project needs a name','warn');return;}
+
+  showToast('Saving projects...','info');
+  const prop=(window.PORTFOLIO||[]).find(p=>p.id===supPropId||p.n===supPropName);
+  if(!prop){showToast('Property not found','error');return;}
+
+  for(const r of rows){
+    const fields={
+      'Scope Name':r.name,
+      'Year/Budget Cycle':r.year,
+      'VDA Consultant':r.consultant||null,
+      'VDA Project Number':r.vdaNum||null,
+      'Client Project #':r.clientProjectNum||null,
+    };
+    let scopeId=r.scopeId;
+    if(scopeId){
+      if(!demoMode)await atUpdate('Scopes',scopeId,fields);
+      const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+      if(sc){sc.name=r.name;sc.year=r.year;sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.clientProjectNum=r.clientProjectNum||sc.clientProjectNum||'';}
+    } else {
+      const createFields={...fields,'Property':[prop.id],'Status':'Capital Plan'};
+      let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+      if(!demoMode){
+        const res=await atCreate('Scopes',createFields);
+        newId=res?.records?.[0]?.id||newId;
+      }
+      scopeId=newId;
+      window.SCOPES=(window.SCOPES||[]).concat([{
+        id:newId,property:prop.n,propertyId:prop.id||'',name:r.name,year:r.year,
+        unitList:'',plannedBudget:0,approvedBudget:0,budgetStatus:'TBD',priority:'4: Standard',status:'Capital Plan',
+        elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,
+        v:r.consultant||'',vdaNum:r.vdaNum||'',clientProjectNum:r.clientProjectNum||'',linkedUnitIds:[],isTbd:false,
+      }]);
+    }
+    r.scopeId=scopeId;
+  }
+
+  // Unit-linking reconciliation — same pattern as saveSplitIntoScopes().
+  const blockIdToScopeId={};
+  rows.forEach(r=>{blockIdToScopeId[r.blockDomId]=r.scopeId;});
+  const propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===prop.n);
+  const scopeIdToUnitIds={};
+  rows.forEach(r=>{scopeIdToUnitIds[r.scopeId]=[];});
+  propUnits.forEach(u=>{
+    const assignedBlockId=splitUnitAssign[u.id];
+    const assignedScopeId=assignedBlockId?blockIdToScopeId[assignedBlockId]:null;
+    if(assignedScopeId&&scopeIdToUnitIds[assignedScopeId])scopeIdToUnitIds[assignedScopeId].push(u.id);
+  });
+  for(const r of rows){
+    const sc=(window.SCOPES||[]).find(s=>s.id===r.scopeId);
+    if(sc){
+      sc.linkedUnitIds=scopeIdToUnitIds[r.scopeId]||[];
+      const countFields=recomputeScopeTypeCounts(sc);
+      if(!demoMode)await atUpdate('Scopes',r.scopeId,{'Linked Units':sc.linkedUnitIds,...countFields});
+    }
+  }
+  for(const u of propUnits){
+    const assignedBlockId=splitUnitAssign[u.id];
+    const newScopeId=assignedBlockId?(blockIdToScopeId[assignedBlockId]||''):'';
+    if(u.scopeId!==newScopeId){
+      u.scopeId=newScopeId;
+      const fields={'Linked Scope':newScopeId?[newScopeId]:[]};
+      if(newScopeId&&u.status!=='Dormant'){
+        const derivedStatus=computeDerivedUnitStatus(u);
+        u.status=derivedStatus;
+        fields['Status']=derivedStatus;
+      }
+      if(!demoMode)await atUpdate('Unit Inventory List',u.id,fields);
+    }
+  }
+
+  closeSetUpProjects();
+  closeNewPropertyPanel();
+  npUnitCounts={elevators:0,escalators:0,lifts:0,other:0};
+  renderCapitalPlan();
+  showToast('Projects saved','success');
+}
+window.saveSetUpProjects=saveSetUpProjects;
 
 function printCapitalPlan(){
   const el=document.getElementById('view-capital');
@@ -14079,30 +14497,50 @@ async function confirmDeleteCapitalScope(scopeId, scopeName, propName){
   renderCharts();
 }
 
-async function saveCapitalPlanEntry(){
-  const editId=document.getElementById('cp-edit-id')?.value||'';
-  const name=document.getElementById('cp-name')?.value.trim();
-  const address=document.getElementById('cp-address')?.value.trim()||'';
-  const city=document.getElementById('cp-city')?.value.trim()||'';
-  const state=document.getElementById('cp-state')?.value.trim()||'';
-  const type=document.getElementById('cp-type')?.value||'Core';
-  const priority=document.getElementById('cp-priority')?.value||'4: Standard';
-  const elevators=parseInt(document.getElementById('cp-elevators')?.value)||0;
-  const escalators=parseInt(document.getElementById('cp-escalators')?.value)||0;
-  const lifts=parseInt(document.getElementById('cp-lifts')?.value)||0;
-  const other=parseInt(document.getElementById('cp-other')?.value)||0;
+async function saveCapitalPlanEntry(skipClose){
+  // v45q — REWRITE. Reads from the new #new-prop-panel field IDs (np-*)
+  // skipClose (added for Continue To Project / Create Unit Inventory):
+  // when true, the panel is left open and the function returns the saved
+  // propObj instead of just falling through, so a caller can chain into
+  // Set Up Projects or Manage Unit Inventory without a jarring close/
+  // reopen. Normal Save Changes click still passes no argument, so it
+  // closes and returns nothing, exactly as before.
+  // instead of the old cp-* modal inputs. City, VDA Consultant, Elevator
+  // Company, and Planned Year inputs are gone from this form per direct
+  // instruction: VDA Consultant and Year now live per-project (see the
+  // upcoming Set Up Projects panel), Elevator Company was never part of
+  // the new field set, and Project Budget was dropped from property-level
+  // entry entirely. Unit counts now come from the npUnitCounts tile state
+  // (steppers), not typed number inputs. All downstream Airtable field
+  // names and the Scope-creation logic below are UNCHANGED — only what
+  // feeds them changed.
+  const editId=document.getElementById('np-edit-id')?.value||'';
+  const name=document.getElementById('np-name')?.value.trim();
+  const address=document.getElementById('np-address')?.value.trim()||'';
+  const city='';
+  const state=document.getElementById('np-state')?.value.trim()||'';
+  const type=document.getElementById('np-type')?.value||'Core';
+  const priority=document.getElementById('np-priority')?.value||'4: Standard';
+  const elevators=npUnitCounts.elevators||0;
+  const escalators=npUnitCounts.escalators||0;
+  const lifts=npUnitCounts.lifts||0;
+  const other=npUnitCounts.other||0;
   const totalUnits=elevators+escalators+lifts+other;
   const unitDesc=[elevators?`${elevators} Elev`:'',escalators?`${escalators} Esc`:'',lifts?`${lifts} WC Lift`:'',other?`${other} Other`:''].filter(Boolean).join(' / ');
-  const plannedYear=parseInt(document.getElementById('cp-year')?.value)||null;
+  // Year moves to project level (Set Up Projects) — no property-level
+  // Planned Year input on this form anymore. New properties start with
+  // Scope year unset (shows as TBD on Capital Plan) until a project sets
+  // its own Year.
+  const plannedYear=null;
   // v36c — Est. Budget/Budget Status inputs removed from this form (see
   // note above the Capital Budget section). Always start at 0/TBD; real
   // numbers come from Manage Unit Inventory's Total Work Est. fields via
   // scopeUnitBudgetTotal(), same as every other budget rollup since v35j.
   const budget=0;
   const budgetStatus='TBD';
-  const consultant=document.getElementById('cp-consultant')?.value.trim()||'TBD';
-  const ec=document.getElementById('cp-ec')?.value.trim()||'TBD';
-  const notes=document.getElementById('cp-notes')?.value.trim()||'';
+  const consultant='TBD';
+  const ec='TBD';
+  const notes=document.getElementById('np-notes')?.value.trim()||'';
 
   if(!name){showToast('Property name is required','warn');return;}
 
@@ -14251,9 +14689,14 @@ async function saveCapitalPlanEntry(){
   }
 
   window.PORTFOLIO=port.sort((a,b)=>a.n.localeCompare(b.n));
-  document.getElementById('capital-entry-overlay')?.remove();
   renderCapitalPlan();
   showToast(editId?`${name} updated`:`${name} added to capital plan`,'success');
+  if(skipClose){
+    document.getElementById('np-edit-id').value=propObj.id;
+    return propObj;
+  }
+  closeNewPropertyPanel();
+  npUnitCounts={elevators:0,escalators:0,lifts:0,other:0};
 }
 
 // ── SPLIT INTO SCOPES (v28a — continuity brief 1L) ──────────────────────
