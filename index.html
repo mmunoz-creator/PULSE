@@ -2674,7 +2674,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v47a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v48a</div>
     </div>
   </nav>
 
@@ -3325,8 +3325,17 @@ from unitEffectiveValue() onto each checkbox). -->
           </div>
         </div>
         <div class="page-body">
+          <div class="tab-row">
+            <button class="tab-btn active" onclick="switchQueueTab('approvals',this)">Approvals</button>
+            <button class="tab-btn" onclick="switchQueueTab('suggested',this)">Suggested Action Items<span id="queue-suggested-badge" class="nav-badge hidden" style="position:static;margin-left:6px">0</span></button>
+          </div>
+          <div id="queue-tab-approvals" class="tab-content active">
           <div id="queue-dynamic-list"></div>
           <div id="queue-empty" class="empty-state hidden"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">Queue is clear</div><div class="empty-state-sub">All updates reviewed</div></div>
+          </div>
+          <div id="queue-tab-suggested" class="tab-content">
+            <div id="suggested-action-items-list"></div>
+          </div>
         </div>
       </div>
 
@@ -4923,7 +4932,7 @@ function gotoView(viewId,btn){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(btn)btn.classList.add('active');
   updateGlobalHelpBtn(viewId);
-  if(viewId==='queue'){refreshQueue();loadDueDaySetting();}
+  if(viewId==='queue'){refreshQueue();loadDueDaySetting();checkAndGenerateSuggestions();}
   if(viewId==='scorecard')renderScorecard();
   if(viewId==='marliinsights')renderMarliInsights();
   if(viewId==='weeklyreportfeedback')renderWeeklyReportFeedback();
@@ -5772,6 +5781,21 @@ function switchPropTab(tab,btn){
   if(drawer&&drawer.classList.contains('open')&&window._helpCurrentView&&window._helpCurrentView.startsWith('property-')){
     renderHelpContent(activeTopic);
   }
+}
+
+// MARLI Suggested Action Items — Pending Review tab switcher, mirrors
+// switchPropTab's mechanics exactly (toggle .active on tab-btn/tab-content
+// within the queue view, no other side effects unless the target tab
+// needs a render). Since the queue view previously had no tab structure at
+// all, these tab-content/tab-btn elements are scoped with 'queue-tab-'
+// prefixed ids so this querySelectorAll doesn't also toggle Property page
+// tabs if both markups happen to be present in the DOM at once.
+function switchQueueTab(tab,btn){
+  document.querySelectorAll('#view-queue .tab-content').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('#view-queue .tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('queue-tab-'+tab)?.classList.add('active');
+  if(btn)btn.classList.add('active');
+  if(tab==='suggested')renderSuggestedActionItems();
 }
 
 function parseUnitDesc(desc){
@@ -18519,6 +18543,62 @@ async function renderMarliInsights(){
       </table>
     </div>
     <div style="margin-top:10px;font-size:11px;color:var(--gray-mid)">Click a row to see the full question, MARLI's response, and the portfolio snapshot she was given — so you can judge for yourself whether the flag is a real problem.</div>
+    ${_renderSuggestionStatsSection(data.suggestionStats)}
+  `;
+}
+
+// MARLI Suggested Action Items - Acceptance Rate section, added below the
+// existing Flagged Responses table. Uses the exact same .stat-card inline
+// style pattern as the 5 cards above, plus 2 side-by-side breakdown
+// tables (By Trigger Reason, By Source Type). data.suggestionStats comes
+// from a new additive key on the same /marli-insights response — see
+// getSuggestionStats() in worker_v43d.mjs.
+function _suggestionRateColor(rate){
+  if(rate>=60)return 'var(--green)';
+  if(rate>=40)return 'var(--amber)';
+  return 'var(--red)';
+}
+function _renderSuggestionBreakdownTable(title,rows){
+  const body=rows.length===0
+    ?`<tr><td colspan="3" style="padding:12px;text-align:center;font-size:12px;color:var(--gray-mid)">No data in this window</td></tr>`
+    :rows.map(r=>`<tr style="border-top:1px solid var(--gray-pale)">
+        <td style="padding:6px 0;font-size:12px">${r.label}</td>
+        <td style="padding:6px 0;font-size:12px;text-align:right">${r.suggested} / ${r.accepted}</td>
+        <td style="padding:6px 0;font-size:12px;text-align:right;font-weight:700;color:${_suggestionRateColor(r.rate)}">${r.rate}%</td>
+      </tr>`).join('');
+  return `<div class="stat-card" style="text-align:left;align-items:stretch;display:block">
+    <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:12px">${title}</div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="text-align:left;font-size:10px;color:var(--gray-mid);text-transform:uppercase;padding-bottom:4px">Group</th>
+        <th style="text-align:right;font-size:10px;color:var(--gray-mid);text-transform:uppercase;padding-bottom:4px">Suggested/Accepted</th>
+        <th style="text-align:right;font-size:10px;color:var(--gray-mid);text-transform:uppercase;padding-bottom:4px">Rate</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  </div>`;
+}
+function _renderSuggestionStatsSection(stats){
+  if(!stats)return '';
+  const cards=[
+    {label:'Total suggested',val:stats.totalSuggested,sub:'this window',color:'var(--blue-dark)'},
+    {label:'Accepted',val:stats.accepted,sub:`${stats.acceptedRate}% acceptance rate`,color:_suggestionRateColor(stats.acceptedRate)},
+    {label:'Dismissed',val:stats.dismissed,sub:`${stats.dismissedRate}% dismissal rate`,color:'var(--gray-mid)'},
+    {label:'Still open',val:stats.stillOpen,sub:'awaiting review, all-time',color:'var(--amber)'},
+  ];
+  const cardsHtml=cards.map(c=>`
+    <div class="stat-card" style="border-top:3px solid ${c.color}">
+      <div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px">${c.label}</div>
+      <div style="font-size:26px;font-weight:700;color:var(--navy)">${c.val}</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-top:4px">${c.sub}</div>
+    </div>`).join('');
+  return `
+    <div style="font-size:14px;font-weight:700;color:var(--navy);margin:28px 0 12px;display:flex;align-items:center;gap:6px"><i class="ti ti-bulb" style="font-size:16px;color:var(--blue-dark)"></i>Suggested Action Items - Acceptance Rate</div>
+    <div class="stat-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px">${cardsHtml}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      ${_renderSuggestionBreakdownTable('By Trigger Reason',stats.byTriggerReason||[])}
+      ${_renderSuggestionBreakdownTable('By Source Type',stats.bySourceType||[])}
+    </div>
   `;
 }
 
@@ -20804,6 +20884,173 @@ function refreshQueue(){
   updateQueueBadge();
 }
 
+// ── MARLI SUGGESTED ACTION ITEMS ─────────────────────────────────
+// New capability: MARLI reads recent PM Updates, Field Updates, Client
+// Comments, and Meeting Discussion Notes and proposes candidate Action
+// Items, surfaced in this new "Suggested Action Items" tab inside Pending
+// Review for a PM/Admin to Accept or Dismiss. Never auto-created — the
+// Worker only ever writes to the separate 'Suggested Action Items' table;
+// a real Action Item is only created when a PM/Admin explicitly accepts
+// one below, same "no silent auto-action" principle as the existing
+// consultant-flagged draft actions (see publishDraftAction()).
+//
+// ASSUMPTION TO VERIFY AGAINST THE LIVE AIRTABLE BASE (flagged for Misty,
+// not confirmed from this sandboxed environment): field names on the
+// 'Suggested Action Items' and 'MARLI Suggestion Control' tables are
+// assumed to mirror the existing 'Action Items' table's naming convention
+// (Description, Suggested Owner, Suggested Due Date, Suggested Priority,
+// Property Name, Source Type, Source Excerpt, Trigger Reason, Status) and
+// a single-row control table with 'Last Suggestion Run' / 'Last Run
+// Triggered By' fields, respectively. See matching comment in
+// worker_v43d.mjs's generateSuggestedActionItems() for the same note.
+window.SUGGESTED_ACTION_ITEMS=window.SUGGESTED_ACTION_ITEMS||[];
+
+function _fmtSuggestionDate(d){
+  if(!d)return 'Not set';
+  try{return new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}catch(e){return d;}
+}
+
+async function loadSuggestedActionItems(){
+  if(demoMode){window.SUGGESTED_ACTION_ITEMS=[];return;}
+  try{
+    const recs=await atGet('Suggested Action Items');
+    window.SUGGESTED_ACTION_ITEMS=recs.map(r=>({
+      id:r.id,
+      description:r.fields['Description']||'',
+      suggestedOwner:r.fields['Suggested Owner']||'',
+      suggestedDue:r.fields['Suggested Due Date']||'',
+      suggestedPriority:r.fields['Suggested Priority']||'Medium',
+      property:r.fields['Property Name']||'',
+      sourceType:r.fields['Source Type']||'',
+      sourceExcerpt:r.fields['Source Excerpt']||'',
+      triggerReason:r.fields['Trigger Reason']||'',
+      status:r.fields['Status']||'Open',
+    }));
+  }catch(e){
+    console.error('loadSuggestedActionItems error:',e);
+    window.SUGGESTED_ACTION_ITEMS=[];
+  }
+}
+
+function renderSuggestedActionItems(){
+  const list=document.getElementById('suggested-action-items-list');
+  if(!list)return;
+  const open=(window.SUGGESTED_ACTION_ITEMS||[]).filter(s=>s.status==='Open');
+  if(open.length===0){
+    list.innerHTML=`<div class="empty-state"><i class="ti ti-bulb" style="color:var(--green)"></i><div class="empty-state-title">No suggested action items</div><div class="empty-state-sub">MARLI will surface follow-ups here as they come up in updates and meetings</div></div>`;
+    updateSuggestedActionItemsBadge();
+    return;
+  }
+  const priColor={High:'var(--red)',Medium:'var(--amber)',Low:'var(--blue-light)'};
+  list.innerHTML=open.map(s=>`<div class="queue-item" style="border-left:3px solid ${priColor[s.suggestedPriority]||'var(--gray-mid)'}">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+      <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--blue-dark);text-transform:uppercase;display:block;margin-bottom:2px">Suggested by MARLI &middot; ${s.sourceType||'Source'}</span>${s.property||'—'}</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="badge b-pending">${s.triggerReason||'Suggested'}</span>
+      </div>
+    </div>
+    <div class="queue-item-meta">Suggested owner: ${s.suggestedOwner||'—'} &middot; Priority: ${s.suggestedPriority||'Medium'} &middot; Due: ${_fmtSuggestionDate(s.suggestedDue)}</div>
+    <div class="queue-item-body"><strong>${(s.description||'').slice(0,200)}</strong>${s.sourceExcerpt?`<div style="margin-top:6px;font-size:11px;color:var(--gray-mid);font-style:italic">"${s.sourceExcerpt.slice(0,200)}"</div>`:''}</div>
+    <div class="queue-actions">
+      <button class="btn btn-success" onclick="acceptSuggestedActionItem('${s.id}')"><i class="ti ti-check"></i>Accept</button>
+      <button class="btn btn-warn" onclick="dismissSuggestedActionItem('${s.id}')"><i class="ti ti-eye-off"></i>Dismiss</button>
+    </div>
+  </div>`).join('');
+  updateSuggestedActionItemsBadge();
+}
+
+function updateSuggestedActionItemsBadge(){
+  const count=(window.SUGGESTED_ACTION_ITEMS||[]).filter(s=>s.status==='Open').length;
+  const el=document.getElementById('queue-suggested-badge');
+  if(el){el.textContent=count;el.classList.toggle('hidden',count===0);}
+}
+
+// Accept/Dismiss modeled exactly on approveSubmission()/kickSubmission():
+// mutate local state, atUpdate() the Airtable record, push a notification
+// if relevant, re-run the parent render function (list rebuilds from
+// filtered state, no manual DOM splice), call showToast().
+async function acceptSuggestedActionItem(id){
+  const s=(window.SUGGESTED_ACTION_ITEMS||[]).find(x=>x.id===id);
+  if(!s)return;
+  if(s.status!=='Open')return; // already actioned — prevent duplicate Action Items
+  const fields={'Property Name':propertyNameToLink(s.property),'Description':s.description,'Owner':s.suggestedOwner||'','Due Date':s.suggestedDue||null,'Priority':s.suggestedPriority||'Medium','Status':'Open'};
+  const res=demoMode?null:await atCreate('Action Items',fields);
+  const newId=res?.records?.[0]?.id||'ai_'+Date.now();
+  actionItems.push({id:newId,property:s.property,description:s.description,owner:s.suggestedOwner||'',due:s.suggestedDue||'TBD',priority:s.suggestedPriority||'Medium',status:'Open',meetingId:null});
+  if(s.suggestedOwner)notifyActionItemOwner(s.suggestedOwner,s.description,s.property,s.suggestedDue,s.suggestedPriority);
+  s.status='Accepted';
+  if(!demoMode)await atUpdate('Suggested Action Items',id,{'Status':'Accepted'});
+  refreshDashActions();
+  if(currentProp&&currentProp.n===s.property)renderPropertyView(currentProp);
+  renderSuggestedActionItems();
+  showToast('Suggestion accepted — added to Action Items','success');
+}
+
+async function dismissSuggestedActionItem(id){
+  const s=(window.SUGGESTED_ACTION_ITEMS||[]).find(x=>x.id===id);
+  if(!s)return;
+  if(s.status!=='Open')return;
+  s.status='Dismissed';
+  if(!demoMode)await atUpdate('Suggested Action Items',id,{'Status':'Dismissed'});
+  renderSuggestedActionItems();
+  showToast('Suggestion dismissed','info');
+}
+
+// Checks the shared MARLI Suggestion Control table's Last Suggestion Run
+// field — if not from today (calendar date comparison, not just 24
+// hours), fires the Worker's /generate-suggestions endpoint (server-side
+// AI generation + Airtable writes) fire-and-forget so it never blocks the
+// UI, then re-renders once done. If Last Suggestion Run IS from today,
+// just re-renders from already-fetched Suggested Action Items data with
+// no Worker call.
+let _suggestionControlChecked=false;
+async function checkAndGenerateSuggestions(){
+  await loadSuggestedActionItems();
+  updateSuggestedActionItemsBadge();
+  const activeTab=document.querySelector('#view-queue .tab-content.active')?.id;
+  if(activeTab==='queue-tab-suggested')renderSuggestedActionItems();
+  if(demoMode)return; // no MARLI Suggestion Control table in demo mode
+  if(_suggestionControlChecked)return; // once per page load is enough; a fresh nav-away/back re-checks below anyway
+  _suggestionControlChecked=true;
+  try{
+    const controlRecs=await atGet('MARLI Suggestion Control');
+    const row=controlRecs[0];
+    const lastRun=row?row.fields['Last Suggestion Run']:null;
+    const todayStr=new Date().toISOString().split('T')[0];
+    const alreadyRanToday=lastRun&&(new Date(lastRun).toISOString().split('T')[0]===todayStr);
+    if(alreadyRanToday)return;
+    // Not run today yet — kick off generation fire-and-forget with a small
+    // loading indicator in the Suggested Action Items tab while it runs.
+    const listEl=document.getElementById('suggested-action-items-list');
+    if(listEl&&activeTab==='queue-tab-suggested'){
+      listEl.insertAdjacentHTML('afterbegin',`<div id="suggestion-gen-loading" style="padding:10px 14px;font-size:12px;color:var(--gray-mid);display:flex;align-items:center;gap:8px"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i>MARLI is reviewing recent updates for new suggestions...</div>`);
+    }
+    // window._marliRecordId is the client's existing "who is logged in"
+    // Access PINs record id (set at login, see _finishLogin()/
+    // tryRestorePulseSession()) — the closest existing equivalent to a PIN
+    // Access record id, reused here rather than inventing a new variable.
+    const triggeredBy=window._marliRecordId||'';
+    fetch(`${WORKER_URL}/generate-suggestions`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({triggeredBy})
+    }).then(async res=>{
+      document.getElementById('suggestion-gen-loading')?.remove();
+      if(res.ok){
+        await loadSuggestedActionItems();
+        updateSuggestedActionItemsBadge();
+        if(document.querySelector('#view-queue .tab-content.active')?.id==='queue-tab-suggested')renderSuggestedActionItems();
+        const data=await res.json().catch(()=>null);
+        if(data&&data.created>0)showToast(`MARLI added ${data.created} new suggested action item${data.created!==1?'s':''}`,'info');
+      }
+    }).catch(e=>{
+      document.getElementById('suggestion-gen-loading')?.remove();
+      console.error('checkAndGenerateSuggestions Worker call failed:',e);
+    });
+  }catch(e){
+    console.error('checkAndGenerateSuggestions error:',e);
+  }
+}
+
 // ── WEEKLY UPDATE REMINDER ────────────────────────────────────────
 // Reads/writes the single "Weekly Update Due Day" row in the Portfolio
 // Settings table. The Send Reminder button stays disabled until a PM has
@@ -21208,6 +21455,7 @@ function updateQueueBadge(){
   updateMyUpdatesBadge();
   updateClientCommentsBadge();
   updateOpsCenterBadge();
+  updateSuggestedActionItemsBadge();
 }
 // v44d — Operations Center nav badge. Counts overdue actions plus newly
 // scheduled meetings/site visits (the same items that populate the Operations
@@ -23456,7 +23704,10 @@ function renderOpsCenter(){
   container.innerHTML=`
     <!-- ACTION PLAN -->
     <div style="margin-bottom:8px">
-      <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">30/60/90 Day Action Plan</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em">30/60/90 Day Action Plan</div>
+        ${(()=>{const sc=(window.SUGGESTED_ACTION_ITEMS||[]).filter(s=>s.status==='Open').length;return sc>0?`<span style="font-size:11px;color:var(--gray-mid);font-weight:400;cursor:pointer" onclick="gotoView('queue',null);setTimeout(()=>switchQueueTab('suggested',document.querySelector('#view-queue .tab-btn[onclick*=\\'suggested\\']')),300)">${sc} new MARLI suggestion${sc!==1?'s':''} &rarr;</span>`:'';})()}
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
         ${actionSection('Overdue',overdue,'var(--red)','ti-alert-triangle')}
         ${actionSection('30 Day',next30,'var(--amber)','ti-clock')}
