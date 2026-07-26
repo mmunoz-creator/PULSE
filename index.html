@@ -17,6 +17,7 @@
   --green:#3B6D11;--green-pale:#EAF3DE;--amber:#854F0B;--amber-pale:#FAEEDA;--red:#A32D2D;--red-pale:#FCEBEB;
   --indigo:#4B5EAA;--indigo-pale:#EEF0FA;
   --purple:#534AB7;--purple-pale:#EEEDFE;--teal:#0F6E56;--teal-pale:#E1F5EE;
+  --vda-billing:#8B5CF6;--vda-billing-pale:#F1EBFE;
   --border:#e8e6e0;--border-strong:#d0cec8;--radius:10px;--radius-sm:6px;
   --shadow:0 1px 3px rgba(10,22,40,0.08);--shadow-md:0 4px 16px rgba(10,22,40,0.12);
   --sidebar-w:235px;
@@ -1634,6 +1635,10 @@ async function loadAllData() {
       linkedUnitIds: r.fields['Linked Units']||[],
       appliesToWholeProject: !!r.fields['Applies to Whole Project'],
     })).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    // v47a — VDA Project billing-tracking feature. Loaded fire-and-forget,
+    // same pattern as backfillAllUnassignedUnits() below, so a slow VDA
+    // Project table never blocks the rest of the app's initial render.
+    loadVdaProjectData();
     AT_CONNECTED = true;
     console.log('AT_CONNECTED set to true - updating UI');
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
@@ -1664,6 +1669,66 @@ async function loadAllData() {
   } catch(e) { console.error('Load error:',e); showToast('Connection issue — retrying in background','warn'); }
   // Load complete
 }
+
+// v47a — VDA Project billing-tracking feature. Field names assumed per
+// Misty's confirmed schema; verify exact spelling against live Airtable
+// before first real save if any write fails.
+// Tables used: 'VDA Project', 'Task Line', 'Amendment History',
+// 'Invoice Entries'. Task Line and Amendment History are assumed to link
+// back to their parent VDA Project record through a field literally named
+// 'VDA Project' (could not be verified against the live base from this
+// environment) — see final report for this assumption.
+window.VDA_PROJECTS=[];window.VDA_TASK_LINES=[];window.VDA_AMENDMENTS=[];window.VDA_INVOICES=[];
+async function loadVdaProjectData(){
+  try{
+    const [vdaRecs,taskRecs,amendRecs,invRecs]=await Promise.all([
+      atGet('VDA Project'), atGet('Task Line'), atGet('Amendment History'), atGet('Invoice Entries')
+    ]);
+    window.VDA_PROJECTS=(vdaRecs||[]).map(r=>({
+      id:r.id,
+      number:r.fields['VDA Project Number']||'',
+      status:r.fields['Status']||'Active',
+      linkedPropertyIds:r.fields['Linked Properties']||[],
+      linkedUnitIds:r.fields['Linked Units']||[],
+      linkedProjectIds:r.fields['Linked Projects']||[],
+      scope:r.fields['Current Scope']||'',
+      price:r.fields['Current Price']!=null?Number(r.fields['Current Price']):0,
+      createdTime:r.createdTime||'',
+    }));
+    window.VDA_TASK_LINES=(taskRecs||[]).map(r=>({
+      id:r.id,
+      vdaId:(r.fields['VDA Project']||[])[0]||'',
+      description:r.fields['Description']||'',
+      amount:r.fields['Amount']!=null?Number(r.fields['Amount']):0,
+      billingSplit:r.fields['Billing Split']||'100% on completion',
+      triggerType:r.fields['Trigger Type']||'Milestone-linked',
+      status:r.fields['Status']||'Not Started',
+      monthlyForecastEstimate:r.fields['Monthly Forecast Estimate']!=null?Number(r.fields['Monthly Forecast Estimate']):0,
+      createdTime:r.createdTime||'',
+    }));
+    window.VDA_AMENDMENTS=(amendRecs||[]).map(r=>({
+      id:r.id,
+      vdaId:(r.fields['VDA Project']||[])[0]||'',
+      date:r.fields['Amendment Date']||'',
+      reason:r.fields['Reason/Notes']||'',
+      priorScope:r.fields['Prior Scope']||'',
+      priorPrice:r.fields['Prior Price']!=null?Number(r.fields['Prior Price']):0,
+      newScope:r.fields['New Scope']||'',
+      newPrice:r.fields['New Price']!=null?Number(r.fields['New Price']):0,
+      amendedBy:r.fields['Amended By']||'',
+    }));
+    window.VDA_INVOICES=(invRecs||[]).map(r=>({
+      id:r.id,
+      taskLineId:(r.fields['Linked Task Line']||[])[0]||'',
+      amount:r.fields['Amount']!=null?Number(r.fields['Amount']):0,
+      date:r.fields['Date']||'',
+    }));
+    if(document.getElementById('view-vdaproject')&&!document.getElementById('view-vdaproject').classList.contains('hidden')){
+      renderVdaProjects();
+    }
+  }catch(e){console.error('loadVdaProjectData error:',e);}
+}
+window.loadVdaProjectData=loadVdaProjectData;
 
 async function backfillAllUnassignedUnits(){
   const propNames=[...new Set((window.UNIT_INVENTORY||[]).map(u=>u.property))].filter(Boolean);
@@ -2238,6 +2303,108 @@ window.PROPERTIES_SEED = [
   </div>
 </div>
 
+<!-- v47a — CONFIGURE VDA PROJECT PANEL (create-only). Same slide-out
+mechanism as Edit Property above (translateX panel + dimmed overlay). -->
+<div id="cvp-overlay" onclick="closeConfigureVdaPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="cvp-panel" style="display:none;position:fixed;top:0;right:0;width:640px;max-width:95vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div style="font-size:16px;font-weight:700;color:#85B7EB">Configure Project</div>
+    <button onclick="closeConfigureVdaPanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px">
+    <div id="cvp-error" style="display:none;background:var(--red-pale);border:1px solid var(--red);color:var(--red);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:14px;line-height:1.5"></div>
+    <div class="two-col" style="gap:12px">
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">VDA Project Number</label><input class="form-input" type="text" id="cvp-number" placeholder="optional"></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Initial Scope</label><textarea class="form-textarea" id="cvp-scope" rows="3" placeholder="Describe the scope of this agreement..."></textarea></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Initial Price</label><input class="form-input" type="number" id="cvp-price" placeholder="0" min="0"></div>
+    </div>
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Linked Properties / Units</div>
+      <input class="form-input" type="text" id="cvp-tree-search" placeholder="Search properties..." oninput="renderVdaPropertyTree('cvp-tree','cvp')" style="margin-bottom:8px">
+      <div id="cvp-tree" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px"></div>
+    </div>
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em">Task Lines</div>
+        <button class="btn btn-success" style="font-size:12px" onclick="addVdaTaskLineRow('cvp-tasklines')"><i class="ti ti-plus"></i>Add Task Line</button>
+      </div>
+      <div id="cvp-tasklines"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:20px">
+      <button class="btn btn-primary" onclick="saveConfigureVdaProject()"><i class="ti ti-check"></i>Save</button>
+      <button class="btn" onclick="closeConfigureVdaPanel()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- v47a — EDIT VDA PROJECT PANEL (existing agreements). Status, Task
+Lines, and Linked Properties/Units are editable and save on Save.
+Current Scope/Current Price are read-only display text here — they can
+only change via Add Amendment, which writes an Amendment History row and
+then updates the VDA Project's Current Scope/Current Price directly. -->
+<div id="evp-overlay" onclick="closeEditVdaPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="evp-panel" style="display:none;position:fixed;top:0;right:0;width:640px;max-width:95vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div style="font-size:16px;font-weight:700;color:#85B7EB">Edit Project</div>
+    <button onclick="closeEditVdaPanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px">
+    <input type="hidden" id="evp-id" value="">
+    <div class="form-group"><label class="form-label">Status</label><select class="form-select" id="evp-status">
+      <option value="Active">Active</option>
+      <option value="On Hold">On Hold</option>
+      <option value="Complete">Complete</option>
+      <option value="Cancelled">Cancelled</option>
+    </select></div>
+
+    <div style="margin-top:14px;padding:12px;background:var(--gray-xpale,#f8f8f6);border-radius:8px">
+      <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Current Scope</div>
+      <div id="evp-scope-display" style="font-size:13px;color:var(--navy);white-space:pre-wrap;margin-bottom:10px">—</div>
+      <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Current Price</div>
+      <div id="evp-price-display" style="font-size:15px;font-weight:700;color:var(--navy)">$0</div>
+    </div>
+
+    <div style="margin-top:14px">
+      <button class="btn btn-success" id="evp-add-amend-btn" onclick="toggleAddAmendmentForm()"><i class="ti ti-history-toggle"></i>Add Amendment</button>
+      <div id="evp-amend-form" style="display:none;margin-top:10px;padding:14px;border:1px solid var(--border);border-radius:8px;background:var(--blue-xpale)">
+        <div class="form-group"><label class="form-label">New Scope</label><textarea class="form-textarea" id="evp-amend-newscope" rows="3"></textarea></div>
+        <div class="form-group"><label class="form-label">New Price</label><input class="form-input" type="number" id="evp-amend-newprice" min="0"></div>
+        <div class="form-group"><label class="form-label">Reason / Notes *</label><textarea class="form-textarea" id="evp-amend-reason" rows="2" placeholder="Required"></textarea></div>
+        <div class="form-group"><label class="form-label">Amended By</label><input class="form-input" type="text" id="evp-amend-by"></div>
+        <div id="evp-amend-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:8px"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="submitAddAmendment()"><i class="ti ti-check"></i>Submit Amendment</button>
+          <button class="btn" onclick="toggleAddAmendmentForm(false)">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px">
+      <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Amendment History</div>
+      <div id="evp-amend-history"></div>
+    </div>
+
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Linked Properties / Units</div>
+      <input class="form-input" type="text" id="evp-tree-search" placeholder="Search properties..." oninput="renderVdaPropertyTree('evp-tree','evp')" style="margin-bottom:8px">
+      <div id="evp-tree" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px"></div>
+    </div>
+
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em">Task Lines</div>
+        <button class="btn btn-success" style="font-size:12px" onclick="addVdaTaskLineRow('evp-tasklines')"><i class="ti ti-plus"></i>Add Task Line</button>
+      </div>
+      <div id="evp-tasklines"></div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:20px">
+      <button class="btn btn-primary" onclick="saveEditVdaProject()"><i class="ti ti-check"></i>Save Changes</button>
+      <button class="btn" onclick="closeEditVdaPanel()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- v45q — NEW PROPERTY PANEL. Replaces the old centered "Add to Capital
 Plan" overlay (openCapitalPlanEntry/saveCapitalPlanEntry previously built
 a modal from scratch in JS — see the removed function bodies). Same
@@ -2392,6 +2559,7 @@ from unitEffectiveValue() onto each checkbox). -->
         <button class="nav-item" onclick="gotoView('scorecard',this)"><i class="ti ti-trophy"></i>Scorecard</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
+        <button class="nav-item" onclick="gotoView('vdaproject',this)"><i class="ti ti-file-invoice"></i>VDA Project</button>
         <button class="nav-item" onclick="gotoView('schedule',this)"><i class="ti ti-timeline"></i>Schedule</button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
       </div>
@@ -2419,6 +2587,7 @@ from unitEffectiveValue() onto each checkbox). -->
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
+        <button class="nav-item" onclick="gotoView('vdaproject',this)"><i class="ti ti-file-invoice"></i>VDA Project</button>
         <button class="nav-item" onclick="gotoView('schedule',this)"><i class="ti ti-timeline"></i>Schedule</button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
       </div>
@@ -2472,6 +2641,7 @@ from unitEffectiveValue() onto each checkbox). -->
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
+        <button class="nav-item" onclick="gotoView('vdaproject',this)"><i class="ti ti-file-invoice"></i>VDA Project</button>
         <button class="nav-item" onclick="gotoView('schedule',this)"><i class="ti ti-timeline"></i>Schedule</button>
       </div>
       <div class="nav-section">
@@ -2504,7 +2674,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v46a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v47a</div>
     </div>
   </nav>
 
@@ -2587,6 +2757,31 @@ from unitEffectiveValue() onto each checkbox). -->
       </div>
 
       <!-- PORTFOLIO -->
+      <!-- VDA PROJECT — v47a. Billing-tracking feature: tracks VDA Project
+      agreements (scope/price), their Task Lines (billable line items with
+      milestone or recurring triggers), Amendment History (scope/price
+      changes over time), and rolls billing status up into a stat row and
+      one card per agreement. PM/Admin full rights; Client view-only; no
+      Consultant access at all (see nav blocks — Consultant has no nav
+      item and view-vdaproject is simply never reachable for that role). -->
+      <div id="view-vdaproject" class="hidden">
+        <div class="page-header">
+          <div class="page-header-left"><h1>VDA Project</h1><p>Billing agreements, task lines, and amendment history across the portfolio</p></div>
+          <div class="header-actions">
+            <button class="btn btn-primary no-print" id="vda-configure-btn" onclick="openConfigureVdaPanel()" style="display:none"><i class="ti ti-plus"></i>Configure Project</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="stat-row" id="vda-stat-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px">
+            <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Total Agreements</div><div id="vda-stat-total" style="font-size:24px;font-weight:700;color:var(--navy)">0</div></div>
+            <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Total Current Price</div><div id="vda-stat-price" style="font-size:24px;font-weight:700;color:var(--navy)">$0</div></div>
+            <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Active</div><div id="vda-stat-active" style="font-size:24px;font-weight:700;color:var(--blue-dark)">0</div></div>
+            <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">With Unstarted Task Lines</div><div id="vda-stat-unstarted" style="font-size:24px;font-weight:700;color:var(--amber)">0</div></div>
+          </div>
+          <div id="vda-card-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px"></div>
+        </div>
+      </div>
+
       <div id="view-portfolio" class="hidden">
         <div class="page-header">
           <div class="page-header-left"><h1>Portfolio View</h1><p id="portfolio-sub">Loading properties...</p></div>
@@ -3202,6 +3397,27 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
             </div>
             <div id="bo-summary-cards" style="display:grid;grid-template-columns:repeat(5,200px);justify-content:space-between;margin-bottom:64px"></div>
+            <!-- v47a — mini Forecasted Spend card, same rolling 12-month
+            actual/forecast bars as the Analytics chart, with its own
+            independent "Include VDA billing" toggle (context='budget' so
+            it never affects the Analytics chart's own toggle state). -->
+            <div class="card no-print" style="position:relative;margin-bottom:24px">
+              <div class="card-header">
+                <div>
+                  <div class="card-title">Forecasted Spend</div>
+                  <div class="card-sub">Rolling 12 months, one-month billing lag, straight-line proration</div>
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid);cursor:pointer;white-space:nowrap">
+                  <input type="checkbox" id="bo-fs-vda-toggle" onchange="toggleVdaForecastInclude('budget',this.checked)">Include VDA billing
+                </label>
+              </div>
+              <div id="bo-fs-chart" style="margin-top:10px;position:relative"></div>
+              <div id="bo-fs-legend" style="display:flex;justify-content:center;gap:16px;margin-top:8px;font-size:11px;color:var(--gray-mid)">
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--act-billing);display:inline-block"></span>Actual (billed)</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--teal);display:inline-block"></span>Forecast</span>
+                <span id="bo-fs-legend-vda" style="display:none;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--vda-billing);display:inline-block"></span>VDA billing</span>
+              </div>
+            </div>
             <div id="bo-chart" style="margin-bottom:24px"></div>
             <div class="table-wrap">
               <table class="data-table">
@@ -4780,6 +4996,7 @@ function gotoView(viewId,btn){
   if(viewId==='dashboard')renderDashboard();
   if(viewId==='glossary')renderGlossary();
   if(viewId==='schedule')renderGantt();
+  if(viewId==='vdaproject')renderVdaProjects();
   if(viewId==='opscenter')renderOpsCenter();
   if(viewId==='submit'){
     populateSubmitDropdown();
@@ -13365,6 +13582,8 @@ window.discardReforecastChanges=discardReforecastChanges;
 function renderBudgetOutlook(){
   const pillsEl=document.getElementById('bo-filter-pills');
   if(!pillsEl)return;
+  // v47a — mini Forecasted Spend card, independent VDA billing toggle.
+  if(typeof renderBoForecastSpendChart==='function')renderBoForecastSpendChart();
   // v41a — role-gated export buttons, same toggle pattern used elsewhere
   // in this file (e.g. line ~3596-3599). Client only ever sees the client
   // report button, relabeled "Export Report" since there's no second
@@ -15471,6 +15690,21 @@ function renderCharts(){
     fsDetailByMonth[mo].push({property:prop,unitName:'',amount:billed,isActual:true});
   });
 
+  // v47a — "Include VDA billing" toggle on Forecasted Spend. Off by
+  // default; when the checkbox is checked, extend fsByMonth[month] with a
+  // third .vda key computed by computeVdaFsByMonth() (see VDA PROJECT
+  // section near the end of this script). Purely additive — never alters
+  // .actual/.forecast, and the third bar segment only renders when on.
+  const fsIncludeVda=!!(document.getElementById('fs-vda-toggle')&&document.getElementById('fs-vda-toggle').checked);
+  if(fsIncludeVda&&typeof computeVdaFsByMonth==='function'){
+    const vdaByMonth=computeVdaFsByMonth(_fcfsMonthKeys);
+    _fcfsMonthKeys.forEach(mo=>{
+      if(!fsByMonth[mo])fsByMonth[mo]={actual:0,forecast:0};
+      fsByMonth[mo].vda=vdaByMonth[mo]||0;
+    });
+  }
+  const fsLegendVda=document.getElementById('fs-legend-vda');
+  if(fsLegendVda)fsLegendVda.style.display=fsIncludeVda?'flex':'none';
 
 
   // 6. Portfolio % Complete — v42a, switched from whole-property status to
@@ -15627,11 +15861,15 @@ function renderCharts(){
           <div class="card-title">Forecasted Spend</div>
           <div class="card-sub">Rolling 12 months, one-month billing lag, straight-line proration</div>
         </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid);cursor:pointer;white-space:nowrap">
+          <input type="checkbox" id="fs-vda-toggle" onchange="toggleVdaForecastInclude('charts',this.checked)">Include VDA billing
+        </label>
       </div>
       <div id="fs-chart" style="margin-top:10px;position:relative"></div>
       <div id="fs-legend" style="display:flex;justify-content:center;gap:16px;margin-top:8px;font-size:11px;color:var(--gray-mid)">
         <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--act-billing);display:inline-block"></span>Actual (billed)</span>
         <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--teal);display:inline-block"></span>Forecast</span>
+        <span id="fs-legend-vda" style="display:none;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--vda-billing);display:inline-block"></span>VDA billing</span>
       </div>
     </div>
   </div>
@@ -15888,22 +16126,25 @@ function renderCharts(){
   // Forecasted Completion's scope exactly.
   const fsChart=document.getElementById('fs-chart');
   if(fsChart){
-    const anyFs=_fcfsMonthKeys.some(k=>((fsByMonth[k]||{}).actual||0)+((fsByMonth[k]||{}).forecast||0)>0);
+    const anyFs=_fcfsMonthKeys.some(k=>((fsByMonth[k]||{}).actual||0)+((fsByMonth[k]||{}).forecast||0)+((fsByMonth[k]||{}).vda||0)>0);
     if(!anyFs){
       fsChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No active projects with resolvable spend in the next 12 months.</div>';
     }else{
-      const maxFs=Math.max(1,..._fcfsMonthKeys.map(k=>((fsByMonth[k]||{}).actual||0)+((fsByMonth[k]||{}).forecast||0)));
+      const maxFs=Math.max(1,..._fcfsMonthKeys.map(k=>((fsByMonth[k]||{}).actual||0)+((fsByMonth[k]||{}).forecast||0)+((fsByMonth[k]||{}).vda||0)));
       const chartH=120;
       fsChart.innerHTML=`
         <div style="display:flex;align-items:flex-end;gap:8px;height:${chartH+24}px;padding:0 4px">
           ${_fcfsMonthKeys.map(k=>{
-            const m=fsByMonth[k]||{actual:0,forecast:0};
-            const totalAmt=m.actual+m.forecast;
+            const m=fsByMonth[k]||{actual:0,forecast:0,vda:0};
+            const vdaAmt=m.vda||0;
+            const totalAmt=m.actual+m.forecast+vdaAmt;
             const actualH=totalAmt>0?Math.max(m.actual>0?4:0,Math.round((m.actual/maxFs)*chartH)):0;
             const forecastH=totalAmt>0?Math.max(m.forecast>0?4:0,Math.round((m.forecast/maxFs)*chartH)):0;
+            const vdaH=totalAmt>0?Math.max(vdaAmt>0?4:0,Math.round((vdaAmt/maxFs)*chartH)):0;
             return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0" ${totalAmt>0?`onmouseover="showFcFsTooltip(event,'fs','${k}')" onmouseout="hideFcFsTooltip()" onclick="showBarDrilldown('fs-month','${k}')"`:''}>
               <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:4px">${totalAmt>0?fmtCurrency(totalAmt):'—'}</div>
               <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;cursor:${totalAmt>0?'pointer':'default'}">
+                ${vdaAmt>0?`<div style="width:100%;height:${vdaH}px;background:var(--vda-billing);opacity:.85;transition:opacity .12s;${m.forecast>0||m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
                 ${m.forecast>0?`<div style="width:100%;height:${forecastH}px;background:var(--teal);opacity:.85;transition:opacity .12s;${m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
                 ${m.actual>0?`<div style="width:100%;height:${actualH}px;background:var(--act-billing);border-radius:4px 4px 0 0;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
               </div>
@@ -23439,6 +23680,712 @@ function _renderGlossaryRows(items){
     <td style="font-size:12px;line-height:1.7;color:var(--gray-dark)">${g.def}</td>
   </tr>`).join('');
 }
+
+// ── VDA PROJECT (billing-tracking feature, v47a) ───────────────────────
+// Field names assumed per Misty's confirmed schema; verify exact spelling
+// against live Airtable before first real save if any write fails. Task
+// Line/Amendment History are assumed to link back to their parent VDA
+// Project via a field named 'VDA Project' (see loadVdaProjectData()
+// above and the final build report for this assumption).
+const VDA_TASKLINE_DESC_OPTIONS=[...MILESTONES_DEF,'Site Visit','PM Services','Other'];
+
+function vdaCanEdit(){return role==='pm'||role==='admin';}
+
+function vdaStatusBadgeColor(status){
+  if(status==='Complete')return {bg:'var(--green-pale)',fg:'var(--green)'};
+  if(status==='On Hold')return {bg:'var(--amber-pale)',fg:'var(--amber)'};
+  if(status==='Cancelled')return {bg:'var(--red-pale)',fg:'var(--red)'};
+  return {bg:'var(--blue-pale)',fg:'var(--blue-dark)'};
+}
+
+function renderVdaProjects(){
+  const list=document.getElementById('vda-card-list');
+  if(!list)return;
+  const canEdit=vdaCanEdit();
+  const cfgBtn=document.getElementById('vda-configure-btn');
+  if(cfgBtn)cfgBtn.style.display=canEdit?'':'none';
+
+  const projects=window.VDA_PROJECTS||[];
+  const taskLines=window.VDA_TASK_LINES||[];
+  const amendments=window.VDA_AMENDMENTS||[];
+
+  const totalAgreements=projects.length;
+  const totalPrice=projects.reduce((a,p)=>a+(p.price||0),0);
+  const activeCount=projects.filter(p=>p.status==='Active').length;
+  const unstartedCount=projects.filter(p=>taskLines.some(t=>t.vdaId===p.id&&t.status==='Not Started')).length;
+  const elTotal=document.getElementById('vda-stat-total');if(elTotal)elTotal.textContent=totalAgreements;
+  const elPrice=document.getElementById('vda-stat-price');if(elPrice)elPrice.textContent=fmtCurrency(totalPrice);
+  const elActive=document.getElementById('vda-stat-active');if(elActive)elActive.textContent=activeCount;
+  const elUnstarted=document.getElementById('vda-stat-unstarted');if(elUnstarted)elUnstarted.textContent=unstartedCount;
+
+  if(projects.length===0){
+    list.innerHTML=`<div class="empty-state" style="grid-column:1/-1"><i class="ti ti-file-invoice"></i><div class="empty-state-title">No VDA Project agreements yet</div><div class="empty-state-sub">${canEdit?'Use + Configure Project to add the first one':'No agreements have been configured yet'}</div></div>`;
+    return;
+  }
+
+  list.innerHTML=projects.map(p=>{
+    const badge=vdaStatusBadgeColor(p.status);
+    const propNames=(p.linkedPropertyIds||[]).map(id=>{
+      const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);
+      return pr?pr.n:'';
+    }).filter(Boolean);
+    const myTasks=taskLines.filter(t=>t.vdaId===p.id);
+    const fullyBilled=myTasks.filter(t=>t.status==='Fully Billed').length;
+    const myAmendments=amendments.filter(a=>a.vdaId===p.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const lastAmendDate=myAmendments.length?myAmendments[0].date:'';
+    const myTaskIds=new Set(myTasks.map(t=>t.id));
+    const myInvoices=(window.VDA_INVOICES||[]).filter(inv=>myTaskIds.has(inv.taskLineId)).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const lastInvoiceDate=myInvoices.length?myInvoices[0].date:'';
+    return `<div class="card" style="padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:var(--navy)">${p.number?p.number.replace(/</g,'&lt;'):'No number assigned'}</div>
+          <span style="display:inline-block;margin-top:4px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;background:${badge.bg};color:${badge.fg}">${p.status||'Active'}</span>
+        </div>
+        ${canEdit?`<button class="btn-icon" onclick="openEditVdaPanel('${p.id}')" title="Edit Project" style="border:none;background:none;cursor:pointer;color:var(--blue-dark);font-size:16px"><i class="ti ti-pencil"></i></button>`:''}
+      </div>
+      <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:8px">${fmtCurrency(p.price||0)}</div>
+      <div style="font-size:12px;color:var(--gray-mid);margin-bottom:6px">${propNames.length?propNames.join(', '):'No properties linked'}</div>
+      <div style="font-size:12px;color:var(--gray-dark);margin-bottom:4px">${myTasks.length} task line${myTasks.length===1?'':'s'} &middot; ${fullyBilled} fully billed</div>
+      ${lastAmendDate?`<div style="font-size:11px;color:var(--gray-mid)">Last amendment: ${lastAmendDate}</div>`:''}
+      ${lastInvoiceDate?`<div style="font-size:11px;color:var(--gray-mid)">Last invoice: ${lastInvoiceDate}</div>`:''}
+    </div>`;
+  }).join('');
+}
+window.renderVdaProjects=renderVdaProjects;
+
+// ── Two-level Property + Unit tree picker, shared by both panels ──────
+// state[prefix] holds the working set of checked property ids and unit ids
+// while a panel is open, keyed by prefix ('cvp' for Configure, 'evp' for Edit).
+window._vdaTreeState={};
+function vdaTreeState(prefix){
+  if(!window._vdaTreeState[prefix])window._vdaTreeState[prefix]={properties:new Set(),units:new Set(),expanded:new Set()};
+  return window._vdaTreeState[prefix];
+}
+function vdaPropertyUnits(propName){
+  return (window.UNIT_INVENTORY||[]).filter(u=>u.property===propName);
+}
+function toggleVdaTreeExpand(prefix,propId){
+  const st=vdaTreeState(prefix);
+  if(st.expanded.has(propId))st.expanded.delete(propId);else st.expanded.add(propId);
+  renderVdaPropertyTree(prefix+'-tree',prefix);
+}
+function toggleVdaTreeProperty(prefix,propId,checked){
+  const st=vdaTreeState(prefix);
+  const prop=(window.PORTFOLIO||[]).find(p=>p.id===propId);
+  if(checked){
+    st.properties.add(propId);
+    if(prop)vdaPropertyUnits(prop.n).forEach(u=>st.units.add(u.id));
+  }else{
+    st.properties.delete(propId);
+    if(prop)vdaPropertyUnits(prop.n).forEach(u=>st.units.delete(u.id));
+  }
+  renderVdaPropertyTree(prefix+'-tree',prefix);
+}
+function toggleVdaTreeUnit(prefix,unitId,checked){
+  const st=vdaTreeState(prefix);
+  if(checked)st.units.add(unitId);else st.units.delete(unitId);
+  renderVdaPropertyTree(prefix+'-tree',prefix);
+}
+function renderVdaPropertyTree(containerId,prefix){
+  const container=document.getElementById(containerId);
+  if(!container)return;
+  const st=vdaTreeState(prefix);
+  const searchEl=document.getElementById(prefix+'-tree-search');
+  const searchVal=(searchEl&&searchEl.value||'').trim().toLowerCase();
+  const canEdit=vdaCanEdit();
+  const props=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed'&&(!searchVal||p.n.toLowerCase().includes(searchVal)))
+    .sort((a,b)=>a.n.localeCompare(b.n));
+  if(props.length===0){
+    container.innerHTML=`<div style="font-size:12px;color:var(--gray-mid);padding:6px">No properties match.</div>`;
+    return;
+  }
+  container.innerHTML=props.map(p=>{
+    const units=vdaPropertyUnits(p.n);
+    const propChecked=st.properties.has(p.id);
+    const expanded=st.expanded.has(p.id);
+    const disabled=canEdit?'':'disabled';
+    return `<div style="border-bottom:1px solid var(--border);padding:4px 0">
+      <div style="display:flex;align-items:center;gap:6px">
+        <button type="button" onclick="toggleVdaTreeExpand('${prefix}','${p.id}')" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:12px;padding:2px"><i class="ti ti-chevron-${expanded?'down':'right'}"></i></button>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;flex:1">
+          <input type="checkbox" ${propChecked?'checked':''} ${disabled} onchange="toggleVdaTreeProperty('${prefix}','${p.id}',this.checked)">
+          <span style="font-weight:600">${p.n.replace(/</g,'&lt;')}</span>
+          <span style="color:var(--gray-mid);font-size:11px">(${units.length} unit${units.length===1?'':'s'})</span>
+        </label>
+      </div>
+      ${expanded?`<div style="margin-left:26px;margin-top:4px">
+        ${units.length===0?`<div style="font-size:11px;color:var(--gray-mid);padding:2px 0">No units in Unit Inventory List.</div>`:units.map(u=>`
+          <label style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:12px;cursor:pointer">
+            <input type="checkbox" ${st.units.has(u.id)?'checked':''} ${disabled} onchange="toggleVdaTreeUnit('${prefix}','${u.id}',this.checked)">
+            <span>${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+          </label>`).join('')}
+      </div>`:''}
+    </div>`;
+  }).join('');
+}
+window.renderVdaPropertyTree=renderVdaPropertyTree;
+
+// ── Task Line repeatable rows ───────────────────────────────────────
+// Each row lives as a DOM block with data-row-id; row state is read
+// directly from the DOM on save (no separate JS array to keep in sync).
+let _vdaTaskLineRowSeq=0;
+function addVdaTaskLineRow(containerId,existing){
+  const container=document.getElementById(containerId);
+  if(!container)return;
+  const rowId='vdatl-'+(++_vdaTaskLineRowSeq);
+  const canEdit=vdaCanEdit();
+  const disabled=canEdit?'':'disabled';
+  const isEditPanel=containerId==='evp-tasklines';
+  const descVal=existing?existing.description:'';
+  const isKnownDesc=VDA_TASKLINE_DESC_OPTIONS.includes(descVal);
+  const descOptions=VDA_TASKLINE_DESC_OPTIONS.map(d=>`<option value="${d}" ${d===descVal?'selected':''}>${d}</option>`).join('');
+  const row=document.createElement('div');
+  row.className='vda-taskline-row';
+  row.dataset.rowId=rowId;
+  row.dataset.existingId=existing&&existing.id?existing.id:'';
+  row.style.cssText='border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;position:relative';
+  row.innerHTML=`
+    <button type="button" onclick="this.closest('.vda-taskline-row').remove()" ${disabled} style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--red);font-size:14px"><i class="ti ti-trash"></i></button>
+    <div class="two-col" style="gap:8px">
+      <div class="form-group" style="grid-column:1/-1">
+        <label class="form-label">Description</label>
+        <select class="form-select vdatl-desc" ${disabled} onchange="vdaTaskLineDescChange(this)">${descOptions}<option value="__custom__" ${!isKnownDesc&&descVal?'selected':''}>Other</option></select>
+        <input class="form-input vdatl-desc-other" type="text" placeholder="Enter description" value="${!isKnownDesc&&descVal?descVal.replace(/"/g,'&quot;'):''}" style="margin-top:6px;display:${!isKnownDesc&&descVal?'block':'none'}" ${disabled}>
+      </div>
+      <div class="form-group"><label class="form-label">Amount</label><input class="form-input vdatl-amount" type="number" min="0" value="${existing?existing.amount:''}" ${disabled}></div>
+      <div class="form-group"><label class="form-label">Billing Split</label><select class="form-select vdatl-split" ${disabled}>
+        <option value="100% on completion" ${existing&&existing.billingSplit==='100% on completion'?'selected':''}>100% on completion</option>
+        <option value="50% start / 50% completion" ${existing&&existing.billingSplit==='50% start / 50% completion'?'selected':''}>50% start / 50% completion</option>
+      </select></div>
+      <div class="form-group"><label class="form-label">Trigger Type</label><select class="form-select vdatl-trigger" ${disabled} onchange="vdaTaskLineTriggerChange(this)">
+        <option value="Milestone-linked" ${!existing||existing.triggerType==='Milestone-linked'?'selected':''}>Milestone-linked</option>
+        <option value="Recurring-count-based" ${existing&&existing.triggerType==='Recurring-count-based'?'selected':''}>Recurring-count-based</option>
+        <option value="Flat recurring" ${existing&&existing.triggerType==='Flat recurring'?'selected':''}>Flat recurring</option>
+      </select></div>
+      <div class="form-group vdatl-monthly-wrap" style="grid-column:1/-1;display:${existing&&existing.triggerType&&existing.triggerType!=='Milestone-linked'?'block':'none'}">
+        <label class="form-label">Monthly Forecast Estimate</label>
+        <input class="form-input vdatl-monthly" type="number" min="0" value="${existing?existing.monthlyForecastEstimate||'':''}" ${disabled}>
+      </div>
+      ${isEditPanel?`<div class="form-group"><label class="form-label">Status</label><select class="form-select vdatl-status" ${disabled}>
+        <option value="Not Started" ${!existing||existing.status==='Not Started'?'selected':''}>Not Started</option>
+        <option value="Start Billed" ${existing&&existing.status==='Start Billed'?'selected':''}>Start Billed</option>
+        <option value="Completed" ${existing&&existing.status==='Completed'?'selected':''}>Completed</option>
+        <option value="Fully Billed" ${existing&&existing.status==='Fully Billed'?'selected':''}>Fully Billed</option>
+      </select></div>`:''}
+    </div>`;
+  container.appendChild(row);
+}
+function vdaTaskLineDescChange(sel){
+  const row=sel.closest('.vda-taskline-row');
+  const otherInput=row.querySelector('.vdatl-desc-other');
+  otherInput.style.display=sel.value==='__custom__'?'block':'none';
+}
+function vdaTaskLineTriggerChange(sel){
+  const row=sel.closest('.vda-taskline-row');
+  const wrap=row.querySelector('.vdatl-monthly-wrap');
+  wrap.style.display=sel.value==='Milestone-linked'?'none':'block';
+}
+function readVdaTaskLineRows(containerId){
+  const container=document.getElementById(containerId);
+  if(!container)return [];
+  return Array.from(container.querySelectorAll('.vda-taskline-row')).map(row=>{
+    const descSel=row.querySelector('.vdatl-desc');
+    const descOther=row.querySelector('.vdatl-desc-other');
+    const description=descSel.value==='__custom__'?(descOther.value||'').trim():descSel.value;
+    const statusSel=row.querySelector('.vdatl-status');
+    return {
+      existingId:row.dataset.existingId||'',
+      description,
+      amount:Number(row.querySelector('.vdatl-amount').value)||0,
+      billingSplit:row.querySelector('.vdatl-split').value,
+      triggerType:row.querySelector('.vdatl-trigger').value,
+      monthlyForecastEstimate:Number(row.querySelector('.vdatl-monthly').value)||0,
+      status:statusSel?statusSel.value:'Not Started',
+    };
+  }).filter(r=>r.description||r.amount);
+}
+
+// ── Configure Project panel (create only) ───────────────────────────
+function openConfigureVdaPanel(){
+  if(!vdaCanEdit())return;
+  document.getElementById('cvp-number').value='';
+  document.getElementById('cvp-scope').value='';
+  document.getElementById('cvp-price').value='';
+  document.getElementById('cvp-error').style.display='none';
+  document.getElementById('cvp-tasklines').innerHTML='';
+  window._vdaTreeState['cvp']={properties:new Set(),units:new Set(),expanded:new Set()};
+  renderVdaPropertyTree('cvp-tree','cvp');
+  const panel=document.getElementById('cvp-panel');
+  const overlay=document.getElementById('cvp-overlay');
+  overlay.style.display='block';panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
+}
+function closeConfigureVdaPanel(){
+  const panel=document.getElementById('cvp-panel');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{panel.style.display='none';document.getElementById('cvp-overlay').style.display='none';},300);
+}
+window.openConfigureVdaPanel=openConfigureVdaPanel;
+window.closeConfigureVdaPanel=closeConfigureVdaPanel;
+
+async function saveConfigureVdaProject(){
+  const numberRaw=(document.getElementById('cvp-number').value||'').trim();
+  const scope=(document.getElementById('cvp-scope').value||'').trim();
+  const price=Number(document.getElementById('cvp-price').value)||0;
+  const errEl=document.getElementById('cvp-error');
+  errEl.style.display='none';
+
+  // Duplicate VDA Project Number check — case-insensitive, trimmed compare
+  // against every OTHER existing VDA Project record. Blocks save and points
+  // the user at that record's pencil icon instead of letting a duplicate
+  // agreement get created.
+  if(numberRaw){
+    const dup=(window.VDA_PROJECTS||[]).find(p=>(p.number||'').trim().toLowerCase()===numberRaw.toLowerCase());
+    if(dup){
+      const dupProps=(dup.linkedPropertyIds||[]).map(id=>{const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);return pr?pr.n:'';}).filter(Boolean).join(', ')||'no properties linked';
+      errEl.textContent=`VDA Project Number "${numberRaw}" already exists on an agreement (${dupProps}${dup.scope?' — '+dup.scope.slice(0,80):''}). Use that record's pencil icon (Edit Project) instead of creating a duplicate.`;
+      errEl.style.display='block';
+      return;
+    }
+  }
+
+  const st=vdaTreeState('cvp');
+  const linkedPropertyIds=[...st.properties];
+  const linkedUnitIds=[...st.units];
+  const taskLineRows=readVdaTaskLineRows('cvp-tasklines');
+
+  showToast('Saving VDA Project...','info');
+  const createRes=await atCreate('VDA Project',{
+    'VDA Project Number':numberRaw,
+    'Status':'Active',
+    'Linked Properties':linkedPropertyIds,
+    'Linked Units':linkedUnitIds,
+    'Current Scope':scope,
+    'Current Price':price,
+  });
+  if(!createRes||!createRes.records||!createRes.records[0]){
+    showToast('Failed to save VDA Project — check connection and retry','error');
+    return;
+  }
+  const newId=createRes.records[0].id;
+  const newTaskLines=[];
+  for(const row of taskLineRows){
+    const tlRes=await atCreate('Task Line',{
+      'Description':row.description,
+      'Amount':row.amount,
+      'Billing Split':row.billingSplit,
+      'Trigger Type':row.triggerType,
+      'Status':'Not Started',
+      'Monthly Forecast Estimate':row.monthlyForecastEstimate,
+      'VDA Project':[newId],
+    });
+    if(tlRes&&tlRes.records&&tlRes.records[0]){
+      const r=tlRes.records[0];
+      newTaskLines.push({id:r.id,vdaId:newId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()});
+    }
+  }
+  window.VDA_PROJECTS=(window.VDA_PROJECTS||[]).concat([{
+    id:newId,number:numberRaw,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope,price,createdTime:new Date().toISOString(),
+  }]);
+  window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat(newTaskLines);
+  closeConfigureVdaPanel();
+  renderVdaProjects();
+  showToast('VDA Project saved','success');
+}
+window.saveConfigureVdaProject=saveConfigureVdaProject;
+
+// ── Edit Project panel (existing agreements) ────────────────────────
+let _evpCurrentId=null;
+function openEditVdaPanel(vdaId){
+  if(!vdaCanEdit())return;
+  const p=(window.VDA_PROJECTS||[]).find(x=>x.id===vdaId);
+  if(!p)return;
+  _evpCurrentId=vdaId;
+  document.getElementById('evp-id').value=vdaId;
+  document.getElementById('evp-status').value=p.status||'Active';
+  document.getElementById('evp-scope-display').textContent=p.scope||'—';
+  document.getElementById('evp-price-display').textContent=fmtCurrency(p.price||0);
+  document.getElementById('evp-amend-form').style.display='none';
+  document.getElementById('evp-amend-error').style.display='none';
+
+  renderEvpAmendmentHistory(vdaId);
+
+  window._vdaTreeState['evp']={properties:new Set(p.linkedPropertyIds||[]),units:new Set(p.linkedUnitIds||[]),expanded:new Set()};
+  renderVdaPropertyTree('evp-tree','evp');
+
+  const tlContainer=document.getElementById('evp-tasklines');
+  tlContainer.innerHTML='';
+  (window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId).forEach(t=>addVdaTaskLineRow('evp-tasklines',t));
+
+  const panel=document.getElementById('evp-panel');
+  const overlay=document.getElementById('evp-overlay');
+  overlay.style.display='block';panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
+}
+function closeEditVdaPanel(){
+  const panel=document.getElementById('evp-panel');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{panel.style.display='none';document.getElementById('evp-overlay').style.display='none';},300);
+  _evpCurrentId=null;
+}
+window.openEditVdaPanel=openEditVdaPanel;
+window.closeEditVdaPanel=closeEditVdaPanel;
+
+function renderEvpAmendmentHistory(vdaId){
+  const container=document.getElementById('evp-amend-history');
+  if(!container)return;
+  const items=(window.VDA_AMENDMENTS||[]).filter(a=>a.vdaId===vdaId).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  if(items.length===0){
+    container.innerHTML=`<div style="font-size:12px;color:var(--gray-mid);padding:6px">No amendments yet.</div>`;
+    return;
+  }
+  container.innerHTML=items.map(a=>`<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
+    <div style="font-size:11px;color:var(--gray-mid);margin-bottom:4px">${a.date||''}${a.amendedBy?' &middot; '+a.amendedBy.replace(/</g,'&lt;'):''}</div>
+    ${a.reason?`<div style="font-size:12px;color:var(--navy);margin-bottom:6px">${a.reason.replace(/</g,'&lt;')}</div>`:''}
+    <div style="font-size:12px;color:var(--gray-dark);display:flex;gap:8px;flex-wrap:wrap">
+      <span>${fmtCurrency(a.priorPrice||0)} <i class="ti ti-arrow-right" style="font-size:11px"></i> ${fmtCurrency(a.newPrice||0)}</span>
+    </div>
+    ${a.priorScope!==a.newScope?`<div style="font-size:11px;color:var(--gray-mid);margin-top:6px">Scope changed</div>`:''}
+  </div>`).join('');
+}
+
+function toggleAddAmendmentForm(show){
+  const form=document.getElementById('evp-amend-form');
+  const shouldShow=show!==undefined?show:form.style.display==='none';
+  form.style.display=shouldShow?'block':'none';
+  if(shouldShow&&_evpCurrentId){
+    const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
+    if(p){
+      document.getElementById('evp-amend-newscope').value=p.scope||'';
+      document.getElementById('evp-amend-newprice').value=p.price||'';
+    }
+    document.getElementById('evp-amend-by').value=window._userName||'';
+  }
+}
+window.toggleAddAmendmentForm=toggleAddAmendmentForm;
+
+async function submitAddAmendment(){
+  if(!_evpCurrentId)return;
+  const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
+  if(!p)return;
+  const newScope=(document.getElementById('evp-amend-newscope').value||'').trim();
+  const newPrice=Number(document.getElementById('evp-amend-newprice').value)||0;
+  const reason=(document.getElementById('evp-amend-reason').value||'').trim();
+  const amendedBy=(document.getElementById('evp-amend-by').value||'').trim()||(window._userName||'');
+  const errEl=document.getElementById('evp-amend-error');
+  if(!reason){
+    errEl.textContent='Reason / Notes is required.';
+    errEl.style.display='block';
+    return;
+  }
+  errEl.style.display='none';
+  const todayIso=new Date().toISOString().split('T')[0];
+  const priorScope=p.scope||'';
+  const priorPrice=p.price||0;
+
+  showToast('Saving amendment...','info');
+  const amendRes=await atCreate('Amendment History',{
+    'Amendment Date':todayIso,
+    'Reason/Notes':reason,
+    'Prior Scope':priorScope,
+    'Prior Price':priorPrice,
+    'New Scope':newScope,
+    'New Price':newPrice,
+    'Amended By':amendedBy,
+    'VDA Project':[_evpCurrentId],
+  });
+  if(!amendRes||!amendRes.records||!amendRes.records[0]){
+    showToast('Failed to save amendment — check connection and retry','error');
+    return;
+  }
+  await atUpdate('VDA Project',_evpCurrentId,{'Current Scope':newScope,'Current Price':newPrice});
+
+  const r=amendRes.records[0];
+  window.VDA_AMENDMENTS=(window.VDA_AMENDMENTS||[]).concat([{
+    id:r.id,vdaId:_evpCurrentId,date:todayIso,reason,priorScope,priorPrice,newScope,newPrice,amendedBy,
+  }]);
+  p.scope=newScope;p.price=newPrice;
+
+  document.getElementById('evp-scope-display').textContent=newScope||'—';
+  document.getElementById('evp-price-display').textContent=fmtCurrency(newPrice);
+  renderEvpAmendmentHistory(_evpCurrentId);
+  toggleAddAmendmentForm(false);
+  renderVdaProjects();
+  showToast('Amendment saved','success');
+}
+window.submitAddAmendment=submitAddAmendment;
+
+async function saveEditVdaProject(){
+  if(!_evpCurrentId)return;
+  const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
+  if(!p)return;
+  const status=document.getElementById('evp-status').value;
+  const st=vdaTreeState('evp');
+  const linkedPropertyIds=[...st.properties];
+  const linkedUnitIds=[...st.units];
+
+  showToast('Saving changes...','info');
+  // Save is deliberately scoped to Status + Linked Properties/Units + Task
+  // Lines. Current Scope/Current Price are never written here — those only
+  // change via Add Amendment (submitAddAmendment above).
+  await atUpdate('VDA Project',_evpCurrentId,{
+    'Status':status,
+    'Linked Properties':linkedPropertyIds,
+    'Linked Units':linkedUnitIds,
+  });
+  p.status=status;p.linkedPropertyIds=linkedPropertyIds;p.linkedUnitIds=linkedUnitIds;
+
+  const rows=readVdaTaskLineRows('evp-tasklines');
+  const existingIds=new Set(rows.filter(r=>r.existingId).map(r=>r.existingId));
+  // Deletions: existing Task Lines for this VDA Project no longer present as a row.
+  const toDelete=(window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===_evpCurrentId&&!existingIds.has(t.id));
+  for(const t of toDelete){
+    await atDelete('Task Line',t.id);
+    window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).filter(x=>x.id!==t.id);
+  }
+  for(const row of rows){
+    if(row.existingId){
+      await atUpdate('Task Line',row.existingId,{
+        'Description':row.description,
+        'Amount':row.amount,
+        'Billing Split':row.billingSplit,
+        'Trigger Type':row.triggerType,
+        'Status':row.status,
+        'Monthly Forecast Estimate':row.monthlyForecastEstimate,
+      });
+      const existingObj=(window.VDA_TASK_LINES||[]).find(x=>x.id===row.existingId);
+      if(existingObj){
+        existingObj.description=row.description;existingObj.amount=row.amount;existingObj.billingSplit=row.billingSplit;
+        existingObj.triggerType=row.triggerType;existingObj.status=row.status;existingObj.monthlyForecastEstimate=row.monthlyForecastEstimate;
+      }
+    }else{
+      const tlRes=await atCreate('Task Line',{
+        'Description':row.description,
+        'Amount':row.amount,
+        'Billing Split':row.billingSplit,
+        'Trigger Type':row.triggerType,
+        'Status':row.status||'Not Started',
+        'Monthly Forecast Estimate':row.monthlyForecastEstimate,
+        'VDA Project':[_evpCurrentId],
+      });
+      if(tlRes&&tlRes.records&&tlRes.records[0]){
+        const r=tlRes.records[0];
+        window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat([{id:r.id,vdaId:_evpCurrentId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:row.status||'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()}]);
+      }
+    }
+  }
+
+  closeEditVdaPanel();
+  renderVdaProjects();
+  showToast('VDA Project updated','success');
+}
+window.saveEditVdaProject=saveEditVdaProject;
+
+// ── Forecast toggle — "Include VDA billing" on the Forecasted Spend
+// chart (Analytics renderCharts() and the Budget Outlook mini version
+// added below). Extends fsByMonth[month] with a third .vda key.
+// Simplification note: for Recurring-count-based / Flat recurring Task
+// Lines, Monthly Forecast Estimate is spread evenly starting from the
+// Task Line's own creation date (falls back to the VDA Project's
+// creation date if the Task Line's own createdTime is unavailable) going
+// forward across the same rolling 12-month window used elsewhere on this
+// chart — a real recurring billing schedule isn't tracked as its own
+// field yet, so this is the simplest reasonable proxy rather than
+// modeling exact recurrence intervals.
+window._vdaForecastIncluded={charts:false,budgetOutlook:false};
+function computeVdaFsByMonth(monthKeys){
+  const out={};
+  monthKeys.forEach(mo=>out[mo]=0);
+  const taskLines=window.VDA_TASK_LINES||[];
+  const milestones=window.MILESTONES||[];
+  const invoices=window.VDA_INVOICES||[];
+  const projects=window.VDA_PROJECTS||[];
+
+  taskLines.forEach(t=>{
+    const p=projects.find(pr=>pr.id===t.vdaId);
+    if(!p)return;
+    const propNames=(p.linkedPropertyIds||[]).map(id=>{const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);return pr?pr.n:'';}).filter(Boolean);
+
+    // Per-task actual invoiced amounts by month, used to override forecast.
+    const invByMonth={};
+    invoices.filter(inv=>inv.taskLineId===t.id).forEach(inv=>{
+      if(!inv.date)return;
+      const d=new Date(inv.date);
+      if(isNaN(d))return;
+      const mo=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+      invByMonth[mo]=(invByMonth[mo]||0)+(inv.amount||0);
+    });
+
+    if(t.triggerType==='Milestone-linked'){
+      // Find the planned date for the matching milestone name, across any
+      // property/scope linked to this VDA Project.
+      let plannedMo=null;
+      for(const propName of propNames){
+        const ms=milestones.find(m=>m.property===propName&&m.milestoneName===t.description&&m.plannedDate);
+        if(ms){
+          const d=new Date(ms.plannedDate);
+          if(!isNaN(d)){plannedMo=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');break;}
+        }
+      }
+      if(plannedMo&&monthKeys.includes(plannedMo)){
+        const actual=invByMonth[plannedMo]||0;
+        out[plannedMo]+=actual>0?actual:(t.amount||0);
+      }
+    }else{
+      // Recurring-count-based / Flat recurring — spread Monthly Forecast
+      // Estimate evenly starting from this Task Line's creation date (or
+      // the VDA Project's creation date if the Task Line's own date isn't
+      // available), forward across the visible window.
+      const startSrc=t.createdTime||p.createdTime;
+      const startDate=startSrc?new Date(startSrc):new Date();
+      const startMo=isNaN(startDate)?monthKeys[0]:(startDate.getFullYear()+'-'+String(startDate.getMonth()+1).padStart(2,'0'));
+      const startIdx=Math.max(0,monthKeys.indexOf(startMo)>=0?monthKeys.indexOf(startMo):0);
+      for(let i=startIdx;i<monthKeys.length;i++){
+        const mo=monthKeys[i];
+        const actual=invByMonth[mo]||0;
+        out[mo]+=actual>0?actual:(t.monthlyForecastEstimate||0);
+      }
+    }
+  });
+  return out;
+}
+window.computeVdaFsByMonth=computeVdaFsByMonth;
+
+// v47a — toggleVdaForecastInclude(context, checked). The checkbox on both
+// Forecasted Spend chart instances (Analytics's #fs-vda-toggle and Budget
+// Outlook's #bo-fs-vda-toggle) calls this directly. context is 'charts'
+// or 'budget' so each instance's on/off state and re-render stay
+// independent of the other one, matching window._vdaForecastIncluded
+// (declared above computeVdaFsByMonth) which already has both keys.
+function toggleVdaForecastInclude(context,checked){
+  if(context==='budget'){
+    window._vdaForecastIncluded.budgetOutlook=!!checked;
+    if(typeof renderBoForecastSpendChart==='function')renderBoForecastSpendChart();
+  }else{
+    window._vdaForecastIncluded.charts=!!checked;
+    if(typeof renderCharts==='function')renderCharts();
+  }
+}
+window.toggleVdaForecastInclude=toggleVdaForecastInclude;
+
+// v47a — Budget Outlook's own mini Forecasted Spend card. Same rolling
+// 12-month window, same active-only unit scope (linked Scope status ===
+// 'In Progress'), same straight-line proration + one-month-lag actuals
+// override as the Analytics version above, kept as an independent
+// function rather than refactored out of renderCharts() so the existing,
+// already-verified Analytics chart logic is never touched by this pass.
+// Its own "Include VDA billing" checkbox (#bo-fs-vda-toggle) reads/writes
+// window._vdaForecastIncluded.budgetOutlook, separate from the Analytics
+// toggle's .charts flag.
+function renderBoForecastSpendChart(){
+  const chartEl=document.getElementById('bo-fs-chart');
+  if(!chartEl)return;
+  const monthKeys=[];
+  const now=new Date();
+  for(let i=0;i<12;i++){
+    const d=new Date(now.getFullYear(),now.getMonth()+i,1);
+    monthKeys.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+  }
+  const monthLabel=(k)=>{
+    const [,m]=k.split('-');
+    const names=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return names[parseInt(m)-1];
+  };
+  const activeUnits=(window.UNIT_INVENTORY||[]).filter(u=>{
+    if(!u.scopeId)return false;
+    const sc=(window.SCOPES||[]).find(s=>s.id===u.scopeId);
+    return sc&&sc.status==='In Progress';
+  });
+  const fsByMonth={};
+  const fsDetailByMonth={};
+  activeUnits.forEach(u=>{
+    const endMo=(typeof resolveUnitTimelineMonth==='function')?resolveUnitTimelineMonth(u):null;
+    if(!endMo)return;
+    const endIdx=monthKeys.indexOf(endMo);
+    const spanEnd=endIdx>=0?endIdx:11;
+    const spanMonths=Math.max(1,spanEnd+1);
+    const totalVal=unitEffectiveValue(u);
+    if(totalVal<=0)return;
+    const perMonth=totalVal/spanMonths;
+    for(let i=0;i<=spanEnd&&i<12;i++){
+      const mo=monthKeys[i];
+      if(!fsByMonth[mo])fsByMonth[mo]={actual:0,forecast:0};
+      if(!fsDetailByMonth[mo])fsDetailByMonth[mo]=[];
+      fsByMonth[mo].forecast+=perMonth;
+      fsDetailByMonth[mo].push({property:u.property,amount:perMonth,isActual:false});
+    }
+  });
+  const latestBillingByPropMonth={};
+  (window.BILLING_LOG||[]).forEach(b=>{
+    if(!b.entryDate)return;
+    const d=new Date(b.entryDate);
+    if(isNaN(d))return;
+    const mo=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    if(!monthKeys.includes(mo))return;
+    const key=b.property+'|||'+mo;
+    const existing=latestBillingByPropMonth[key];
+    if(!existing||new Date(b.entryDate)>=new Date(existing.entryDate)){
+      latestBillingByPropMonth[key]={entryDate:b.entryDate,billedYTD:Number(b.billedYTD)||0};
+    }
+  });
+  Object.keys(latestBillingByPropMonth).forEach(key=>{
+    const [prop,mo]=key.split('|||');
+    const billed=latestBillingByPropMonth[key].billedYTD;
+    if(!fsByMonth[mo])fsByMonth[mo]={actual:0,forecast:0};
+    if(!fsDetailByMonth[mo])fsDetailByMonth[mo]=[];
+    const propForecastRows=fsDetailByMonth[mo].filter(d2=>d2.property===prop&&!d2.isActual);
+    const propForecastTotal=propForecastRows.reduce((a,r)=>a+r.amount,0);
+    fsByMonth[mo].forecast-=propForecastTotal;
+    fsDetailByMonth[mo]=fsDetailByMonth[mo].filter(d2=>!(d2.property===prop&&!d2.isActual));
+    fsByMonth[mo].actual+=billed;
+    fsDetailByMonth[mo].push({property:prop,amount:billed,isActual:true});
+  });
+  const includeVda=!!(window._vdaForecastIncluded&&window._vdaForecastIncluded.budgetOutlook);
+  if(includeVda&&typeof computeVdaFsByMonth==='function'){
+    const vdaByMonth=computeVdaFsByMonth(monthKeys);
+    monthKeys.forEach(mo=>{
+      if(!fsByMonth[mo])fsByMonth[mo]={actual:0,forecast:0};
+      fsByMonth[mo].vda=vdaByMonth[mo]||0;
+    });
+  }
+  const legendVda=document.getElementById('bo-fs-legend-vda');
+  if(legendVda)legendVda.style.display=includeVda?'flex':'none';
+  const toggleEl=document.getElementById('bo-fs-vda-toggle');
+  if(toggleEl)toggleEl.checked=includeVda;
+
+  const anyFs=monthKeys.some(k=>((fsByMonth[k]||{}).actual||0)+((fsByMonth[k]||{}).forecast||0)+((fsByMonth[k]||{}).vda||0)>0);
+  if(!anyFs){
+    chartEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No active projects with resolvable spend in the next 12 months.</div>';
+    return;
+  }
+  const maxFs=Math.max(1,...monthKeys.map(k=>((fsByMonth[k]||{}).actual||0)+((fsByMonth[k]||{}).forecast||0)+((fsByMonth[k]||{}).vda||0)));
+  const chartH=120;
+  chartEl.innerHTML=`
+    <div style="display:flex;align-items:flex-end;gap:8px;height:${chartH+24}px;padding:0 4px">
+      ${monthKeys.map(k=>{
+        const m=fsByMonth[k]||{actual:0,forecast:0,vda:0};
+        const vdaAmt=m.vda||0;
+        const totalAmt=m.actual+m.forecast+vdaAmt;
+        const actualH=totalAmt>0?Math.max(m.actual>0?4:0,Math.round((m.actual/maxFs)*chartH)):0;
+        const forecastH=totalAmt>0?Math.max(m.forecast>0?4:0,Math.round((m.forecast/maxFs)*chartH)):0;
+        const vdaH=totalAmt>0?Math.max(vdaAmt>0?4:0,Math.round((vdaAmt/maxFs)*chartH)):0;
+        return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+          <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:4px">${totalAmt>0?fmtCurrency(totalAmt):'—'}</div>
+          <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end">
+            ${vdaAmt>0?`<div style="width:100%;height:${vdaH}px;background:var(--vda-billing);opacity:.85;${m.forecast>0||m.actual>0?'':'border-radius:4px 4px 0 0'}"></div>`:''}
+            ${m.forecast>0?`<div style="width:100%;height:${forecastH}px;background:var(--teal);opacity:.85;${m.actual>0?'':'border-radius:4px 4px 0 0'}"></div>`:''}
+            ${m.actual>0?`<div style="width:100%;height:${actualH}px;background:var(--act-billing);border-radius:4px 4px 0 0;opacity:.85"></div>`:''}
+          </div>
+          <div style="width:100%;height:3px;background:var(--border)"></div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:8px;padding:4px 4px 0">
+      ${monthKeys.map(k=>`<div style="flex:1;min-width:0;text-align:center;font-size:10px;color:var(--navy);font-weight:500">${monthLabel(k)}</div>`).join('')}
+    </div>`;
+}
+window.renderBoForecastSpendChart=renderBoForecastSpendChart;
 </script>
 <script>
 /* ============================================================
