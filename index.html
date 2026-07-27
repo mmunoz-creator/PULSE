@@ -1759,6 +1759,11 @@ async function loadVdaProjectData(){
       linkedUnitIds:r.fields['Linked Units']||[],
       linkedProjectIds:r.fields['Linked Projects']||[],
       scope:r.fields['Current Scope']||'',
+      // v49j — price is read here for backward compatibility with any
+      // pre-existing record that still has a Current Price value, but it
+      // is never written to and never used for display anymore. Every
+      // screen computes Project Value live via vdaProjectValue(p.id),
+      // the sum of that agreement's Task Line amounts.
       price:r.fields['Current Price']!=null?Number(r.fields['Current Price']):0,
       createdTime:r.createdTime||'',
     }));
@@ -1790,12 +1795,71 @@ async function loadVdaProjectData(){
       amount:r.fields['Amount']!=null?Number(r.fields['Amount']):0,
       date:r.fields['Date']||'',
     }));
+    // v49k — one-time-per-number bulk auto-create. Every distinct, non-
+    // blank VDA Project Number already sitting in Scopes gets a real VDA
+    // Project agreement record if one doesn't already exist, so the panel
+    // is never empty just because nobody has manually run + Configure
+    // Project yet. Uses the same field mapping verified by the single-
+    // record test (testCreateVdaFromScope). Silently skips any number
+    // that already has a matching agreement — safe to run every load.
+    await autoCreateVdaProjectsFromScopes();
     if(document.getElementById('view-vdaproject')&&!document.getElementById('view-vdaproject').classList.contains('hidden')){
       renderVdaProjects();
     }
   }catch(e){console.error('loadVdaProjectData error:',e);}
 }
 window.loadVdaProjectData=loadVdaProjectData;
+
+// v49k — bulk version of the proven testCreateVdaFromScope logic. Groups
+// every Scope by its non-blank VDA Project Number, and for every distinct
+// number that doesn't already have a matching VDA Project agreement,
+// creates one (Status Active, linked properties = every property with a
+// matching scope, linked units = every unit at those properties — same
+// rule the manual Configure Project checklist uses when a whole property
+// is checked). Runs after both Scopes and the real VDA Project records
+// are loaded, so it never creates a duplicate for a number someone
+// already configured manually. Field mapping matches the one confirmed
+// correct against live Airtable via the single-record test.
+async function autoCreateVdaProjectsFromScopes(){
+  const scopes=window.SCOPES||[];
+  const existingNumbers=new Set((window.VDA_PROJECTS||[]).map(p=>(p.number||'').trim().toLowerCase()).filter(Boolean));
+  const byNumber={};
+  scopes.forEach(s=>{
+    const num=(s.vdaNum||'').trim();
+    if(!num)return;
+    if(existingNumbers.has(num.toLowerCase()))return;
+    if(!byNumber[num])byNumber[num]=[];
+    byNumber[num].push(s);
+  });
+  const numbersToCreate=Object.keys(byNumber);
+  if(numbersToCreate.length===0)return;
+  console.log(`Auto-creating ${numbersToCreate.length} VDA Project agreement(s) from Scopes data not yet configured: ${numbersToCreate.join(', ')}`);
+  for(const num of numbersToCreate){
+    const matches=byNumber[num];
+    const propNames=[...new Set(matches.map(s=>s.property).filter(Boolean))];
+    const linkedPropertyIds=[...new Set(matches.map(s=>s.propertyId).filter(Boolean))];
+    const linkedUnitIds=[];
+    propNames.forEach(propName=>{
+      vdaPropertyUnits(propName).forEach(u=>{if(!linkedUnitIds.includes(u.id))linkedUnitIds.push(u.id);});
+    });
+    const createRes=await atCreate('VDA Project',{
+      'VDA Project Number':num,
+      'Status':'Active',
+      'Linked Properties':linkedPropertyIds,
+      'Linked Units':linkedUnitIds,
+    });
+    if(!createRes||!createRes.records||!createRes.records[0]){
+      console.error(`Auto-create failed for VDA Project Number "${num}" — see atCreate error just above.`);
+      continue;
+    }
+    const newId=createRes.records[0].id;
+    window.VDA_PROJECTS=(window.VDA_PROJECTS||[]).concat([{
+      id:newId,number:num,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope:'',price:0,createdTime:new Date().toISOString(),
+    }]);
+    existingNumbers.add(num.toLowerCase());
+  }
+}
+window.autoCreateVdaProjectsFromScopes=autoCreateVdaProjectsFromScopes;
 
 async function backfillAllUnassignedUnits(){
   const propNames=[...new Set((window.UNIT_INVENTORY||[]).map(u=>u.property))].filter(Boolean);
@@ -2383,7 +2447,9 @@ mechanism as Edit Property above (translateX panel + dimmed overlay). -->
     <div class="two-col" style="gap:12px">
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">VDA Project Number</label><input class="form-input" type="text" id="cvp-number" placeholder="optional"></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Initial Scope</label><textarea class="form-textarea" id="cvp-scope" rows="3" placeholder="Describe the scope of this agreement..."></textarea></div>
-      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Initial Price</label><input class="form-input" type="number" id="cvp-price" placeholder="0" min="0"></div>
+      <!-- v49j — Initial Price removed. Project Value is never typed in —
+      it's always the live sum of this agreement's Task Line amounts (see
+      vdaProjectValue()). Add Task Lines below to set the value. -->
     </div>
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
       <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Linked Properties / Units</div>
@@ -2427,17 +2493,28 @@ then updates the VDA Project's Current Scope/Current Price directly. -->
     <div style="margin-top:14px;padding:12px;background:var(--gray-xpale,#f8f8f6);border-radius:8px">
       <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Current Scope</div>
       <div id="evp-scope-display" style="font-size:13px;color:var(--navy);white-space:pre-wrap;margin-bottom:10px">—</div>
-      <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Current Price</div>
+      <!-- v49j — relabeled from Current Price. Value is now computed live
+      from Task Line amounts (vdaProjectValue()), never typed in. -->
+      <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Project Value</div>
       <div id="evp-price-display" style="font-size:15px;font-weight:700;color:var(--navy)">$0</div>
     </div>
 
     <div style="margin-top:14px">
+      <!-- v49j — Add Amendment now logs a scope expansion: a reason plus
+      one or more new Task Lines, instead of a manually-typed new price.
+      Project Value grows automatically once the new lines are added,
+      since it's always the live sum of all Task Lines on this agreement. -->
       <button class="btn btn-success" id="evp-add-amend-btn" onclick="toggleAddAmendmentForm()"><i class="ti ti-history-toggle"></i>Add Amendment</button>
       <div id="evp-amend-form" style="display:none;margin-top:10px;padding:14px;border:1px solid var(--border);border-radius:8px;background:var(--blue-xpale)">
-        <div class="form-group"><label class="form-label">New Scope</label><textarea class="form-textarea" id="evp-amend-newscope" rows="3"></textarea></div>
-        <div class="form-group"><label class="form-label">New Price</label><input class="form-input" type="number" id="evp-amend-newprice" min="0"></div>
-        <div class="form-group"><label class="form-label">Reason / Notes *</label><textarea class="form-textarea" id="evp-amend-reason" rows="2" placeholder="Required"></textarea></div>
+        <div class="form-group"><label class="form-label">Reason for Scope Expansion *</label><textarea class="form-textarea" id="evp-amend-reason" rows="2" placeholder="Required — e.g. client requested 2 additional units"></textarea></div>
         <div class="form-group"><label class="form-label">Amended By</label><input class="form-input" type="text" id="evp-amend-by"></div>
+        <div style="margin:10px 0">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em">New Task Lines</div>
+            <button class="btn btn-success" style="font-size:12px" type="button" onclick="addVdaTaskLineRow('evp-amend-tasklines')"><i class="ti ti-plus"></i>Add Task Line</button>
+          </div>
+          <div id="evp-amend-tasklines"></div>
+        </div>
         <div id="evp-amend-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:8px"></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary" onclick="submitAddAmendment()"><i class="ti ti-check"></i>Submit Amendment</button>
@@ -2742,7 +2819,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49h</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49l</div>
     </div>
   </nav>
 
@@ -24407,6 +24484,15 @@ function vdaStatusBadgeColor(status){
   return {bg:'var(--blue-pale)',fg:'var(--blue-dark)'};
 }
 
+// v49j — Project Value is always the live sum of a VDA Project's own Task
+// Line amounts, never a manually-typed number. This is the single place
+// that math happens so the stat cards, project cards, and Edit panel all
+// agree — no code should ever read p.price directly for display again.
+function vdaProjectValue(vdaId){
+  return (window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId).reduce((a,t)=>a+(t.amount||0),0);
+}
+window.vdaProjectValue=vdaProjectValue;
+
 function renderVdaProjects(){
   const list=document.getElementById('vda-card-list');
   if(!list)return;
@@ -24419,7 +24505,7 @@ function renderVdaProjects(){
   const amendments=window.VDA_AMENDMENTS||[];
 
   const totalAgreements=projects.length;
-  const totalPrice=projects.reduce((a,p)=>a+(p.price||0),0);
+  const totalPrice=projects.reduce((a,p)=>a+vdaProjectValue(p.id),0);
   const activeCount=projects.filter(p=>p.status==='Active').length;
   const unstartedCount=projects.filter(p=>taskLines.some(t=>t.vdaId===p.id&&t.status==='Not Started')).length;
   const elTotal=document.getElementById('vda-stat-total');if(elTotal)elTotal.textContent=totalAgreements;
@@ -24441,22 +24527,22 @@ function renderVdaProjects(){
     const myTasks=taskLines.filter(t=>t.vdaId===p.id);
     const fullyBilled=myTasks.filter(t=>t.status==='Fully Billed').length;
     const myAmendments=amendments.filter(a=>a.vdaId===p.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
-    const lastAmendDate=myAmendments.length?myAmendments[0].date:'';
+    const lastAmend=myAmendments.length?myAmendments[0]:null;
     const myTaskIds=new Set(myTasks.map(t=>t.id));
     const myInvoices=(window.VDA_INVOICES||[]).filter(inv=>myTaskIds.has(inv.taskLineId)).sort((a,b)=>new Date(b.date)-new Date(a.date));
     const lastInvoiceDate=myInvoices.length?myInvoices[0].date:'';
     return `<div class="card" style="padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
         <div>
-          <div style="font-size:14px;font-weight:700;color:var(--navy)">${p.number?String(p.number).replace(/</g,'&lt;'):'No number assigned'}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--navy)">${p.number?'VDA Project #'+String(p.number).replace(/</g,'&lt;'):'No number assigned'}</div>
           <span style="display:inline-block;margin-top:4px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;background:${badge.bg};color:${badge.fg}">${p.status||'Active'}</span>
         </div>
         ${canEdit?`<button class="btn-icon" onclick="openEditVdaPanel('${p.id}')" title="Edit Project" style="border:none;background:none;cursor:pointer;color:var(--blue-dark);font-size:16px"><i class="ti ti-pencil"></i></button>`:''}
       </div>
-      <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:8px">${fmtCurrency(p.price||0)}</div>
+      <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:8px">${fmtCurrency(vdaProjectValue(p.id))}</div>
       <div style="font-size:12px;color:var(--gray-mid);margin-bottom:6px">${propNames.length?propNames.join(', '):'No properties linked'}</div>
       <div style="font-size:12px;color:var(--gray-dark);margin-bottom:4px">${myTasks.length} task line${myTasks.length===1?'':'s'} &middot; ${fullyBilled} fully billed</div>
-      ${lastAmendDate?`<div style="font-size:11px;color:var(--gray-mid)">Last amendment: ${lastAmendDate}</div>`:''}
+      ${lastAmend?`<div style="font-size:11px;color:var(--gray-mid)">Last amendment: ${lastAmend.date} — ${fmtCurrency(lastAmend.priorPrice)} &rarr; ${fmtCurrency(lastAmend.newPrice)}</div>`:''}
       ${lastInvoiceDate?`<div style="font-size:11px;color:var(--gray-mid)">Last invoice: ${lastInvoiceDate}</div>`:''}
     </div>`;
   }).join('');
@@ -24641,7 +24727,6 @@ window.closeConfigureVdaPanel=closeConfigureVdaPanel;
 async function saveConfigureVdaProject(){
   const numberRaw=(document.getElementById('cvp-number').value||'').trim();
   const scope=(document.getElementById('cvp-scope').value||'').trim();
-  const price=Number(document.getElementById('cvp-price').value)||0;
   const errEl=document.getElementById('cvp-error');
   errEl.style.display='none';
 
@@ -24665,13 +24750,15 @@ async function saveConfigureVdaProject(){
   const taskLineRows=readVdaTaskLineRows('cvp-tasklines');
 
   showToast('Saving VDA Project...','info');
+  // v49j — Current Price is no longer written here. Project Value is
+  // always the live sum of this agreement's Task Lines (vdaProjectValue()),
+  // computed fresh every render — never a stored/typed number.
   const createRes=await atCreate('VDA Project',{
     'VDA Project Number':numberRaw,
     'Status':'Active',
     'Linked Properties':linkedPropertyIds,
     'Linked Units':linkedUnitIds,
     'Current Scope':scope,
-    'Current Price':price,
   });
   if(!createRes||!createRes.records||!createRes.records[0]){
     showToast('Failed to save VDA Project — check connection and retry','error');
@@ -24695,7 +24782,7 @@ async function saveConfigureVdaProject(){
     }
   }
   window.VDA_PROJECTS=(window.VDA_PROJECTS||[]).concat([{
-    id:newId,number:numberRaw,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope,price,createdTime:new Date().toISOString(),
+    id:newId,number:numberRaw,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope,createdTime:new Date().toISOString(),
   }]);
   window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat(newTaskLines);
   closeConfigureVdaPanel();
@@ -24703,6 +24790,56 @@ async function saveConfigureVdaProject(){
   showToast('VDA Project saved','success');
 }
 window.saveConfigureVdaProject=saveConfigureVdaProject;
+
+// v49i — ONE-TIME TEST: creates a single VDA Project agreement derived
+// from Scopes data, so Misty can check the resulting Airtable record's
+// fields are correct before this runs in bulk for every distinct VDA
+// Project Number found across all Scopes. Call from the browser console:
+// testCreateVdaFromScope('69913')
+// Deliberately NOT wired to any button or auto-run on load — the VDA
+// Project table's field names were never verified against the live base
+// (see loadVdaProjectData's comment), so a bulk write here is riskier
+// than a normal UI bug. This writes exactly one record and logs the
+// result so it can be checked in Airtable directly, and does nothing
+// automatically. Not part of the eventual auto-create-all logic — once
+// this test confirms the fields are right, the bulk version reuses the
+// same field mapping, grouped by every distinct vdaNum instead of one.
+async function testCreateVdaFromScope(vdaNumber){
+  const matches=(window.SCOPES||[]).filter(s=>(s.vdaNum||'').trim()===String(vdaNumber).trim());
+  if(matches.length===0){
+    console.error(`No Scopes found with VDA Project Number "${vdaNumber}"`);
+    return;
+  }
+  const existing=(window.VDA_PROJECTS||[]).find(p=>(p.number||'').trim()===String(vdaNumber).trim());
+  if(existing){
+    console.error(`A VDA Project agreement for "${vdaNumber}" already exists (id ${existing.id}) — not creating a duplicate.`);
+    return;
+  }
+  const propNames=[...new Set(matches.map(s=>s.property).filter(Boolean))];
+  const linkedPropertyIds=[...new Set(matches.map(s=>s.propertyId).filter(Boolean))];
+  const linkedUnitIds=[];
+  propNames.forEach(propName=>{
+    vdaPropertyUnits(propName).forEach(u=>{if(!linkedUnitIds.includes(u.id))linkedUnitIds.push(u.id);});
+  });
+  console.log(`Test-creating VDA Project ${vdaNumber} from ${matches.length} scope(s) across ${propNames.length} propert${propNames.length===1?'y':'ies'}: ${propNames.join(', ')}. Linked units: ${linkedUnitIds.length}.`);
+  const createRes=await atCreate('VDA Project',{
+    'VDA Project Number':vdaNumber,
+    'Status':'Active',
+    'Linked Properties':linkedPropertyIds,
+    'Linked Units':linkedUnitIds,
+  });
+  if(!createRes||!createRes.records||!createRes.records[0]){
+    console.error('Test create FAILED — check the atCreate error logged just above this for the exact field Airtable rejected.');
+    return;
+  }
+  const newId=createRes.records[0].id;
+  window.VDA_PROJECTS=(window.VDA_PROJECTS||[]).concat([{
+    id:newId,number:vdaNumber,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope:'',price:0,createdTime:new Date().toISOString(),
+  }]);
+  renderVdaProjects();
+  console.log(`Test create SUCCEEDED — new record id ${newId}. Check it in Airtable now to confirm Linked Properties/Linked Units landed correctly before we run this for every VDA number.`);
+}
+window.testCreateVdaFromScope=testCreateVdaFromScope;
 
 // ── Edit Project panel (existing agreements) ────────────────────────
 let _evpCurrentId=null;
@@ -24714,9 +24851,11 @@ function openEditVdaPanel(vdaId){
   document.getElementById('evp-id').value=vdaId;
   document.getElementById('evp-status').value=p.status||'Active';
   document.getElementById('evp-scope-display').textContent=p.scope||'—';
-  document.getElementById('evp-price-display').textContent=fmtCurrency(p.price||0);
+  document.getElementById('evp-price-display').textContent=fmtCurrency(vdaProjectValue(vdaId));
   document.getElementById('evp-amend-form').style.display='none';
   document.getElementById('evp-amend-error').style.display='none';
+  const amendTlContainer=document.getElementById('evp-amend-tasklines');
+  if(amendTlContainer)amendTlContainer.innerHTML='';
 
   renderEvpAmendmentHistory(vdaId);
 
@@ -24759,17 +24898,26 @@ function renderEvpAmendmentHistory(vdaId){
   </div>`).join('');
 }
 
+// v49j — rebuilt for the scope-expansion model. An amendment no longer
+// lets anyone type a new scope/price directly; it captures a reason and
+// one or more new Task Lines, and Project Value grows automatically
+// because it's always the live sum of every Task Line on the agreement
+// (see vdaProjectValue()). Scope text itself is untouched by an
+// amendment now — Current Scope only ever changes via editing the
+// agreement's own scope field elsewhere, keeping this form focused on
+// exactly what Misty asked for: adding task lines to support a scope
+// expansion, with the reason logged.
 function toggleAddAmendmentForm(show){
   const form=document.getElementById('evp-amend-form');
   const shouldShow=show!==undefined?show:form.style.display==='none';
   form.style.display=shouldShow?'block':'none';
   if(shouldShow&&_evpCurrentId){
-    const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
-    if(p){
-      document.getElementById('evp-amend-newscope').value=p.scope||'';
-      document.getElementById('evp-amend-newprice').value=p.price||'';
-    }
     document.getElementById('evp-amend-by').value=window._userName||'';
+    document.getElementById('evp-amend-reason').value='';
+    const errEl=document.getElementById('evp-amend-error');
+    if(errEl)errEl.style.display='none';
+    const tlContainer=document.getElementById('evp-amend-tasklines');
+    if(tlContainer)tlContainer.innerHTML='';
   }
 }
 window.toggleAddAmendmentForm=toggleAddAmendmentForm;
@@ -24778,46 +24926,71 @@ async function submitAddAmendment(){
   if(!_evpCurrentId)return;
   const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
   if(!p)return;
-  const newScope=(document.getElementById('evp-amend-newscope').value||'').trim();
-  const newPrice=Number(document.getElementById('evp-amend-newprice').value)||0;
   const reason=(document.getElementById('evp-amend-reason').value||'').trim();
   const amendedBy=(document.getElementById('evp-amend-by').value||'').trim()||(window._userName||'');
   const errEl=document.getElementById('evp-amend-error');
+  const newTaskLineRows=readVdaTaskLineRows('evp-amend-tasklines');
   if(!reason){
-    errEl.textContent='Reason / Notes is required.';
+    errEl.textContent='Reason for scope expansion is required.';
+    errEl.style.display='block';
+    return;
+  }
+  if(newTaskLineRows.length===0){
+    errEl.textContent='Add at least one new task line to support this scope expansion.';
     errEl.style.display='block';
     return;
   }
   errEl.style.display='none';
   const todayIso=new Date().toISOString().split('T')[0];
-  const priorScope=p.scope||'';
-  const priorPrice=p.price||0;
+  const priorPrice=vdaProjectValue(_evpCurrentId);
 
   showToast('Saving amendment...','info');
+  const newTaskLines=[];
+  for(const row of newTaskLineRows){
+    const tlRes=await atCreate('Task Line',{
+      'Description':row.description,
+      'Amount':row.amount,
+      'Billing Split':row.billingSplit,
+      'Trigger Type':row.triggerType,
+      'Status':'Not Started',
+      'Monthly Forecast Estimate':row.monthlyForecastEstimate,
+      'VDA Project':[_evpCurrentId],
+    });
+    if(tlRes&&tlRes.records&&tlRes.records[0]){
+      const r=tlRes.records[0];
+      newTaskLines.push({id:r.id,vdaId:_evpCurrentId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()});
+    }
+  }
+  if(newTaskLines.length===0){
+    showToast('Failed to save new task lines — check connection and retry','error');
+    return;
+  }
+  window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat(newTaskLines);
+  const newPrice=vdaProjectValue(_evpCurrentId);
+
   const amendRes=await atCreate('Amendment History',{
     'Amendment Date':todayIso,
     'Reason/Notes':reason,
-    'Prior Scope':priorScope,
+    'Prior Scope':p.scope||'',
     'Prior Price':priorPrice,
-    'New Scope':newScope,
+    'New Scope':p.scope||'',
     'New Price':newPrice,
     'Amended By':amendedBy,
     'VDA Project':[_evpCurrentId],
   });
   if(!amendRes||!amendRes.records||!amendRes.records[0]){
-    showToast('Failed to save amendment — check connection and retry','error');
-    return;
+    showToast('Task lines saved, but the amendment log entry failed — check connection and retry logging it','error');
+  }else{
+    const r=amendRes.records[0];
+    window.VDA_AMENDMENTS=(window.VDA_AMENDMENTS||[]).concat([{
+      id:r.id,vdaId:_evpCurrentId,date:todayIso,reason,priorScope:p.scope||'',priorPrice,newScope:p.scope||'',newPrice,amendedBy,
+    }]);
   }
-  await atUpdate('VDA Project',_evpCurrentId,{'Current Scope':newScope,'Current Price':newPrice});
 
-  const r=amendRes.records[0];
-  window.VDA_AMENDMENTS=(window.VDA_AMENDMENTS||[]).concat([{
-    id:r.id,vdaId:_evpCurrentId,date:todayIso,reason,priorScope,priorPrice,newScope,newPrice,amendedBy,
-  }]);
-  p.scope=newScope;p.price=newPrice;
-
-  document.getElementById('evp-scope-display').textContent=newScope||'—';
   document.getElementById('evp-price-display').textContent=fmtCurrency(newPrice);
+  const tlContainer=document.getElementById('evp-tasklines');
+  tlContainer.innerHTML='';
+  (window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===_evpCurrentId).forEach(t=>addVdaTaskLineRow('evp-tasklines',t));
   renderEvpAmendmentHistory(_evpCurrentId);
   toggleAddAmendmentForm(false);
   renderVdaProjects();
