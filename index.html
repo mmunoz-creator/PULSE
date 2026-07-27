@@ -1754,6 +1754,7 @@ async function loadVdaProjectData(){
     window.VDA_PROJECTS=(vdaRecs||[]).map(r=>({
       id:r.id,
       number:r.fields['VDA Project Number']||'',
+      nickname:r.fields['Nickname']||'',
       status:r.fields['Status']||'Active',
       linkedPropertyIds:r.fields['Linked Properties']||[],
       linkedUnitIds:r.fields['Linked Units']||[],
@@ -2446,6 +2447,7 @@ mechanism as Edit Property above (translateX panel + dimmed overlay). -->
     <div id="cvp-error" style="display:none;background:var(--red-pale);border:1px solid var(--red);color:var(--red);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:14px;line-height:1.5"></div>
     <div class="two-col" style="gap:12px">
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">VDA Project Number</label><input class="form-input" type="text" id="cvp-number" placeholder="optional"></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Nickname (optional)</label><input class="form-input" type="text" id="cvp-nickname" placeholder="e.g. Tapa Tower"></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Initial Scope</label><textarea class="form-textarea" id="cvp-scope" rows="3" placeholder="Describe the scope of this agreement..."></textarea></div>
       <!-- v49j — Initial Price removed. Project Value is never typed in —
       it's always the live sum of this agreement's Task Line amounts (see
@@ -2483,6 +2485,7 @@ then updates the VDA Project's Current Scope/Current Price directly. -->
   </div>
   <div style="padding:24px">
     <input type="hidden" id="evp-id" value="">
+    <div class="form-group"><label class="form-label">Nickname (optional)</label><input class="form-input" type="text" id="evp-nickname" placeholder="e.g. Tapa Tower"></div>
     <div class="form-group"><label class="form-label">Status</label><select class="form-select" id="evp-status">
       <option value="Active">Active</option>
       <option value="On Hold">On Hold</option>
@@ -2819,7 +2822,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49m</div>
     </div>
   </nav>
 
@@ -2923,6 +2926,7 @@ from unitEffectiveValue() onto each checkbox). -->
             <div class="card" style="padding:20px;text-align:center"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Active</div><div id="vda-stat-active" style="font-size:30px;font-weight:700;color:var(--blue-dark)">0</div></div>
             <div class="card" style="padding:20px;text-align:center"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">With Unstarted Task Lines</div><div id="vda-stat-unstarted" style="font-size:30px;font-weight:700;color:var(--amber)">0</div></div>
           </div>
+          <input class="form-input no-print" type="text" id="vda-search" placeholder="Search by VDA Project #, nickname, or property..." oninput="renderVdaProjects()" style="max-width:400px;margin-bottom:16px">
           <div id="vda-card-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px"></div>
         </div>
       </div>
@@ -24518,12 +24522,42 @@ function renderVdaProjects(){
     return;
   }
 
-  list.innerHTML=projects.map(p=>{
+  // v49m — search box filters by VDA Project #, nickname, or any linked
+  // property name (case-insensitive substring match). Sort is always
+  // numeric ascending by VDA Project #, per Misty's direct instruction —
+  // falls back to sorting after any numbered agreements for records with
+  // a non-numeric or blank number, so those don't scatter randomly.
+  const searchRaw=(document.getElementById('vda-search')?.value||'').trim().toLowerCase();
+  const propNamesFor=p=>(p.linkedPropertyIds||[]).map(id=>{
+    const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);
+    return pr?pr.n:'';
+  }).filter(Boolean);
+  let visibleProjects=projects;
+  if(searchRaw){
+    visibleProjects=projects.filter(p=>{
+      const numMatch=(p.number||'').toLowerCase().includes(searchRaw);
+      const nickMatch=(p.nickname||'').toLowerCase().includes(searchRaw);
+      const propMatch=propNamesFor(p).some(n=>n.toLowerCase().includes(searchRaw));
+      return numMatch||nickMatch||propMatch;
+    });
+  }
+  visibleProjects=[...visibleProjects].sort((a,b)=>{
+    const na=parseFloat(a.number),nb=parseFloat(b.number);
+    const aNum=!isNaN(na),bNum=!isNaN(nb);
+    if(aNum&&bNum)return na-nb;
+    if(aNum)return -1;
+    if(bNum)return 1;
+    return (a.number||'').localeCompare(b.number||'');
+  });
+
+  if(visibleProjects.length===0){
+    list.innerHTML=`<div class="empty-state" style="grid-column:1/-1"><i class="ti ti-search"></i><div class="empty-state-title">No matching agreements</div><div class="empty-state-sub">Try a different VDA Project #, nickname, or property name</div></div>`;
+    return;
+  }
+
+  list.innerHTML=visibleProjects.map(p=>{
     const badge=vdaStatusBadgeColor(p.status);
-    const propNames=(p.linkedPropertyIds||[]).map(id=>{
-      const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);
-      return pr?pr.n:'';
-    }).filter(Boolean);
+    const propNames=propNamesFor(p);
     const myTasks=taskLines.filter(t=>t.vdaId===p.id);
     const fullyBilled=myTasks.filter(t=>t.status==='Fully Billed').length;
     const myAmendments=amendments.filter(a=>a.vdaId===p.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -24535,6 +24569,7 @@ function renderVdaProjects(){
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
         <div>
           <div style="font-size:14px;font-weight:700;color:var(--navy)">${p.number?'VDA Project #'+String(p.number).replace(/</g,'&lt;'):'No number assigned'}</div>
+          ${p.nickname?`<div style="font-size:12px;color:var(--gray-mid);font-style:italic">${String(p.nickname).replace(/</g,'&lt;')}</div>`:''}
           <span style="display:inline-block;margin-top:4px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;background:${badge.bg};color:${badge.fg}">${p.status||'Active'}</span>
         </div>
         ${canEdit?`<button class="btn-icon" onclick="openEditVdaPanel('${p.id}')" title="Edit Project" style="border:none;background:none;cursor:pointer;color:var(--blue-dark);font-size:16px"><i class="ti ti-pencil"></i></button>`:''}
@@ -24705,8 +24740,8 @@ function readVdaTaskLineRows(containerId){
 function openConfigureVdaPanel(){
   if(!vdaCanEdit())return;
   document.getElementById('cvp-number').value='';
+  document.getElementById('cvp-nickname').value='';
   document.getElementById('cvp-scope').value='';
-  document.getElementById('cvp-price').value='';
   document.getElementById('cvp-error').style.display='none';
   document.getElementById('cvp-tasklines').innerHTML='';
   window._vdaTreeState['cvp']={properties:new Set(),units:new Set(),expanded:new Set()};
@@ -24726,6 +24761,7 @@ window.closeConfigureVdaPanel=closeConfigureVdaPanel;
 
 async function saveConfigureVdaProject(){
   const numberRaw=(document.getElementById('cvp-number').value||'').trim();
+  const nickname=(document.getElementById('cvp-nickname').value||'').trim();
   const scope=(document.getElementById('cvp-scope').value||'').trim();
   const errEl=document.getElementById('cvp-error');
   errEl.style.display='none';
@@ -24755,6 +24791,7 @@ async function saveConfigureVdaProject(){
   // computed fresh every render — never a stored/typed number.
   const createRes=await atCreate('VDA Project',{
     'VDA Project Number':numberRaw,
+    'Nickname':nickname,
     'Status':'Active',
     'Linked Properties':linkedPropertyIds,
     'Linked Units':linkedUnitIds,
@@ -24782,7 +24819,7 @@ async function saveConfigureVdaProject(){
     }
   }
   window.VDA_PROJECTS=(window.VDA_PROJECTS||[]).concat([{
-    id:newId,number:numberRaw,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope,createdTime:new Date().toISOString(),
+    id:newId,number:numberRaw,nickname,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope,createdTime:new Date().toISOString(),
   }]);
   window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat(newTaskLines);
   closeConfigureVdaPanel();
@@ -24849,6 +24886,7 @@ function openEditVdaPanel(vdaId){
   if(!p)return;
   _evpCurrentId=vdaId;
   document.getElementById('evp-id').value=vdaId;
+  document.getElementById('evp-nickname').value=p.nickname||'';
   document.getElementById('evp-status').value=p.status||'Active';
   document.getElementById('evp-scope-display').textContent=p.scope||'—';
   document.getElementById('evp-price-display').textContent=fmtCurrency(vdaProjectValue(vdaId));
@@ -25003,20 +25041,22 @@ async function saveEditVdaProject(){
   const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
   if(!p)return;
   const status=document.getElementById('evp-status').value;
+  const nickname=(document.getElementById('evp-nickname').value||'').trim();
   const st=vdaTreeState('evp');
   const linkedPropertyIds=[...st.properties];
   const linkedUnitIds=[...st.units];
 
   showToast('Saving changes...','info');
-  // Save is deliberately scoped to Status + Linked Properties/Units + Task
-  // Lines. Current Scope/Current Price are never written here — those only
-  // change via Add Amendment (submitAddAmendment above).
+  // Save is deliberately scoped to Status + Nickname + Linked Properties/
+  // Units + Task Lines. Current Scope/Current Price are never written
+  // here — those only change via Add Amendment (submitAddAmendment above).
   await atUpdate('VDA Project',_evpCurrentId,{
     'Status':status,
+    'Nickname':nickname,
     'Linked Properties':linkedPropertyIds,
     'Linked Units':linkedUnitIds,
   });
-  p.status=status;p.linkedPropertyIds=linkedPropertyIds;p.linkedUnitIds=linkedUnitIds;
+  p.status=status;p.nickname=nickname;p.linkedPropertyIds=linkedPropertyIds;p.linkedUnitIds=linkedUnitIds;
 
   const rows=readVdaTaskLineRows('evp-tasklines');
   const existingIds=new Set(rows.filter(r=>r.existingId).map(r=>r.existingId));
