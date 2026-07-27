@@ -2825,7 +2825,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49o</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49p</div>
     </div>
   </nav>
 
@@ -3574,7 +3574,10 @@ from unitEffectiveValue() onto each checkbox). -->
             <div id="bo-chart" style="margin-bottom:24px"></div>
             <div class="table-wrap">
               <table class="data-table">
-                <thead><tr><th style="width:24px"></th><th style="text-align:left;width:22%">Year</th><th style="text-align:center;width:11%">Award</th><th style="text-align:center;width:11%">Estimate</th><th style="text-align:center;width:11%">Total</th><th style="text-align:center;width:7%">Units</th><th style="text-align:left;width:34%">Unit names</th></tr></thead>
+                <!-- v49p — header relabeled from "Unit names" to "Properties" to
+                match the collapsed row now showing a property count in that
+                column instead of a per-scope unit name list. -->
+                <thead><tr><th style="width:24px"></th><th style="text-align:left;width:22%">Year</th><th style="text-align:center;width:11%">Award</th><th style="text-align:center;width:11%">Estimate</th><th style="text-align:center;width:11%">Total</th><th style="text-align:center;width:7%">Units</th><th style="text-align:left;width:34%">Properties</th></tr></thead>
                 <tbody id="bo-tbody"></tbody>
               </table>
             </div>
@@ -14019,10 +14022,11 @@ function renderBudgetOutlook(){
 
   const byYearAll={};
   allocs.forEach(a=>{
-    if(!byYearAll[a.year])byYearAll[a.year]={committed:0,planned:0,items:[],unitTotal:0};
+    if(!byYearAll[a.year])byYearAll[a.year]={committed:0,planned:0,items:[],unitTotal:0,propSet:new Set()};
     if(a.isCommitted)byYearAll[a.year].committed+=a.amount;else byYearAll[a.year].planned+=a.amount;
     byYearAll[a.year].items.push(a);
     byYearAll[a.year].unitTotal+=(a.unitCount||0);
+    if(a.property)byYearAll[a.year].propSet.add(a.property);
   });
   const allYearsPresent=Object.keys(byYearAll).map(Number).sort((a,b)=>a-b);
   // v36j — year picker. boYearSelection is null until the user opens the
@@ -14112,7 +14116,15 @@ function renderBudgetOutlook(){
       <td style="text-align:center;color:var(--blue-mid)">${cell(d.planned)}</td>
       <td style="text-align:center;font-weight:600">${fmtCurrency(d.committed+d.planned)}</td>
       <td style="text-align:center;color:var(--gray-mid)">${d.unitTotal||'—'}</td>
-      <td></td>
+      <!-- v49p — the Unit Names column previously showed nothing at all
+      on the collapsed year row (only the click-expanded per-scope detail
+      rows below ever populated it), which reads as a data bug in a
+      printed report since a print job never expands anything. Per
+      Misty's direction, the collapsed row now shows the count of
+      distinct properties associated with that year instead (not units,
+      since the Units column already covers that, and not a name list,
+      since that only makes sense per-scope in the expanded detail rows). -->
+      <td style="text-align:left;color:var(--gray-mid)">${d.propSet&&d.propSet.size?d.propSet.size+' propert'+(d.propSet.size===1?'y':'ies'):'<span style="color:var(--gray-light)">—</span>'}</td>
     </tr>${detailRows}`;
   }).join('')||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--gray-mid)">No allocations for this filter</td></tr>`;
   // v34i — cache what was just rendered so Export to Excel reads the exact
@@ -23318,6 +23330,20 @@ async function crPrintCustomReport(){
     }
   });
 
+  // v49p — the combined report had no footer at all. Every other printed
+  // PULSE report (Performance Report, email/RTF exports) ends with the
+  // same prescribed line, so this appends one identical footer element
+  // after the last selected section, then removes it in cleanup below
+  // along with everything else this function touches.
+  const _crClientName=demoMode?'Demo Retail Portfolio':'Park Hotels & Resorts';
+  const _crToday=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  const crFooterEl=document.createElement('div');
+  crFooterEl.id='custom-report-footer';
+  crFooterEl.className='custom-report-section';
+  crFooterEl.style.cssText='text-align:center;padding:1rem 0;border-top:1px solid var(--border);font-size:10px;color:var(--gray-light);font-family:\'Plus Jakarta Sans\',sans-serif';
+  crFooterEl.textContent=`PULSE · ${_crClientName} · Generated ${_crToday} · Modernization Project Assurance · Confidential`;
+  document.body.appendChild(crFooterEl);
+
   window.print();
 
   // Cleanup — synchronous, runs right after the print dialog is
@@ -23329,6 +23355,7 @@ async function crPrintCustomReport(){
     el.classList.remove('print-active','custom-report-section','custom-report-subsection-hidden');
   });
   inlineDisplayEls.forEach(({el,prevDisplay})=>{el.style.display=prevDisplay;});
+  crFooterEl.remove();
   boFilter=savedBoFilter;
   boYearSelection=savedBoYearSelection;
   boExpandedYear=savedBoExpandedYear;
