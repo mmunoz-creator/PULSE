@@ -551,6 +551,57 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   #view-charts.print-active{display:block!important}
   #view-schedule.print-active{display:block!important}
   [id^="view-"]:not(#view-report):not(#view-dashboard.print-active):not(#view-charts.print-active):not(#view-schedule.print-active):not(#view-portfolio.print-active):not(#view-capital.print-active){display:none!important}
+  /* v49d — Custom Report Builder. body.custom-report-print-mode is added
+  only while printCustomReport() runs, letting several views be visible at
+  once (unlike every single-view print function above, which only ever
+  shows one view via .print-active). Kept as a fully separate mechanism
+  rather than extending the :not() chain above, so no existing print
+  button's behavior changes. Each selected view still needs its own
+  .print-active class added by printCustomReport() the same way the
+  single-view print functions already do it; this rule just stops the
+  :not() chain above from hiding whichever ones have that class while this
+  mode is active. */
+  body.custom-report-print-mode [id^="view-"].print-active{display:block!important;overflow:visible!important;height:auto!important}
+  body.custom-report-print-mode [id^="view-"].print-active .table-wrap{overflow:visible!important}
+  /* v49e bug fix — budget-outlook-view and milestone-report-view have
+  "-view" as a SUFFIX, not "view-" as a prefix, so [id^="view-"] never
+  matched either one. Both stayed at their inline style="display:none"
+  no matter what classes crPrintCustomReport() added, which is why
+  Budget Outlook never appeared in a combined print at all. Listing both
+  ids explicitly here, and also clearing their inline display in JS (see
+  crPrintCustomReport) since inline styles are stronger than a class
+  selector even with !important on the property itself. */
+  body.custom-report-print-mode #budget-outlook-view.print-active,
+  body.custom-report-print-mode #milestone-report-view.print-active{display:block!important;overflow:visible!important;height:auto!important}
+  body.custom-report-print-mode #budget-outlook-view.print-active .table-wrap,
+  body.custom-report-print-mode #milestone-report-view.print-active .table-wrap{overflow:visible!important}
+  /* Page break before every section after the first one, so each printed
+  section starts on its own page instead of running together. */
+  body.custom-report-print-mode [id^="view-"].print-active.custom-report-section,
+  body.custom-report-print-mode #budget-outlook-view.print-active.custom-report-section,
+  body.custom-report-print-mode #milestone-report-view.print-active.custom-report-section{page-break-before:always}
+  body.custom-report-print-mode [id^="view-"].print-active.custom-report-section:first-of-type,
+  body.custom-report-print-mode #budget-outlook-view.print-active.custom-report-section:first-of-type,
+  body.custom-report-print-mode #milestone-report-view.print-active.custom-report-section:first-of-type{page-break-before:avoid}
+  /* Sub-section wrapper used to show/hide individual charts (Dashboard's
+  Heat Map/Attention Required/Action Horizon, Analytics's Budget % Spent/
+  Forecasted Completion/Forecasted Spend) independent of one another. */
+  body.custom-report-print-mode .custom-report-subsection.custom-report-subsection-hidden{display:none!important}
+  /* #view-report{display:block!important} above is unconditional so the
+  Milestone Report and on-demand report reader (both live inside
+  view-report) always print correctly on their own. That same rule was
+  also keeping report-library-view (the Performance Reports button/list
+  page underneath) AND report-reader-view (a previously-opened saved
+  report, if the user had one open and never closed it before opening
+  the builder) visible during a combined custom report print — both
+  bled stray content into the printed output (a duplicate, differently-
+  styled stat row from a saved report's own embedded snapshot, confirmed
+  from a live test print). Hide both specifically during
+  custom-report-print-mode — Milestone Report's own container
+  (milestone-report-view) is separate and already gated by the
+  .print-active rule above, so this doesn't affect it. */
+  body.custom-report-print-mode #report-library-view{display:none!important}
+  body.custom-report-print-mode #report-reader-view{display:none!important}
   body{background:white;overflow:visible!important}
   html{overflow:visible!important}
   @page{margin:16mm 12mm;size:A4 portrait}
@@ -564,10 +615,19 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   .card{padding:10px 12px!important;margin-bottom:8px!important;overflow:visible!important;height:auto!important;max-height:none!important}
   .card-header{margin-bottom:6px!important}
   .rep-row{margin-bottom:3px!important}
-  /* Allow charts to break across pages */
+  /* Allow charts to break across pages (standalone printCharts() only —
+  long Analytics pages need to flow naturally when printed on their own).
+  Custom Report Builder overrides this below since a leadership packet
+  should never have a single chart card cut in half mid-page. */
   #analytics-body .card{break-inside:auto;page-break-inside:auto}
   #analytics-body .two-col{break-inside:auto;page-break-inside:auto}
   #dashboard-body .card{break-inside:avoid;page-break-inside:avoid}
+  /* v49e — custom report print keeps every chart card intact on one page,
+  overriding the "allow charts to break" rule above. Scoped strictly to
+  custom-report-print-mode so printCharts()'s own standalone behavior is
+  untouched. */
+  body.custom-report-print-mode #analytics-body .card{break-inside:avoid!important;page-break-inside:avoid!important}
+  body.custom-report-print-mode #analytics-body .two-col{break-inside:avoid!important;page-break-inside:avoid!important}
   /* Remove overflow restrictions that clip content */
   #analytics-body,#dashboard-body{overflow:visible!important;height:auto!important;max-height:none!important}
   /* Force SVG and canvas to print */
@@ -2682,7 +2742,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49h</div>
     </div>
   </nav>
 
@@ -2780,7 +2840,7 @@ from unitEffectiveValue() onto each checkbox). -->
           </div>
         </div>
         <div class="page-body">
-          <div class="stat-row" id="vda-stat-row" style="display:grid;grid-template-columns:repeat(4,minmax(0,320px));gap:16px;margin-bottom:20px">
+          <div class="stat-row" id="vda-stat-row" style="display:grid;grid-template-columns:repeat(4,minmax(0,320px));gap:28px;margin-bottom:20px">
             <div class="card" style="padding:20px;text-align:center"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Total Agreements</div><div id="vda-stat-total" style="font-size:30px;font-weight:700;color:var(--navy)">0</div></div>
             <div class="card" style="padding:20px;text-align:center"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Total Current Price</div><div id="vda-stat-price" style="font-size:30px;font-weight:700;color:var(--navy)">$0</div></div>
             <div class="card" style="padding:20px;text-align:center"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Active</div><div id="vda-stat-active" style="font-size:30px;font-weight:700;color:var(--blue-dark)">0</div></div>
@@ -3250,8 +3310,15 @@ from unitEffectiveValue() onto each checkbox). -->
           <div class="page-header no-print">
             <div class="page-header-left"><h1>Performance Reports</h1><p>Generated weekly and on-demand</p></div>
             <div class="header-actions">
-              <button class="btn" onclick="showMilestoneReport()"><i class="ti ti-timeline"></i>Milestone Report</button>
-              <button class="btn btn-add" onclick="showGenerateReportModal()"><i class="ti ti-file-plus"></i>Generate Report</button>
+              <button class="btn btn-add" onclick="showMilestoneReport()"><i class="ti ti-timeline"></i>Milestone Report</button>
+              <!-- v49h — Custom Report Builder. Client/PM/Admin only (same
+              access as Performance Reports itself, Consultant excluded).
+              Lets the user pick which existing PULSE sections to combine
+              into one printed/PDF document, e.g. for a client prepping a
+              packet for their own leadership. Always live data, no saved
+              document — see showCustomReportBuilder(). -->
+              <button class="btn btn-add" id="custom-report-btn" onclick="showCustomReportBuilder()"><i class="ti ti-layout-grid"></i>Build Custom Report</button>
+              <button class="btn btn-add" onclick="showGenerateReportModal()"><i class="ti ti-file-plus"></i>Generate Performance Report</button>
             </div>
           </div>
           <div class="page-body">
@@ -15793,7 +15860,7 @@ function renderCharts(){
   const _analyticsUnitBuckets=getPortfolioClassification().unitBuckets;
   container.innerHTML=`
   <!-- PROGRAM SUMMARY BAR -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
+  <div class="custom-report-subsection" id="analytics-stats-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
     <div class="stat-card" style="border-top:3px solid var(--navy)">
       <div class="stat-label">Total Program Value</div>
       <div class="stat-value" style="font-size:20px">${totalProgramValue?fmtBudget(totalProgramValue):'—'}</div>
@@ -15845,11 +15912,11 @@ function renderCharts(){
 
   <!-- ROW 1: Portfolio % Complete | Budget % Spent -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
-    <div class="card">
+    <div class="card custom-report-subsection" id="analytics-portfolio-complete-card">
       <div class="card-header"><div class="card-title">Portfolio % Complete</div><div class="card-sub">Buildings Modernized vs Total Portfolio</div></div>
       <div id="portfolio-complete-chart" style="margin-top:10px"></div>
     </div>
-    <div class="card">
+    <div class="card custom-report-subsection" id="analytics-budget-spent-card">
       <div class="card-header"><div class="card-title">Budget % Spent</div><div class="card-sub">Total billed YTD vs active properties budget</div></div>
       <div id="budget-spent-chart" style="margin-top:10px"></div>
     </div>
@@ -15857,7 +15924,7 @@ function renderCharts(){
 
   <!-- ROW 2: Forecasted Completion | Forecasted Spend -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
-    <div class="card" style="position:relative">
+    <div class="card custom-report-subsection" id="analytics-forecasted-completion-card" style="position:relative">
       <div class="card-header">
         <div>
           <div class="card-title">Forecasted Completion</div>
@@ -15866,7 +15933,7 @@ function renderCharts(){
       </div>
       <div id="fc-chart" style="margin-top:10px;position:relative"></div>
     </div>
-    <div class="card" style="position:relative">
+    <div class="card custom-report-subsection" id="analytics-forecasted-spend-card" style="position:relative">
       <div class="card-header">
         <div>
           <div class="card-title">Forecasted Spend</div>
@@ -15887,11 +15954,11 @@ function renderCharts(){
 
   <!-- ROW 3: Active Projects by Stage | Elevator Company Performance -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
-    <div class="card">
+    <div class="card custom-report-subsection" id="analytics-projects-by-stage-card">
       <div class="card-header"><div class="card-title">Active Projects by Stage</div><div class="card-sub">Portfolio distribution across project lifecycle stages</div></div>
       <div id="ms-stage-chart" style="margin-top:10px"></div>
     </div>
-    <div class="card">
+    <div class="card custom-report-subsection" id="analytics-elevator-co-card">
       <div class="card-header"><div class="card-title">Elevator Company Performance</div><div class="card-sub">Project count by status per contractor</div></div>
       <div id="elev-co-chart" style="margin-top:10px"></div>
     </div>
@@ -15899,18 +15966,18 @@ function renderCharts(){
 
   <!-- ROW 4: Open Task Roll-up | Top 5 Properties by Unit Count -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
-    <div class="card">
+    <div class="card custom-report-subsection" id="analytics-task-rollup-card">
       <div class="card-header"><div class="card-title">Open Task Roll-up</div><div class="card-sub">Open action items by priority</div></div>
       <div id="task-rollup-chart" style="margin-top:10px"></div>
     </div>
-    <div class="card">
+    <div class="card custom-report-subsection" id="analytics-top5-units-card">
       <div class="card-header"><div class="card-title">Top 5 Properties by Unit Count</div><div class="card-sub">Health of largest properties</div></div>
       <div id="top5-units-chart" style="margin-top:10px"></div>
     </div>
   </div>
 
   <!-- ROW 5: Budget vs Billed — full width -->
-  <div class="card" style="margin-bottom:20px">
+  <div class="card custom-report-subsection" id="analytics-budget-vs-billed-card" style="margin-bottom:20px">
     <div class="card-header"><div class="card-title">Budget vs Billed</div><div class="card-sub">Project Budget vs YTD Billed: ${CF.status?CF.status.toLowerCase()+' properties':CF.property.length===1?CF.property[0]:CF.property.length>1?CF.property.length+' properties selected':'all properties'}</div></div>
     <div id="budget-bars" style="margin-top:10px"></div>
     ${budgetData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries to populate this chart.</div>':''}
@@ -17649,7 +17716,7 @@ function renderDashboard(){
       // Active + Pipeline, two terms, both visible tiles — nothing
       // folded in silently, so there's no separate footnote needed.
       const _cpBudgetDisplay=_cpBudget;
-      return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
+      return `<div class="custom-report-subsection" id="dashboard-stats-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
         <div class="stat-card" style="border-top:3px solid var(--navy)">
           <div class="stat-label">Total Program Value</div>
           <div class="stat-value" style="font-size:20px">${_progVal?fmtBudget(_progVal):'—'}</div>
@@ -17692,7 +17759,7 @@ function renderDashboard(){
         </div>
       </div>`;
     })()}
-    <div class="card" style="margin-bottom:16px">
+    <div class="card custom-report-subsection" id="dashboard-heatmap-card" style="margin-bottom:16px">
       <div class="card-header">
         <div><div class="card-title">Portfolio Heat Map</div><div class="card-sub">Construction Health by Property</div></div>
         <div style="display:flex;gap:14px;align-items:center">
@@ -17710,9 +17777,9 @@ function renderDashboard(){
       <div id="dash-heat-grid" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
       ${active.length===0&&(!dashHeatShowComplete||completeProps.length===0)?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No active properties in progress</div>':''}
     </div>
-    <div id="dash-attention-section" style="margin-bottom:16px"></div>
-    <div id="dash-action-horizon" style="margin-bottom:16px"></div>
-    <div id="dash-activity-feed" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px"></div>`;
+    <div id="dash-attention-section" class="custom-report-subsection" style="margin-bottom:16px"></div>
+    <div id="dash-action-horizon" class="custom-report-subsection" style="margin-bottom:16px"></div>
+    <div id="dash-activity-feed" class="custom-report-subsection" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px"></div>`;
 
   // Populate dashboard heat grid
   // v36c — legend/render collapsed to three real states: On Track, At
@@ -22795,6 +22862,401 @@ function showGenerateReportModal(){
   </div>`;
   document.body.appendChild(overlay);
 }
+
+// ============================================================
+// v49d — CUSTOM REPORT BUILDER
+// Lets Client/PM/Admin (Consultant excluded, same access as Performance
+// Reports itself) pick which existing PULSE sections/charts to combine
+// into one printed/PDF document, e.g. for a client prepping a packet for
+// their own leadership. Always live data pulled at print time — no saved
+// document. Selections (which checkboxes were last checked) persist in
+// localStorage so the modal reopens pre-checked next time; the actual
+// filter/year state for Budget Outlook does NOT persist, it resets to
+// "all" each time the modal opens.
+//
+// Scope note: Portfolio View and Capital Plan were considered for this
+// feature but dropped after finding their render functions (~600 lines
+// each) too deeply tied to global state to safely fork an independent
+// filter for — see continuity notes. Only Dashboard, Analytics, Budget
+// Outlook, and Milestone Report are offered here.
+//
+// Budget Outlook is the one section with its own independent mini-filter
+// in this modal (filter pill + year picker), separate from whatever the
+// live Budget Outlook page is currently showing. This is NOT done by
+// forking renderBudgetOutlook() — that function is reused as-is. Instead,
+// crPrintCustomReport() below temporarily swaps the real boFilter/
+// boYearSelection globals to the report's chosen values, calls the real
+// renderBudgetOutlook(), and restores the original globals immediately
+// after (all synchronous, no await in between) so the live page's own
+// filter state is never actually changed from the user's point of view.
+// ============================================================
+
+const CUSTOM_REPORT_STORAGE_KEY='pulse_custom_report_selections';
+
+// Each top-level section may have sub-items (individual charts). A
+// section with no subItems prints as one block with no further breakdown.
+const CUSTOM_REPORT_SECTIONS=[
+  {id:'dashboard',label:'Dashboard',icon:'ti-layout-dashboard',viewId:'dashboard',
+    subItems:[
+      {id:'dashboard-stats',label:'Stat cards',elId:'dashboard-stats-row'},
+      {id:'dashboard-heatmap',label:'Portfolio heat map',elId:'dashboard-heatmap-card'},
+      {id:'dashboard-attention',label:'Attention required',elId:'dash-attention-section'},
+      {id:'dashboard-horizon',label:'Action horizon',elId:'dash-action-horizon'},
+      {id:'dashboard-activity',label:'Activity feed',elId:'dash-activity-feed'}
+    ]},
+  {id:'analytics',label:'Analytics',icon:'ti-chart-dots',viewId:'charts',
+    subItems:[
+      {id:'analytics-stats',label:'Stat cards',elId:'analytics-stats-row'},
+      {id:'analytics-portfolio-complete',label:'Portfolio % complete',elId:'analytics-portfolio-complete-card'},
+      {id:'analytics-budget-spent',label:'Budget % spent',elId:'analytics-budget-spent-card'},
+      {id:'analytics-forecasted-completion',label:'Forecasted completion',elId:'analytics-forecasted-completion-card'},
+      {id:'analytics-forecasted-spend',label:'Forecasted spend',elId:'analytics-forecasted-spend-card'},
+      {id:'analytics-projects-by-stage',label:'Active projects by stage',elId:'analytics-projects-by-stage-card'},
+      {id:'analytics-elevator-co',label:'Elevator company performance',elId:'analytics-elevator-co-card'},
+      {id:'analytics-task-rollup',label:'Open task roll-up',elId:'analytics-task-rollup-card'},
+      {id:'analytics-top5-units',label:'Top 5 properties by unit count',elId:'analytics-top5-units-card'},
+      {id:'analytics-budget-vs-billed',label:'Budget vs billed',elId:'analytics-budget-vs-billed-card'}
+    ]},
+  {id:'budgetoutlook',label:'Budget outlook',icon:'ti-report-money',viewId:'budgetoutlook',hasBoFilter:true},
+  {id:'milestonereport',label:'Milestone report',icon:'ti-timeline',viewId:'milestonereport'}
+];
+
+function crLoadSelections(){
+  try{
+    const raw=localStorage.getItem(CUSTOM_REPORT_STORAGE_KEY);
+    if(!raw)return null;
+    return JSON.parse(raw);
+  }catch(e){return null;}
+}
+function crSaveSelections(sel){
+  try{localStorage.setItem(CUSTOM_REPORT_STORAGE_KEY,JSON.stringify(sel));}catch(e){}
+}
+// Default selections, only used the very first time the modal opens on a
+// given browser, before anything is saved. Stat cards and Activity Feed
+// default OFF per Misty's direct instruction — they're checkable but not
+// meant to print by default, since a leadership-facing packet usually
+// wants the heat map/charts, not the raw stat tiles or activity log.
+function crDefaultSelections(){
+  return {
+    sections:{dashboard:true,analytics:true,budgetoutlook:true,milestonereport:false},
+    subItems:{
+      'dashboard-stats':false,'dashboard-heatmap':true,'dashboard-attention':false,'dashboard-horizon':false,'dashboard-activity':false,
+      'analytics-stats':false,
+      'analytics-portfolio-complete':false,'analytics-budget-spent':false,
+      'analytics-forecasted-completion':true,'analytics-forecasted-spend':true
+    },
+    // v49e — Budget Outlook's own mini-filter/year-picker state, saved
+    // alongside the section/sub-item checkboxes so it survives closing
+    // and reopening the modal. boYear is stored as an array (or null for
+    // "all years") since Sets don't survive JSON.stringify.
+    boFilter:'all',
+    boYear:null
+  };
+}
+
+let _crBoFilter='all';
+let _crBoYearSelection=null;
+
+function showCustomReportBuilder(){
+  if(role==='consultant'){showToast('Custom reports aren\'t available for the Consultant role.','error');return;}
+  // v49g bug fix — a raw saved object from localStorage only has whatever
+  // keys existed in it the last time it was written. Any sub-item added
+  // to CUSTOM_REPORT_SECTIONS after that (e.g. analytics-stats) is simply
+  // missing from an older saved object, and saved.subItems[item.id]!==false
+  // treated "missing" the same as "true" (checked) rather than falling
+  // back to that item's real default. That's why Analytics' stat row kept
+  // printing even after being added as an unchecked-by-default sub-item —
+  // anyone who'd used the builder even once before this fix had a stale
+  // saved object with no analytics-stats key at all. Merging onto a fresh
+  // crDefaultSelections() here means only keys the user actually
+  // interacted with ever override the current defaults; anything new
+  // always starts at its intended default until explicitly toggled.
+  const defaults=crDefaultSelections();
+  const rawSaved=crLoadSelections();
+  const saved=rawSaved?{
+    sections:Object.assign({},defaults.sections,rawSaved.sections),
+    subItems:Object.assign({},defaults.subItems,rawSaved.subItems),
+    boFilter:rawSaved.boFilter!==undefined?rawSaved.boFilter:defaults.boFilter,
+    boYear:rawSaved.boYear!==undefined?rawSaved.boYear:defaults.boYear
+  }:defaults;
+  const overlay=document.createElement('div');
+  overlay.id='custom-report-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const rowsHtml=CUSTOM_REPORT_SECTIONS.map(sec=>{
+    const checked=saved.sections[sec.id]!==false;
+    let sub='';
+    if(sec.subItems){
+      sub=sec.subItems.map(item=>{
+        const subChecked=saved.subItems[item.id]!==false;
+        return `<label style="display:flex;align-items:center;gap:10px;padding:6px 4px 6px 40px;cursor:pointer">
+          <input type="checkbox" class="cr-subitem" data-section="${sec.id}" data-item="${item.id}" ${subChecked?'checked':''} style="width:14px;height:14px">
+          <span style="font-size:13px;color:var(--gray-mid);flex:1">${item.label}</span>
+        </label>`;
+      }).join('');
+    }
+    let boFilterHtml='';
+    if(sec.hasBoFilter){
+      boFilterHtml=`<div style="padding:8px 4px 8px 40px;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;gap:6px" id="cr-bo-pills">
+          <button type="button" class="cr-bo-pill" data-val="all" onclick="crSetBoFilter('all')" style="font-size:12px;padding:4px 10px;background:var(--blue-dark);color:white;border:none;border-radius:6px;cursor:pointer">All scheduled</button>
+          <button type="button" class="cr-bo-pill" data-val="capital" onclick="crSetBoFilter('capital')" style="font-size:12px;padding:4px 10px;background:var(--surface-1,#f1efe8);border:1px solid var(--border);border-radius:6px;cursor:pointer">Capital plan only</button>
+          <button type="button" class="cr-bo-pill" data-val="active" onclick="crSetBoFilter('active')" style="font-size:12px;padding:4px 10px;background:var(--surface-1,#f1efe8);border:1px solid var(--border);border-radius:6px;cursor:pointer">Active properties</button>
+        </div>
+        <div style="position:relative;display:inline-block">
+          <button type="button" class="btn" id="cr-bo-year-trigger" onclick="crToggleBoYearPanel()" style="font-size:12px;padding:4px 10px;display:flex;align-items:center;gap:6px">
+            <i class="ti ti-calendar" style="font-size:13px"></i>
+            <span id="cr-bo-year-trigger-label">All years</span>
+            <i class="ti ti-chevron-down" style="font-size:11px"></i>
+          </button>
+          <div id="cr-bo-year-panel" style="display:none;position:absolute;left:0;top:calc(100% + 4px);background:white;border:1px solid var(--border);border-radius:6px;padding:10px 12px;width:180px;z-index:2100;box-shadow:var(--shadow-md,0 4px 12px rgba(0,0,0,.15))">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px">Show years</span>
+              <div style="display:flex;gap:8px">
+                <button type="button" onclick="crBoSetAllYears(true)" style="font-size:11px;color:var(--blue-dark);background:none;border:none;cursor:pointer;padding:0">All</button>
+                <button type="button" onclick="crBoSetAllYears(false)" style="font-size:11px;color:var(--blue-dark);background:none;border:none;cursor:pointer;padding:0">None</button>
+              </div>
+            </div>
+            <div id="cr-bo-year-checklist" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto"></div>
+          </div>
+        </div>
+      </div>`;
+    }
+    return `<label style="display:flex;align-items:center;gap:10px;padding:10px 4px;cursor:pointer${sec.subItems?'':''}">
+        <input type="checkbox" class="cr-section" data-section="${sec.id}" ${checked?'checked':''} style="width:16px;height:16px">
+        <i class="ti ${sec.icon}" style="font-size:18px;color:var(--gray-mid)"></i>
+        <span style="font-size:14px;font-weight:600;color:var(--navy);flex:1">${sec.label}</span>
+      </label>${sub}${boFilterHtml}`;
+  }).join('');
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:480px;box-shadow:var(--shadow-md);padding:24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div style="font-size:15px;font-weight:600;color:var(--navy)"><i class="ti ti-layout-grid" style="margin-right:6px;color:var(--blue-dark)"></i>Build Custom Report</div>
+      <button onclick="document.getElementById('custom-report-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px;line-height:1;padding:0"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">Select the sections and charts to include. Each pulls live data at print time.</div>
+    <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:16px;max-height:400px;overflow-y:auto;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:8px 0">
+      ${rowsHtml}
+    </div>
+    <div style="font-size:11px;color:var(--gray-light);margin-bottom:16px">Your selections are remembered for next time. Budget outlook's filters here are independent of what's showing on the live page.</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('custom-report-overlay').remove()">Cancel</button>
+      <button class="btn btn-add" onclick="crPrintCustomReport()"><i class="ti ti-printer"></i>Print report</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  // v49e — restore the saved Budget Outlook filter/year selection instead
+  // of always resetting to 'all'/null, so it persists across modal opens
+  // the same way the section/sub-item checkboxes already do.
+  _crBoFilter=saved.boFilter||'all';
+  _crBoYearSelection=Array.isArray(saved.boYear)?new Set(saved.boYear):null;
+  crUpdateBoPillHighlight();
+  crRefreshBoYearList();
+}
+window.showCustomReportBuilder=showCustomReportBuilder;
+
+// Discovers which years actually exist in the current Budget Outlook data
+// so the modal's year checklist shows real years, not a placeholder. Does
+// this by reusing the real renderBudgetOutlook() (its year computation is
+// too deeply tied to Scope/Unit Inventory data to safely duplicate — see
+// continuity notes on the same call made for Portfolio View/Capital
+// Plan), the same save/restore pattern used at print time: swap boFilter/
+// boYearSelection to the report's own values, call renderBudgetOutlook(),
+// read the years it wrote into #bo-year-checklist on the LIVE page, then
+// restore the real globals immediately. All synchronous, so the live
+// page's own Budget Outlook (if the user has it open in another tab of
+// this same session) never visibly changes.
+function crRefreshBoYearList(){
+  if(typeof renderBudgetOutlook!=='function')return;
+  const savedFilter=boFilter,savedYearSel=boYearSelection,savedExpanded=boExpandedYear;
+  boFilter=_crBoFilter;
+  boYearSelection=_crBoYearSelection;
+  boExpandedYear=null;
+  renderBudgetOutlook();
+  const years=Array.from(document.querySelectorAll('#bo-year-checklist input[type=checkbox]')).map(el=>Number(el.nextSibling.textContent)).filter(n=>!isNaN(n));
+  boFilter=savedFilter;
+  boYearSelection=savedYearSel;
+  boExpandedYear=savedExpanded;
+  if(document.getElementById('budget-outlook-view')?.style.display!=='none')renderBudgetOutlook();
+  _crBoAllYears=years;
+  crRenderBoYearChecklist();
+}
+
+let _crBoAllYears=[];
+
+function crRenderBoYearChecklist(){
+  const list=document.getElementById('cr-bo-year-checklist');
+  const label=document.getElementById('cr-bo-year-trigger-label');
+  if(!list||!label)return;
+  list.innerHTML=_crBoAllYears.map(y=>{
+    const checked=!_crBoYearSelection||_crBoYearSelection.has(y);
+    return `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--navy)"><input type="checkbox" ${checked?'checked':''} onchange="crToggleBoYear(${y},this.checked)">${y}</label>`;
+  }).join('')||`<span style="font-size:12px;color:var(--gray-mid)">No years to show</span>`;
+  if(!_crBoYearSelection||_crBoYearSelection.size===_crBoAllYears.length){
+    label.textContent='All years';
+  }else if(_crBoYearSelection.size===0){
+    label.textContent='No years';
+  }else{
+    const sorted=[..._crBoYearSelection].sort((a,b)=>a-b);
+    label.textContent=sorted.length<=3?sorted.join(', '):`${sorted.length} years`;
+  }
+}
+
+function crToggleBoYearPanel(){
+  const panel=document.getElementById('cr-bo-year-panel');
+  if(!panel)return;
+  panel.style.display=panel.style.display==='none'?'block':'none';
+}
+window.crToggleBoYearPanel=crToggleBoYearPanel;
+
+function crToggleBoYear(year,isChecked){
+  if(!_crBoYearSelection)_crBoYearSelection=new Set(_crBoAllYears);
+  if(isChecked)_crBoYearSelection.add(year);else _crBoYearSelection.delete(year);
+  crRenderBoYearChecklist();
+}
+window.crToggleBoYear=crToggleBoYear;
+
+function crBoSetAllYears(showAll){
+  _crBoYearSelection=showAll?null:new Set();
+  crRenderBoYearChecklist();
+}
+window.crBoSetAllYears=crBoSetAllYears;
+
+document.addEventListener('click',function(e){
+  const panel=document.getElementById('cr-bo-year-panel');
+  const trigger=document.getElementById('cr-bo-year-trigger');
+  if(!panel||panel.style.display==='none')return;
+  if(panel.contains(e.target)||(trigger&&trigger.contains(e.target)))return;
+  panel.style.display='none';
+});
+
+function crSetBoFilter(val){
+  _crBoFilter=val;
+  _crBoYearSelection=null;
+  crUpdateBoPillHighlight();
+  crRefreshBoYearList();
+}
+window.crSetBoFilter=crSetBoFilter;
+
+function crUpdateBoPillHighlight(){
+  document.querySelectorAll('.cr-bo-pill').forEach(btn=>{
+    const active=btn.dataset.val===_crBoFilter;
+    btn.style.background=active?'var(--blue-dark)':'var(--surface-1,#f1efe8)';
+    btn.style.color=active?'white':'';
+    btn.style.border=active?'none':'1px solid var(--border)';
+  });
+}
+
+// Reads the modal's checkbox state into the same shape crLoadSelections/
+// crDefaultSelections use, so it can be saved directly.
+function crReadSelectionsFromModal(){
+  const sections={};
+  document.querySelectorAll('.cr-section').forEach(cb=>{sections[cb.dataset.section]=cb.checked;});
+  const subItems={};
+  document.querySelectorAll('.cr-subitem').forEach(cb=>{subItems[cb.dataset.item]=cb.checked;});
+  // v49e — include the Budget Outlook mini-filter/year state (module-level
+  // vars, not DOM checkboxes) so it gets saved to localStorage along with
+  // everything else whenever the report is printed.
+  return {sections,subItems,boFilter:_crBoFilter,boYear:_crBoYearSelection?[..._crBoYearSelection]:null};
+}
+
+async function crPrintCustomReport(){
+  const sel=crReadSelectionsFromModal();
+  crSaveSelections(sel);
+  const selectedSections=CUSTOM_REPORT_SECTIONS.filter(s=>sel.sections[s.id]);
+  if(selectedSections.length===0){
+    showToast('Select at least one section to include.','error');
+    return;
+  }
+  document.getElementById('custom-report-overlay')?.remove();
+  showToast('Building report...','info');
+
+  // Save the live Budget Outlook globals so they can be restored exactly
+  // as they were, since this temporarily swaps them to render the
+  // report's own independent filter/year selection instead.
+  const savedBoFilter=boFilter;
+  const savedBoYearSelection=boYearSelection;
+  const savedBoExpandedYear=boExpandedYear;
+
+  // v49d — for each selected section, ensure its view container has real,
+  // current data before print. Views not already visible on screen still
+  // need their render function called at least once, since some (Budget
+  // Outlook, Milestone Report) only populate their DOM when opened.
+  for(const sec of selectedSections){
+    if(sec.id==='dashboard'&&typeof renderDashboard==='function')renderDashboard();
+    if(sec.id==='analytics'&&typeof renderCharts==='function')renderCharts();
+    if(sec.id==='budgetoutlook'){
+      boFilter=_crBoFilter;
+      boYearSelection=_crBoYearSelection;
+      boExpandedYear=null;
+      if(typeof renderBudgetOutlook==='function')renderBudgetOutlook();
+    }
+    if(sec.id==='milestonereport'&&typeof renderMilestoneReport==='function')renderMilestoneReport();
+  }
+
+  // Reveal each selected section's view container via the same
+  // .print-active mechanism every existing single-section print button
+  // uses, plus .custom-report-section (page-break marker) — all gated
+  // behind body.custom-report-print-mode so the existing print CSS's
+  // single-view :not() chain never interferes with this multi-section
+  // print job. Sub-item checkboxes hide/show individual chart cards via
+  // .custom-report-subsection-hidden.
+  const touchedEls=[];
+  // v49e — budget-outlook-view and milestone-report-view are shown/hidden
+  // via an inline style attribute (style.display), not a CSS class, since
+  // they're sub-panels toggled by showBudgetOutlook()/closeBudgetOutlook()
+  // and the Milestone Report's own nav function. An inline style always
+  // wins over a class-based rule regardless of !important on the property,
+  // so the print CSS's #budget-outlook-view.print-active rule above can
+  // only take effect once the inline display:none is actually cleared here.
+  // Tracked separately so cleanup can put the inline style back exactly as
+  // found, not just strip classes.
+  const inlineDisplayEls=[];
+  document.body.classList.add('custom-report-print-mode');
+  selectedSections.forEach(sec=>{
+    let el;
+    if(sec.id==='budgetoutlook')el=document.getElementById('budget-outlook-view');
+    else if(sec.id==='milestonereport')el=document.getElementById('milestone-report-view');
+    else el=document.getElementById('view-'+sec.viewId);
+    if(!el)return;
+    el.classList.add('print-active','custom-report-section');
+    touchedEls.push(el);
+    if(sec.id==='budgetoutlook'||sec.id==='milestonereport'){
+      inlineDisplayEls.push({el,prevDisplay:el.style.display});
+      el.style.display='';
+    }
+    if(sec.subItems){
+      sec.subItems.forEach(item=>{
+        const subEl=document.getElementById(item.elId);
+        if(!subEl)return;
+        const shouldShow=sel.subItems[item.id]!==false;
+        subEl.classList.toggle('custom-report-subsection-hidden',!shouldShow);
+        touchedEls.push(subEl);
+      });
+    }
+  });
+
+  window.print();
+
+  // Cleanup — synchronous, runs right after the print dialog is
+  // dismissed/confirmed. Restores every touched element and the real
+  // Budget Outlook globals so the live pages are exactly as the user left
+  // them, whether or not Budget Outlook was even part of this report.
+  document.body.classList.remove('custom-report-print-mode');
+  touchedEls.forEach(el=>{
+    el.classList.remove('print-active','custom-report-section','custom-report-subsection-hidden');
+  });
+  inlineDisplayEls.forEach(({el,prevDisplay})=>{el.style.display=prevDisplay;});
+  boFilter=savedBoFilter;
+  boYearSelection=savedBoYearSelection;
+  boExpandedYear=savedBoExpandedYear;
+  // Re-render whichever of these the user might currently have open live,
+  // so restoring the globals above is actually reflected on screen and
+  // not just in memory, in case Budget Outlook was visible underneath
+  // this whole operation.
+  if(document.getElementById('budget-outlook-view')?.style.display!=='none'&&typeof renderBudgetOutlook==='function'){
+    renderBudgetOutlook();
+  }
+}
+window.crPrintCustomReport=crPrintCustomReport;
 
 async function generateOnDemandReport(){
   const scope=document.getElementById('gen-report-scope')?.value||'all';
