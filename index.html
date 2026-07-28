@@ -1538,6 +1538,13 @@ async function loadAllData() {
         // changes). Blank for any Scope that hasn't changed status since
         // this field was added — no retroactive backfill.
         statusChangedDate: r.fields['Status Changed Date']||'',
+        // v50b — Planned Start / Target Completion, new project-level date
+        // fields powering the even monthly spend spread (scopeMonthlySpread)
+        // used by Budget Outlook and Forecasted Spend until real Unit Phase
+        // dates exist to override it. Blank for every existing Scope until
+        // entered — no retroactive backfill or inference from milestones.
+        plannedStart: r.fields['Planned Start']||'',
+        targetCompletion: r.fields['Target Completion']||'',
         coRateST: r.fields['ST Rate']!=null?Number(r.fields['ST Rate']):null,
         coRateOT: r.fields['OT Rate']!=null?Number(r.fields['OT Rate']):null,
         coMaterialMarkup: r.fields['Material Markup']!=null?Number(r.fields['Material Markup'])*100:null,
@@ -1609,7 +1616,7 @@ async function loadAllData() {
       id: r.id,
       name: r.fields['Unit Name']||'',
       property: resolvePropertyLink(r.fields['Property Name']),
-      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      scopeId: (r.fields['Scopes']||[])[0]||'',
       deviceLocation: r.fields['Device Location']||'',
       unitType: r.fields['Unit Type']||'',
       // Equipment Type — the specific drive/product subtype (MRL Elevator,
@@ -2825,7 +2832,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v49p</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50b</div>
     </div>
   </nav>
 
@@ -3120,6 +3127,14 @@ from unitEffectiveValue() onto each checkbox). -->
           <!-- UNIT PHASES TAB -->
           <div id="prop-tab-phases" class="tab-content">
             <div id="phases-scope-tabs"></div>
+            <!-- v50c — MARLI Unit Phase suggestions. Structural (not
+            text-based) suggestions: groups of 2+ units in this project
+            sharing equipment type and CapEx Year that aren't already
+            fully covered by a matching Unit Phase, including units
+            currently sitting in a mismatched phase. Generated server-side
+            once per calendar day (see checkAndGenerateUnitPhaseSuggestions),
+            gated to only run for projects past Capital Plan status. -->
+            <div id="unit-phase-suggestions"></div>
             <div class="card">
               <div class="card-header">
                 <div>
@@ -3147,15 +3162,9 @@ from unitEffectiveValue() onto each checkbox). -->
                 </div>
               </div>
               <div class="two-col" style="gap:12px">
-                <div class="form-group"><label class="form-label">Product Type</label>
-                  <select class="form-input" id="phase-product-type" onchange="renderPhaseMilestoneSelector()">
-                    <option value="">Select product type…</option>
-                    <option>MRL Elevator</option>
-                    <option>Geared Elevator</option>
-                    <option>Hydraulic Elevator</option>
-                    <option>Escalator</option>
-                    <option>Wheelchair Lift</option>
-                  </select>
+                <div class="form-group"><label class="form-label">Product Type <span style="font-size:10px;color:var(--gray-mid)">(auto-derived from checked units)</span></label>
+                  <input type="hidden" id="phase-product-type">
+                  <div id="phase-product-type-display" class="form-input" style="background:var(--gray-xpale);color:var(--gray-mid);cursor:default;display:flex;align-items:center">&mdash;</div>
                 </div>
                 <div class="form-group"><label class="form-label"># Units in Phase <span style="font-size:10px;color:var(--gray-mid)">(auto-counted)</span></label><input class="form-input" type="number" id="phase-units-input" readonly style="background:var(--gray-xpale);color:var(--gray-mid);cursor:default"></div>
               </div>
@@ -3201,15 +3210,9 @@ from unitEffectiveValue() onto each checkbox). -->
               <input type="hidden" id="edit-phase-id">
               <div class="two-col" style="gap:12px">
                 <div class="form-group"><label class="form-label">Phase Name</label><input class="form-input" type="text" id="edit-phase-name"></div>
-                <div class="form-group"><label class="form-label">Product Type</label>
-                  <select class="form-input" id="edit-phase-product-type" onchange="renderEditPhaseMilestoneSelector()">
-                    <option value="">Select product type…</option>
-                    <option>MRL Elevator</option>
-                    <option>Geared Elevator</option>
-                    <option>Hydraulic Elevator</option>
-                    <option>Escalator</option>
-                    <option>Wheelchair Lift</option>
-                  </select>
+                <div class="form-group"><label class="form-label">Product Type <span style="font-size:10px;color:var(--gray-mid)">(auto-derived from checked units)</span></label>
+                  <input type="hidden" id="edit-phase-product-type">
+                  <div id="edit-phase-product-type-display" class="form-input" style="background:var(--gray-xpale);color:var(--gray-mid);cursor:default;display:flex;align-items:center">&mdash;</div>
                 </div>
               </div>
               <div class="two-col" style="gap:12px">
@@ -5393,6 +5396,7 @@ function renderUnitInventoryManagerModal(propName){
       <div>
         <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-list-details" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>Manage Unit Inventory</div>
         <div style="font-size:12px;color:var(--gray-mid);margin-top:2px">${propName}</div>
+        <div style="font-size:11px;color:var(--blue-dark);margin-top:6px;display:flex;align-items:center;gap:5px"><i class="ti ti-info-circle" style="font-size:13px"></i>Update unit count to add or remove a unit.</div>
       </div>
       <button onclick="closeUnitInventoryManager()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
     </div>
@@ -5740,7 +5744,7 @@ async function linkUnitToScope(unit,scope,oldScope){
   }
   if(!demoMode){
     await atUpdate('Scopes',scope.id,{'Linked Units':scope.linkedUnitIds,...countFields});
-    await atUpdate('Unit Inventory List',unit.id,{'Linked Scope':[scope.id],...statusFields});
+    await atUpdate('Unit Inventory List',unit.id,{'Scopes':[scope.id],...statusFields});
   }
 }
 
@@ -6976,11 +6980,21 @@ function renderScopeCards(p){
     // were previously only reachable through the ambiguous currentScope-
     // targeted section buried in Edit Property.
     const editBtn=canEdit?`<button onclick="event.stopPropagation();openScopeEditModal('${s.id}')" title="Edit this project" aria-label="Edit this project" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;flex-shrink:0"><i class="ti ti-pencil" style="font-size:13px"></i></button>`:'';
+    // v50b — Demote to Unit Phase. Only offered when there's at least one
+    // other non-Complete project on this property to fold into, and the
+    // scope itself isn't already Complete (nothing to demote if it's
+    // finished work). Folds this project's units into a target project as
+    // real Unit Phases (grouped by equipment type), then removes this
+    // project — see openDemoteScopeModal.
+    const otherDemoteTargets=scopes.filter(os=>os.id!==s.id&&os.status!=='Complete');
+    const demoteBtn=(canEdit&&s.status!=='Complete'&&otherDemoteTargets.length>0)
+      ?`<button onclick="event.stopPropagation();openDemoteScopeModal('${s.id}')" title="Demote to unit phase" aria-label="Demote to unit phase" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;flex-shrink:0"><i class="ti ti-corner-down-right" style="font-size:13px"></i></button>`
+      :'';
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
           <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${s.name||'Property Modernization'} ${staleFlag}</span>
-          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${onHoldToggle}${editBtn}</span>
+          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${onHoldToggle}${demoteBtn}${editBtn}</span>
         </div>
         ${driftBadge}
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -7019,6 +7033,37 @@ function renderScopeCards(p){
             <div style="font-size:12px;color:var(--gray-mid)">${budgetVal}</div>
           </div>`:''}
         </div>
+        <!-- v50b — Planned Start / Target Completion. Read-only on the
+        card; edited only via Edit Project (openScopeEditModal), never a
+        per-field inline editor here, per direct instruction. Uses
+        getScopeDateRange() so once real Unit Phase dates exist, this
+        shows the derived range (earliest phase start, latest phase
+        completion) instead of the typed fields — 'the project is shaped
+        by its units', not the other way around. -->
+        ${(()=>{
+          const dr=getScopeDateRange(s.id);
+          if(!dr.start&&!dr.end)return'';
+          const fmtD=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+          let spreadNote='';
+          if(!dr.derived&&s.plannedStart&&s.targetCompletion){
+            const months=(window.monthKeysBetween?monthKeysBetween(s.plannedStart,s.targetCompletion):[]).length;
+            const total=scopeUnitBudgetTotal(s.id);
+            if(months>0&&total>0){
+              spreadNote=`<div style="background:var(--blue-xpale);border-radius:6px;padding:6px 8px;margin-top:8px;font-size:10px;color:var(--blue-dark)"><i class="ti ti-chart-line" style="margin-right:4px"></i>${fmtCurrency(total)} spread evenly across ${months} month${months===1?'':'s'} ≈ ${fmtCurrency(total/months)} / month, until unit phases are dated.</div>`;
+            }
+          }
+          return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-bottom:12px">
+            <div>
+              <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
+              <div style="font-size:13px;font-weight:500;color:var(--navy)">${fmtD(dr.start)}</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Target Completion</div>
+              <div style="font-size:13px;font-weight:500;color:var(--navy)">${fmtD(dr.end)}</div>
+            </div>
+            ${spreadNote?`<div style="grid-column:1/-1">${spreadNote}</div>`:''}
+          </div>`;
+        })()}
         <div style="border-top:0.5px solid var(--border);padding-top:10px;margin-bottom:10px">
           <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Contract Rates</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap">${ratesHtml}</div>
@@ -7159,6 +7204,15 @@ function renderScopeEditModal(s,p){
         Airtable column, just exposed here too. -->
         <div class="form-group"><label class="form-label">Planned Year</label><input class="form-input" type="number" id="se-year" value="${s.year||''}" placeholder="e.g. 2026" min="2020" max="2045"></div>
       </div>
+      <!-- v50b — Planned Start / Target Completion, edited only here (not
+      via any per-field control on the card itself, per direct
+      instruction). Drives scopeMonthlySpread() until real Unit Phase
+      dates exist to override it. -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;border:0.5px solid var(--border);border-radius:8px;padding:10px;margin-bottom:12px;background:var(--gray-xpale)">
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Planned Start</label><input class="form-input" type="date" id="se-planned-start" value="${s.plannedStart||''}"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Target Completion</label><input class="form-input" type="date" id="se-target-completion" value="${s.targetCompletion||''}"></div>
+        <div style="grid-column:1/-1;font-size:11px;color:var(--gray-mid)">Spreads this project's estimated value evenly across these months in Budget Outlook and Forecasted Spend, until unit phases have their own dates.</div>
+      </div>
       <label class="form-label" style="display:block;margin-bottom:6px">Units In This Project — Check To Include</label>
       <div id="se-units-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:12px"></div>
       <div style="background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);padding:10px 12px;margin-bottom:12px">
@@ -7197,6 +7251,161 @@ function renderScopeEditModal(s,p){
   });
 }
 window.renderScopeEditModal=renderScopeEditModal;
+
+// v50b — Demote to Unit Phase. Folds a whole project (Scope) into another
+// project on the same property as real Unit Phases, grouped by each
+// unit's own equipment type (never mixed-type phases, matching the same
+// single-product-type rule the manual Add Phase form already enforces —
+// see confirmPhaseTypeMismatch). Planned Start/Completion entered here
+// apply to every resulting phase; per Misty's direction, Budget Outlook
+// will bucket these units by those phase dates (scopeMonthlySpread's
+// Level 2 override), but Capital Plan still groups them under the target
+// project's own Year/Budget Cycle regardless of these dates, since
+// Capital Plan has never read Unit Group dates — surfaced as a note in
+// the modal so this isn't a silent surprise.
+function openDemoteScopeModal(scopeId){
+  const s=(window.SCOPES||[]).find(x=>x.id===scopeId);
+  if(!s){showToast('Project not found','warn');return;}
+  const targets=(window.SCOPES||[]).filter(os=>os.property===s.property&&os.id!==s.id&&os.status!=='Complete');
+  if(targets.length===0){showToast('No other open project on this property to fold into','warn');return;}
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id);
+  const existing=document.getElementById('demote-scope-overlay');
+  if(existing)existing.remove();
+  const overlay=document.createElement('div');
+  overlay.id='demote-scope-overlay';
+  overlay.dataset.scopeId=scopeId;
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
+  const targetOptions=targets.map(t=>`<option value="${t.id}">${(t.name||'Project').replace(/</g,'&lt;')}</option>`).join('');
+  const typeGroups={};
+  units.forEach(u=>{
+    const key=u.equipmentType||'(no equipment type set)';
+    (typeGroups[key]=typeGroups[key]||[]).push(u);
+  });
+  const resultRows=Object.keys(typeGroups).map(type=>{
+    const grp=typeGroups[type];
+    return `<div><i class="ti ti-tool" style="font-size:13px;margin-right:5px;color:var(--blue-dark)"></i>Phase &mdash; ${type} (${grp.length} unit${grp.length===1?'':'s'})</div>`;
+  }).join('');
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:460px;box-shadow:var(--shadow-md);margin:auto">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border)">
+      <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-corner-down-right" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>Demote to Unit Phase</div>
+      <div style="font-size:12px;color:var(--gray-mid);margin-top:2px">${(s.name||'Project').replace(/</g,'&lt;')} &middot; ${s.property}</div>
+    </div>
+    <div style="padding:20px 22px">
+      <div class="form-group"><label class="form-label">Fold Into Project</label>
+        <select class="form-input" id="demote-target-scope">${targetOptions}</select>
+      </div>
+      <div class="two-col" style="gap:10px">
+        <div class="form-group"><label class="form-label">Planned Start</label><input class="form-input" type="date" id="demote-planned-start"></div>
+        <div class="form-group"><label class="form-label">Planned Completion</label><input class="form-input" type="date" id="demote-planned-end"></div>
+      </div>
+      <div style="background:var(--blue-xpale);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:var(--blue-dark)">
+        This project's ${units.length} unit${units.length===1?'':'s'} will become unit phases under the selected project, grouped automatically by equipment type and dated as set above. ${(s.name||'This project').replace(/</g,'&lt;')} will be removed.
+      </div>
+      <div style="background:#fff7ed;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#b45309;display:flex;gap:6px">
+        <i class="ti ti-alert-triangle" style="font-size:14px;flex-shrink:0"></i>
+        <span>Budget Outlook will bucket these units by the planned dates above. Capital Plan still groups them under the target project's own Year/Budget Cycle regardless of these dates.</span>
+      </div>
+      ${resultRows?`<div style="border-top:0.5px solid var(--border);padding-top:10px;font-size:12px;color:var(--gray-mid)">
+        <div style="font-weight:700;color:var(--navy);margin-bottom:6px">Resulting Phases</div>
+        <div style="display:flex;flex-direction:column;gap:4px">${resultRows}</div>
+      </div>`:''}
+    </div>
+    <div style="padding:12px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('demote-scope-overlay').remove()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmDemoteScope()"><i class="ti ti-corner-down-right"></i>Demote Project</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+window.openDemoteScopeModal=openDemoteScopeModal;
+
+async function confirmDemoteScope(){
+  const overlay=document.getElementById('demote-scope-overlay');
+  if(!overlay)return;
+  const scopeId=overlay.dataset.scopeId;
+  const s=(window.SCOPES||[]).find(x=>x.id===scopeId);
+  if(!s){showToast('Project not found','warn');overlay.remove();return;}
+  const targetId=document.getElementById('demote-target-scope')?.value;
+  const target=(window.SCOPES||[]).find(x=>x.id===targetId);
+  if(!target){showToast('Please choose a project to fold into','warn');return;}
+  const plannedStart=document.getElementById('demote-planned-start')?.value||'';
+  const plannedEnd=document.getElementById('demote-planned-end')?.value||'';
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId);
+  if(units.length===0){showToast('This project has no units to demote','warn');return;}
+  overlay.remove();
+  showToast('Demoting project...','info');
+
+  // Group by equipment type — one Unit Phase per distinct type, same rule
+  // Add Phase already enforces (a phase can't mix equipment types).
+  const typeGroups={};
+  units.forEach(u=>{
+    const key=u.equipmentType||'';
+    (typeGroups[key]=typeGroups[key]||[]).push(u);
+  });
+  const existingPhasesForTarget=(window.UNIT_GROUPS||[]).filter(u=>u.property===target.property&&u.scopeId===target.id);
+  let nextPhaseOrder=existingPhasesForTarget.length+1;
+  const createdPhaseIds=[];
+
+  for(const type of Object.keys(typeGroups)){
+    const grp=typeGroups[type];
+    const phaseName=`${s.name||'Demoted project'}: ${type||'Unassigned equipment type'}`;
+    const linkedUnitIds=grp.map(u=>u.id);
+    const ugFields={
+      'Property Name':propertyNameToLink(target.property),
+      'Phase Name':phaseName,
+      'Units in Phase':grp.length,
+      'Status':'Not Started',
+      'Planned Start':plannedStart||null,
+      'Planned Completion':plannedEnd||null,
+      'Product Type':type||null,
+      'Linked Units':linkedUnitIds,
+      'Linked Scope':[target.id],
+      'Phase Order':nextPhaseOrder,
+    };
+    let newPhaseId='demo_ug_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    if(!demoMode){
+      const res=await atCreate('Unit Groups',ugFields);
+      newPhaseId=res?.records?.[0]?.id||newPhaseId;
+    }
+    window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([{
+      id:newPhaseId,property:target.property,scopeId:target.id,phase:phaseName,units:grp.length,
+      status:'Not Started',plannedStart,plannedCompletion:plannedEnd,
+      actualStart:'',completionDate:'',notes:'',
+      productType:type,unitNames:sortUnitsByName(grp).map(u=>u.name).filter(Boolean).join(', '),
+      linkedUnitIds,phaseTasks:[],phaseOrder:nextPhaseOrder,
+    }]);
+    createdPhaseIds.push(newPhaseId);
+    nextPhaseOrder++;
+    // Relink each unit to the target Scope in Airtable and in memory —
+    // same relink mechanics saveScopeEditModal already uses.
+    for(const u of grp){
+      if(!demoMode&&u.id&&u.id.startsWith('rec')){
+        await atUpdate('Unit Inventory List',u.id,{'Scopes':[target.id]});
+      }
+      u.scopeId=target.id;
+    }
+  }
+
+  // Delete the source Scope's own Milestone rows and the Scope record
+  // itself, same cleanup saveSplitIntoScopes already performs when a
+  // Scope block is removed via merge-back — no orphaned Milestones left
+  // pointing at a scopeId that no longer exists.
+  if(!demoMode&&s.id){
+    const orphanedMs=(window.MILESTONES||[]).filter(m=>m.scopeId===s.id);
+    for(const m of orphanedMs){
+      if(m.id)await atDelete('Milestones',m.id);
+    }
+    await atDelete('Scopes',s.id);
+  }
+  window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.scopeId!==s.id);
+  window.SCOPES=(window.SCOPES||[]).filter(x=>x.id!==s.id);
+
+  if(currentScope?.id===s.id)currentScope=target;
+  if(currentProp)renderPropertyView(currentProp);
+  if(demoMode){showToast('Project demoted — Demo mode: changes reset on logout','info');}
+  else{showToast(`${s.name||'Project'} demoted into ${target.name||'target project'}`,'success');}
+}
+window.confirmDemoteScope=confirmDemoteScope;
 
 // Persists just this one scope's fields plus any unit-checklist changes
 // made in the modal — mirrors the field-name/percent-conversion
@@ -7239,6 +7448,9 @@ async function saveScopeEditModal(scopeId){
   // v38m — Planned Year, see note on the se-year input above.
   const yearRaw=document.getElementById('se-year')?.value.trim()||'';
   const year=yearRaw!==''?parseInt(yearRaw):null;
+  // v50b — Planned Start / Target Completion.
+  const plannedStart=document.getElementById('se-planned-start')?.value||'';
+  const targetCompletion=document.getElementById('se-target-completion')?.value||'';
 
   const scopeFields={
     'Scope Name':scopeName,
@@ -7254,11 +7466,14 @@ async function saveScopeEditModal(scopeId){
     'Retainage':retainagePct!=null?retainagePct/100:null,
     'Contract Award Value':contractAwardValue,
     'Year/Budget Cycle':year,
+    'Planned Start':plannedStart||null,
+    'Target Completion':targetCompletion||null,
   };
   s.name=scopeName;s.v=consultant;s.ec=ec;s.vdaNum=vdaNum;s.clientProjectNum=clientProjectNum;s.priority=scopePriority(priorityDisplay);
   s.coRateST=coRateST;s.coRateOT=coRateOT;
   s.coMaterialMarkup=coMaterialMarkup;s.coOPMarkup=coOPMarkup;
   s.retainagePct=retainagePct;s.contractAwardValue=contractAwardValue;s.year=year;
+  s.plannedStart=plannedStart;s.targetCompletion=targetCompletion;
 
   // v42i — real bug: this checkbox read used to happen AFTER overlay.remove()
   // below, but #se-units-list (where every .se-unit-check box lives) is
@@ -7290,7 +7505,7 @@ async function saveScopeEditModal(scopeId){
       const countFields=recomputeScopeTypeCounts(s);
       if(!demoMode){
         await atUpdate('Scopes',s.id,{'Linked Units':s.linkedUnitIds,...countFields});
-        await atUpdate('Unit Inventory List',u.id,{'Linked Scope':[]});
+        await atUpdate('Unit Inventory List',u.id,{'Scopes':[]});
       }
     }
   }
@@ -7771,7 +7986,7 @@ function openMeetingPanel(){
   document.getElementById('delete-draft-btn').style.display='none';
 }
 function openActionItemModal(propName){
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   const isGlobal=!propName;
   const overlay=document.createElement('div');
   overlay.id='action-item-overlay';
@@ -11053,6 +11268,125 @@ function getProjectDates(propName){
   const latestEnd=endDates.length>0?new Date(Math.max(...endDates)):null;
   return{projectStart,latestEnd,phases};
 }
+// v50c — MARLI Unit Phase suggestions. Structural (not text/AI-based)
+// suggestions: for a Scope past Capital Plan status, groups its own
+// linked units by equipment type + CapEx Year, and flags any group of 2+
+// units not already fully covered by one matching Unit Phase — this
+// naturally catches both plain unassigned units AND a unit sitting in a
+// phase whose equipment type doesn't match (it won't be "covered" by any
+// same-type phase, so it surfaces in whichever group its real type
+// belongs to). Never suggests moving units across projects on its own —
+// that's what Demote to Unit Phase is for, deliberately.
+window.SUGGESTED_UNIT_PHASES=window.SUGGESTED_UNIT_PHASES||[];
+
+async function loadSuggestedUnitPhases(){
+  if(demoMode){window.SUGGESTED_UNIT_PHASES=[];return;}
+  try{
+    const recs=await atGet('Suggested Unit Phases');
+    window.SUGGESTED_UNIT_PHASES=recs.map(r=>({
+      id:r.id,
+      property:r.fields['Property Name']||'',
+      scopeId:(r.fields['Linked Scope']||[])[0]||'',
+      linkedUnitIds:r.fields['Linked Units']||[],
+      equipmentType:r.fields['Equipment Type']||'',
+      capexYear:r.fields['CapEx Year']||'',
+      status:r.fields['Status']||'Pending',
+    }));
+  }catch(e){
+    console.error('loadSuggestedUnitPhases error:',e);
+    window.SUGGESTED_UNIT_PHASES=[];
+  }
+}
+
+// Same daily-gate pattern as checkAndGenerateSuggestions (Suggested Action
+// Items), but keyed to its own control field so the two features' runs
+// never block or race each other, and triggered from opening a graduated
+// project's Unit Phases tab rather than globally on login — per direct
+// instruction, this should never fire for a project still in Capital Plan.
+let _unitPhaseSuggestionChecked={};
+async function checkAndGenerateUnitPhaseSuggestions(scopeId){
+  if(!scopeId||demoMode)return;
+  const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+  if(!sc||sc.status==='Capital Plan'||sc.status==='Complete')return;
+  await loadSuggestedUnitPhases();
+  renderUnitPhaseSuggestions(scopeId);
+  if(_unitPhaseSuggestionChecked[scopeId])return;
+  _unitPhaseSuggestionChecked[scopeId]=true;
+  try{
+    const controlRecs=await atGet('MARLI Suggestion Control');
+    const row=controlRecs[0];
+    const lastRun=row?row.fields['Last Unit Phase Suggestion Run']:null;
+    const todayStr=new Date().toISOString().split('T')[0];
+    const alreadyRanToday=lastRun&&(new Date(lastRun).toISOString().split('T')[0]===todayStr);
+    if(alreadyRanToday)return;
+    fetch(`${WORKER_URL}/generate-unit-phase-suggestions`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({triggeredBy:window._marliRecordId||''})
+    }).then(async res=>{
+      if(res.ok){
+        await loadSuggestedUnitPhases();
+        if(currentScope?.id===scopeId)renderUnitPhaseSuggestions(scopeId);
+      }
+    }).catch(e=>console.error('generate-unit-phase-suggestions failed:',e));
+  }catch(e){
+    console.error('checkAndGenerateUnitPhaseSuggestions error:',e);
+  }
+}
+window.checkAndGenerateUnitPhaseSuggestions=checkAndGenerateUnitPhaseSuggestions;
+
+function renderUnitPhaseSuggestions(scopeId){
+  const container=document.getElementById('unit-phase-suggestions');
+  if(!container)return;
+  const canEdit=role==='pm'||role==='admin';
+  const open=(window.SUGGESTED_UNIT_PHASES||[]).filter(s=>s.scopeId===scopeId&&s.status==='Pending');
+  if(!canEdit||open.length===0){container.innerHTML='';return;}
+  container.innerHTML=open.map(s=>{
+    const units=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>s.linkedUnitIds.includes(u.id)));
+    const names=units.map(u=>u.name).filter(Boolean).join(', ');
+    return `<div style="background:var(--blue-xpale);border:0.5px solid var(--blue-light);border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:var(--blue-dark)">
+        <i class="ti ti-bulb" style="margin-right:5px"></i>
+        <strong>${units.length} unit${units.length===1?'':'s'}</strong> (${s.equipmentType||'unspecified type'}${s.capexYear?', CapEx '+s.capexYear:''}) could become a phase: ${names}
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn" style="font-size:11px;padding:4px 10px" onclick="acceptSuggestedUnitPhase('${s.id}')"><i class="ti ti-check"></i>Accept</button>
+        <button class="btn" style="font-size:11px;padding:4px 10px" onclick="dismissSuggestedUnitPhase('${s.id}')"><i class="ti ti-x"></i>Dismiss</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+window.renderUnitPhaseSuggestions=renderUnitPhaseSuggestions;
+
+// Accept pre-fills and opens Add Phase with this suggestion's units and
+// equipment type already checked/set, same "hand off to the real form,
+// don't silently auto-create" pattern jumpToAddPhaseWithUnits already
+// uses elsewhere, rather than creating the phase directly from the
+// suggestion without a final human look.
+async function acceptSuggestedUnitPhase(id){
+  const s=(window.SUGGESTED_UNIT_PHASES||[]).find(x=>x.id===id);
+  if(!s)return;
+  s.status='Accepted';
+  if(!demoMode)await atUpdate('Suggested Unit Phases',id,{'Status':'Accepted'});
+  renderUnitPhaseSuggestions(s.scopeId);
+  jumpToAddPhaseWithUnits(s.scopeId,s.linkedUnitIds,s.property);
+  const ptEl=document.getElementById('phase-product-type');
+  if(ptEl)ptEl.value=s.equipmentType||'';
+  const ptDisplayEl=document.getElementById('phase-product-type-display');
+  if(ptDisplayEl)ptDisplayEl.textContent=s.equipmentType||'\u2014';
+  showToast('Suggestion accepted \u2014 review and save the new phase below','success');
+}
+window.acceptSuggestedUnitPhase=acceptSuggestedUnitPhase;
+
+async function dismissSuggestedUnitPhase(id){
+  const s=(window.SUGGESTED_UNIT_PHASES||[]).find(x=>x.id===id);
+  if(!s)return;
+  s.status='Dismissed';
+  if(!demoMode)await atUpdate('Suggested Unit Phases',id,{'Status':'Dismissed'});
+  renderUnitPhaseSuggestions(s.scopeId);
+  showToast('Suggestion dismissed','info');
+}
+window.dismissSuggestedUnitPhase=dismissSuggestedUnitPhase;
+
 function renderPhasesTab(p){
   if(!p)return;
   renderScopeTabs('phases-scope-tabs',p.n);
@@ -11062,6 +11396,12 @@ function renderPhasesTab(p){
   if(addPhaseBtn)addPhaseBtn.style.display=canPM?'':'none';
   // v28b — scoped to currentScope (filters Unit Groups by Linked Scope).
   const scopeId=currentScope?.id;
+  // v50c — MARLI Unit Phase suggestions, fired whenever this tab renders
+  // for a specific graduated project. checkAndGenerateUnitPhaseSuggestions
+  // itself no-ops for Capital Plan/Complete scopes and for demo mode, and
+  // is internally gated to once per calendar day per Scope.
+  if(scopeId)checkAndGenerateUnitPhaseSuggestions(scopeId);
+  else{const c=document.getElementById('unit-phase-suggestions');if(c)c.innerHTML='';}
   const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===p.n&&(!scopeId||u.scopeId===scopeId)).sort((a,b)=>{
     // v29g Bug 11 fix: sort render array by phase name number — this is what
     // was missing. reorderPhase correctly renames phases and updates phaseOrder,
@@ -11532,6 +11872,7 @@ function openAddPhaseForm(){
   const descEl=document.getElementById('phase-description-input');
   if(descEl){descEl.value='';descEl.focus();}
   document.getElementById('phase-product-type').value='';
+  const _ptd=document.getElementById('phase-product-type-display');if(_ptd)_ptd.textContent='\u2014';
   document.getElementById('phase-milestone-selector').style.display='none';
   renderPhaseUnitsPicker('phase-units-picker',[],'phase-units-input',null);
   form.scrollIntoView({behavior:'smooth'});
@@ -11608,6 +11949,30 @@ function renderScopeUnitsPicker(containerId,propName,opts){
 }
 window.renderScopeUnitsPicker=renderScopeUnitsPicker;
 
+// v50c — reclaimUnitsFromOtherPhases(). When a unit checked into this
+// phase already belongs to a DIFFERENT phase on the same property (the
+// amber "already in X" flag renderPhaseUnitsPicker shows), saving used to
+// only ever write the new phase's own linkedUnitIds — the old phase kept
+// a stale reference to a unit it no longer actually has, both in memory
+// and in Airtable's 'Linked Units' field. This strips the unit out of
+// every other phase's list first, updates that phase's own Units in
+// Phase count, and pushes both changes to Airtable — same "move, not
+// duplicate" behavior already used when moving a unit between Scopes
+// (splitScopeToggleUnit/saveSplitIntoScopes).
+async function reclaimUnitsFromOtherPhases(propName,linkedUnitIds,excludePhaseId){
+  const otherPhases=(window.UNIT_GROUPS||[]).filter(g=>g.property===propName&&g.id!==excludePhaseId&&(g.linkedUnitIds||[]).some(uid=>linkedUnitIds.includes(uid)));
+  for(const g of otherPhases){
+    const newLinked=(g.linkedUnitIds||[]).filter(uid=>!linkedUnitIds.includes(uid));
+    g.linkedUnitIds=newLinked;
+    g.units=newLinked.length;
+    g.unitNames=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>newLinked.includes(u.id))).map(u=>u.name).filter(Boolean).join(', ');
+    if(!demoMode&&g.id&&g.id.startsWith('rec')){
+      await atUpdate('Unit Groups',g.id,{'Linked Units':newLinked,'Units in Phase':newLinked.length});
+    }
+  }
+}
+window.reclaimUnitsFromOtherPhases=reclaimUnitsFromOtherPhases;
+
 function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhaseId){
   const container=document.getElementById(containerId);
   if(!container)return;
@@ -11649,19 +12014,39 @@ function getCheckedPhaseUnitIds(){
 }
 window.getCheckedPhaseUnitIds=getCheckedPhaseUnitIds;
 
+function derivePhaseProductType(checked,hiddenId,displayId){
+  const hiddenEl=document.getElementById(hiddenId);
+  const displayEl=document.getElementById(displayId);
+  const types=[...new Set(checked.map(c=>c.dataset.unitType).filter(Boolean))];
+  let value='';
+  let label='\u2014';
+  let mixed=false;
+  if(types.length===1){
+    value=types[0];
+    label=types[0];
+  } else if(types.length>1){
+    mixed=true;
+    label='Mixed \u2014 check units of one equipment type only';
+  }
+  if(hiddenEl)hiddenEl.value=value;
+  if(displayEl){
+    displayEl.textContent=label;
+    displayEl.style.color=mixed?'var(--red)':'var(--gray-mid)';
+  }
+  return {value,mixed};
+}
+window.derivePhaseProductType=derivePhaseProductType;
+
 function phaseUnitsPickerChanged(countInputId){
   const checked=[...document.querySelectorAll('.phase-unit-check:checked')];
   if(countInputId){const ci=document.getElementById(countInputId);if(ci)ci.value=checked.length;}
-  // Real per-unit type-mismatch check, replacing the old regex guess against
-  // free-typed unit names — now that each unit's real Unit Type is known.
-  const productTypeEl=document.getElementById('phase-product-type')||document.getElementById('edit-phase-product-type');
-  const productType=productTypeEl?productTypeEl.value:'';
-  if(productType){
-    const mismatched=checked.filter(c=>c.dataset.unitType&&c.dataset.unitType!==productType);
-    if(mismatched.length>0){
-      showToast(`${mismatched.length} checked unit${mismatched.length===1?'':'s'} ${mismatched.length===1?"doesn't":"don't"} match this phase's Product Type (${productType})`,'warn');
-    }
-  }
+  // v50b — Product Type is now derived live from each checked unit's real
+  // Unit Type instead of being manually picked, so a mismatch can no
+  // longer happen — the phase's type IS whatever the checked units are.
+  // Derive both forms' fields every time (whichever isn't in the DOM
+  // right now is just a no-op, same pattern as the old shared lookup).
+  derivePhaseProductType(checked,'phase-product-type','phase-product-type-display');
+  derivePhaseProductType(checked,'edit-phase-product-type','edit-phase-product-type-display');
 }
 window.phaseUnitsPickerChanged=phaseUnitsPickerChanged;
 
@@ -11687,16 +12072,19 @@ function selectAllPhaseMilestones(checked){
   document.querySelectorAll('.phase-ms-check').forEach(c=>c.checked=checked);
 }
 
-// v40a — Shared Product/Equipment Type mismatch confirm, used by both
-// saveNewPhase and saveEditPhase. Previously each save path carried its own
-// copy of this check/confirm(), so wording and logic could drift apart
-// between New Phase and Edit Phase over time. Same behavior as before:
-// non-blocking warning, user can click OK to proceed anyway.
+// v50b — Product Type is now derived from checked units instead of
+// manually picked, so a "mismatch" can't happen anymore — a phase's type
+// IS whatever the checked units are. What CAN still happen is a Mixed
+// phase (checked units spanning more than one equipment type), which is
+// now a hard block on save rather than the old confirm()-and-proceed
+// warning, since there's no longer a single type to fall back to saving.
 function confirmPhaseTypeMismatch(pickedUnits,productType){
-  const mismatched=(pickedUnits||[]).filter(u=>u.equipmentType&&productType&&u.equipmentType!==productType);
-  if(mismatched.length===0)return true;
-  const names=mismatched.map(u=>u.name||'(unnamed)').join(', ');
-  return confirm(`Warning: ${mismatched.length} checked unit${mismatched.length===1?'':'s'} (${names}) ${mismatched.length===1?"doesn't":"don't"} match this phase's Product Type (${productType}).\n\nEach phase should contain only one product type with concurrent units.\n\nClick OK to save anyway, or Cancel to review.`);
+  const types=[...new Set((pickedUnits||[]).map(u=>u.equipmentType).filter(Boolean))];
+  if(types.length>1){
+    showToast('Checked units span more than one equipment type. A phase must contain only one product type — split into separate phases.','warn');
+    return false;
+  }
+  return true;
 }
 window.confirmPhaseTypeMismatch=confirmPhaseTypeMismatch;
 
@@ -11716,8 +12104,8 @@ async function saveNewPhase(){
   const plannedStart=document.getElementById('phase-planned-start').value;
   const plannedEnd=document.getElementById('phase-planned-end').value;
   if(!phaseNum){showToast('Phase number missing','warn');return;}
-  if(!productType){showToast('Please select a product type','warn');return;}
   if(!units){showToast('Please check at least one unit for this phase','warn');return;}
+  if(!productType){showToast('Checked units span more than one equipment type. A phase must contain only one product type.','warn');return;}
   // Product type guardrail — now a real per-unit check against each picked
   // unit's actual Unit Type field, replacing the old regex guess against
   // free-typed unit names (which could only pattern-match on naming
@@ -11757,6 +12145,10 @@ async function saveNewPhase(){
     phaseTasks:selectedMs,
     phaseOrder:nextPhaseOrder,
   };
+  // v50c — strip any of these units out of whatever OTHER phase on this
+  // property currently claims them, so a move via the picker doesn't
+  // leave a stale reference behind (see reclaimUnitsFromOtherPhases).
+  await reclaimUnitsFromOtherPhases(currentProp.n,linkedUnitIds,newPhaseId);
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([newPhase]);
   // Write tasks to PHASE_STEPS locally so they render immediately
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
@@ -11796,6 +12188,7 @@ async function saveNewPhase(){
   document.getElementById('add-phase-form').style.display='none';
   ['phase-description-input','phase-units-input','phase-planned-start','phase-planned-end'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('phase-product-type').value='';
+  const _ptd=document.getElementById('phase-product-type-display');if(_ptd)_ptd.textContent='\u2014';
   document.getElementById('phase-milestone-selector').style.display='none';
   const pickerEl=document.getElementById('phase-units-picker');
   if(pickerEl)pickerEl.innerHTML='';
@@ -11824,9 +12217,15 @@ function openEditPhaseForm(id,propName){
   // Show warning if tasks have started
   const warningEl=document.getElementById('edit-phase-started-warning');
   if(warningEl)warningEl.style.display=hasStarted?'block':'none';
-  // Set product type and render steps
+  // v50b — Product Type is now derived, not manually set. Seed the hidden
+  // field/display from the saved value so renderEditPhaseMilestoneSelector
+  // has something to key off before the units picker below re-derives it
+  // live from whichever units are actually checked.
   const ptEl=document.getElementById('edit-phase-product-type');
-  if(ptEl){ptEl.disabled=hasStarted;ptEl.style.background=hasStarted?'var(--gray-xpale)':'';ptEl.value=ph.productType||'';renderEditPhaseMilestoneSelector(ph,hasStarted);}
+  const ptDisplayEl=document.getElementById('edit-phase-product-type-display');
+  if(ptEl)ptEl.value=ph.productType||'';
+  if(ptDisplayEl)ptDisplayEl.textContent=ph.productType||'\u2014';
+  renderEditPhaseMilestoneSelector(ph,hasStarted);
   // v36p — Unit Phase Picker. Pre-check from this phase's real
   // linkedUnitIds; excludePhaseId=id so this phase's own current picks
   // aren't flagged as "claimed by another phase" against themselves.
@@ -11921,6 +12320,12 @@ async function saveEditPhase(){
       }
     }
   }
+  // v50c — strip any of these units out of whatever OTHER phase on this
+  // property currently claims them, same reasoning as saveNewPhase. Must
+  // run before the atUpdate below so a unit moved INTO this phase from
+  // another one doesn't briefly exist in both records' Linked Units at
+  // once if either write fails partway through.
+  await reclaimUnitsFromOtherPhases(ph.property,linkedUnitIds,id);
   window.UNIT_GROUPS[idx]={...ph,phase:name,units,unitNames,linkedUnitIds,productType,
     plannedStart,plannedCompletion:plannedEnd,
     actualStart,actualCompletion:actualEnd,
@@ -12470,6 +12875,78 @@ function scopeUnitBudgetTotal(scopeId){
   }
   return units.reduce((a,u)=>a+unitEffectiveValue(u),0);
 }
+// v50b — scopeMonthlySpread(). Returns {'YYYY-MM': dollarAmount} for a
+// Scope, spreading its estimated value evenly across calendar months
+// rather than dumping it into a single year bucket. Three-level override,
+// resolved per unit so the pieces coexist without double-counting money:
+//   1. Project-level flat spread — scopeUnitBudgetTotal(scopeId) divided
+//      evenly across every month from the Scope's own Planned Start to
+//      Target Completion. Applies to any unit not yet covered by a dated
+//      Unit Phase (Unit Group). This is the fallback for a brand-new
+//      project where nobody knows yet which units land in which month.
+//   2. Unit Phase planned dates — once a unit is linked to a Unit Group
+//      that has Planned Start/Planned Completion, that unit's own share
+//      of the total (unitEffectiveValue) is spread across that phase's
+//      own span instead of the flat project-wide spread.
+//   3. Unit Phase actual dates — if that same Unit Group has Actual
+//      Start/Actual Completion, those replace the planned dates as the
+//      spread basis, same "actual overrides planned" precedent already
+//      established by Forecasted Spend's billing-actuals merge.
+// Months with no resolvable date anywhere (no Scope dates AND no phase
+// dates) contribute nothing — same "don't invent data" principle already
+// used throughout this file's other derived-value functions.
+function monthKeysBetween(startStr,endStr){
+  const start=new Date(startStr);
+  const end=new Date(endStr);
+  if(isNaN(start)||isNaN(end)||end<start)return[];
+  const keys=[];
+  let y=start.getFullYear(),m=start.getMonth();
+  const endY=end.getFullYear(),endM=end.getMonth();
+  while(y<endY||(y===endY&&m<=endM)){
+    keys.push(y+'-'+String(m+1).padStart(2,'0'));
+    m++;
+    if(m>11){m=0;y++;}
+  }
+  return keys;
+}
+window.monthKeysBetween=monthKeysBetween;
+function scopeMonthlySpread(scopeId){
+  const spread={};
+  const addAmt=(mo,amt)=>{if(!mo||!(amt>0))return;spread[mo]=(spread[mo]||0)+amt;};
+  const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+  if(!sc)return spread;
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId);
+  const phases=(window.UNIT_GROUPS||[]).filter(ug=>ug.scopeId===scopeId);
+  // Map unit id -> covering phase, if any (a unit belongs to at most one
+  // phase in practice; first match wins, matching unitGroupYear's own
+  // single-Unit-Group assumption elsewhere in the file).
+  const unitPhase={};
+  phases.forEach(ug=>{(ug.linkedUnitIds||[]).forEach(uid=>{if(!unitPhase[uid])unitPhase[uid]=ug;});});
+  const flatUnits=[];
+  units.forEach(u=>{
+    const ug=unitPhase[u.id];
+    if(!ug){flatUnits.push(u);return;}
+    const start=ug.actualStart||ug.plannedStart;
+    const end=ug.actualCompletion||ug.plannedCompletion;
+    if(!start||!end){flatUnits.push(u);return;}
+    const months=monthKeysBetween(start,end);
+    if(months.length===0){flatUnits.push(u);return;}
+    const perMonth=unitEffectiveValue(u)/months.length;
+    months.forEach(mo=>addAmt(mo,perMonth));
+  });
+  // Level 1 — flat project-wide spread for whatever's left uncovered by a
+  // dated phase, using the Scope's own Planned Start/Target Completion.
+  if(flatUnits.length>0&&sc.plannedStart&&sc.targetCompletion){
+    const months=monthKeysBetween(sc.plannedStart,sc.targetCompletion);
+    if(months.length>0){
+      const flatTotal=flatUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
+      const perMonth=flatTotal/months.length;
+      months.forEach(mo=>addAmt(mo,perMonth));
+    }
+  }
+  return spread;
+}
+window.scopeMonthlySpread=scopeMonthlySpread;
 // v36e — unitEffectiveValue(). Single source of truth for a unit's OWN
 // dollar value: once a unit has been awarded (Award Value > 0), that
 // real number replaces its pre-award estimate (Total Work Est.) — never
@@ -13890,12 +14367,41 @@ function renderBudgetOutlook(){
       byYear.get(y).push(u);
     });
     if(units.length===0)byYear.set(sc.year,[]);
+    // v50b — flat-spread fallback amounts for units resolved via neither a
+    // dated Unit Group nor sitting whole in the sc.year bucket. When the
+    // Scope has Planned Start/Target Completion, scopeMonthlySpread()
+    // already computed a real month-by-month spread for exactly these
+    // units (its own Level 1); roll that up into years here and ADD to
+    // (never replace) whatever yearAmount the existing per-unit sum
+    // produces, then skip the old whole-value sum for those same units so
+    // nothing double-counts. Units with a dated Unit Group are untouched —
+    // they keep the existing whole-unit-in-one-year behavior above.
+    const flatUnitIds=new Set(units.filter(u=>!unitToYear.has(u.id)).map(u=>u.id));
+    const hasFlatSpread=flatUnitIds.size>0&&sc.plannedStart&&sc.targetCompletion;
+    const flatYearTotals=new Map();
+    if(hasFlatSpread){
+      const spread=scopeMonthlySpread(sc.id);
+      Object.keys(spread).forEach(mo=>{
+        const yr=parseInt(mo.split('-')[0],10);
+        flatYearTotals.set(yr,(flatYearTotals.get(yr)||0)+spread[mo]);
+        // A flat-spread year not already a byYear bucket (project spans
+        // into a year no dated unit or sc.year ever visits) needs its own
+        // empty bucket added, or its dollars would never get summed below.
+        if(!byYear.has(yr))byYear.set(yr,[]);
+      });
+    }
     byYear.forEach((yearUnits,yr)=>{
       let yearAmount;
       if(isCommitted){
         yearAmount=(!anyUnitAwarded&&units.length>0)
           ?sc.contractAwardValue*(yearUnits.length/units.length)
           :yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
+      }else if(hasFlatSpread){
+        // Sum only units NOT covered by the flat spread (i.e. already
+        // resolved to this year via a dated Unit Group), then add this
+        // year's share of the flat spread separately.
+        const datedOnly=yearUnits.filter(u=>!flatUnitIds.has(u.id));
+        yearAmount=datedOnly.reduce((a,u)=>a+unitEffectiveValue(u),0)+(flatYearTotals.get(yr)||0);
       }else{
         yearAmount=yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
       }
@@ -14768,7 +15274,7 @@ async function confirmBulkUnitImport(){
     const scope=c.isNewProject?newScopeCache.get(scopeKey):(window.SCOPES||[]).find(s=>s.property===c.property&&(s.name||'')===c.projectName);
     if(c.isNewProject&&!scope){failCount++;continue;}
     const fields={'Unit Name':c.unitName,'Property Name':propertyNameToLink(c.property)};
-    if(scope)fields['Linked Scope']=[scope.id];
+    if(scope)fields['Scopes']=[scope.id];
     if(c.fields.unitType)fields['Unit Type']=c.fields.unitType;
     if(c.fields.equipmentType)fields['Equipment Type']=c.fields.equipmentType;
     if(c.fields.deviceLocation)fields['Device Location']=c.fields.deviceLocation;
@@ -15246,6 +15752,14 @@ function addSplitScopeBlock(scope){
       <div class="form-group"><label class="form-label">Elevator Co.</label><input class="form-input split-sc-ec" type="text" value="${(s.ec||prop?.ec||'').replace(/"/g,'&quot;')}" placeholder="e.g. Otis, Schindler"></div>
     </div>
     <div class="form-group" style="margin-bottom:12px"><label class="form-label">Mod. Survey Date <span style="font-weight:400;color:var(--gray-mid)">(graduates this project)</span></label><input class="form-input split-sc-m1date" type="date" value="${m1dateVal}"></div>
+    <!-- v50b — Planned Start / Target Completion, powering the even
+    monthly spread (scopeMonthlySpread) shown on the project card and
+    used by Budget Outlook/Forecasted Spend until real Unit Phase dates
+    exist to override it. -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group"><label class="form-label">Planned Start</label><input class="form-input split-sc-planned-start" type="date" value="${s.plannedStart||''}"></div>
+      <div class="form-group"><label class="form-label">Target Completion</label><input class="form-input split-sc-target-completion" type="date" value="${s.targetCompletion||''}"></div>
+    </div>
     ${s.id?`
     <!-- v40a — Contract & Rates, merged in from Edit Project so a graduated
     project's full field set is editable from this one surface too.
@@ -15461,6 +15975,7 @@ async function saveSplitIntoScopes(){
       if(!demoMode) await atUpdate('Scopes',scopeId,fields);
       const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
       if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.clientProjectNum=r.clientProjectNum||sc.clientProjectNum||'';sc.isTbd=sc.isTbd||r.name==='TBD Scope';
+        sc.plannedStart=r.plannedStart||sc.plannedStart||'';sc.targetCompletion=r.targetCompletion||sc.targetCompletion||'';
         sc.ec=r.ec||sc.ec||'';sc.contractAwardValue=r.contractAwardValue!=null?r.contractAwardValue:sc.contractAwardValue;
         sc.coRateST=r.coRateST!=null?r.coRateST:sc.coRateST;sc.coRateOT=r.coRateOT!=null?r.coRateOT:sc.coRateOT;
         sc.coMaterialMarkup=r.coMaterialMarkup!=null?r.coMaterialMarkup:sc.coMaterialMarkup;
@@ -15481,6 +15996,7 @@ async function saveSplitIntoScopes(){
         budgetStatus:r.budgetStatus||'TBD',priority:scopePriority(r.priority),status:'Capital Plan',
         elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,
         v:r.consultant||'',vdaNum:r.vdaNum||'',clientProjectNum:r.clientProjectNum||'',linkedUnitIds:[],isTbd:r.name==='TBD Scope',
+        plannedStart:r.plannedStart||'',targetCompletion:r.targetCompletion||'',
       }]);
     }
     r.scopeId=scopeId; // needed by the post-save unit-linking pass below
@@ -15782,6 +16298,15 @@ function renderCharts(){
       const y=parseInt(u.capexYear);
       if(!isNaN(y))return y+'-12';
     }
+    // v50c — fall back to the unit's Scope's own Target Completion when
+    // no dated phase and no CapEx Year exist, instead of silently
+    // excluding the unit from Forecasted Completion entirely. Same
+    // override order as scopeMonthlySpread's Level 1 fallback.
+    const sc=(window.SCOPES||[]).find(s=>s.id===u.scopeId);
+    if(sc?.targetCompletion){
+      const dt=new Date(sc.targetCompletion);
+      if(!isNaN(dt))return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    }
     return null;
   }
   window.resolveUnitTimelineMonth=resolveUnitTimelineMonth;
@@ -15809,16 +16334,43 @@ function renderCharts(){
   // Budget Outlook's own filter, not duplicated here.
   const fsByMonth={}; // month -> {actual, forecast}
   const fsDetailByMonth={}; // month -> [{property,unitName,amount,isActual}]
+  // v50b — resolveUnitSpanStart(). A unit's proration used to always
+  // start at index 0 of the rolling window (effectively 'now'), even when
+  // a real Planned Start exists on its Unit Phase or Scope. Prefer, in
+  // order: its own Unit Group's actualStart/plannedStart, else its
+  // Scope's plannedStart, else fall back to 'now' (index 0) exactly as
+  // before — so a unit with no dates anywhere behaves unchanged.
+  function resolveUnitSpanStart(u){
+    const ug=(window.UNIT_GROUPS||[]).find(g=>(g.linkedUnitIds||[]).includes(u.id));
+    const ugStart=ug?(ug.actualStart||ug.plannedStart):null;
+    if(ugStart){
+      const dt=new Date(ugStart);
+      if(!isNaN(dt))return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    }
+    const sc=(window.SCOPES||[]).find(s=>s.id===u.scopeId);
+    if(sc?.plannedStart){
+      const dt=new Date(sc.plannedStart);
+      if(!isNaN(dt))return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    }
+    return null;
+  }
   _fcfsActiveUnits.forEach(u=>{
     const endMo=resolveUnitTimelineMonth(u);
     if(!endMo)return;
     const endIdx=_fcfsMonthKeys.indexOf(endMo);
     const spanEnd=endIdx>=0?endIdx:11;
-    const spanMonths=Math.max(1,spanEnd+1);
+    // Real start date clamped into the visible window: a start before the
+    // window just means the unit is already mid-span (spanStart=0, same
+    // as today's behavior); a start after spanEnd is nonsensical data and
+    // falls back to 0 rather than producing a negative span.
+    const startMo=resolveUnitSpanStart(u);
+    const startIdx=startMo?_fcfsMonthKeys.indexOf(startMo):-1;
+    const spanStart=(startIdx>0&&startIdx<=spanEnd)?startIdx:0;
+    const spanMonths=Math.max(1,spanEnd-spanStart+1);
     const totalVal=unitEffectiveValue(u);
     if(totalVal<=0)return;
     const perMonth=totalVal/spanMonths;
-    for(let i=0;i<=spanEnd&&i<12;i++){
+    for(let i=spanStart;i<=spanEnd&&i<12;i++){
       const mo=_fcfsMonthKeys[i];
       if(!fsByMonth[mo])fsByMonth[mo]={actual:0,forecast:0};
       if(!fsDetailByMonth[mo])fsDetailByMonth[mo]=[];
@@ -17350,7 +17902,7 @@ function showEditCalEvent(type,id){
   const isVisit=type==='visit';
   const record=isVisit?siteVisits.find(v=>v.id===id):meetings.find(m=>m.id===id);
   if(!record)return;
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===record.property?' selected':''}>${p.n}</option>`).join('');
   const tzOptions=`<option value="America/New_York"${(record.tz||'America/New_York')==='America/New_York'?' selected':''}>Eastern (ET)</option><option value="America/Chicago"${record.tz==='America/Chicago'?' selected':''}>Central (CT)</option><option value="America/Denver"${record.tz==='America/Denver'?' selected':''}>Mountain (MT)</option><option value="America/Los_Angeles"${record.tz==='America/Los_Angeles'?' selected':''}>Pacific (PT)</option><option value="America/Anchorage"${record.tz==='America/Anchorage'?' selected':''}>Alaska (AKT)</option><option value="Pacific/Honolulu"${record.tz==='Pacific/Honolulu'?' selected':''}>Hawaii (HT)</option>`;
   const overlay=document.createElement('div');
@@ -18952,7 +19504,7 @@ function visitCardHtml(v, isPast){
 function showVisitEntry(){
   if(!currentProp)return;
   const propName=currentProp.n;
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   const overlay=document.createElement('div');
   overlay.id='visit-prop-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -19023,7 +19575,7 @@ function showGlobalVisitEntry(){
   document.body.appendChild(overlay);
 }
 function showSiteVisitForm(){
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   const overlay=document.createElement('div');
   overlay.id='visit-prop-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
@@ -19124,7 +19676,7 @@ function getVisitAttendees(){
   }).filter(a=>a.name||a.email);
 }
 function openScheduleMeetingModal(prefillPropName){
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   const overlay=document.createElement('div');
   overlay.id='schedule-mtg-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
@@ -20185,10 +20737,40 @@ function openPropDocSubfolder(propName, subfolder){
 // PORTFOLIO TABLE
 function getProjectEndDate(propName){
   const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
-  if(phases.length===0)return null;
   const ends=phases.map(u=>u.plannedCompletion).filter(Boolean).sort();
-  return ends.length>0?ends[ends.length-1]:null;
+  if(ends.length>0)return ends[ends.length-1];
+  // v50b — fall back to the latest typed Target Completion across this
+  // property's own Scopes when no Unit Phase has a planned completion
+  // date yet, instead of returning null and showing '—' on Portfolio
+  // View for every project that hasn't had phases added.
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===propName&&s.targetCompletion);
+  if(scopes.length===0)return null;
+  const scopeEnds=scopes.map(s=>s.targetCompletion).sort();
+  return scopeEnds[scopeEnds.length-1];
 }
+// v50b — getScopeDateRange(). Scope-level (not property-wide) start/end,
+// for the Project card and Edit Project modal. Derives from this Scope's
+// own Unit Phases when any have planned/actual dates (earliest start,
+// latest completion — 'the project is shaped by its units', per Misty's
+// explicit direction), falling back to the Scope's own typed Planned
+// Start/Target Completion when no phase has dates yet. Returns
+// {start,end,derived} — derived=true means the dates come from phases,
+// not the typed fields, so callers can label them differently if needed.
+function getScopeDateRange(scopeId){
+  const phases=(window.UNIT_GROUPS||[]).filter(ug=>ug.scopeId===scopeId);
+  const starts=phases.map(ug=>ug.actualStart||ug.plannedStart).filter(Boolean).sort();
+  const ends=phases.map(ug=>ug.actualCompletion||ug.plannedCompletion).filter(Boolean).sort();
+  const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+  if(starts.length>0||ends.length>0){
+    return{
+      start:starts.length>0?starts[0]:(sc?.plannedStart||null),
+      end:ends.length>0?ends[ends.length-1]:(sc?.targetCompletion||null),
+      derived:true,
+    };
+  }
+  return{start:sc?.plannedStart||null,end:sc?.targetCompletion||null,derived:false};
+}
+window.getScopeDateRange=getScopeDateRange;
 function fmtShortDate(dateStr){
   if(!dateStr)return'—';
   const d=new Date(dateStr+'T12:00:00');
@@ -20498,7 +21080,7 @@ window.openClientUnitInventoryView=openClientUnitInventoryView;
 
 async function deleteProperty(){
   // If called from property detail, pre-select current property
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   const preSelected=currentProp?.n||'';
   const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===preSelected?' selected':''}>${p.n}</option>`).join('');
   const overlay=document.createElement('div');
@@ -21649,7 +22231,7 @@ function updateOpsCenterBadge(){
 function populateSubmitDropdown(){
   const sel=document.getElementById('f-property');
   if(!sel)return;
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   // Consultants only see their assigned properties; PM/Admin see all
   let filtered=role==='consultant'
     ? port.filter(p=>propertyHasConsultant(p.n,currentConsultantName))
@@ -22031,7 +22613,7 @@ function openNewFlag(){
   const form=document.getElementById('new-flag-form');
   form.style.display='block';
   const sel=document.getElementById('flag-property');
-  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   sel.innerHTML='<option value="">Select property...</option>'+port.map(p=>`<option>${p.n}</option>`).join('');
   form.scrollIntoView({behavior:'smooth'});
 }
@@ -22262,7 +22844,7 @@ function renderPMUpdates(){
   if(canAuthor){
     const propSel=document.getElementById('pmu-property');
     if(propSel&&propSel.options.length===0){
-      const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+      const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
       propSel.innerHTML=port.map(p=>`<option value="${p.n}">${p.n}</option>`).join('');
       pmuPopulateScopes();
     }
