@@ -2423,17 +2423,12 @@ window.PROPERTIES_SEED = [
         <div id="ep-unit-stats"></div>
         <div style="font-size:11px;color:var(--gray-mid);margin-top:8px">Counts below reflect real Unit Inventory once units are added; manual entry only applies before inventory exists.</div>
       </div>
-      <!-- v43b hotfix — Project Budget was mistakenly deleted along with the
-      Project Details section during the v43a rebuild. This is a
-      property-level rough budget field (used for Total Program Value,
-      Budget % Spent, etc.), not one of the scope-specific fields that moved
-      to the project card — it should never have been removed. Restored
-      here. openEditPropertyPanel()/saveEditProperty() both still expect
-      #ep-budget to exist; its absence was throwing on every Edit Property
-      open ("TypeError: null is not an object (evaluating
-      document.getElementById('ep-budget').value...)"), confirmed via
-      Misty's console trace. -->
-      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Budget</label><input class="form-input" type="text" inputmode="numeric" id="ep-budget" placeholder="e.g. 1,800,000"></div>
+      <!-- v50f — Project Budget removed from Edit Property entirely, per
+      direct instruction. Budget lives at the project/Scope level (each
+      project card's own Planned Budget) — this property-level rough
+      field was a legacy holdover from before that per-project budget
+      existed and duplicated/conflicted with it. saveEditProperty() no
+      longer reads #ep-budget or writes Properties.Project Budget. -->
       <div class="form-group"><label class="form-label">Total Units</label><input class="form-input" type="number" id="ep-units" placeholder="e.g. 8" min="0"></div>
       <div class="form-group"><label class="form-label">Elevator Count</label><input class="form-input" type="number" id="ep-elevators" placeholder="0" min="0"></div>
       <div class="form-group"><label class="form-label">Escalator Count</label><input class="form-input" type="number" id="ep-escalators" placeholder="0" min="0"></div>
@@ -2832,7 +2827,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50e</div>
     </div>
   </nav>
 
@@ -11356,8 +11351,8 @@ function renderUnitPhaseSuggestions(scopeId){
   container.innerHTML=open.map(s=>{
     const units=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>s.linkedUnitIds.includes(u.id)));
     const names=units.map(u=>u.name).filter(Boolean).join(', ');
-    return `<div style="background:var(--blue-xpale);border:0.5px solid var(--blue-light);border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-      <div style="font-size:12px;color:var(--blue-dark)">
+    return `<div style="background:var(--amber-pale);border:0.5px solid #fac775;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:var(--amber)">
         <i class="ti ti-bulb" style="margin-right:5px"></i>
         <strong>${units.length} unit${units.length===1?'':'s'}</strong> (${s.equipmentType||'unspecified type'}${s.capexYear?', CapEx '+s.capexYear:''}) could become a phase: ${names}
       </div>
@@ -20877,7 +20872,7 @@ function printPortfolio(){
 }
 
 function openEditPropertyPanel(){
-  setTimeout(()=>{initCurrencyInput('ep-budget');applyPriorityDisplaySetting();},50);
+  setTimeout(()=>{applyPriorityDisplaySetting();},50);
   const p=currentProp;if(!p)return;
   const panel=document.getElementById('edit-prop-panel');
   const overlay=document.getElementById('edit-prop-overlay');
@@ -20894,7 +20889,6 @@ function openEditPropertyPanel(){
   document.getElementById('ep-state').value=p.s||'';
   document.getElementById('ep-type').value=p.type||'Core';
   document.getElementById('ep-priority').value=p.priority||'';
-  document.getElementById('ep-budget').value=p.budget?Number(p.budget).toLocaleString('en-US'):'';
   document.getElementById('ep-notes').value=p.comment||'';
   document.getElementById('ep-consultant').value=p.v||'';
 
@@ -21233,9 +21227,6 @@ async function saveEditProperty(){
   const priority=document.getElementById('ep-priority').value;
   if(['Core','Non-Core'].includes(assetType))propFields['Asset Type']=assetType;
   if(priority)propFields['Priority']=priority;
-  const budgetRaw=document.getElementById('ep-budget').value.replace(/[^0-9.]/g,'');
-  const budget=budgetRaw!==''?parseFloat(budgetRaw):null;
-  propFields['Project Budget']=budget;
   const unitsRaw=document.getElementById('ep-units').value.trim();
   const units=unitsRaw!==''?parseInt(unitsRaw):null;
   propFields['Unit Count']=units!=null?String(units):null;
@@ -21281,7 +21272,6 @@ async function saveEditProperty(){
   if(propFields['Asset Type'])p.type=propFields['Asset Type'];
   if(priority)p.priority=priority;
   p.v=propFields['VDA Consultant'];p.comment=propFields['Comments'];
-  p.budget=budget;
   if(propUnitsInv.length===0){
     p.units=units;
     p.elevatorCount=elevators;p.escalatorCount=escalators;
