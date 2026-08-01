@@ -1681,6 +1681,15 @@ async function loadAllData() {
     // read-only feed. Distinct from Client Comments above (a two-way
     // threaded/flagged conversation) -- this is a one-way announcement
     // channel, hence its own table.
+    // v50i — added units/phase/progressStatus/commentType/
+    // appliesToWholeProject/linkedUnitIds/draftAction to this mapping.
+    // Previously these were only ever attached to a record in-memory the
+    // moment it was created or edited through a modal this session — a
+    // draft loaded fresh from Airtable (first load, or one nobody has
+    // touched yet this session) came back with none of this data, so its
+    // Edit Draft Update modal always opened blank/unchecked regardless of
+    // what was actually saved in Airtable. Same field names pmuCreate()/
+    // _saveEditedPMUpdateCore() already write, mirrored on read.
     window.PM_UPDATES = pmUpdates.map(r=>({
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
@@ -1690,6 +1699,18 @@ async function loadAllData() {
       status: r.fields['Status']||'Draft',
       created: r.fields['Created Date']||'',
       published: r.fields['Published Date']||'',
+      units: r.fields['Units Updated']||'',
+      phase: r.fields['Project Phase']||'',
+      progressStatus: r.fields['Progress Status']||'',
+      commentType: r.fields['Comment Type']||'',
+      appliesToWholeProject: !!r.fields['Applies to Whole Project'],
+      linkedUnitIds: r.fields['Linked Units']||[],
+      draftAction: r.fields['Draft Action Description']?{
+        description: r.fields['Draft Action Description']||'',
+        owner: r.fields['Draft Action Owner']||'',
+        priority: r.fields['Draft Action Priority']||'Medium',
+        due: r.fields['Draft Action Due']||'',
+      }:null,
     })).sort((a,b)=>new Date(b.created)-new Date(a.created));
     // Change Order Savings Log
     window.CO_SAVINGS = coSavings.map(r=>({
@@ -2847,7 +2868,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50h</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50i</div>
     </div>
   </nav>
 
@@ -23259,7 +23280,9 @@ async function pmuCreate(status){
   }
   if(hasDraftAction){
     fields['Draft Action Description']=draftAction.description;
-    fields['Draft Owner']=draftAction.owner||null;
+    // v50i — 'Draft Owner' was the wrong Airtable field name (confirmed
+    // directly). The real column matches its siblings' naming pattern.
+    fields['Draft Action Owner']=draftAction.owner||null;
     fields['Draft Action Priority']=draftAction.priority;
     fields['Draft Action Due']=draftAction.due||null;
   }
@@ -23501,12 +23524,14 @@ async function _saveEditedPMUpdateCore(publishStatus){
   }
   if(hasDraftAction){
     fields['Draft Action Description']=draftAction.description;
-    fields['Draft Owner']=draftAction.owner||null;
+    // v50i — 'Draft Owner' was the wrong Airtable field name (confirmed
+    // directly). The real column matches its siblings' naming pattern.
+    fields['Draft Action Owner']=draftAction.owner||null;
     fields['Draft Action Priority']=draftAction.priority;
     fields['Draft Action Due']=draftAction.due||null;
   }else{
     fields['Draft Action Description']='';
-    fields['Draft Owner']=null;
+    fields['Draft Action Owner']=null;
     fields['Draft Action Priority']=null;
     fields['Draft Action Due']=null;
   }
@@ -23637,6 +23662,18 @@ async function pollProjectUpdates(){
       status:r.fields['Status']||'Draft',
       created:r.fields['Created Date']||'',
       published:r.fields['Published Date']||'',
+      units:r.fields['Units Updated']||'',
+      phase:r.fields['Project Phase']||'',
+      progressStatus:r.fields['Progress Status']||'',
+      commentType:r.fields['Comment Type']||'',
+      appliesToWholeProject:!!r.fields['Applies to Whole Project'],
+      linkedUnitIds:r.fields['Linked Units']||[],
+      draftAction:r.fields['Draft Action Description']?{
+        description:r.fields['Draft Action Description']||'',
+        owner:r.fields['Draft Action Owner']||'',
+        priority:r.fields['Draft Action Priority']||'Medium',
+        due:r.fields['Draft Action Due']||'',
+      }:null,
     })).sort((a,b)=>new Date(b.created)-new Date(a.created));
     // approvedAt is set client-side only (never written to Airtable — see
     // approveSubmission()), so a poll re-fetch can't read it from r.fields.
@@ -23667,6 +23704,19 @@ async function pollProjectUpdates(){
       // gracefully rather than erroring.
       scopeId:(r.fields['Linked Scope']||[])[0]||'',
       appliesToWholeProject:!!r.fields['Applies to Whole Project'],
+      // v50i — draftAction was missing from this poll-refresh mapping
+      // entirely (present on initial load at line ~1286, dropped here).
+      // Every periodic poll was silently stripping draftAction off every
+      // submission in memory. Mirrors the initial-load block exactly.
+      draftAction: r.fields['Draft Action Description']?{
+        description: r.fields['Draft Action Description']||'',
+        owner: r.fields['Draft Action Owner']||'',
+        priority: r.fields['Draft Action Priority']||'Medium',
+        due: r.fields['Draft Action Due']||'',
+        published: !!r.fields['Draft Action Published'],
+        dismissed: !!r.fields['Draft Action Dismissed'],
+        dismissNote: r.fields['Draft Action Dismiss Note']||'',
+      }:null,
       // Fall back to Submitted Date if this was approved in a different
       // session/tab (no local approvedAt to carry forward) — keeps it
       // visible in the 30-day feed instead of silently disappearing just
