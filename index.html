@@ -2847,7 +2847,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50h</div>
     </div>
   </nav>
 
@@ -4065,6 +4065,25 @@ from unitEffectiveValue() onto each checkbox). -->
           <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="pmue-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
         </div>
         <div class="form-group"><label class="form-label">Update</label><textarea class="form-input" id="pmue-text" rows="4" placeholder="What's the latest on this property?"></textarea></div>
+        <!-- v50h — mirrors the New Update composer's pmu-draft-action-toggle
+        block, its own pmue-* IDs since the composer stays live underneath
+        this modal. State is populated in openEditPMUpdateModal() and read/
+        written in _saveEditedPMUpdateCore(), same Draft Action Description/
+        Owner/Priority/Due fields pmuCreate() writes on the composer side. -->
+        <div class="form-group" style="margin-top:8px;padding-top:12px;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:var(--navy)">
+            <input type="checkbox" id="pmue-draft-action-toggle" onchange="document.getElementById('pmue-draft-action-fields').style.display=this.checked?'block':'none'">
+            Flag a follow-up action for review
+          </label>
+          <div id="pmue-draft-action-fields" style="display:none;margin-top:10px">
+            <div class="form-group"><label class="form-label">Description</label><input class="form-input" type="text" id="pmue-draft-action-desc" placeholder="e.g. Schedule punch list walkthrough"></div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Owner</label><input class="form-input" type="text" id="pmue-draft-action-owner" placeholder="e.g. Sarah Chen"></div>
+              <div class="form-group"><label class="form-label">Priority</label><select class="form-select" id="pmue-draft-action-priority"><option>Low</option><option selected>Medium</option><option>High</option></select></div>
+            </div>
+            <div class="form-group"><label class="form-label">Due date</label><input class="form-input" type="date" id="pmue-draft-action-due"></div>
+          </div>
+        </div>
         <div style="display:flex;gap:8px;margin-top:16px">
           <button class="btn" onclick="closeEditPMUpdateModal()">Cancel</button>
           <button class="btn" onclick="saveEditedPMUpdate()"><i class="ti ti-device-floppy"></i>Save Changes</button>
@@ -22093,6 +22112,79 @@ async function sendWeeklyReminders(){
   }
 }
 
+// v50h — read-only detail view for an already-approved Field Update,
+// used by the Operations Center Recent Field Updates eye icon. Deliberately
+// separate from previewQueueItem() above, which hardcodes "Pending" review
+// status and Approve/Return actions that don't apply once a submission is
+// already approved — reusing it here would show a wrong status and offer
+// actions that don't make sense post-approval. Same field layout/data
+// source (submissions), just Close-only, no action buttons.
+function previewFieldUpdateDetail(subId){
+  const s=submissions.find(x=>x.id===subId);
+  if(!s)return;
+  const overlay=document.createElement('div');
+  overlay.id='fu-detail-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:13px;font-weight:600;color:var(--navy)">${s.property} — Week of ${s.week}</div>
+      <button onclick="document.getElementById('fu-detail-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
+    </div>
+    <div style="overflow-y:auto;padding:20px;flex:1">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
+        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Submitted:</span> <strong>${s.submittedAt||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${s.units||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${s.phase||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--green)">Approved</strong></div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
+      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${s.notes||'—'}</div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex">
+      <button class="btn" style="margin-left:auto" onclick="document.getElementById('fu-detail-overlay').remove()">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+window.previewFieldUpdateDetail=previewFieldUpdateDetail;
+
+// v50h — read-only detail view for a Published PM Update, same eye-icon
+// entry point on Operations Center's now-merged Recent Field Updates card.
+function previewPMUpdateDetail(pmuId){
+  const u=(window.PM_UPDATES||[]).find(x=>x.id===pmuId);
+  if(!u)return;
+  const overlay=document.createElement('div');
+  overlay.id='pmu-detail-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:13px;font-weight:600;color:var(--navy)">${u.property} — PM Update</div>
+      <button onclick="document.getElementById('pmu-detail-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
+    </div>
+    <div style="overflow-y:auto;padding:20px;flex:1">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
+        <div><span style="color:var(--gray-mid)">Author:</span> <strong>${u.author||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Published:</span> <strong>${u.published||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${u.units||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${u.phase||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${u.progressStatus||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${u.commentType||'—'}</strong></div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Update</div>
+      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${u.text||'—'}</div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex">
+      <button class="btn" style="margin-left:auto" onclick="document.getElementById('pmu-detail-overlay').remove()">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+window.previewPMUpdateDetail=previewPMUpdateDetail;
+
 function previewQueueItem(subId){
   const s=submissions.find(x=>x.id===subId);
   if(!s)return;
@@ -23252,6 +23344,17 @@ function openEditPMUpdateModal(id){
     if(u.progressStatus)document.getElementById('pmue-status').value=u.progressStatus;
     if(u.commentType)document.getElementById('pmue-comment-type').value=u.commentType;
   }
+  // v50h — Flag a follow-up action, mirrors the New Update composer.
+  // Pre-fills from the draft's own draftAction data if this draft was
+  // flagged when first saved (see pmuCreate's hasDraftAction/draftAction);
+  // otherwise starts unchecked, same default as a brand new draft.
+  const hasExistingFlag=!!(u.draftAction&&u.draftAction.description);
+  document.getElementById('pmue-draft-action-toggle').checked=hasExistingFlag;
+  document.getElementById('pmue-draft-action-fields').style.display=hasExistingFlag?'block':'none';
+  document.getElementById('pmue-draft-action-desc').value=hasExistingFlag?(u.draftAction.description||''):'';
+  document.getElementById('pmue-draft-action-owner').value=hasExistingFlag?(u.draftAction.owner||''):'';
+  document.getElementById('pmue-draft-action-priority').value=hasExistingFlag?(u.draftAction.priority||'Medium'):'Medium';
+  document.getElementById('pmue-draft-action-due').value=hasExistingFlag?(u.draftAction.due||''):'';
   document.getElementById('pmue-overlay').style.display='block';
   document.getElementById('pmue-modal').style.display='block';
 }
@@ -23367,6 +23470,15 @@ async function _saveEditedPMUpdateCore(publishStatus){
   const phase=hasProject?document.getElementById('pmue-phase').value:'';
   const progressStatus=hasProject?document.getElementById('pmue-status').value:'';
   const commentType=hasProject?document.getElementById('pmue-comment-type').value:'';
+  // v50h — Flag a follow-up action, same read pattern as pmuCreate().
+  const hasDraftAction=document.getElementById('pmue-draft-action-toggle').checked;
+  const draftAction=hasDraftAction?{
+    description:document.getElementById('pmue-draft-action-desc').value.trim(),
+    owner:document.getElementById('pmue-draft-action-owner').value.trim(),
+    priority:document.getElementById('pmue-draft-action-priority').value,
+    due:document.getElementById('pmue-draft-action-due').value,
+  }:null;
+  if(hasDraftAction&&!draftAction.description){showToast('Please enter a description for the follow-up action, or uncheck the flag','warn');return false;}
   const fields={
     'Property Name':propertyNameToLink(propName),
     'Update Text':text,
@@ -23387,6 +23499,17 @@ async function _saveEditedPMUpdateCore(publishStatus){
     fields['Applies to Whole Project']=false;
     fields['Linked Units']=[];
   }
+  if(hasDraftAction){
+    fields['Draft Action Description']=draftAction.description;
+    fields['Draft Owner']=draftAction.owner||null;
+    fields['Draft Action Priority']=draftAction.priority;
+    fields['Draft Action Due']=draftAction.due||null;
+  }else{
+    fields['Draft Action Description']='';
+    fields['Draft Owner']=null;
+    fields['Draft Action Priority']=null;
+    fields['Draft Action Due']=null;
+  }
   const todayStr=new Date().toISOString().split('T')[0];
   if(publishStatus==='Published'){
     fields['Status']='Published';
@@ -23398,9 +23521,23 @@ async function _saveEditedPMUpdateCore(publishStatus){
   u.units=units;u.phase=phase;u.progressStatus=progressStatus;
   u.commentType=commentType;u.appliesToWholeProject=appliesToWholeProject;
   u.linkedUnitIds=linkedUnitIds;
+  u.draftAction=hasDraftAction?draftAction:null;
   if(publishStatus==='Published'){
     u.status='Published';u.published=todayStr;
     await archivePMUpdateToDocuments(u);
+    // v50h — same live Action Item creation pmuCreate() does on publish
+    // for a newly-flagged action. A draft flagged, then edited/published
+    // through this modal, should behave identically to one flagged and
+    // published straight from the New Update composer.
+    if(hasDraftAction){
+      const aiFields={'Property Name':propertyNameToLink(propName),'Description':draftAction.description,'Owner':draftAction.owner||'','Due Date':draftAction.due||null,'Priority':draftAction.priority||'Medium','Status':'Open'};
+      if(scopeId)aiFields['Linked Scope']=[scopeId];
+      const aiRes=await atCreate('Action Items',aiFields);
+      const aiId=aiRes?.records?.[0]?.id||'ai_'+Date.now();
+      actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
+      if(draftAction.owner)notifyActionItemOwner(draftAction.owner,draftAction.description,propName,draftAction.due,draftAction.priority);
+      refreshDashActions();
+    }
   }
   return true;
 }
@@ -25164,8 +25301,13 @@ function renderOpsCenter(){
   }).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,4);
   const fmtShort=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
 
-  // Recent field updates
-  const recentUpdates=(submissions||[]).filter(s=>s.reviewStatus==='approved'&&propFilter(s.property)).slice().reverse().slice(0,4);
+  // Recent field updates — v50h, merged with Published PM Updates into one
+  // combined, date-sorted feed per direct instruction. Each entry keeps a
+  // 'kind' tag ('field'|'pmupdate') so the eye icon can open the right
+  // detail view and the row can carry the right onclick.
+  const recentFieldOnly=(submissions||[]).filter(s=>s.reviewStatus==='approved'&&propFilter(s.property)).map(s=>({kind:'field',id:s.id,property:s.property,date:s.submittedAt,by:s.consultant}));
+  const recentPmOnly=(window.PM_UPDATES||[]).filter(u=>u.status==='Published'&&propFilter(u.property)).map(u=>({kind:'pmupdate',id:u.id,property:u.property,date:u.published||u.created,by:u.author}));
+  const recentUpdates=[...recentFieldOnly,...recentPmOnly].sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).slice(0,4);
 
   // Recent meetings
   const recentMeetings=(meetings||[]).filter(m=>propFilter(m.property)).slice().reverse().slice(0,4);
@@ -25216,10 +25358,10 @@ function renderOpsCenter(){
         <div class="card-header"><div class="card-title">Recent Field Updates</div></div>
         ${recentUpdates.length===0
           ?'<div style="font-size:12px;color:var(--gray-mid)">No approved field updates yet.</div>'
-          :recentUpdates.map(s=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')">
+          :recentUpdates.map(s=>`<div class="action-item-row">
             <div class="action-dot" style="background:var(--green)"></div>
-            <div class="action-desc" style="flex:1"><strong>${s.property}</strong><br><span style="color:var(--gray-mid)">Submitted ${fmtShort(s.submittedAt)} · ${s.consultant}</span></div>
-            <i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px;flex-shrink:0"></i>
+            <div class="action-desc" style="flex:1;cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')"><strong>${s.property}</strong><br><span style="color:var(--gray-mid)">${s.kind==='pmupdate'?'PM Update':'Submitted'} ${fmtShort(s.date)} · ${s.by||'—'}</span></div>
+            <i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px;flex-shrink:0;cursor:pointer" onclick="event.stopPropagation();${s.kind==='pmupdate'?`previewPMUpdateDetail('${s.id}')`:`previewFieldUpdateDetail('${s.id}')`}"></i>
           </div>`).join('')
         }
       </div>
