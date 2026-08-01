@@ -209,9 +209,6 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .b-pending{background:#FAEEDA;color:#854F0B}.b-approved{background:#EAF3DE;color:#3B6D11}.b-returned{background:#FCEBEB;color:#A32D2D}
 .b-core{background:#EEEDFE;color:#534AB7}.b-noncore{background:#F1EFE8;color:#5F5E5A}
 .b-draft{background:#EEEDFE;color:#534AB7}
-.demo-role-btn{padding:12px 8px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:white;cursor:pointer;text-align:center;transition:all .15s;font-size:12px;font-weight:500;color:var(--gray-mid);width:100%}
-.demo-role-btn.active{border-color:var(--purple);background:#EEEDFE;color:var(--purple)}
-.demo-badge{background:var(--purple);color:white;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;text-transform:uppercase;margin-left:6px;vertical-align:middle}
 .b-ms-complete{background:#EAF3DE;color:#3B6D11}.b-ms-inprog{background:#E6F1FB;color:#185FA5}
 .b-ms-atrisk{background:#FAEEDA;color:#854F0B}.b-ms-notstart{background:#F1EFE8;color:#5F5E5A}
 .b-high{background:#FCEBEB;color:#A32D2D}.b-medium{background:#FAEEDA;color:#854F0B}.b-low{background:#EAF3DE;color:#3B6D11}
@@ -727,7 +724,6 @@ before adding. -->
     <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:6px">Airtable API token</label>
     <input type="password" id="token-input" placeholder="pat..." style="width:100%;padding:9px 12px;border:1px solid #e8e6e0;border-radius:6px;font-size:13px;outline:none;font-family:'Plus Jakarta Sans',sans-serif;margin-bottom:12px">
     <button onclick="saveToken()" style="width:100%;padding:10px;background:#185FA5;color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer">Connect database</button>
-    <div style="text-align:center;margin-top:10px"><button onclick="skipToken()" style="background:none;border:none;color:#B4B2A9;font-size:12px;cursor:pointer">Skip for now — use demo data</button></div>
   </div>
 </div>
 
@@ -760,6 +756,25 @@ window.addEventListener('error', function(ev){
 });
 // ── AIRTABLE VIA CLOUDFLARE WORKER ───────────────────────────────────
 const WORKER_URL = 'https://pulse-api.misty-munoz.workers.dev';
+// v51a. Session token issued by the Worker's /login endpoint at sign in.
+// Every Worker call goes through workerFetch(), which attaches it as a
+// Bearer header. The Worker refuses (almost) everything without it.
+window._sessionToken=window._sessionToken||null;
+async function workerFetch(input,opts={}){
+  const o={...opts};
+  o.headers={...(o.headers||{})};
+  if(window._sessionToken)o.headers['Authorization']='Bearer '+window._sessionToken;
+  const r=await fetch(input,o);
+  if(r.status===401&&window._sessionToken){
+    // Session expired or was revoked server side. Clear it so the next
+    // page load lands on a genuine login screen instead of a half-broken
+    // session that 401s on every call.
+    window._sessionToken=null;
+    try{sessionStorage.removeItem('pulse_session');}catch(e){}
+    if(typeof showToast==='function')showToast('Session expired. Refresh and sign in again.','warn');
+  }
+  return r;
+}
 // v49a — MARLI mascot assets moved out of the bundle to assets/*.png so they
 // cache independently of index.html instead of being re-downloaded on every
 // deploy. marli-avatar.png (60x87) is the small chat avatar; marli-head.png
@@ -889,24 +904,18 @@ function skipToken() {
 }
 
 // ── PIN AUTH ──────────────────────────────────────────────────────
-// Role keys (internal) -> Access PINs "Role" field values (Airtable single select)
-const PIN_ROLE_LABELS = {pm:'Project Manager',consultant:'Consultant',client:'Client',admin:'IT Admin'};
-// In-memory lockout — resets on page reload by design (lightweight speed-bump,
-// not a durable security boundary; pilot user base is small and known).
-let _pinAttempts = 0;
-let _pinLockedUntil = 0;
-function _pinLockoutRemaining(){
-  return _pinLockedUntil>Date.now() ? Math.ceil((_pinLockedUntil-Date.now())/60000) : 0;
-}
+// v51a: PIN verification moved server side. The browser POSTs role/name/PIN
+// to the Worker's /login endpoint and never downloads the Access PINs table
+// (the Worker also strips the PIN field from any read of that table). On
+// success the Worker returns a 12 hour session token, which workerFetch()
+// attaches to every subsequent Worker call. The old client side lockout is
+// gone; the Worker rate limits per IP instead, which cannot be bypassed by
+// a page reload.
 // Returns {ok:true,name} on success, or {ok:false,message} on failure.
-// Does not mutate any UI — callers handle their own error display.
-// Admin is a single shared role-level PIN (no per-person Name) — pass
+// Does not mutate any UI. Callers handle their own error display.
+// Admin is a single shared role-level PIN (no per-person Name). Pass
 // nameInput as null/empty for roleKey==='admin'; matching is on Role+PIN only.
 async function verifyPinLogin(roleKey,nameInput,pinInput){
-  const remaining=_pinLockoutRemaining();
-  if(remaining>0){
-    return {ok:false,message:`Too many attempts. Try again in ${remaining} minute${remaining===1?'':'s'}.`};
-  }
   const isAdmin=(roleKey==='admin');
   const name=(nameInput||'').trim();
   const pin=(pinInput||'').trim();
@@ -917,58 +926,23 @@ async function verifyPinLogin(roleKey,nameInput,pinInput){
   }else if(!name||!pin){
     return {ok:false,message:'Enter your name and PIN to continue.'};
   }
-  const roleLabel=PIN_ROLE_LABELS[roleKey];
-  let recs=[];
+  let d=null;
   try{
-    recs=await atGet('Access PINs');
+    const r=await workerFetch(`${WORKER_URL}/login`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({role:roleKey,name,pin}),
+    });
+    d=await r.json();
   }catch(e){
-    console.error('PIN lookup failed:',e);
-    return {ok:false,message:'Could not verify PIN — check your connection and try again.'};
+    console.error('Login failed:',e);
+    return {ok:false,message:'Could not verify PIN. Check your connection and try again.'};
   }
-  let match;
-  if(isAdmin){
-    // Role+PIN only — no Name field on this credential. If multiple active
-    // IT Admin rows exist (e.g. mid-rotation of the shared PIN), accept a
-    // match against any of them.
-    match=recs.find(r=>
-      (r.fields['Role']||'')===roleLabel &&
-      !!r.fields['Active'] &&
-      (r.fields['PIN']||'')===pin
-    );
-    if(!match){
-      const anyAdminConfigured=recs.some(r=>(r.fields['Role']||'')===roleLabel&&!!r.fields['Active']);
-      _pinAttempts++;
-      if(_pinAttempts>=3){_pinLockedUntil=Date.now()+10*60000;_pinAttempts=0;
-        return {ok:false,message:'Too many attempts. Try again in 10 minutes.'};}
-      if(!anyAdminConfigured){
-        return {ok:false,message:'Admin PIN not configured — contact IT.'};
-      }
-      return {ok:false,message:'Incorrect PIN.'};
-    }
-    _pinAttempts=0;
-    return {ok:true,name:'IT Admin',tourCompleted:match.fields['Tour Completed']||null,recordId:match.id};
+  if(!d||!d.ok||!d.token){
+    return {ok:false,message:(d&&d.message)||'Sign in failed. Try again.'};
   }
-  const nameLower=name.toLowerCase();
-  match=recs.find(r=>
-    (r.fields['Role']||'')===roleLabel &&
-    (r.fields['Name']||'').trim().toLowerCase()===nameLower
-  );
-  if(!match){
-    _pinAttempts++;
-    if(_pinAttempts>=3){_pinLockedUntil=Date.now()+10*60000;_pinAttempts=0;
-      return {ok:false,message:'Too many attempts. Try again in 10 minutes.'};}
-    return {ok:false,message:'Name not found.'};
-  }
-  const pinOk=(match.fields['PIN']||'')===pin;
-  const activeOk=!!match.fields['Active'];
-  if(!pinOk||!activeOk){
-    _pinAttempts++;
-    if(_pinAttempts>=3){_pinLockedUntil=Date.now()+10*60000;_pinAttempts=0;
-      return {ok:false,message:'Too many attempts. Try again in 10 minutes.'};}
-    return {ok:false,message:'Incorrect PIN.'};
-  }
-  _pinAttempts=0;
-  return {ok:true,name:match.fields['Name']||name,tourCompleted:match.fields['Tour Completed']||null,recordId:match.id};
+  window._sessionToken=d.token;
+  return {ok:true,name:d.name,tourCompleted:d.tourCompleted||null,recordId:d.recordId||null};
 }
 
 // Build 2 — auto-launch Orientation Tour on first login only.
@@ -1013,7 +987,7 @@ async function atGet(table, formula='') {
       let url = `${WORKER_URL}?table=${encodeURIComponent(table)}`;
       if (formula) url += `&formula=${encodeURIComponent(formula)}`;
       if (offset) url += `&offset=${encodeURIComponent(offset)}`;
-      const r = await fetch(url);
+      const r = await workerFetch(url);
       if (!r.ok) { 
         console.error(`atGet ${table} failed: ${r.status} ${r.statusText}`);
         const text = await r.text();
@@ -1032,7 +1006,7 @@ async function atGet(table, formula='') {
 async function atCreate(table, fields) {
   if(demoMode){console.log('[DEMO] atCreate blocked:',table);return null;}
   try {
-    const r = await fetch(`${WORKER_URL}?table=${encodeURIComponent(table)}`, {
+    const r = await workerFetch(`${WORKER_URL}?table=${encodeURIComponent(table)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ records: [{ fields }] })
@@ -1050,7 +1024,7 @@ async function atUpdate(table, id, fields) {
   if(demoMode){console.log('[DEMO] atUpdate blocked:',table,id);return null;}
   if (!id) return null;
   try {
-    const r = await fetch(`${WORKER_URL}?table=${encodeURIComponent(table)}&recordId=${id}`, {
+    const r = await workerFetch(`${WORKER_URL}?table=${encodeURIComponent(table)}&recordId=${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields })
@@ -1109,7 +1083,7 @@ async function atDelete(table, id) {
   if(demoMode){console.log('[DEMO] atDelete blocked:',table,id);return null;}
   if (!id) return null;
   try {
-    const r = await fetch(`${WORKER_URL}?table=${encodeURIComponent(table)}&recordId=${id}`, {
+    const r = await workerFetch(`${WORKER_URL}?table=${encodeURIComponent(table)}&recordId=${id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -1117,62 +1091,14 @@ async function atDelete(table, id) {
   } catch(e) { console.error('atDelete error:', e); return null; }
 }
 
-// Seed properties if empty
-async function seedIfEmpty() {
-  console.log('Checking Properties table...');
-  const existing = await atGet('Properties');
-  // Filter out empty rows - only count rows with actual property names
-  const realRecords = existing.filter(r => r.fields && r.fields['Property Name'] && r.fields['Property Name'].trim() !== '');
-  console.log(`Properties check: ${existing.length} rows total, ${realRecords.length} with real data`);
-  if (realRecords.length > 0) { console.log(`Properties: ${realRecords.length} real records found - skipping seed`); return; }
-  console.log('Seeding 44 properties via Worker...');
-  showToast('First-time setup — loading portfolio data...','info');
-  const props = window.PROPERTIES_SEED || [];
-  const batch10 = (arr) => {
-    const chunks = [];
-    for (let i=0; i<arr.length; i+=10) chunks.push(arr.slice(i,i+10));
-    return chunks;
-  };
-  let seeded = 0;
-  for (const chunk of batch10(props)) {
-    const records = chunk.map(p => ({
-      fields: {
-        'Property Name': p.n,
-        'State': p.s,
-        'Address': p.addr,
-        'Elevator Company': p.ec,
-        'VDA Consultant': p.v,
-        'VDA Project Number': p.vda,
-        'Unit Count': String(p.units||0),
-        'Unit Description': p.ud||'',
-        'Comments': p.comment||'',
-        'Target Completion': p.target||'TBD',
-        'Forecasted Budget': p.budget||0,
-        'Project Budget': p.budget||0,
-      }
-    }));
-    try {
-      const r = await fetch(`${WORKER_URL}?table=Properties`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ records })
-      });
-      const d = await r.json();
-      if (d.records) seeded += d.records.length;
-      else console.error('Seed batch error:', JSON.stringify(d));
-    } catch(e) { console.error('Seed batch failed:', e); }
-    await new Promise(r=>setTimeout(r,300));
-  }
-  console.log(`Seeded ${seeded} properties`);
-  if (seeded > 0) showToast(`Portfolio loaded — ${seeded} properties added!`,'success');
-  else showToast('Seed failed — check console for details','error');
-}
+// v51a: seedIfEmpty() removed along with PROPERTIES_SEED (see note at the
+// former seed block). It only ever mattered on a brand new empty base and
+// cost every login an extra full Properties fetch.
 
 // Load all live data
 async function loadAllData() {
   // Loading in background - no overlay
   try {
-    await seedIfEmpty();
     // Loading portfolio data...
     const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory, pmUpdates, meetingAttendeesRaw] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
@@ -1984,49 +1910,12 @@ window.addEventListener('popstate', function(e){
 });
 </script>
 <script>
+// v51a: PROPERTIES_SEED removed. It was a first-time Airtable bootstrapping
+// relic that shipped the entire real portfolio (names, addresses, budgets,
+// VDA numbers, status comments) inside this public file, and its
+// seedIfEmpty() check also cost a redundant full Properties fetch on every
+// login. The Airtable base is the sole source of portfolio data now.
 window.PROPERTIES_SEED = [
-  {n:'Hilton Denver City Center',s:'CO',ec:'Otis',st:'Awarded',r:'On Track',v:'Dane Carollo',units:'12',ud:'5 Elev / 4 Esc',vda:'65153',type:'Core',budget:4400000,addr:'1701 California Street, Denver, CO',comment:'On site next week - 2nd car on pace for Thanksgiving pending AHJ inspection',target:'Aug 2025'},
-  {n:'Hilton New Orleans Riverside',s:'LA',ec:'Schindler',st:'Awarded',r:'On Track',v:'Ken Donner',units:'53',ud:'27 Elev / 4 Esc',vda:'72398',type:'Core',budget:19313175,addr:'2 Poydras Street, New Orleans, LA',comment:'Fixture Drawings - Schindler. Ken has submittals',target:'TBD'},
-  {n:'Hilton Chicago',s:'IL',ec:'TBD',st:'Active',r:'—',v:'Jeff Hart',units:'36',ud:'14 Elev',vda:'74588',type:'Core',budget:7000000,addr:'720 South Michigan Avenue, Chicago, IL',comment:'Waiting for revised bids to include destination dispatch',target:'TBD'},
-  {n:'Hilton Hawaiian Village',s:'HI',ec:'Otis',st:'Active',r:'On Track',v:'Jeff Sena',units:'64',ud:'10 Elev',vda:'67870',type:'Core',budget:5352500,addr:'2005 Kalia Road, Honolulu, HI',comment:'Moving forward with 6 units. Jeff completed final punch report.',target:'TBD'},
-  {n:'HHV Diamond Head Apartments',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:'2',ud:'2 Elev',vda:'67869',type:'Non-Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'',target:'NAC'},
-  {n:'HHV Rainbow Tower',s:'HI',ec:'TBD (Otis preferred)',st:'Active',r:'—',v:'Jeff Sena',units:'0',ud:'TBD',vda:'—',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'Cab design not finalized. Combining into one proposal.',target:'TBD'},
-  {n:'HHV Tapa Low Rise',s:'HI',ec:'Otis',st:'Active',r:'Behind',v:'Jeff Sena',units:'4',ud:'4 Elev',vda:'71667',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'Low Rise ready - waiting for designers and cab interiors to finalize.',target:'TBD'},
-  {n:'HHV Tapa High Rise',s:'HI',ec:'Otis',st:'Active',r:'—',v:'Jeff Sena',units:'4',ud:'4 Elev',vda:'71667',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'High Rise - contract should be ready soon.',target:'TBD'},
-  {n:'HHV Alii Tower',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:'3',ud:'3 Elev',vda:'79546',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'No proposals yet - Jeff working on.',target:'TBD'},
-  {n:'HHV Kalia',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:'3',ud:'3 Elev',vda:'77472',type:'Non-Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'No proposals yet - Jeff working on.',target:'TBD'},
-  {n:'Hyatt Regency Mission Bay',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'7',ud:'2 Elev',vda:'68304',type:'Non-Core',budget:497420,addr:'1441 Quivira Road, San Diego, CA',comment:'Not moving forward until 2026-2027.',target:'TBD'},
-  {n:'Hilton Waikoloa Village',s:'HI',ec:'Otis',st:'Active',r:'On Track',v:'Jeff Sena',units:'20',ud:'2 Elev',vda:'73515',type:'Core',budget:1343900,addr:'69-425 Waikoloa Beach Drive, Waikoloa, HI',comment:'Invoices received, need updated schedule from Otis.',target:'TBD'},
-  {n:'New York Hilton Midtown',s:'NY',ec:'Schindler',st:'CIP',r:'Ahead',v:'John Frondi',units:'44',ud:'26 Elev / 10 Esc',vda:'69913',type:'Core',budget:18511335,addr:'1335 Avenue of the Americas, New York, NY',comment:'ACM found in doors. David onsite on Monday.',target:'Mar 2029'},
-  {n:'Casa Marina Key West',s:'FL',ec:'Elevated',st:'CIP',r:'Behind',v:'Nick Nikolai',units:'8',ud:'7 Elev / 1 Lift',vda:'58475',type:'Non-Core',budget:1800000,addr:'1500 Reynolds Street, Key West, FL',comment:'PE1 & PE2 substantial completion. PE6 & PE7 commencing Q2-Q3 2025.',target:'Oct 2026'},
-  {n:'The Reach Curio',s:'FL',ec:'Elevated',st:'Active',r:'Behind',v:'Nick Nikolai',units:'4',ud:'4 Elev',vda:'58476',type:'Non-Core',budget:885000,addr:'1435 Simonton Street, Key West, FL',comment:'Final punch list/Jack replacement delayed to next quiet time.',target:'TBD'},
-  {n:'Royal Palm South Beach',s:'FL',ec:'Elevated',st:'Awarded',r:'Behind',v:'Jim Himes',units:'8',ud:'8 Elev',vda:'70043',type:'Non-Core',budget:4205280,addr:'1545 Collins Avenue, Miami Beach, FL',comment:'2 cars completed. 3 teams on site.',target:'Jun 2027'},
-  {n:'Hilton Boston Logan Airport',s:'MA',ec:'TBD',st:'Budgeting',r:'—',v:'Rob Campbell',units:'9',ud:'7 Elev / 2 Esc',vda:'—',type:'Core',budget:0,addr:'1 Hotel Drive, Boston, MA',comment:'Budgeted for 2026.',target:'TBD'},
-  {n:'JW Marriott San Francisco',s:'CA',ec:'Otis',st:'CIP',r:'On Track',v:'Ron Welts',units:'8',ud:'7 Elev',vda:'60433',type:'Core',budget:1943600,addr:'515 Mason Street, San Francisco, CA',comment:'4 pass starts Feb 2025. On schedule, slightly ahead.',target:'2026'},
-  {n:'Hyatt Regency Boston',s:'MA',ec:'TBD',st:'On Hold',r:'—',v:'Rob Campbell',units:'0',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'1 Ave de Lafayette, Boston, MA',comment:'',target:'NAC'},
-  {n:'Hilton Checkers',s:'CA',ec:'TBD',st:'Active',r:'—',v:'Jeff Sena',units:'5',ud:'2 Elev',vda:'65149',type:'Non-Core',budget:0,addr:'535 S Grand Ave, Los Angeles, CA',comment:'In Progress 2025 / Need contract with Park.',target:'TBD'},
-  {n:'Doubletree Mission Valley San Diego',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'5',ud:'2 Elev',vda:'—',type:'Non-Core',budget:0,addr:'7450 Hazard Center Dr, San Diego, CA',comment:'Not authorized to proceed.',target:'NAC'},
-  {n:'WA Bonnet Creek',s:'FL',ec:'TBD',st:'On Hold',r:'—',v:'Nick Nikolai',units:'0',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'14651 Chelonia Pkwy, Orlando, FL',comment:'Working with Hilton Corp for maintenance audit.',target:'TBD'},
-  {n:'Bonnet Creek Golf World',s:'FL',ec:'TBD',st:'Budgeting',r:'—',v:'Nick Nikolai',units:'37',ud:'21 Elev / 2 Esc',vda:'—',type:'Non-Core',budget:0,addr:'14651 Chelonia Pkwy, Orlando, FL',comment:'Survey completed by ATIS.',target:'TBD'},
-  {n:'Marriott Newton',s:'MA',ec:'TBD',st:'On Hold',r:'—',v:'Rob Campbell',units:'5',ud:'5 Elev',vda:'—',type:'Non-Core',budget:1800000,addr:'2345 Commonwealth Ave, Newton, MA',comment:'On Hold.',target:'TBD'},
-  {n:'Hilton Oakland Airport',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:'4',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'1 Hegenberger Rd, Oakland, CA',comment:'On Hold.',target:'NAC'},
-  {n:'Hilton Santa Barbara',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'5',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'633 East Cabrillo Blvd, Santa Barbara, CA',comment:'Requires survey.',target:'NAC'},
-  {n:'Doubletree San Jose',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:'8',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'2050 Gateway Pl, San Jose, CA',comment:'Not active.',target:'NAC'},
-  {n:'Hilton McLean Tysons Corner',s:'VA',ec:'Fujitec',st:'Complete',r:'—',v:'Robb Parks',units:'7',ud:'2 Serv Elev',vda:'58474',type:'Core',budget:0,addr:'7920 Jones Branch Drive, McLean, VA',comment:'Complete. Need reinspection due to failure.',target:'Complete'},
-  {n:'Doubletree Durango',s:'CO',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'3',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'501 Camino del Rio, Durango, CO',comment:'Not active.',target:'NAC'},
-  {n:'Doubletree Ontario',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'9',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'222 N Vineyard Ave, Ontario, CA',comment:'Not active.',target:'NAC'},
-  {n:'Hilton Short Hills',s:'NJ',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'7',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'41 John F Kennedy Pkwy, Short Hills, NJ',comment:'Not active.',target:'NAC'},
-  {n:'Embassy Suites Kansas City',s:'MO',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:'4',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'7640 NW Tiffany Springs Pkwy, Kansas City, MO',comment:'Not active.',target:'NAC'},
-  {n:'Hilton Salt Lake City',s:'UT',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:'11',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'255 South West Temple, Salt Lake City, UT',comment:'Will send quote for survey.',target:'NAC'},
-  {n:'Hilton Seattle Airport',s:'WA',ec:'TBD',st:'On Hold',r:'—',v:'Dane Carollo',units:'8',ud:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'17620 International Blvd, Seattle, WA',comment:'On Hold.',target:'NAC'},
-  {n:'The Midland Chicago',s:'IL',ec:'TBD',st:'Survey',r:'—',v:'Jeff Hart',units:'2',ud:'2 Elev',vda:'—',type:'Non-Core',budget:0,addr:'172 West Adams, Chicago, IL',comment:'Need survey.',target:'TBD'},
-  {n:'Wade',s:'FL',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Hart',units:'6',ud:'4 Elev / 1 Luggage',vda:'—',type:'Non-Core',budget:0,addr:'Miami Beach, FL',comment:'On Hold, no cap planner.',target:'NAC'},
-  {n:'Hilton Lake Buena Vista',s:'FL',ec:'Otis',st:'On Hold',r:'—',v:'Nick Nikolai',units:'13',ud:'TBD',vda:'—',type:'Core',budget:0,addr:'1751 Hotel Plaza Blvd, Lake Buena Vista, FL',comment:'On Hold.',target:'Nov 2026'},
-  {n:'Caribe Hilton Puerto Rico',s:'PR',ec:'Otis',st:'Survey',r:'—',v:'Mike Loefler',units:'16',ud:'TBD',vda:'—',type:'Core',budget:0,addr:'1 C. San Geronimo, San Juan, PR',comment:'Proposed.',target:'TBD'},
-  {n:'Doubletree Crystal City',s:'VA',ec:'TBD',st:'On Hold',r:'—',v:'Chris Shields',units:'11',ud:'9 Elev / 2 Esc',vda:'—',type:'Non-Core',budget:5488000,addr:'300 Army Navy Drive, Arlington, VA',comment:'On Hold.',target:'NAC'},
-  {n:'Doubletree Seattle Airport',s:'WA',ec:'TBD',st:'On Hold',r:'—',v:'Dane Carollo',units:'11',ud:'11 Elev',vda:'—',type:'Non-Core',budget:0,addr:'18740 International Blvd, Seattle, WA',comment:'Surveyed. Spec not authorized to proceed.',target:'NAC'},
-  {n:'Embassy Suites Austin',s:'TX',ec:'TBD',st:'On Hold',r:'—',v:'Jake Seibert',units:'2',ud:'2 Elev',vda:'—',type:'Non-Core',budget:0,addr:'300 S Congress Ave, Austin, TX',comment:'On Hold.',target:'NAC'},
-  {n:'Juniper Hotel Cupertino',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:'3',ud:'3 Elev',vda:'—',type:'Non-Core',budget:1536000,addr:'10050 S De Anza Blvd, Cupertino, CA',comment:'On Hold.',target:'NAC'},
 ];
 </script>
 <div id="login-screen">
@@ -2071,9 +1960,6 @@ window.PROPERTIES_SEED = [
         <div id="login-pin-error" style="display:none;color:var(--red);font-size:12px;margin-top:8px"></div>
       </div>
       <button class="login-btn" onclick="doLogin()"><i class="ti ti-login"></i>Enter Portal</button>
-      <div style="text-align:center;margin-top:14px">
-        <button onclick="startDemo()" style="background:none;border:none;color:#378ADD;font-size:12px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:inline-flex;align-items:center;gap:5px;font-weight:500"><i class="ti ti-presentation" style="font-size:14px"></i>View demo portfolio</button>
-      </div>
     </div>
     <div class="login-version">PULSE v1.0 · elevatorpulse.com</div>
   </div>
@@ -2120,21 +2006,7 @@ window.PROPERTIES_SEED = [
   </div>
 </div>
 
-<!-- DEMO ROLE PICKER -->
-<div id="demo-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem">
-  <div style="width:44px;height:44px;background:var(--purple);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1.25rem"><i class="ti ti-presentation" style="color:white;font-size:24px"></i></div>
-  <div style="font-size:20px;font-weight:600;color:white;margin-bottom:6px;letter-spacing:-.3px">Demo Portfolio</div>
-  <div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:2rem;text-align:center;max-width:360px">Explore a fictional retail elevator modernization portfolio. No real data.</div>
-  <div style="background:white;border-radius:12px;padding:1.5rem;width:100%;max-width:380px">
-    <label style="font-size:11px;font-weight:500;color:#5F5E5A;text-transform:uppercase;letter-spacing:.5px;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:10px">Sign in as</label>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
-      <button class="demo-role-btn active" id="demo-btn-pm" onclick="selectDemoRole('pm',this)"><i class="ti ti-clipboard-list" style="display:block;font-size:22px;margin-bottom:4px;color:var(--blue-dark)"></i>Project Mgr</button>
-      <button class="demo-role-btn" id="demo-btn-client" onclick="selectDemoRole('client',this)"><i class="ti ti-building" style="display:block;font-size:22px;margin-bottom:4px;color:var(--blue-dark)"></i>Client</button>
-    </div>
-    <button onclick="enterDemo()" style="width:100%;padding:10px;background:var(--purple);color:white;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px"><i class="ti ti-arrow-right"></i>Enter demo</button>
-    <div style="text-align:center;margin-top:10px"><button onclick="exitDemo()" style="background:none;border:none;color:#B4B2A9;font-size:12px;cursor:pointer">← Back to login</button></div>
-  </div>
-</div>
+<!-- v51a: demo role picker removed. The demo lives at /demo now. -->
 
 <!-- UNDER CONSTRUCTION -->
 <div id="under-construction-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center">
@@ -2868,7 +2740,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51b</div>
     </div>
   </nav>
 
@@ -4178,9 +4050,12 @@ from unitEffectiveValue() onto each checkbox). -->
 <script>
 const CLIENTS={park:'Park Hotels & Resorts',diamond:'Diamond Rock Hospitality',white:'White Lodging',hca:'HCA Holdings',primark:'Primark Stores'};
 
-// ── DEMO MODE ─────────────────────────────────────────────────────────
+// ── DEMO MODE (removed) ──────────────────────────────────────────────
+// v51a: the demo experience moved to its own standalone build served at
+// elevatorpulse.com/demo (demo/index.html in the repo). demoMode stays
+// declared because live-code guards still reference it; it is always
+// false in this build.
 let demoMode=false;
-let demoRole='pm';
 
 const MILESTONES_DEF=['Modernization Survey','Technical Specification','RFP / Bid Process','Contract Award','Submittal Drawing Review','First Phase Start','25% Construction','50% Construction','75% Construction','Final Phase Complete','Punch Lists Complete','Inspections Complete (AHJ)','Owner Acceptance','Closeout Documentation'];
 // Milestone derivation type, indexed by milestone number (1-14)
@@ -4206,346 +4081,24 @@ const MILESTONE_DERIVATION={
   14:{type:'calendar'}, // Closeout Documentation
 };
 
-const DEMO_PORTFOLIO=[
-  {n:'Store #101',s:'NY',city:'New York',ec:'Otis',st:'CIP',r:'On Track',v:'Sarah Chen',units:12,unitDesc:'8 Elev / 4 Esc',vda:'D-1001',type:'Core',budget:4200000,addr:'500 Fifth Avenue, New York, NY',dateAdded:'2024-05-15',dateRemoved:'',comment:'Flagship store. High traffic — night-only installation windows.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-06-10'},{ms:1,status:'complete',planned:'2024-09-01',actual:'2024-09-15'},{ms:2,status:'complete',planned:'2024-11-01',actual:'2024-11-01'},{ms:3,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:4,status:'complete',planned:'2025-04-01',actual:'2025-05-01'},{ms:5,status:'inprog',planned:'2025-07-01',actual:''}]},
-  {n:'Store #142',s:'IL',city:'Chicago',ec:'Schindler',st:'CIP',r:'Behind',v:'Marcus Webb',units:8,unitDesc:'6 Elev / 2 Esc',vda:'D-1002',type:'Core',budget:2800000,addr:'830 N Michigan Ave, Chicago, IL',dateAdded:'2024-07-20',dateRemoved:'',comment:'Magnificent Mile location. Permit delays from city.',ms:[{ms:0,status:'complete',planned:'2024-08-01',actual:'2024-08-20'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2025-01-15'},{ms:2,status:'complete',planned:'2025-02-01',actual:'2025-02-01'},{ms:3,status:'complete',planned:'2025-04-01',actual:'2025-05-10'},{ms:4,status:'atrisk',planned:'2025-08-01',actual:''}]},
-  {n:'Store #208',s:'CA',city:'Los Angeles',ec:'Kone',st:'Awarded',r:'On Track',v:'Sarah Chen',units:6,unitDesc:'4 Elev / 2 Esc',vda:'D-1003',type:'Core',budget:1950000,addr:'Beverly Center, Los Angeles, CA',dateAdded:'2024-12-10',dateRemoved:'',comment:'Mall anchor location. Coordinating with mall management.',ms:[{ms:0,status:'complete',planned:'2025-01-01',actual:'2025-01-10'},{ms:1,status:'complete',planned:'2025-05-01',actual:'2025-05-20'},{ms:2,status:'complete',planned:'2025-07-01',actual:'2025-07-01'},{ms:3,status:'inprog',planned:'2025-09-01',actual:''}]},
-  {n:'Store #315',s:'TX',city:'Houston',ec:'TBD',st:'Budgeting',r:'—',v:'James Ortiz',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1004',type:'Non-Core',budget:0,addr:'Galleria Mall, Houston, TX',dateAdded:'2025-03-01',dateRemoved:'',comment:'Budget under review. Survey complete.',ms:[{ms:0,status:'complete',planned:'2025-06-01',actual:'2025-06-15'}]},
-  {n:'Store #089',s:'FL',city:'Miami',ec:'Otis',st:'Active',r:'On Track',v:'Marcus Webb',units:4,unitDesc:'3 Elev / 1 Esc',vda:'D-1005',type:'Non-Core',budget:1100000,addr:'Dadeland Mall, Miami, FL',dateAdded:'2024-09-05',dateRemoved:'',comment:'Renovation aligned with store remodel.',ms:[{ms:0,status:'complete',planned:'2024-10-01',actual:'2024-10-15'},{ms:1,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:2,status:'complete',planned:'2025-04-01',actual:'2025-04-01'},{ms:3,status:'complete',planned:'2025-06-01',actual:'2025-06-20'},{ms:4,status:'inprog',planned:'2025-09-01',actual:''}]},
-  {n:'Store #422',s:'WA',city:'Seattle',ec:'TBD',st:'Survey',r:'—',v:'Sarah Chen',units:3,unitDesc:'3 Elev',vda:'D-1006',type:'Non-Core',budget:0,addr:'Westlake Center, Seattle, WA',dateAdded:'2026-05-20',dateRemoved:'',comment:'Survey scheduled Q3 2026.',ms:[]},
-  {n:'Store #177',s:'MA',city:'Boston',ec:'Schindler',st:'Complete',r:'—',v:'James Ortiz',units:6,unitDesc:'4 Elev / 2 Esc',vda:'D-1007',type:'Core',budget:1800000,addr:'Prudential Center, Boston, MA',dateAdded:'2023-11-01',dateRemoved:'',comment:'Project complete. Certificate of occupancy received.',ms:MILESTONES_DEF.slice(0,16).map((_,i)=>({ms:i,status:'complete',planned:'2024-01-01',actual:'2024-01-15'}))},
-  {n:'Store #531',s:'GA',city:'Atlanta',ec:'Kone',st:'Active',r:'Behind',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1008',type:'Non-Core',budget:1400000,addr:'Lenox Square, Atlanta, GA',dateAdded:'2025-01-15',dateRemoved:'',comment:'Labor shortage impacting schedule. Recovery plan submitted.',ms:[{ms:0,status:'complete',planned:'2025-02-01',actual:'2025-02-10'},{ms:1,status:'complete',planned:'2025-05-01',actual:'2025-06-01'},{ms:2,status:'complete',planned:'2025-07-01',actual:'2025-07-01'},{ms:3,status:'atrisk',planned:'2025-09-01',actual:''}]},
-  {n:'Store #644',s:'CO',city:'Denver',ec:'TBD',st:'On Hold',r:'—',v:'James Ortiz',units:4,unitDesc:'3 Elev / 1 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Cherry Creek Mall, Denver, CO',dateAdded:'2025-02-01',dateRemoved:'',comment:'On hold pending lease renewal.',ms:[]},
-  {n:'Store #712',s:'PA',city:'Philadelphia',ec:'Otis',st:'Awarded',r:'On Track',v:'Sarah Chen',units:7,unitDesc:'5 Elev / 2 Esc',vda:'D-1010',type:'Core',budget:2200000,addr:'King of Prussia Mall, Philadelphia, PA',dateAdded:'2025-02-28',dateRemoved:'',comment:'Contract executed. Pre-construction meetings underway.',ms:[{ms:0,status:'complete',planned:'2025-03-01',actual:'2025-03-10'},{ms:1,status:'complete',planned:'2025-06-01',actual:'2025-06-15'},{ms:2,status:'complete',planned:'2025-08-01',actual:'2025-08-01'},{ms:3,status:'inprog',planned:'2025-10-01',actual:''}]},
-  {n:'Store #388',s:'MN',city:'Minneapolis',ec:'TBD',st:'Budgeting',r:'—',v:'James Ortiz',units:6,unitDesc:'4 Elev / 2 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Mall of America, Minneapolis, MN',dateAdded:'2026-04-10',dateRemoved:'',comment:'Largest location. Budget pending board approval.',ms:[{ms:0,status:'inprog',planned:'2026-01-01',actual:''}]},
-  {n:'Store #055',s:'NV',city:'Las Vegas',ec:'Kone',st:'CIP',r:'Ahead',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'D-1012',type:'Core',budget:1650000,addr:'Fashion Show Mall, Las Vegas, NV',dateAdded:'2024-08-01',dateRemoved:'',comment:'Ahead of schedule. Contractor performing well.',ms:[{ms:0,status:'complete',planned:'2024-09-01',actual:'2024-08-20'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2024-11-15'},{ms:2,status:'complete',planned:'2025-02-01',actual:'2025-01-20'},{ms:3,status:'complete',planned:'2025-04-01',actual:'2025-03-25'},{ms:4,status:'complete',planned:'2025-06-01',actual:'2025-05-15'},{ms:5,status:'inprog',planned:'2025-08-01',actual:''}]},
-  {n:'Store #290',s:'AZ',city:'Phoenix',ec:'TBD',st:'On Hold',r:'—',v:'Sarah Chen',units:3,unitDesc:'3 Elev',vda:'—',type:'Non-Core',budget:0,addr:'Scottsdale Fashion Square, Phoenix, AZ',dateAdded:'2025-08-15',dateRemoved:'2026-03-01',comment:'On hold. Ownership transfer in progress. Property sold.',ms:[]},
-  {n:'Store #467',s:'OR',city:'Portland',ec:'Schindler',st:'Active',r:'On Track',v:'James Ortiz',units:4,unitDesc:'3 Elev / 1 Esc',vda:'D-1014',type:'Non-Core',budget:980000,addr:'Pioneer Place, Portland, OR',dateAdded:'2024-12-20',dateRemoved:'',comment:'On track. First unit complete.',ms:[{ms:0,status:'complete',planned:'2025-01-01',actual:'2025-01-10'},{ms:1,status:'complete',planned:'2025-04-01',actual:'2025-04-05'},{ms:2,status:'complete',planned:'2025-06-01',actual:'2025-06-01'},{ms:3,status:'complete',planned:'2025-08-01',actual:'2025-08-10'},{ms:4,status:'inprog',planned:'2025-10-01',actual:''}]},
-  {n:'Store #823',s:'MI',city:'Detroit',ec:'TBD',st:'Survey',r:'—',v:'Marcus Webb',units:5,unitDesc:'4 Elev / 1 Esc',vda:'—',type:'Non-Core',budget:0,addr:'Somerset Collection, Detroit, MI',dateAdded:'2026-05-28',dateRemoved:'',comment:'Survey complete. Awaiting proposal.',ms:[{ms:0,status:'complete',planned:'2026-02-01',actual:'2026-02-15'}]},
-];
+// v51a: DEMO_PORTFOLIO seed data moved to the standalone demo build at /demo.
 
-const DEMO_AI_CONTEXT=`You are a portfolio assistant for an elevator modernization consulting firm. You have access to the following Demo Retail Portfolio data. Answer questions only based on this data. Do not make up information not present here.
+// v51a: DEMO_AI_CONTEXT moved to the standalone demo build at /demo.
 
-PORTFOLIO SUMMARY:
-- Client: Demo Retail Portfolio (fictional retail department store chain)
-- Total stores: 15 across the US
-- Total VT units: ${DEMO_PORTFOLIO.reduce((a,p)=>a+p.units,0)} elevators and escalators
-- Total forecasted budget (where known): ${fmtBudget(DEMO_PORTFOLIO.reduce((a,p)=>a+(p.budget||0),0))}
-- VDA Consultants: Sarah Chen, Marcus Webb, James Ortiz
 
-STORE DATA:
-${DEMO_PORTFOLIO.map(p=>`- ${p.n} | ${p.city}, ${p.s} | Status: ${p.st} | Schedule: ${p.r||'N/A'} | Elevator Co: ${p.ec} | Units: ${p.units} (${p.unitDesc}) | Budget: ${p.budget?fmtBudget(p.budget):'TBD'} | Consultant: ${p.v} | Type: ${p.type} | Notes: ${p.comment}`).join('\n')}
 
-STATUS BREAKDOWN:
-- CIP/Active/Awarded: ${DEMO_PORTFOLIO.filter(p=>['CIP','Active','Awarded'].includes(p.st)).length} stores
-- Behind schedule: ${DEMO_PORTFOLIO.filter(p=>p.r==='Behind').length} stores (Store #142 Chicago, Store #531 Atlanta)
-- On track or ahead: ${DEMO_PORTFOLIO.filter(p=>['On Track','Ahead'].includes(p.r)).length} stores
-- Complete: ${DEMO_PORTFOLIO.filter(p=>p.st==='Complete').length} store (Store #177 Boston)
-- On Hold / Survey / Budgeting: ${DEMO_PORTFOLIO.filter(p=>['On Hold','Survey','Budgeting'].includes(p.st)).length} stores
 
-Keep responses concise, professional, and focused on the portfolio data above. If asked something outside this data, say you don't have that information.`;
+// v51a: enterDemo()/setupDemoPortal() and all demo seed arrays moved to
+// the standalone demo build at /demo (demo/index.html in the repo).
 
-function startDemo(){
-  document.getElementById('login-screen').style.display='none';
-  document.getElementById('demo-screen').style.display='flex';
-}
-function exitDemo(){
-  document.getElementById('demo-screen').style.display='none';
-  document.getElementById('login-screen').style.display='flex';
-}
-function selectDemoRole(r,btn){
-  demoRole=r;
-  document.querySelectorAll('.demo-role-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-}
-function enterDemo(){
-  demoMode=true;
-  role=demoRole;
-  client='demo';
-  if(role==='consultant')currentConsultantName='Sarah Chen';
-  document.getElementById('demo-screen').style.display='none';
-  document.getElementById('portal-screen').classList.add('active');
-  pushHistoryState();
-  // Override PORTFOLIO with demo data — map statuses to PULSE schema
-  window.PORTFOLIO=[...DEMO_PORTFOLIO.map(p=>({
-    ...p,
-    id:'demo-'+p.n,
-    st:({'CIP':'In Progress','Active':'In Progress','Awarded':'In Progress','Complete':'Complete','Survey':'Planned','Budgeting':'Planned','On Hold':'Planned'}[p.st])||'Planned',
-  })),...CAPITAL_PLAN_DEMO.map(p=>({...p,id:p.id}))].sort((a,b)=>a.n.localeCompare(b.n));
-  window.CAPITAL_PLAN_LIVE=CAPITAL_PLAN_DEMO;
-
-  // v28b — seed one default Scope per Capital Plan demo property. Without
-  // this, getCapitalPlanScopes() (which reads window.SCOPES, not property
-  // status directly, as of the v28a Capital Plan reshape) finds nothing
-  // and the demo Capital Plan view renders empty even though these 8
-  // properties exist in PORTFOLIO at Capital Plan status. Mirrors exactly
-  // what saveCapitalPlanEntry creates for a real new property — same
-  // default name, same field mapping from the property's own budget/year/
-  // priority/budgetStatus.
-  window.SCOPES=CAPITAL_PLAN_DEMO.map(p=>({
-    id:'demo_sc_'+p.id,property:p.n,propertyId:p.id,name:'Property Modernization',
-    year:p.plannedYear||null,unitList:'',plannedBudget:p.budget||0,approvedBudget:0,
-    budgetStatus:p.budgetStatus||'TBD',priority:scopePriority(p.priority||'4: Standard'),status:'Capital Plan',
-  }));
-
-  // Also seed Active Properties' default Scope, so demo Milestones/Phases
-  // tabs (now Scope-aware) have a currentScope to resolve against. Active
-  // demo properties don't carry a real budget/year/priority on the same
-  // fields as Capital Plan ones, so this Scope is intentionally minimal —
-  // it exists purely as the anchor currentScope, not a budget line item.
-  window.SCOPES=window.SCOPES.concat(DEMO_PORTFOLIO.map(p=>({
-    id:'demo_sc_active_'+p.n,property:p.n,propertyId:'demo-'+p.n,name:'Property Modernization',
-    year:null,unitList:'',plannedBudget:0,approvedBudget:0,
-    budgetStatus:'TBD',priority:p.priority||'4: Standard',
-    status:({'CIP':'In Progress','Active':'In Progress','Awarded':'In Progress','Complete':'Complete','Survey':'Planned','Budgeting':'Planned','On Hold':'Planned'}[p.st])||'Planned',
-  })));
-
-  // Seed demo meetings
-  meetings=[
-    {id:'dm1',property:'Store #101',date:'2026-06-10',type:'Monthly Performance Review',elevco:'Otis',format:'In-person',attVDA:'Sarah Chen',attElev:'John Smith (Otis PM)',attClient:'Karen Lee',agenda:'Review PE1-PE4 progress, discuss schedule variance',notes:'PE1 and PE2 substantially complete. PE3 starts next week. No major issues.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
-    {id:'dm2',property:'Store #142',date:'2026-06-03',type:'Progress Review',elevco:'Schindler',format:'Zoom',attVDA:'Marcus Webb',attElev:'Tom Brady (Schindler)',attClient:'',agenda:'Schedule recovery discussion',notes:'Permit delays resolved. Recovery plan approved. 3-week buffer added to schedule.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
-    {id:'dm3',property:'Store #055',date:'2026-05-28',type:'Kickoff',elevco:'Kone',format:'In-person',attVDA:'Marcus Webb',attElev:'Steve Martin (Kone)',attClient:'VP Facilities',agenda:'Project kickoff and introductions',notes:'Kickoff successful. All parties aligned on schedule. Contractor performing ahead of expectations.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
-    {id:'dm4',property:'Store #101',date:'2026-05-15',type:'Progress Review',elevco:'Otis',format:'Zoom',attVDA:'Sarah Chen',attElev:'John Smith',attClient:'Karen Lee',agenda:'Mid-construction check',notes:'On track. Minor punch list items addressed.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
-    {id:'dm5',property:'Store #101',date:'2026-04-10',type:'Pre-Construction',elevco:'Otis',format:'In-person',attVDA:'Sarah Chen',attElev:'John Smith',attClient:'',agenda:'Pre-construction coordination',notes:'Staging areas confirmed. Night-only installation windows agreed.',published:false,visibility:'Internal',isDraft:false,status:'Logged'},
-    {id:'dm6',property:'Store #101',date:'2026-06-17',type:'Progress Review',elevco:'Otis',format:'Zoom',attVDA:'Sarah Chen',attElev:'John Smith (Otis PM)',attClient:'Karen Lee',agenda:'PE3 mobilization update\nPunch list review for PE1 & PE2\nSchedule variance discussion',notes:'',published:false,visibility:'Internal',isDraft:false,status:'Scheduled'},
-    {id:'dm7',property:'Store #142',date:'2026-06-20',type:'Client Update',elevco:'Schindler',format:'In-person',attVDA:'Marcus Webb',attElev:'',attClient:'David Abraham',agenda:'Budget status review\nQ3 schedule outlook\nContingency discussion',notes:'',published:false,visibility:'Internal',isDraft:false,status:'Scheduled'},
-  ];
-
-  // Seed demo action items
-  actionItems=[
-    {id:'da1',property:'Store #142',meetingId:'dm2',description:'Submit revised schedule to PM by June 15',owner:'Tom Brady',due:'2026-06-15',priority:'High',status:'Open'},
-    {id:'da2',property:'Store #101',meetingId:'dm1',description:'Confirm PE3 staging area with mall management',owner:'Sarah Chen',due:'2026-06-12',priority:'Medium',status:'Open'},
-    {id:'da3',property:'Store #531',meetingId:'',description:'Submit labor recovery plan',owner:'Marcus Webb',due:'2026-06-08',priority:'High',status:'Open'},
-    {id:'da4',property:'Store #055',meetingId:'dm3',description:'Order long-lead materials for Phase 2',owner:'Steve Martin',due:'2026-07-01',priority:'Low',status:'Open'},
-    {id:'da5',property:'Store #712',meetingId:'',description:'Confirm AHJ inspection date',owner:'Sarah Chen',due:'2026-06-20',priority:'Medium',status:'Closed',closedDate:'2026-06-01'},
-  ];
-
-  // Seed demo submissions (field updates)
-  submissions=[
-    {id:'ds1',atId:null,property:'Store #101',week:'2026-06-01',units:'PE1, PE2',phase:'Construction',status:'In Progress',notes:'PE1 and PE2 punch list complete. Inspector approved both units. PE3 mobilizing next Monday.',commentType:'General',issueStatus:'None',savings:'',submittedAt:'June 2, 2026',reviewStatus:'approved',consultant:'Sarah Chen'},
-    {id:'ds2',atId:null,property:'Store #142',week:'2026-06-01',units:'All',phase:'Construction',status:'In Progress',notes:'Permit delay resolved as of June 1. Crew returning Monday. Recovery schedule submitted to PM.',commentType:'Issue',issueStatus:'Open',savings:'',submittedAt:'June 2, 2026',reviewStatus:'pending',consultant:'Marcus Webb'},
-    {id:'ds3',atId:null,property:'Store #055',week:'2026-05-25',units:'PE1-PE4',phase:'Adjusting',status:'Ahead',notes:'All four units in adjusting. Two units completed final inspection. Ahead of schedule by 2 weeks.',commentType:'General',issueStatus:'None',savings:'Negotiated $8,500 reduction on cab interiors with Kone.',submittedAt:'May 26, 2026',reviewStatus:'approved',consultant:'Marcus Webb'},
-  ];
-
-  // Seed demo unit phases with product types and milestones
-  window.UNIT_GROUPS=[
-    {id:'dug1',property:'Store #101',phase:'Phase 1: Passenger Elevators',units:8,status:'In Progress',plannedStart:'2025-06-01',plannedCompletion:'2026-08-01',actualStart:'2025-06-10',actualCompletion:'',notes:'Night-only installation windows.',productType:'MRL Elevator',unitNames:'PE1, PE2, PE3, PE4, PE5, PE6, PE7, PE8',phaseTasks:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation: Hoistway Equipment','Installation: Electrical & System Upgrades','Installation: Fixtures & Finishes','Adjusting & Testing','Final (AHJ) Inspection','Owner Acceptance']},
-    {id:'dug2',property:'Store #101',phase:'Phase 2: Escalators',units:4,status:'Not Started',plannedStart:'2026-09-01',plannedCompletion:'2027-03-01',actualStart:'',actualCompletion:'',notes:'Concurrent with Phase 1 closeout.',productType:'Escalator',unitNames:'E1, E2, E3, E4',phaseTasks:['Engineering Site Survey','Submittal & Shop Drawing Review','Procurement & Manufacturing','Installation','Adjusting & Test','Final (AHJ) Inspection','Owner Acceptance']},
-    {id:'dug3',property:'Store #142',phase:'Phase 1: All Units',units:8,status:'In Progress',plannedStart:'2025-08-01',plannedCompletion:'2026-10-01',actualStart:'2025-08-20',actualCompletion:'',notes:'Recovery plan active.',productType:'Geared Elevator',unitNames:'EL1, EL2, EL3, EL4, EL5, EL6, ESC1, ESC2',phaseTasks:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation: Machine Room & Hoistway','Installation: Electrical & System Upgrades','Adjusting & Testing','Final (AHJ) Inspection','Owner Acceptance']},
-    {id:'dug4',property:'Store #055',phase:'Phase 1: Elevators',units:4,status:'In Progress',plannedStart:'2025-09-01',plannedCompletion:'2026-06-01',actualStart:'2025-08-20',actualCompletion:'',notes:'Ahead of schedule.',productType:'Hydraulic Elevator',unitNames:'PE1, PE2, PE3, PE4',phaseTasks:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation','Adjusting & Test','Pre-Test Fire Life Safety','Final (AHJ) Inspection','Owner Acceptance']},
-    {id:'dug5',property:'Store #531',phase:'Phase 1: All Units',units:5,status:'In Progress',plannedStart:'2025-10-01',plannedCompletion:'2026-09-01',actualStart:'2025-10-10',actualCompletion:'',notes:'Labor shortage — recovery plan submitted.',productType:'MRL Elevator',unitNames:'EL1, EL2, EL3, EL4, EL5',phaseTasks:['Submittal & Shop Drawing Review','Procurement & Manufacturing','Mobilization & Demolition','Installation: Hoistway Equipment','Installation: Electrical & System Upgrades','Adjusting & Testing','Final (AHJ) Inspection','Owner Acceptance']},
-  ];
-
-  // Seed demo documents
-  window.DOCUMENTS_LIVE=[
-    {id:'ddoc1',name:'Store #101 — Field Update 2026-06-01',property:'Store #101',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-06-02',uploadedBy:'Sarah Chen',notes:'Week of June 1',_submissionId:'ds1'},
-    {id:'ddoc2',name:'Store #055 — Field Update 2026-05-25',property:'Store #055',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-05-26',uploadedBy:'Marcus Webb',notes:'Week of May 25',_submissionId:'ds3'},
-    {id:'ddoc3',name:'Store #101 — Progress Review 2026-04-10',property:'Store #101',type:'Meeting Minutes',subfolder:'Meeting Minutes',visibility:'Internal',uploaded:'2026-04-10',uploadedBy:'System',notes:'Pre-Construction · 2026-04-10',_meetingId:'dm5'},
-    {id:'ddoc4',name:'Store #712 — Closed Action: Confirm AHJ inspection date',property:'Store #712',type:'Closed Actions Report',subfolder:'Closed Actions',visibility:'Public',uploaded:'2026-06-01',uploadedBy:'Sarah Chen',notes:'Owner: Sarah Chen · Priority: Medium · Due: 2026-06-20',_actionId:'da5',_action:{description:'Confirm AHJ inspection date',owner:'Sarah Chen',priority:'Medium',due:'2026-06-20',closedDate:'2026-06-01',property:'Store #712'}},
-  ];
-
-  // Seed demo billing log
-  window.BILLING_LOG=[
-    {id:'dbl1',property:'Store #101',billedYTD:1250000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Progress billing through PE2 completion',loggedBy:'PM User'},
-    {id:'dbl2',property:'Store #142',billedYTD:680000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Partial billing — schedule delay',loggedBy:'PM User'},
-    {id:'dbl3',property:'Store #055',billedYTD:920000,entryDate:'2026-05-15',invoiceMonth:'April 2026',notes:'Ahead of schedule billing',loggedBy:'PM User'},
-    {id:'dbl4',property:'Store #712',billedYTD:440000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Pre-construction and mobilization billing',loggedBy:'PM User'},
-    {id:'dbl5',property:'Store #208',billedYTD:390000,entryDate:'2026-05-15',invoiceMonth:'April 2026',notes:'Phase 1 initial billing',loggedBy:'PM User'},
-    {id:'dbl6',property:'Store #531',billedYTD:280000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Partial billing — labor recovery plan in effect',loggedBy:'PM User'},
-    {id:'dbl7',property:'Store #089',billedYTD:660000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Phase 4 progress billing',loggedBy:'PM User'},
-    {id:'dbl8',property:'Store #467',billedYTD:310000,entryDate:'2026-05-15',invoiceMonth:'April 2026',notes:'First unit complete — progress billing submitted',loggedBy:'PM User'},
-    {id:'dbl9',property:'Store #177',billedYTD:1800000,entryDate:'2026-03-01',invoiceMonth:'Feb 2026',notes:'Final billing — project complete',loggedBy:'PM User'},
-  ];
-
-  // Seed demo bid round + supplier submissions — Store #422 (Seattle,
-  // currently Survey status) is a believable spot for an active RFP,
-  // since it has no awarded elevator company yet. Mirrors the real
-  // Airtable field names exactly so renderBidsTab/renderBidLevelingTable
-  // work unmodified against either data source.
-  window.BID_ROUNDS_DEMO=[
-    {id:'dbr1',property:'Store #422',scopeId:'demo_sc_active_Store #422','Round Name':'Original','Property':['Store #422'],'Unit List':'Elevator No. 1\nElevator No. 2\nElevator No. 3','Round Status':'Open','Created Date':'2026-05-20'},
-  ];
-  window.BID_SUBMISSIONS_DEMO=[
-    {id:'dbs1',property:'Store #422','Bid Round':['dbr1'],'Supplier Name':'Acme Elevator','Status':'Submitted','Visibility':'Published','Base Bid Amount':610000,'Lead Time':10,'Bond Cost':15000,'Interim Maintenance Pricing':3200,'Warranty Maintenance Pricing':0,'Long-Term Maintenance Pricing':8800,'Submitted Date':'2026-06-05','Entered By':'Sarah Chen','Last Edited By':'Sarah Chen'},
-    {id:'dbs2',property:'Store #422','Bid Round':['dbr1'],'Supplier Name':'Schindler','Status':'Submitted','Visibility':'Published','Base Bid Amount':645000,'Lead Time':8,'Bond Cost':16500,'Interim Maintenance Pricing':2900,'Warranty Maintenance Pricing':0,'Long-Term Maintenance Pricing':9400,'Submitted Date':'2026-06-06','Entered By':'Sarah Chen','Last Edited By':'Sarah Chen'},
-    {id:'dbs3',property:'Store #422','Bid Round':['dbr1'],'Supplier Name':'Otis','Status':'Submitted','Visibility':'Internal','Base Bid Amount':590000,'Lead Time':12,'Bond Cost':14000,'Interim Maintenance Pricing':3400,'Warranty Maintenance Pricing':0,'Long-Term Maintenance Pricing':8200,'Submitted Date':'2026-06-07','Entered By':'Sarah Chen','Last Edited By':'Sarah Chen'},
-  ];
-  window.BID_LINE_ITEMS_DEMO=[
-    {id:'dbli1','Bid Submission':['dbs1'],'Line Item Type':'Alternate','Description':'Upgrade to glass cab interior','Amount':18500},
-    {id:'dbli2','Bid Submission':['dbs1'],'Line Item Type':'Clarification','Category':'Scope','Description':'Pricing assumes existing hoistway dimensions are unchanged from 2019 survey.'},
-    {id:'dbli3','Bid Submission':['dbs2'],'Line Item Type':'Equipment','Component':'Controller','Manufacturer':'Schindler','Model':'PORT Technology'},
-    {id:'dbli4','Bid Submission':['dbs3'],'Line Item Type':'Reference','Project':'Westfield Valley Fair','Owner/Contact':'Unibail-Rodamco-Westfield','Contract Amount':2100000},
-  ];
-
-  notifications=[
-    {type:'approved',property:'Store #101',week:'2026-06-01',time:'June 2, 2026'},
-    {type:'approved',property:'Store #055',week:'2026-05-25',time:'May 26, 2026'},
-  ];
-  // Seed demo phase steps
-  window.PHASE_STEPS=[
-    {id:'dps1',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Submittal & Shop Drawing Review',taskOrder:1,plannedStart:'2025-06-01',plannedEnd:'2025-07-15',actualStart:'2025-06-10',completionDate:'2025-07-20',status:'Complete',notes:''},
-    {id:'dps2',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Procurement & Manufacturing',taskOrder:2,plannedStart:'2025-07-15',plannedEnd:'2025-10-01',actualStart:'2025-07-20',completionDate:'2025-10-10',status:'Complete',notes:'Long lead items ordered'},
-    {id:'dps3',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Mobilization & Demolition',taskOrder:3,plannedStart:'2025-10-01',plannedEnd:'2025-11-01',actualStart:'2025-10-10',completionDate:'2025-11-15',status:'Complete',notes:''},
-    {id:'dps4',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Installation: Hoistway Equipment',taskOrder:4,plannedStart:'2025-11-01',plannedEnd:'2026-03-01',actualStart:'2025-11-15',completionDate:'',status:'In Progress',notes:'Night-only windows'},
-    {id:'dps5',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Installation: Electrical & System Upgrades',taskOrder:5,plannedStart:'2026-03-01',plannedEnd:'2026-05-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps6',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Adjusting & Testing',taskOrder:6,plannedStart:'2026-05-01',plannedEnd:'2026-06-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps7pl',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Punch List Complete',taskOrder:7,plannedStart:'2026-06-15',plannedEnd:'2026-06-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps7',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Final (AHJ) Inspection',taskOrder:8,plannedStart:'2026-06-15',plannedEnd:'2026-07-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps8',property:'Store #101',phaseName:'Phase 1: Passenger Elevators',taskName:'Owner Acceptance',taskOrder:8,plannedStart:'2026-07-01',plannedEnd:'2026-08-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps9',property:'Store #055',phaseName:'Phase 1: Elevators',taskName:'Submittal & Shop Drawing Review',taskOrder:1,plannedStart:'2025-09-01',plannedEnd:'2025-10-01',actualStart:'2025-08-20',completionDate:'2025-09-25',status:'Complete',notes:''},
-    {id:'dps10',property:'Store #055',phaseName:'Phase 1: Elevators',taskName:'Procurement & Manufacturing',taskOrder:2,plannedStart:'2025-10-01',plannedEnd:'2025-12-01',actualStart:'2025-09-25',completionDate:'2025-11-20',status:'Complete',notes:'Ahead of schedule'},
-    {id:'dps11',property:'Store #055',phaseName:'Phase 1: Elevators',taskName:'Mobilization & Demolition',taskOrder:3,plannedStart:'2025-12-01',plannedEnd:'2026-01-01',actualStart:'2025-11-20',completionDate:'2025-12-28',status:'Complete',notes:''},
-    {id:'dps12',property:'Store #055',phaseName:'Phase 1: Elevators',taskName:'Installation',taskOrder:4,plannedStart:'2026-01-01',plannedEnd:'2026-04-01',actualStart:'2025-12-28',completionDate:'',status:'In Progress',notes:'Ahead of schedule'},
-    {id:'dps13',property:'Store #055',phaseName:'Phase 1: Elevators',taskName:'Adjusting & Test',taskOrder:5,plannedStart:'2026-04-01',plannedEnd:'2026-05-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps14pl',property:'Store #055',phaseName:'Phase 1: Elevators',taskName:'Punch List Complete',taskOrder:6,plannedStart:'2026-05-15',plannedEnd:'2026-05-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps14',property:'Store #055',phaseName:'Phase 1: Elevators',taskName:'Final (AHJ) Inspection',taskOrder:7,plannedStart:'2026-05-15',plannedEnd:'2026-06-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    // Store #101 Phase 2: Escalators
-    {id:'dps15',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Engineering Site Survey',taskOrder:1,plannedStart:'2026-09-01',plannedEnd:'2026-09-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps16',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Submittal & Shop Drawing Review',taskOrder:2,plannedStart:'2026-09-15',plannedEnd:'2026-10-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps17',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Procurement & Manufacturing',taskOrder:3,plannedStart:'2026-10-15',plannedEnd:'2027-01-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps18',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Installation',taskOrder:4,plannedStart:'2027-01-01',plannedEnd:'2027-02-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps19',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Adjusting & Test',taskOrder:5,plannedStart:'2027-02-01',plannedEnd:'2027-02-20',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps20pl',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Punch List Complete',taskOrder:6,plannedStart:'2027-02-20',plannedEnd:'2027-02-20',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps20',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Final (AHJ) Inspection',taskOrder:7,plannedStart:'2027-02-20',plannedEnd:'2027-03-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps21',property:'Store #101',phaseName:'Phase 2: Escalators',taskName:'Owner Acceptance',taskOrder:7,plannedStart:'2027-03-01',plannedEnd:'2027-03-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    // Store #142 Phase 1: All Units
-    {id:'dps22',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Submittal & Shop Drawing Review',taskOrder:1,plannedStart:'2025-08-01',plannedEnd:'2025-09-01',actualStart:'2025-08-20',completionDate:'2025-09-10',status:'Complete',notes:''},
-    {id:'dps23',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Procurement & Manufacturing',taskOrder:2,plannedStart:'2025-09-01',plannedEnd:'2025-11-01',actualStart:'2025-09-10',completionDate:'2025-11-15',status:'Complete',notes:''},
-    {id:'dps24',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Mobilization & Demolition',taskOrder:3,plannedStart:'2025-11-01',plannedEnd:'2026-01-01',actualStart:'2025-11-15',completionDate:'',status:'In Progress',notes:'Permit delays'},
-    {id:'dps25',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Installation: Machine Room & Hoistway',taskOrder:4,plannedStart:'2026-01-01',plannedEnd:'2026-05-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps26',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Installation: Electrical & System Upgrades',taskOrder:5,plannedStart:'2026-05-01',plannedEnd:'2026-07-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps27',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Adjusting & Testing',taskOrder:6,plannedStart:'2026-07-01',plannedEnd:'2026-08-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps28pl',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Punch List Complete',taskOrder:7,plannedStart:'2026-08-15',plannedEnd:'2026-08-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps28',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Final (AHJ) Inspection',taskOrder:8,plannedStart:'2026-08-15',plannedEnd:'2026-09-15',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-    {id:'dps29',property:'Store #142',phaseName:'Phase 1: All Units',taskName:'Owner Acceptance',taskOrder:8,plannedStart:'2026-09-15',plannedEnd:'2026-10-01',actualStart:'',completionDate:'',status:'Not Started',notes:''},
-  ];
-  window.CO_SAVINGS=[
-    {id:'co1',property:'Store #101',description:'Owner-requested upgrade to stainless steel cab interiors not included in original scope',originalAmount:48000,negotiatedAmount:31500,savings:16500,status:'Approved',ec:'Otis',loggedBy:'Sarah Chen',date:'2025-06-15',notes:'Negotiated unit price down; standardized across all 8 units'},
-    {id:'co2',property:'Store #101',description:'Additional structural reinforcement required due to existing pit conditions discovered during demolition',originalAmount:22000,negotiatedAmount:18500,savings:3500,status:'Approved',ec:'Otis',loggedBy:'Sarah Chen',date:'2025-08-20',notes:'Unforeseen condition; owner approved after review'},
-    {id:'co3',property:'Store #142',description:'Owner requested additional floor landings not in original contract scope',originalAmount:35000,negotiatedAmount:35000,savings:0,status:'Pending',ec:'Schindler',loggedBy:'Marcus Webb',date:'2026-05-01',notes:'Under review — evaluating whether scope is legitimate'},
-    {id:'co4',property:'Store #055',description:'Upgraded motor controls requested by owner for energy efficiency compliance',originalAmount:15000,negotiatedAmount:11200,savings:3800,status:'Client Approved',ec:'Kone',loggedBy:'Marcus Webb',date:'2026-03-10',notes:'Client authorized payment on 2026-03-18'},
-  ];
-  clientFlags=[];flagIdCounter=0;
-
-  setupDemoPortal();
-  populatePortfolio();populateMilestonesTable();
-  renderDocFolders();populatePanelPropertyList();
-  renderDashboard();renderAllMeetings();populatePanelPropertyList();
-  if(role==='pm')gotoView('dashboard',null);
-  else gotoView('dashboard',null);
-  setFirstNavActive('dashboard');updateQueueBadge();
-  document.getElementById('dash-sub').textContent='Demo Retail Portfolio · Elevator Modernization Program';
-  showToast('Demo mode — fictional data only','info');
-  // Update chatbot for demo
-  const chatMsgs=document.getElementById('chat-messages');
-  if(chatMsgs)chatMsgs.innerHTML=`<div class="chat-msg"><div class="msg-av ai-av ai-av-mascot"><img src="${MARLI_AVATAR_URI}" alt="MARLI"></div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — this is a demo preview of MARLI with a few sample questions wired up. Try one of the suggestions below to see how she responds.</div></div>`;
-  const chatSub=document.getElementById('chat-head-sub');
-  if(chatSub)chatSub.textContent='15 stores · Demo preview';
-  const chips=document.getElementById('chat-chips');
-  if(chips)chips.innerHTML=`
-    <span class="chip" onclick="askQ('Which stores are behind schedule?')">Behind schedule?</span>
-    <span class="chip" onclick="askQ('What is a Cat 5 test?')">VT Glossary: Cat 5 test</span>
-    <span class="chip" onclick="askQ('How do I submit a field update?')">How do I submit an update?</span>
-  `;
-}
-function setupDemoPortal(){
-  document.getElementById('sb-client-name').textContent='Demo Retail';
-  document.getElementById('dash-sub').textContent='Demo Retail Portfolio · Elevator Modernization Program';
-  ['admin','pm','consultant','client'].forEach(r=>document.getElementById('nav-'+r).classList.add('hidden'));
-  // Demo PM gets full PM nav
-  document.getElementById('nav-'+role).classList.remove('hidden');
-  const cfgs={
-    admin:{tag:'tag-admin',label:'IT Admin',av:'IT',name:'System Admin',roleLabel:'IT Admin',commTitle:'Client Comments'},
-    pm:{tag:'tag-pm',label:'Project Manager',av:'PM',name:'PM User',roleLabel:'Project Manager',commTitle:'Client Comments'},
-    consultant:{tag:'tag-consultant',label:'Consultant',av:'VC',name:currentConsultantName||'VDA Consultant',roleLabel:'Field Consultant',commTitle:'Comments'},
-    client:{tag:'tag-client',label:'Client',av:'DR',name:'Demo Client',roleLabel:'Demo Retail Capital Projects',commTitle:'Comments & flags'},
-  };
-  const c=cfgs[role]||cfgs.pm;
-  const tag=document.getElementById('sb-role-tag');tag.className='sidebar-role-tag '+c.tag;tag.textContent=c.label;
-  document.getElementById('sb-avatar').textContent=c.av;
-  document.getElementById('sb-username').textContent=c.name;
-  document.getElementById('sb-userrole').textContent=c.roleLabel;
-  // Add DEMO badge
-  const logoName=document.querySelector('.sidebar-logo-name');
-  if(logoName&&!document.getElementById('demo-logo-badge')){
-    const badge=document.createElement('span');badge.id='demo-logo-badge';badge.className='demo-badge';badge.textContent='DEMO';
-    logoName.appendChild(badge);
-  }
-  const canEdit=role==='pm';
-  ['prop-budget-btn','prop-meeting-btn','prop-visit-btn','prop-billing-inline-btn','prop-retainage-inline-btn','prop-visit-inline-btn'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=canEdit?'':'none';});
-  const eb=document.getElementById('prop-edit-btn');if(eb)eb.style.display=canEdit?'':'none';
-  const eib=document.getElementById('prop-edit-inline-btn');if(eib)eib.style.display=canEdit?'':'none';
-  const db=document.getElementById('prop-delete-btn');if(db)db.style.display=canEdit?'':'none';
-  const sb=document.getElementById('prop-submit-btn');if(sb)sb.style.display='none';
-  const fub=document.getElementById('prop-fieldupdate-inline-btn');if(fub)fub.style.display=role==='consultant'?'':'none';
-  const bidsTabBtn=document.getElementById('prop-bids-tab-btn');if(bidsTabBtn)bidsTabBtn.style.display='';
-  const aib=document.getElementById('prop-action-inline-btn');if(aib)aib.style.display=role==='pm'||role==='admin'||role==='consultant'?'':'none';
-  const plmb=document.getElementById('prop-log-meeting-btn');if(plmb)plmb.style.display=role==='pm'||role==='admin'||role==='consultant'?'':'none';const paib=document.getElementById('prop-action-item-btn');if(paib)paib.style.display=role==='pm'||role==='admin'||role==='consultant'?'':'none';
-  const sab=document.getElementById('schedule-action-btn');if(sab)sab.style.display=role==='pm'||role==='admin'||role==='consultant'?'':'none';
-  const smb=document.getElementById('schedule-meeting-btn');if(smb)smb.style.display=role==='pm'?'':'none';
-  const psmb=document.getElementById('prop-schedule-meeting-btn');if(psmb)psmb.style.display=role==='pm'||role==='admin'||role==='consultant'?'':'none';
-  document.getElementById('prop-meeting-btn').style.display=role==='pm'?'':'none';
-  document.getElementById('at-label').textContent='Demo mode';
-  document.getElementById('at-dot').style.background='var(--purple)';
-}
-
+// v51a: the hardcoded portfolio seed (real client data) is removed from
+// this public file. Live data comes exclusively from Airtable after
+// login; PORTFOLIO remains only as an empty fallback shape.
 const PORTFOLIO=[
-  {n:'Hilton Denver City Center',s:'CO',ec:'Otis',st:'Awarded',r:'On Track',v:'Dane Carollo',units:12,unitDesc:'5 Elev / 4 Esc',vda:'65153',type:'Core',budget:4400000,addr:'1701 California Street, Denver, CO',comment:'On site next week - 2nd car on pace for Thanksgiving pending AHJ inspection',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-06-15'},{ms:1,status:'complete',planned:'2024-09-01',actual:'2024-09-20'},{ms:2,status:'complete',planned:'2024-10-01',actual:'2024-10-05'},{ms:3,status:'complete',planned:'2024-12-01',actual:'2024-12-10'},{ms:4,status:'complete',planned:'2025-02-01',actual:'2025-02-18'},{ms:5,status:'complete',planned:'2025-03-01',actual:'2025-03-05'},{ms:6,status:'inprog',planned:'2026-03-01',actual:''},{ms:7,status:'notstart',planned:'2026-05-01',actual:''}]},
-  {n:'Hilton New Orleans Riverside',s:'LA',ec:'Schindler',st:'Awarded',r:'On Track',v:'Ken Donner',units:53,unitDesc:'27 Elev / 4 Esc',vda:'72398',type:'Core',budget:19313175,addr:'2 Poydras Street, New Orleans, LA',comment:'Fixture Drawings - Schindler. Ken has submittals',ms:[{ms:0,status:'complete',planned:'2024-01-01',actual:'2024-01-10'},{ms:1,status:'complete',planned:'2024-04-01',actual:'2024-04-15'},{ms:2,status:'complete',planned:'2024-06-01',actual:'2024-06-01'},{ms:3,status:'complete',planned:'2024-08-01',actual:'2024-08-20'},{ms:4,status:'complete',planned:'2024-11-01',actual:'2024-11-30'},{ms:5,status:'complete',planned:'2025-01-01',actual:'2025-01-08'}]},
-  {n:'Hilton Chicago',s:'IL',ec:'TBD',st:'Active',r:'—',v:'Jeff Hart',units:36,unitDesc:'14 Elev',vda:'74588',type:'Core',budget:7000000,addr:'720 South Michigan Avenue, Chicago, IL',comment:'Waiting for revised bids to include destination dispatch',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-07-01'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2025-01-10'},{ms:2,status:'complete',planned:'2025-03-01',actual:'2025-03-01'},{ms:3,status:'inprog',planned:'2025-07-01',actual:''}]},
-  {n:'Hilton Hawaiian Village',s:'HI',ec:'Otis',st:'Active',r:'On Track',v:'Jeff Sena',units:64,unitDesc:'10 Elev',vda:'67870',type:'Core',budget:5352500,addr:'2005 Kalia Road, Honolulu, HI',comment:'Moving forward with 6 units. Jeff completed final punch report.',ms:[{ms:0,status:'complete',planned:'2023-01-01',actual:'2023-01-15'},{ms:1,status:'complete',planned:'2023-06-01',actual:'2023-07-01'},{ms:2,status:'complete',planned:'2023-09-01',actual:'2023-09-01'},{ms:3,status:'complete',planned:'2024-01-01',actual:'2024-02-01'},{ms:4,status:'complete',planned:'2024-05-01',actual:'2024-06-15'},{ms:5,status:'complete',planned:'2024-06-01',actual:'2024-07-01'},{ms:6,status:'complete',planned:'2025-03-01',actual:'2025-04-01'},{ms:7,status:'inprog',planned:'2025-09-01',actual:''}]},
-  {n:'HHV Diamond Head Apartments',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:2,unitDesc:'2 Elev',vda:'67869',type:'Non-Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'',ms:[]},
-  {n:'HHV Rainbow Tower',s:'HI',ec:'TBD (Otis preferred)',st:'Active',r:'—',v:'Jeff Sena',units:0,unitDesc:'TBD',vda:'—',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'Cab design not finalized. Combining into one proposal.',ms:[{ms:0,status:'complete',planned:'2025-09-01',actual:'2025-09-10'}]},
-  {n:'HHV Tapa Low Rise',s:'HI',ec:'Otis',st:'Active',r:'Behind',v:'Jeff Sena',units:4,unitDesc:'4 Elev',vda:'71667',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'Low Rise ready - waiting for designers and cab interiors to finalize.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-07-01'},{ms:1,status:'complete',planned:'2024-10-01',actual:'2024-10-20'},{ms:2,status:'complete',planned:'2024-12-01',actual:'2024-12-01'},{ms:3,status:'complete',planned:'2025-02-01',actual:'2025-02-15'},{ms:4,status:'atrisk',planned:'2025-05-01',actual:''},{ms:5,status:'notstart',planned:'2025-06-01',actual:''}]},
-  {n:'HHV Tapa High Rise',s:'HI',ec:'Otis',st:'Active',r:'—',v:'Jeff Sena',units:4,unitDesc:'4 Elev',vda:'71667',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'High Rise - contract should be ready soon.',ms:[{ms:0,status:'complete',planned:'2024-09-01',actual:'2024-10-01'},{ms:1,status:'inprog',planned:'2025-03-01',actual:''}]},
-  {n:"HHV Alii Tower",s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:3,unitDesc:'3 Elev',vda:'79546',type:'Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'No proposals yet - Jeff working on.',ms:[{ms:0,status:'complete',planned:'2025-12-01',actual:'2025-12-15'}]},
-  {n:'HHV Kalia',s:'HI',ec:'TBD',st:'Survey',r:'—',v:'Jeff Sena',units:3,unitDesc:'3 Elev',vda:'77472',type:'Non-Core',budget:0,addr:'2005 Kalia Road, Honolulu, HI',comment:'No proposals yet - Jeff working on.',ms:[{ms:0,status:'complete',planned:'2026-01-01',actual:'2026-01-20'}]},
-  {n:'Hyatt Regency Mission Bay',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:7,unitDesc:'2 Elev',vda:'68304',type:'Non-Core',budget:497420,addr:'1441 Quivira Road, San Diego, CA',comment:'Not moving forward until 2026-2027. Renovations moving forward.',ms:[{ms:0,status:'complete',planned:'2025-06-01',actual:'2025-06-20'}]},
-  {n:'Hilton Waikoloa Village',s:'HI',ec:'Otis',st:'Active',r:'On Track',v:'Jeff Sena',units:20,unitDesc:'2 Elev',vda:'73515',type:'Core',budget:1343900,addr:'69-425 Waikoloa Beach Drive, Waikoloa, HI',comment:'Invoices received, need updated schedule from Otis.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-06-20'},{ms:1,status:'complete',planned:'2024-12-01',actual:'2025-01-10'},{ms:2,status:'complete',planned:'2025-03-01',actual:'2025-03-01'},{ms:3,status:'complete',planned:'2025-07-01',actual:'2025-07-15'},{ms:4,status:'inprog',planned:'2026-01-01',actual:''},{ms:5,status:'notstart',planned:'2026-04-01',actual:''}]},
-  {n:'New York Hilton Midtown',s:'NY',ec:'Schindler',st:'CIP',r:'Ahead',v:'John Frondi',units:44,unitDesc:'26 Elev / 10 Esc',vda:'69913',type:'Core',budget:18511335,addr:'1335 Avenue of the Americas, New York, NY',comment:'ACM found in doors. David onsite on Monday.',ms:[{ms:0,status:'complete',planned:'2023-06-01',actual:'2023-06-01'},{ms:1,status:'complete',planned:'2023-10-01',actual:'2023-10-15'},{ms:2,status:'complete',planned:'2023-12-01',actual:'2023-12-01'},{ms:3,status:'complete',planned:'2024-02-01',actual:'2024-01-15'},{ms:4,status:'complete',planned:'2024-05-01',actual:'2024-04-20'},{ms:5,status:'complete',planned:'2024-06-01',actual:'2024-06-01'},{ms:6,status:'complete',planned:'2025-03-01',actual:'2025-02-20'},{ms:7,status:'complete',planned:'2025-09-01',actual:'2025-08-10'},{ms:8,status:'inprog',planned:'2026-03-01',actual:''}]},
-  {n:'Casa Marina Key West',s:'FL',ec:'Elevated',st:'CIP',r:'Behind',v:'Paul Parios',units:8,unitDesc:'7 Elev / 1 Lift',vda:'58475',type:'Non-Core',budget:1800000,addr:'1500 Reynolds Street, Key West, FL',comment:'PE1 & PE2 substantial completion. PE6 & PE7 commencing Q2-Q3 2025. VPL complete.',ms:[{ms:0,status:'complete',planned:'2023-12-01',actual:'2023-12-15'},{ms:1,status:'complete',planned:'2024-04-01',actual:'2024-04-20'},{ms:2,status:'complete',planned:'2024-06-01',actual:'2024-06-01'},{ms:3,status:'complete',planned:'2024-08-01',actual:'2024-09-10'},{ms:4,status:'complete',planned:'2024-11-01',actual:'2024-12-05'},{ms:5,status:'complete',planned:'2025-01-01',actual:'2025-01-20'},{ms:6,status:'atrisk',planned:'2025-09-01',actual:''},{ms:7,status:'notstart',planned:'2026-01-01',actual:''}]},
-  {n:'The Reach Curio',s:'FL',ec:'Elevated',st:'Active',r:'Behind',v:'Paul Parios',units:4,unitDesc:'4 Elev',vda:'58476',type:'Non-Core',budget:885000,addr:'1435 Simonton Street, Key West, FL',comment:'Dec 2023 - Jun 2025. Final punch list/Jack replacement delayed to next quiet time.',ms:[{ms:0,status:'complete',planned:'2023-06-01',actual:'2023-06-10'},{ms:1,status:'complete',planned:'2023-10-01',actual:'2023-11-01'},{ms:2,status:'complete',planned:'2023-12-01',actual:'2023-12-01'},{ms:3,status:'complete',planned:'2024-03-01',actual:'2024-04-01'},{ms:4,status:'complete',planned:'2024-06-01',actual:'2024-07-15'},{ms:5,status:'complete',planned:'2024-07-01',actual:'2024-08-01'},{ms:6,status:'atrisk',planned:'2025-06-01',actual:''},{ms:7,status:'notstart',planned:'2025-09-01',actual:''}]},
-  {n:'Royal Palm South Beach',s:'FL',ec:'Elevated',st:'Awarded',r:'Behind',v:'Jim Himes',units:8,unitDesc:'8 Elev',vda:'70043',type:'Non-Core',budget:4205280,addr:'1545 Collins Avenue, Miami Beach, FL',comment:'2 cars completed. 3 teams on site. Start Q3 2025.',ms:[{ms:0,status:'complete',planned:'2023-09-01',actual:'2023-09-10'},{ms:1,status:'complete',planned:'2024-01-01',actual:'2024-01-20'},{ms:2,status:'complete',planned:'2024-03-01',actual:'2024-03-01'},{ms:3,status:'complete',planned:'2024-05-01',actual:'2024-05-15'},{ms:4,status:'complete',planned:'2024-08-01',actual:'2024-09-01'},{ms:5,status:'complete',planned:'2024-09-01',actual:'2024-09-20'},{ms:6,status:'atrisk',planned:'2025-06-01',actual:''},{ms:7,status:'notstart',planned:'2025-12-01',actual:''}]},
-  {n:'Hilton Boston Logan Airport',s:'MA',ec:'TBD',st:'Budgeting',r:'—',v:'Rob Campbell',units:9,unitDesc:'7 Elev / 2 Esc',vda:'—',type:'Core',budget:0,addr:'1 Hotel Drive, Boston, MA',comment:'Budgeted for 2026.',ms:[{ms:0,status:'inprog',planned:'2026-03-01',actual:''}]},
-  {n:'JW Marriott San Francisco',s:'CA',ec:'Otis',st:'CIP',r:'On Track',v:'Ron Welts',units:8,unitDesc:'7 Elev',vda:'60433',type:'Core',budget:1943600,addr:'515 Mason Street, San Francisco, CA',comment:'4 pass starts Feb 2025. On schedule, slightly ahead. Security integration required.',ms:[{ms:0,status:'complete',planned:'2023-06-01',actual:'2023-06-15'},{ms:1,status:'complete',planned:'2023-12-01',actual:'2024-01-01'},{ms:2,status:'complete',planned:'2024-03-01',actual:'2024-03-01'},{ms:3,status:'complete',planned:'2024-06-01',actual:'2024-06-10'},{ms:4,status:'complete',planned:'2024-10-01',actual:'2024-11-01'},{ms:5,status:'complete',planned:'2024-11-01',actual:'2024-11-15'},{ms:6,status:'inprog',planned:'2025-08-01',actual:''},{ms:7,status:'notstart',planned:'2026-01-01',actual:''}]},
-  {n:'Hyatt Regency Boston',s:'MA',ec:'TBD',st:'On Hold',r:'—',v:'Rob Campbell',units:0,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'1 Ave de Lafayette, Boston, MA',comment:'',ms:[]},
-  {n:'Hilton Checkers',s:'CA',ec:'TBD',st:'Active',r:'—',v:'Jeff Sena',units:5,unitDesc:'2 Elev',vda:'65149',type:'Non-Core',budget:0,addr:'535 S Grand Ave, Los Angeles, CA',comment:'In Progress 2025 / Need contract with Park.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-06-20'},{ms:1,status:'inprog',planned:'2025-01-01',actual:''}]},
-  {n:'Doubletree Mission Valley San Diego',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:5,unitDesc:'2 Elev',vda:'—',type:'Non-Core',budget:0,addr:'7450 Hazard Center Dr, San Diego, CA',comment:'Not authorized to proceed. On hold.',ms:[]},
-  {n:'WA Bonnet Creek',s:'FL',ec:'TBD',st:'On Hold',r:'—',v:'Paul Parios',units:0,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'14651 Chelonia Pkwy, Orlando, FL',comment:'Working with Hilton Corp for maintenance audit. MOD still a few years out.',ms:[]},
-  {n:'Bonnet Creek Golf World',s:'FL',ec:'TBD',st:'Budgeting',r:'—',v:'Paul Parios',units:37,unitDesc:'21 Elev / 2 Esc',vda:'—',type:'Non-Core',budget:0,addr:'14651 Chelonia Pkwy, Orlando, FL',comment:'Survey completed by ATIS.',ms:[{ms:0,status:'complete',planned:'2025-01-01',actual:'2025-03-01'}]},
-  {n:'Marriott Newton',s:'MA',ec:'TBD',st:'On Hold',r:'—',v:'Rob Campbell',units:5,unitDesc:'5 Elev',vda:'—',type:'Non-Core',budget:1800000,addr:'2345 Commonwealth Ave, Newton, MA',comment:'On Hold.',ms:[{ms:0,status:'complete',planned:'2024-01-01',actual:'2024-02-01'},{ms:1,status:'complete',planned:'2024-06-01',actual:'2024-07-01'},{ms:2,status:'complete',planned:'2024-09-01',actual:'2024-09-01'},{ms:3,status:'notstart',planned:'2025-01-01',actual:''}]},
-  {n:'Hilton Oakland Airport',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:4,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'1 Hegenberger Rd, Oakland, CA',comment:'On Hold.',ms:[]},
-  {n:'Hilton Santa Barbara',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:5,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'633 East Cabrillo Blvd, Santa Barbara, CA',comment:'Requires survey.',ms:[]},
-  {n:'Doubletree San Jose',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:8,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'2050 Gateway Pl, San Jose, CA',comment:'Not active.',ms:[]},
-  {n:'Hilton McLean Tysons Corner',s:'VA',ec:'Fujitec',st:'Complete',r:'—',v:'Robb Parks',units:7,unitDesc:'2 Serv Elev',vda:'58474',type:'Core',budget:0,addr:'7920 Jones Branch Drive, McLean, VA',comment:'Complete. New PM for Fujitec, need reinspection due to failure.',ms:MILESTONES_DEF.slice(0,15).map((_,i)=>({ms:i,status:'complete',planned:'2022-01-01',actual:'2022-01-01'}))},
-  {n:'Doubletree Durango',s:'CO',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:3,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'501 Camino del Rio, Durango, CO',comment:'Not active.',ms:[]},
-  {n:'Doubletree Ontario',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:9,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'222 N Vineyard Ave, Ontario, CA',comment:'Not active.',ms:[]},
-  {n:'Hilton Short Hills',s:'NJ',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:7,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'41 John F Kennedy Pkwy, Short Hills, NJ',comment:'Not active.',ms:[]},
-  {n:'Embassy Suites Kansas City',s:'MO',ec:'TBD',st:'On Hold',r:'—',v:'TBD',units:4,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'7640 NW Tiffany Springs Pkwy, Kansas City, MO',comment:'Not active.',ms:[]},
-  {n:'Hilton Salt Lake City',s:'UT',ec:'TBD',st:'On Hold',r:'—',v:'Ron Welts',units:11,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'255 South West Temple, Salt Lake City, UT',comment:'Will send quote for survey.',ms:[]},
-  {n:'Hilton Seattle Airport',s:'WA',ec:'TBD',st:'On Hold',r:'—',v:'Dane Carollo',units:8,unitDesc:'TBD',vda:'—',type:'Non-Core',budget:0,addr:'17620 International Blvd, Seattle, WA',comment:'On Hold.',ms:[]},
-  {n:'The Midland Chicago',s:'IL',ec:'TBD',st:'Survey',r:'—',v:'Jeff Hart',units:2,unitDesc:'2 Elev',vda:'—',type:'Non-Core',budget:0,addr:'172 West Adams, Chicago, IL',comment:'Need survey.',ms:[]},
-  {n:'Wade',s:'FL',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Hart',units:6,unitDesc:'4 Elev / 1 Luggage',vda:'—',type:'Non-Core',budget:0,addr:'Miami Beach, FL',comment:'On Hold, no cap planner.',ms:[{ms:0,status:'complete',planned:'2024-06-01',actual:'2024-07-01'}]},
-  {n:'Hilton Lake Buena Vista',s:'FL',ec:'Otis',st:'On Hold',r:'—',v:'Paul Parios',units:13,unitDesc:'TBD',vda:'—',type:'Core',budget:0,addr:'1751 Hotel Plaza Blvd, Lake Buena Vista, FL',comment:'On Hold.',ms:[{ms:0,status:'complete',planned:'2025-06-01',actual:'2025-06-15'},{ms:1,status:'complete',planned:'2025-10-01',actual:'2025-10-20'},{ms:2,status:'complete',planned:'2025-12-01',actual:'2025-12-01'},{ms:3,status:'inprog',planned:'2026-03-01',actual:''}]},
-  {n:'Caribe Hilton Puerto Rico',s:'PR',ec:'Otis',st:'Survey',r:'—',v:'Mike Loefler',units:16,unitDesc:'TBD',vda:'—',type:'Core',budget:0,addr:'1 C. San Geronimo, San Juan, PR',comment:'Proposed.',ms:[{ms:0,status:'inprog',planned:'2026-03-01',actual:''}]},
-  {n:'Doubletree Crystal City',s:'VA',ec:'TBD',st:'On Hold',r:'—',v:'Chris Shields',units:11,unitDesc:'9 Elev / 2 Esc',vda:'—',type:'Non-Core',budget:5488000,addr:'300 Army Navy Drive, Arlington, VA',comment:'On Hold.',ms:[]},
-  {n:'Doubletree Seattle Airport',s:'WA',ec:'TBD',st:'On Hold',r:'—',v:'Dane Carollo',units:11,unitDesc:'11 Elev',vda:'—',type:'Non-Core',budget:0,addr:'18740 International Blvd, Seattle, WA',comment:'Surveyed. Spec not authorized to proceed.',ms:[{ms:0,status:'complete',planned:'2024-01-01',actual:'2024-02-01'}]},
-  {n:'Embassy Suites Austin',s:'TX',ec:'TBD',st:'On Hold',r:'—',v:'Jake Seibert',units:2,unitDesc:'2 Elev',vda:'—',type:'Non-Core',budget:0,addr:'300 S Congress Ave, Austin, TX',comment:'On Hold.',ms:[]},
-  {n:'Juniper Hotel Cupertino',s:'CA',ec:'TBD',st:'On Hold',r:'—',v:'Jeff Sena',units:3,unitDesc:'3 Elev',vda:'—',type:'Non-Core',budget:1536000,addr:'10050 S De Anza Blvd, Cupertino, CA',comment:'On Hold.',ms:[]},
 ];
 
 
-// Capital Plan demo properties — pre-Modernization Survey (no M1 date set)
-const CAPITAL_PLAN_DEMO=[
-  {id:'cp1',n:'Store #334',s:'CA',city:'Los Angeles',ec:'TBD',st:'Capital Plan',r:'—',v:'Sarah Chen',units:6,unitDesc:'4 Elev / 2 Esc',vda:'',type:'Core',budget:2100000,budgetStatus:'Approved',plannedYear:2026,priority:'1: Critical',addr:'Los Angeles, CA',comment:'Priority 1 — hydraulic units past service life, ADA compliance gap.',ms:[]},
-  {id:'cp2',n:'Store #419',s:'NY',city:'New York',ec:'TBD',st:'Capital Plan',r:'—',v:'Marcus Webb',units:4,unitDesc:'4 Elev',vda:'',type:'Core',budget:1650000,budgetStatus:'Approved',plannedYear:2026,priority:'1: Critical',addr:'New York, NY',comment:'Multiple units flagged in last inspection. Urgent.',ms:[]},
-  {id:'cp3',n:'Store #267',s:'FL',city:'Orlando',ec:'TBD',st:'Capital Plan',r:'—',v:'Marcus Webb',units:5,unitDesc:'3 Elev / 2 Esc',vda:'',type:'Core',budget:1820000,budgetStatus:'Approved',plannedYear:2027,priority:'2: High',addr:'Orlando, FL',comment:'Budget approved Q4 2025. Survey pending.',ms:[]},
-  {id:'cp4',n:'Store #502',s:'TX',city:'Dallas',ec:'TBD',st:'Capital Plan',r:'—',v:'Sarah Chen',units:3,unitDesc:'3 Elev',vda:'',type:'Core',budget:980000,budgetStatus:'Approved',plannedYear:2027,priority:'2: High',addr:'Dallas, TX',comment:'Modernization study complete. Awaiting survey date.',ms:[]},
-  {id:'cp5',n:'Store #188',s:'TN',city:'Nashville',ec:'TBD',st:'Capital Plan',r:'—',v:'Marcus Webb',units:2,unitDesc:'2 Elev',vda:'',type:'Non-Core',budget:620000,budgetStatus:'Preliminary',plannedYear:2027,priority:'3: Medium',addr:'Nashville, TN',comment:'Preliminary budget. Survey Q1 2027.',ms:[]},
-  {id:'cp6',n:'Store #611',s:'MN',city:'Minneapolis',ec:'TBD',st:'Capital Plan',r:'—',v:'Sarah Chen',units:4,unitDesc:'2 Elev / 2 Esc',vda:'',type:'Core',budget:1340000,budgetStatus:'Preliminary',plannedYear:2028,priority:'3: Medium',addr:'Minneapolis, MN',comment:'Included in 2028 capital cycle.',ms:[]},
-  {id:'cp7',n:'Store #743',s:'OR',city:'Portland',ec:'TBD',st:'Capital Plan',r:'—',v:'Marcus Webb',units:2,unitDesc:'2 Elev',vda:'',type:'Non-Core',budget:540000,budgetStatus:'TBD',plannedYear:2028,priority:'4: Standard',addr:'Portland, OR',comment:'Preliminary scope only.',ms:[]},
-  {id:'cp8',n:'Store #095',s:'TX',city:'Austin',ec:'TBD',st:'Capital Plan',r:'—',v:'Sarah Chen',units:3,unitDesc:'2 Elev / 1 Esc',vda:'',type:'Core',budget:0,budgetStatus:'TBD',plannedYear:null,priority:'4: Standard',addr:'Austin, TX',comment:'Long-range — year and budget TBD.',ms:[]},
-];
+// v51a: CAPITAL_PLAN_DEMO seed data moved to the standalone demo build at /demo.
 
 const DOCUMENTS=[];  // Documents loaded from Airtable
 
@@ -4568,7 +4121,8 @@ const SUBFOLDERS=['Field Updates','PM Updates','Meeting Minutes','Closed Actions
 // v49a — single HTML-escape implementation. Replaces nine near-identical
 // local copies, four of which used (x||'') and therefore rendered a
 // literal 0 or false as an empty string.
-function escHtml(t){return (t==null?'':String(t)).replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function escHtml(t){return (t==null?'':String(t)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}// v51b: hardened. Ampersand first, plus both quote types, so
+// interpolations inside attributes (value="...") are also safe.
 
 // Phase construction milestone templates by equipment type
 // All steps are optional — PM selects which apply per job
@@ -4637,13 +4191,9 @@ const OPTIONAL_STEPS={
   'MRL Elevator':['Installation: Fronts & Entrances'],
 };
 
-const AI_RESPONSES={
-  behind:'3 properties are currently behind schedule:\n\n• Casa Marina Key West (FL) — Elevated — PE6 & PE7 delayed. Pit sealing delayed to July 6. Over budget on COs.\n\n• Royal Palm South Beach (FL) — Elevated — 2 cars complete, 3 teams on site. Recovery in progress.\n\n• HHV Tapa Low Rise (HI) — Otis — Waiting on designers and cab interiors to finalize before construction can begin.',
-  budget:'Portfolio forecasted budget breakdown (where available):\n\n• Hilton New Orleans: $19.3M (largest single project)\n• New York Hilton Midtown: $18.5M\n• Royal Palm South Beach: $4.2M\n• Hilton Hawaiian Village: $5.4M\n• Hilton Denver: $4.4M\n• JW Marriott SF: $1.9M\n• Casa Marina: $1.8M\n• The Reach Curio: $885K\n\nTotal forecasted across portfolio: ~$89M',
-  hawaii:'11 Hawaii properties across 2 islands:\n\nHilton Hawaiian Village (Oahu):\nHilton Hawaiian Village (Active/Otis), HHV Diamond Head Apts (Survey), HHV Rainbow Tower (Active/TBD), HHV Tapa Low Rise (Active/Otis - Behind), HHV Tapa High Rise (Active/Otis), HHV Alii Tower (Survey), HHV Kalia (Survey)\n\nWaikoloa (Big Island):\nHilton Waikoloa Village (Active/Otis), HWV Palace (Complete), HWV Makai Tower (Active)\n\nHawaii is the largest geographic concentration. Jeff Sena is the primary VDA consultant.',
-  risks:'Critical risks this week:\n\n🔴 HIGH — Casa Marina Key West: Schedule delayed + CO exposure. Pit sealing July 6 weather-dependent. Recovery plan overdue.\n\n🔴 HIGH — Royal Palm South Beach: Behind schedule. Client flag open.\n\n🟡 MEDIUM — HHV Tapa Low Rise: Blocked on cab interior approval. Contractor waiting.\n\n🟡 MEDIUM — HHV Rainbow Tower: Cab design not finalized. Combining into one proposal pending.\n\n🟢 LOW — Hilton Lake Buena Vista: On hold, fire service retrofit scope unresolved.',
-  consultants:'VDA consultant assignments across the 44-property portfolio:\n\n• Jeff Sena — 8 properties (HI, CA) — largest portfolio\n• Ron Welts — 6 properties (HI, CA, UT)\n• Paul Parios — 4 properties (FL)\n• Rob Campbell — 3 properties (MA, NY)\n• Jeff Hart — 3 properties (IL)\n• Dane Carollo — 2 properties (CO, WA)\n• John Frondi — 1 property (NY Hilton Midtown)\n• Jim Himes — 1 property (Royal Palm)\n• Mike Loefler — 1 property (Caribe Hilton PR)\n• Chris Shields — 1 property (Crystal City)',
-};
+// v51a: AI_RESPONSES removed. It was dead code (nothing referenced it) and
+// its canned answers contained real portfolio details that do not belong
+// in a public file.
 
 let role='admin',client='park',currentProp=null,prevView='portfolio';
 // v28b — currentScope: which Scope is selected within the open property's
@@ -4743,6 +4293,7 @@ async function doLogin(){
       sessionStorage.setItem('pulse_session',JSON.stringify({
         role,client,userName:result.name,recordId:result.recordId||null,
         marliSessionId:window._marliSessionId,
+        sessionToken:window._sessionToken||null,
       }));
     }catch(e){/* sessionStorage unavailable — session restore just won't work, not fatal */}
   }
@@ -4799,6 +4350,12 @@ async function tryRestorePulseSession(){
     if(raw)saved=JSON.parse(raw);
   }catch(e){return false;}
   if(!saved||!saved.role||!saved.client)return false;
+  // v51a. A restored session is only usable if it still has its Worker
+  // session token; without one every authenticated call would 401. An
+  // older sessionStorage entry from before tokens existed (or one whose
+  // token was cleared by a 401) falls through to a fresh login instead.
+  if(!saved.sessionToken)return false;
+  window._sessionToken=saved.sessionToken;
   role=saved.role;
   client=saved.client;
   window._userName=saved.userName||null;
@@ -5019,6 +4576,7 @@ function doLogout(){
   window._userName=null;
   sessionStorage.removeItem('pulse_consultant');
   sessionStorage.removeItem('pulse_session');
+  window._sessionToken=null; // v51a. Drop the Worker session token.
   demoMode=false;
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
@@ -5411,7 +4969,7 @@ async function renderUnitsTab(p){
     // No else — after backfill, every unit has one of the 4 real values.
   });
 
-  const unitChip=(u,color)=>`<span style="font-size:12px;background:${color==='ok'?'var(--green-pale)':color==='dormant'?'var(--gray-pale)':'var(--blue-xpale)'};color:${color==='ok'?'var(--green)':color==='dormant'?'var(--gray-mid)':'var(--blue-dark)'};padding:5px 8px;border-radius:6px;text-align:center;display:inline-block" title="${[u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · ')}">${u.name||'(unnamed)'}</span>`;
+  const unitChip=(u,color)=>`<span style="font-size:12px;background:${color==='ok'?'var(--green-pale)':color==='dormant'?'var(--gray-pale)':'var(--blue-xpale)'};color:${color==='ok'?'var(--green)':color==='dormant'?'var(--gray-mid)':'var(--blue-dark)'};padding:5px 8px;border-radius:6px;text-align:center;display:inline-block" title="${[u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · ')}">${escHtml(u.name||'(unnamed)')}</span>`;
 
   const section=(key,label,list,color,emptyMsg)=>{
     const isOpen=unitsTabOpen[key];
@@ -5979,8 +5537,8 @@ function renderUimTable(propName){
     const priOpts=[1,2,3,4].map(n=>`<option value="${n}" ${String(u.priority)===String(n)?'selected':''}>${n}</option>`).join('');
     return `<tr>
       ${checkCell}
-      <td><input class="form-input" style="min-width:120px" value="${esc(u.name)}" onchange="uimSaveTextField('${u.id}','Unit Name','name',this.value)"></td>
-      <td><input class="form-input" style="min-width:110px" value="${esc(u.deviceLocation)}" onchange="uimSaveTextField('${u.id}','Device Location','deviceLocation',this.value)"></td>
+      <td><input class="form-input" style="min-width:120px" value="${escHtml(u.name)}" onchange="uimSaveTextField('${u.id}','Unit Name','name',this.value)"></td>
+      <td><input class="form-input" style="min-width:110px" value="${escHtml(u.deviceLocation)}" onchange="uimSaveTextField('${u.id}','Device Location','deviceLocation',this.value)"></td>
       <td><select class="form-input" style="min-width:120px" onchange="uimSaveSelectField('${u.id}','Unit Type','unitType',this.value,this)"><option value="">—</option>${typeOpts}</select></td>
       <td><select class="form-input" style="min-width:140px" onchange="uimSaveSelectField('${u.id}','Equipment Type','equipmentType',this.value,this)"><option value="">—</option>${equipTypeOpts}</select></td>
       <td><select class="form-input" style="width:60px" onchange="uimSaveSelectField('${u.id}','Priority','priority',this.value,this)"><option value="">—</option>${priOpts}</select></td>
@@ -5989,11 +5547,11 @@ function renderUimTable(propName){
         <option value="Complete" ${u.status==='Complete'?'selected':''}>Complete</option>
         <option value="Dormant" ${u.status==='Dormant'?'selected':''}>Dormant</option>
       </select></td>
-      <td style="display:flex;align-items:center;gap:4px"><input class="form-input" style="width:80px" value="${esc(u.capexYear)}" onchange="uimSaveTextField('${u.id}','Client Capex Planning Year','capexYear',this.value)">${(()=>{const yr=parseInt(u.capexYear);return(yr&&yr<new Date().getFullYear()&&u.status!=='Complete')?'<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px;flex-shrink:0" title="Past CapEx year but not marked Complete — worth checking"></i>':'';})()}</td>
+      <td style="display:flex;align-items:center;gap:4px"><input class="form-input" style="width:80px" value="${escHtml(u.capexYear)}" onchange="uimSaveTextField('${u.id}','Client Capex Planning Year','capexYear',this.value)">${(()=>{const yr=parseInt(u.capexYear);return(yr&&yr<new Date().getFullYear()&&u.status!=='Complete')?'<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px;flex-shrink:0" title="Past CapEx year but not marked Complete — worth checking"></i>':'';})()}</td>
       <!-- v45q — VDA Recommended Year, plain text like Client Capex
       Planning Year above (typed year, no formula, no validation beyond
       what capexYear already has). -->
-      <td><input class="form-input" style="width:80px" value="${esc(u.vdaRecYear)}" onchange="uimSaveTextField('${u.id}','VDA Recommended Year','vdaRecYear',this.value)"></td>
+      <td><input class="form-input" style="width:80px" value="${escHtml(u.vdaRecYear)}" onchange="uimSaveTextField('${u.id}','VDA Recommended Year','vdaRecYear',this.value)"></td>
       <td><input id="uim-elev-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.elevEst?Number(u.elevEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Elevator Mod Est.','elevEst',this.value,this)"></td>
       <td><input id="uim-related-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.relatedEst?Number(u.relatedEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Related Work Est.','relatedEst',this.value,this)"></td>
       <td><input id="uim-cab-${u.id}" class="form-input" style="width:110px;text-align:right" type="text" placeholder="$0" value="${u.cabEst?Number(u.cabEst).toLocaleString('en-US'):''}" onchange="uimSaveNumberField('${u.id}','Cab Interior Est.','cabEst',this.value,this)"></td>
@@ -7114,7 +6672,7 @@ function renderScopeCards(p){
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
-          <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${s.name||'Property Modernization'} ${staleFlag}</span>
+          <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${escHtml(s.name||'Property Modernization')} ${staleFlag}</span>
           <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${demoteBtn}${editBtn}</span>
         </div>
         ${onHoldToggle?`<div style="display:flex;justify-content:flex-end;margin-bottom:6px">${onHoldToggle}</div>`:''}
@@ -8008,7 +7566,7 @@ function populateMilestonesTable(){
       <td style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.n}</td>
       <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
       <td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.ec||'TBD'}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:12px;font-weight:600;text-align:center">${p.units||'—'}</td>
+      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:12px;font-weight:600;text-align:center">${escHtml(p.units||'—')}</td>
       <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${currentMs}</td>
       <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${currentPhase}</td>
       <td style="font-size:11px">${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
@@ -8097,7 +7655,7 @@ function openMeetingPanel(){
     const _mscSel=document.getElementById('m-scope');
     const _mscGrp=document.getElementById('m-scope-group');
     if(_mscSel&&_mscGrp){
-      _mscSel.innerHTML='<option value="">All projects / property-level</option>'+_msc.map(s=>`<option value="${s.id}">${s.name||'Project'}</option>`).join('');
+      _mscSel.innerHTML='<option value="">All projects / property-level</option>'+_msc.map(s=>`<option value="${s.id}">${escHtml(s.name||'Project')}</option>`).join('');
       _mscGrp.style.display=_msc.length>0?'':'none';
     }
   }
@@ -8160,7 +7718,7 @@ function populateAiScopes(propNameOverride){
   const grp=document.getElementById('ai-scope-group');
   if(!sel||!grp)return;
   const sc=(window.SCOPES||[]).filter(s=>s.property===propName&&s.status!=='Capital Plan');
-  sel.innerHTML='<option value="">All projects / property-level</option>'+sc.map(s=>`<option value="${s.id}">${s.name||'Project'}</option>`).join('');
+  sel.innerHTML='<option value="">All projects / property-level</option>'+sc.map(s=>`<option value="${s.id}">${escHtml(s.name||'Project')}</option>`).join('');
   grp.style.display=sc.length>0?'':'none';
 }
 
@@ -8215,7 +7773,7 @@ async function notifyActionItemOwner(ownerName,description,propName,due,priority
       return;
     }
     const dueLabel=due&&due!=='TBD'?new Date(due+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'Not set';
-    await fetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
+    await workerFetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         to:match.fields['Email'],
@@ -8262,7 +7820,7 @@ async function saveActionItem(){
       `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No Open Actions</div></div>`:
       openAIs.map(a=>`<div class="action-item-row">
       <div class="action-dot dot-open"></div>
-      <div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">Owner: ${a.owner} · Due: ${a.due} · <span class="badge b-${(a.priority||'medium').toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
+      <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · <span class="badge b-${(a.priority||'medium').toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
       ${role==='pm'?`<button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>`:''}
     </div>`).join('');
     const countEl=document.getElementById('prop-action-count');
@@ -8421,7 +7979,7 @@ function populatePanelPropertyList(){
     const mScopeGroup=document.getElementById('m-scope-group');
     if(mScopeSel&&mScopeGroup){
       const sc=(window.SCOPES||[]).filter(s=>s.property===newSel.value&&s.status!=='Capital Plan');
-      mScopeSel.innerHTML='<option value="">All projects / property-level</option>'+sc.map(s=>`<option value="${s.id}">${s.name||'Project'}</option>`).join('');
+      mScopeSel.innerHTML='<option value="">All projects / property-level</option>'+sc.map(s=>`<option value="${s.id}">${escHtml(s.name||'Project')}</option>`).join('');
       mScopeGroup.style.display=sc.length>0?'':'none';
     }
   });
@@ -8573,25 +8131,25 @@ function renderPropMeetings(p){
             `}
         </div>
       </div>
-      ${m.attVDA||m.attElev||m.attClient?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6">${m.attVDA?`Team: ${m.attVDA} `:''}${m.attElev?`· Elev: ${m.attElev} `:''}${m.attClient?`· Client: ${m.attClient}`:''}</div>`:''}
+      ${m.attVDA||m.attElev||m.attClient?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6">${m.attVDA?`Team: ${escHtml(m.attVDA)} `:''}${m.attElev?`· Elev: ${escHtml(m.attElev)} `:''}${m.attClient?`· Client: ${escHtml(m.attClient)}`:''}</div>`:''}
       ${m.agenda?(()=>{
         const topics=m.agenda.split('\n').filter(Boolean);
         if(m.status==='Scheduled'&&topics.length){
           return `<div style="font-size:11px;color:var(--gray-mid);margin-top:6px"><strong style="color:var(--navy)">Agenda</strong><ul style="margin:4px 0 0 14px;padding:0">${topics.map(t=>`<li>${t}</li>`).join('')}</ul></div>`;
         }
-        return `<div style="font-size:11px;color:var(--gray-mid);margin-top:4px"><strong>Agenda:</strong> ${m.agenda}</div>`;
+        return `<div style="font-size:11px;color:var(--gray-mid);margin-top:4px"><strong>Agenda:</strong> ${escHtml(m.agenda)}</div>`;
       })():''}
-      <div class="meeting-card-body">${m.notes||''}</div>
+      <div class="meeting-card-body">${escHtml(m.notes||'')}</div>
     </div>`).join('');
   const aList=document.getElementById('prop-actions-list');
   if(aList)aList.innerHTML=propActions.length===0?
     `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No Open Actions</div></div>`:
     propActions.map(a=>{
       const aiScope=a.scopeId?(window.SCOPES||[]).find(s=>s.id===a.scopeId):null;
-      const scopeTag=aiScope?`<span style="font-size:9px;background:var(--blue-xpale);color:var(--blue-dark);border:1px solid var(--blue-light);border-radius:4px;padding:1px 5px;margin-left:4px">${aiScope.name}</span>`:''; 
+      const scopeTag=aiScope?`<span style="font-size:9px;background:var(--blue-xpale);color:var(--blue-dark);border:1px solid var(--blue-light);border-radius:4px;padding:1px 5px;margin-left:4px">${escHtml(aiScope.name)}</span>`:''; 
       return `<div class="action-item-row">
         <div class="action-dot dot-open"></div>
-        <div class="action-desc"><strong>${a.description}</strong>${scopeTag}<br><span style="color:var(--gray-mid)">Owner: ${a.owner} · Due: ${a.due} · <span class="badge b-${a.priority.toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
+        <div class="action-desc"><strong>${escHtml(a.description)}</strong>${scopeTag}<br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · <span class="badge b-${a.priority.toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
         ${role==='pm'||role==='admin'||role==='consultant'?`<button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>`:''}
       </div>`;
     }).join('');
@@ -8856,7 +8414,7 @@ function renderAllMeetings(){
     `<div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No Open Actions</div></div>`:
     openAI.map(a=>`<div class="action-item-row">
       <div class="action-dot dot-open"></div>
-      <div class="action-desc"><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${a.owner} · Due: ${a.due}</span></div>
+      <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${escHtml(a.owner)} · Due: ${a.due}</span></div>
       <button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>
     </div>`).join('');
   const loadingEl=document.getElementById('schedule-loading');
@@ -9109,7 +8667,7 @@ function renderChangeOrdersTab(p){
     return `<div class="co-row ${statusClass}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
         <div style="flex:1">
-          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${co.description}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(co.description)}</div>
           <div style="font-size:11px;color:var(--gray-mid)">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date?new Date(co.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</div>
         </div>
         <span class="${statusBadgeClass}">${co.status}</span>
@@ -9137,7 +8695,7 @@ function renderChangeOrdersTab(p){
           <div>O&amp;P Claimed: <strong>${co.opClaimed!=null?fmtCurrency(co.opClaimed):'—'}</strong>${p.coOPMarkup!=null?` <span style="color:var(--gray-mid)">(${p.coOPMarkup}% markup)</span>`:''}</div>
         </div>
       </div>`:''}
-      ${co.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${co.notes}</div>`:''}
+      ${co.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${escHtml(co.notes)}</div>`:''}
       ${canEdit?`<div style="display:flex;gap:6px;flex-wrap:wrap">
         ${!isLocked?`<button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editCO('${co.id}')">Edit</button>`:''}
         ${co.status==='Pending'?`<button class="btn btn-success" style="font-size:10px;padding:2px 8px" onclick="updateCOStatus('${co.id}','Approved')"><i class="ti ti-check"></i>Approve</button>`:''}
@@ -9278,7 +8836,7 @@ function renderRoundCardHtml(round,p){
       <div style="display:flex;align-items:center;gap:8px">
         <i class="ti ti-chevron-${isExpanded?'down':'right'}" style="font-size:14px;color:var(--gray-mid)"></i>
         <div>
-          <div class="card-title">${round['Round Name']||'Untitled Round'}${round['Round Status']==='Closed'?' <i class="ti ti-lock" style="font-size:11px;color:var(--gray-mid)"></i>':''}</div>
+          <div class="card-title">${escHtml(round['Round Name']||'Untitled Round')}${round['Round Status']==='Closed'?' <i class="ti ti-lock" style="font-size:11px;color:var(--gray-mid)"></i>':''}</div>
           <div class="card-sub">${round['Round Status']==='Closed'?'Round closed':'Round open'}</div>
         </div>
       </div>
@@ -9318,7 +8876,7 @@ function renderRoundCardBody(round,p){
       :locked?'<span style="font-size:10px;color:var(--blue-dark);font-weight:600;margin-left:6px">PUBLISHED</span>':'';
     const canEditThis=editAllowed&&!locked&&s['Status']!=='Draft'||editAllowed&&s['Status']==='Draft';
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
-      <div style="font-size:12px;color:var(--navy)">${s['Supplier Name']||'(unnamed supplier)'}${statusLabel}</div>
+      <div style="font-size:12px;color:var(--navy)">${escHtml(s['Supplier Name']||'(unnamed supplier)')}${statusLabel}</div>
       <div style="display:flex;gap:6px;width:64px;justify-content:flex-end">
         ${canEditThis?`<button class="btn btn-icon" onclick="openBidSubmissionForm('${s.id}',false)" title="${s['Status']==='Draft'?'Resume':'Edit'}"><i class="ti ti-pencil" style="font-size:14px;color:var(--gray-mid)"></i></button>`:''}
         <button class="btn btn-icon" onclick="openBidSubmissionForm('${s.id}',true)" title="View"><i class="ti ti-eye" style="font-size:14px;color:var(--gray-mid)"></i></button>
@@ -9547,19 +9105,19 @@ async function renderBidLevelingTable(round,roundSubs,p){
   };
 
   const relatedWorkRows=multiItemRows('Related Work',s=>s.relatedWork,
-    item=>`<div>${item['Vendor']?'<span style="font-size:10px;color:var(--gray-mid);font-weight:600">'+item['Vendor']+'</span><br>':''}${item['Description']||''}</div><div style="color:var(--gray-mid);margin-top:2px">${item['Amount']!=null?fmtBidCurrency(item['Amount']):'—'}</div>`);
+    item=>`<div>${item['Vendor']?'<span style="font-size:10px;color:var(--gray-mid);font-weight:600">'+item['Vendor']+'</span><br>':''}${escHtml(item['Description']||'')}</div><div style="color:var(--gray-mid);margin-top:2px">${item['Amount']!=null?fmtBidCurrency(item['Amount']):'—'}</div>`);
 
   const alternatesRows=multiItemRows('Alternates',s=>s.alternates,
-    item=>`<div>${item['Description']||''}</div><div style="color:var(--gray-mid);margin-top:2px">${item['Amount']!=null?fmtBidCurrency(item['Amount']):'—'}</div>`);
+    item=>`<div>${escHtml(item['Description']||'')}</div><div style="color:var(--gray-mid);margin-top:2px">${item['Amount']!=null?fmtBidCurrency(item['Amount']):'—'}</div>`);
 
   const allowancesRows=multiItemRows('Allowances',s=>s.allowances,
-    item=>`<div>${item['Description']||''}</div><div style="color:var(--gray-mid);margin-top:2px">${item['Amount']!=null?fmtBidCurrency(item['Amount']):'—'}</div>`);
+    item=>`<div>${escHtml(item['Description']||'')}</div><div style="color:var(--gray-mid);margin-top:2px">${item['Amount']!=null?fmtBidCurrency(item['Amount']):'—'}</div>`);
 
   const equipmentRows=multiItemRows('Equipment Details',s=>s.equipment,
     item=>`<div>${item['Component']||''}</div><div style="color:var(--gray-mid);margin-top:2px">${item['Manufacturer']||''} · ${item['Model']||''}</div>`);
 
   const clarificationsRows=multiItemRows('Clarifications',s=>s.clarifications,
-    item=>`<div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">${item['Category']||''}</div><div style="margin-top:2px">${item['Description']||''}</div>`);
+    item=>`<div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">${item['Category']||''}</div><div style="margin-top:2px">${escHtml(item['Description']||'')}</div>`);
 
   const summaryRows=
     sectionRow('Summary')+
@@ -9644,7 +9202,7 @@ function printBidLeveling(roundId){
 // server-side, including the concurrency-aware schedule math.
 async function fetchBidLeveling(roundId){
   try{
-    const r=await fetch(`${WORKER_URL}/bid-leveling?roundId=${roundId}`);
+    const r=await workerFetch(`${WORKER_URL}/bid-leveling?roundId=${roundId}`);
     if(!r.ok)return null;
     return await r.json();
   }catch(e){
@@ -9766,7 +9324,7 @@ let bidFormUnitDetail=[]; // working list of {unitName, unitPrice, outOfServiceW
 
 async function createBidSubmission(fields){
   try{
-    const r=await fetch(`${WORKER_URL}?table=${encodeURIComponent('Bid Submissions')}`,{
+    const r=await workerFetch(`${WORKER_URL}?table=${encodeURIComponent('Bid Submissions')}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({records:[{fields}]})
@@ -9821,7 +9379,7 @@ function openBidSubmissionForm(existingId,viewOnly,roundIdParam){
       <div style="font-size:15px;font-weight:600;color:var(--navy)"><i class="ti ti-building" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>${readOnly?'View Supplier Bid':existing?'Edit Supplier Bid':'New Supplier Bid'}${isLocked?' <span style="font-size:11px;font-weight:400;color:var(--gray-mid)">(Published — locked)</span>':''}</div>
       <button id="bsf-close-x" onclick="document.getElementById('bid-submission-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">&times;</button>
     </div>
-    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">${round['Round Name']||'Untitled Round'} — ${currentProp.n}</div>
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">${escHtml(round['Round Name']||'Untitled Round')} — ${currentProp.n}</div>
     <input type="hidden" id="bsf-editing-id" value="${existing?existing.id:''}">
     <input type="hidden" id="bsf-round-id" value="${roundId}">
 
@@ -10884,7 +10442,7 @@ async function notifyClientCO(coId){
   const savings=Math.max(0,(parseFloat(co.originalAmount)||0)-(parseFloat(co.negotiatedAmount)||0));
   document.getElementById('notify-client-co-summary').innerHTML=`
     <div style="font-weight:600;color:var(--navy);margin-bottom:6px">${co.property} — Change Order</div>
-    <div style="color:var(--gray-mid);margin-bottom:4px">${co.description}</div>
+    <div style="color:var(--gray-mid);margin-bottom:4px">${escHtml(co.description)}</div>
     <div style="display:flex;gap:16px;margin-top:6px">
       <span><span style="color:var(--gray-mid)">Original:</span> <strong>${fmtCurrency(co.originalAmount)}</strong></span>
       <span><span style="color:var(--gray-mid)">Negotiated:</span> <strong style="color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</strong></span>
@@ -10895,7 +10453,7 @@ async function notifyClientCO(coId){
     <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--gray-xpale);border-radius:6px">
       <i class="ti ti-user" style="color:var(--blue-dark);font-size:14px"></i>
       <div>
-        <div style="font-size:12px;font-weight:600;color:var(--navy)">${c.name}</div>
+        <div style="font-size:12px;font-weight:600;color:var(--navy)">${escHtml(c.name)}</div>
         <div style="font-size:11px;color:var(--gray-mid)">${c.email}${c.property?` · ${c.property}`:''}</div>
       </div>
     </div>`).join('');
@@ -10992,7 +10550,7 @@ function openBillingHistoryPopout(propName){
         <td style="font-size:12px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
         <td style="font-size:12px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
         <td style="font-size:12px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
-        <td style="font-size:12px;color:var(--gray-mid)">${b.notes||'—'}</td>
+        <td style="font-size:12px;color:var(--gray-mid)">${escHtml(b.notes||'—')}</td>
         ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
           <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="closeHistoryPopout();editBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}');openBillingHistoryPopout('${propName.replace(/'/g,"\\'")}')">Remove</button>
         </td>`:''}
@@ -11025,7 +10583,7 @@ function openRetainageHistoryPopout(propName){
   const rows=propReleases.map(rl=>`<tr id="retainage-row-${rl.id}">
         <td style="font-size:12px">${rl.releaseDate||'—'}</td>
         <td style="font-size:12px;font-weight:600">${fmtCurrencyFull(rl.amountReleased)}</td>
-        <td style="font-size:12px;color:var(--gray-mid)">${rl.notes||'—'}</td>
+        <td style="font-size:12px;color:var(--gray-mid)">${escHtml(rl.notes||'—')}</td>
         ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
           <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="closeHistoryPopout();editRetainageRelease('${rl.id}','${propName.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteRetainageRelease('${rl.id}','${propName.replace(/'/g,"\\'")}');openRetainageHistoryPopout('${propName.replace(/'/g,"\\'")}')">Remove</button>
         </td>`:''}
@@ -11168,7 +10726,7 @@ function renderBudgetTab(p){
         <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
         <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
         <td style="font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
-        <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.notes||'—'}</td>
+        <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(b.notes||'—')}</td>
         ${showActions&&canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
           <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
         </td>`:showActions?'<td></td>':''}
@@ -11223,7 +10781,7 @@ function renderBudgetTab(p){
     const retainageRow=(rl,showActions)=>`<tr id="retainage-row-${rl.id}">
           <td style="font-size:11px">${rl.releaseDate||'—'}</td>
           <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(rl.amountReleased)}</td>
-          <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${rl.notes||'—'}</td>
+          <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(rl.notes||'—')}</td>
           ${showActions&&canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
             <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteRetainageRelease('${rl.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
           </td>`:showActions?'<td></td>':''}
@@ -11444,7 +11002,7 @@ async function checkAndGenerateUnitPhaseSuggestions(scopeId){
     const todayStr=new Date().toISOString().split('T')[0];
     const alreadyRanToday=lastRun&&(new Date(lastRun).toISOString().split('T')[0]===todayStr);
     if(alreadyRanToday)return;
-    fetch(`${WORKER_URL}/generate-unit-phase-suggestions`,{
+    workerFetch(`${WORKER_URL}/generate-unit-phase-suggestions`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({triggeredBy:window._marliRecordId||'',scopeId})
     }).then(async res=>{
@@ -11606,7 +11164,7 @@ function renderPhasesTab(p){
         </div>`:''}
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px">
-            <div style="font-weight:600;font-size:13px;color:var(--navy)">${ph.phase}</div>
+            <div style="font-weight:600;font-size:13px;color:var(--navy)">${escHtml(ph.phase)}</div>
             ${ph.productType?`<span style="background:var(--blue-pale);color:var(--blue-dark);font-size:9px;font-weight:600;padding:1px 6px;border-radius:10px">${ph.productType}</span>`:''}
             ${statusBadge}
           </div>
@@ -11698,7 +11256,7 @@ function renderStepTimeline(ph, propName){
       :s.plannedEnd?`<span style="font-size:9px;font-family:'Plus Jakarta Sans',sans-serif;color:${isBehind?'var(--red)':'var(--gray-mid)'}">${s.plannedEnd}</span>`
       :`<span style="font-size:9px;color:var(--gray-light)">—</span>`;
     const overdueTag=isBehind&&daysLate>0?`<span style="font-size:9px;font-weight:700;color:var(--red);background:var(--red-pale);padding:1px 5px;border-radius:4px;margin-left:4px">${daysLate}d overdue</span>`:'';
-    const noteTag=s.notes?`<div style="font-size:10px;color:var(--gray-mid);padding-left:22px;padding-bottom:3px;font-style:italic">${s.notes}</div>`:'';
+    const noteTag=s.notes?`<div style="font-size:10px;color:var(--gray-mid);padding-left:22px;padding-bottom:3px;font-style:italic">${escHtml(s.notes)}</div>`:'';
     const dot=isComplete
       ?`<i class="ti ti-circle-check" style="color:var(--green);font-size:13px;flex-shrink:0"></i>`
       :`<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0;opacity:${s.status==='Not Started'&&!isBehind?0.35:1}"></span>`;
@@ -12583,7 +12141,7 @@ async function deleteDraft(){
   if(!confirm('Delete this draft? This cannot be undone.'))return;
   meetings=meetings.filter(m=>m.id!==draftId);
   if(!demoMode){
-    try{await fetch(`${WORKER_URL}?table=Meetings&id=${draftId}`,{method:'DELETE'});}catch(e){console.warn('Delete draft failed:',e);}
+    try{await workerFetch(`${WORKER_URL}?table=Meetings&recordId=${draftId}`,{method:'DELETE'});}catch(e){console.warn('Delete draft failed:',e);}
   }
   closePanel();
   renderAllMeetings();
@@ -13504,7 +13062,7 @@ function renderCapitalPlan(){
                 ${p.comment?`<div style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:normal">${p.comment.slice(0,60)}${p.comment.length>60?'…':''}</div>`:''}
                 ${graduating?`<div style="font-size:10px;color:var(--green);font-weight:600;margin-top:2px"><i class="ti ti-arrow-up-right" style="font-size:10px"></i> Activating</div>`:''}
               </td>
-              <td style="font-size:12px;color:var(--navy)">${s.name||'—'}</td>
+              <td style="font-size:12px;color:var(--navy)">${escHtml(s.name||'—')}</td>
               <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
               <td><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
               <td style="font-size:12px">${(()=>{const scU=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id).length;return scU>0?scU:(s.unitList||'—');})()}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total"></i>`:''}</td>
@@ -13554,7 +13112,7 @@ function renderCapitalPlan(){
             <td style="font-size:12px;color:var(--gray-mid)">${scopeLabel}</td>
             <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
             <td><span class="badge" style="background:${priBg(topPriority)};color:${priColor(topPriority)};border:none;font-size:10px">${(topPriority||'—').split(':')[0]}</span></td>
-            <td style="font-size:12px">${p.units||'—'}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Project units (${g.scopeUnitSum}) don't match property total (${p.units})"></i>`:''}</td>
+            <td style="font-size:12px">${escHtml(p.units||'—')}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Project units (${g.scopeUnitSum}) don't match property total (${escHtml(p.units)})"></i>`:''}</td>
             <td style="font-size:12px;font-weight:600;color:var(--navy)">${g.totalBudget?fmtCurrency(g.totalBudget):'TBD'}</td>
             <td>${bsDisplay}</td>
             <td style="font-size:12px">${propertyConsultantsDisplay(p.n)}</td>
@@ -13570,7 +13128,7 @@ function renderCapitalPlan(){
                 const graduating=m1Date&&m1Date!=='';
                 return `<tr style="${graduating?'background:var(--green-xpale,#f0faf4)':''}">
                   <td style="width:20%;padding-left:30px;font-size:12px;color:var(--gray-mid)">${graduating?`<span style="color:var(--green);font-weight:600"><i class="ti ti-arrow-up-right" style="font-size:10px"></i> Activating</span>`:''}</td>
-                  <td style="width:13%;font-size:12px;color:#1D9E75;font-weight:500">${s.name||'—'}</td>
+                  <td style="width:13%;font-size:12px;color:#1D9E75;font-weight:500">${escHtml(s.name||'—')}</td>
                   <td style="width:6%"></td>
                   <td style="width:6%"><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
                   <td style="width:7%;font-size:12px;color:#1D9E75">${(()=>{const u=(window.UNIT_INVENTORY||[]).filter(inv=>inv.scopeId===s.id).length;return u||s.unitList||'—';})()}</td>
@@ -13654,7 +13212,7 @@ function renderCapitalPlan(){
             <span style="font-size:12px;color:var(--gray-mid);min-width:100px;text-align:right">${g._prop?.v||'—'}</span>
           </div>
           <div id="${g.rowId}" style="display:none;padding:2px 14px 12px 36px">
-            ${g.units.map(u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;background:var(--gray-xpale);border-radius:4px;padding:3px 8px;color:var(--navy)">${u.name||'—'}</span>`).join('')}
+            ${g.units.map(u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;background:var(--gray-xpale);border-radius:4px;padding:3px 8px;color:var(--navy)">${escHtml(u.name||'—')}</span>`).join('')}
           </div>
         </div>`).join('')}
       </div>
@@ -14275,7 +13833,7 @@ function renderReforecastView(){
     const changed=pending!=null&&pending!==sc.year;
     return `<tr style="${changed?'background:var(--blue-xpale)':''}">
       <td><input type="checkbox" ${changed?'checked':''} disabled></td>
-      <td>${sc.name||'Untitled Project'}</td>
+      <td>${escHtml(sc.name||'Untitled Project')}</td>
       <td style="color:var(--gray-mid);font-size:12px">${sc.property||''}</td>
       <td>${sc.year}</td>
       <td><i class="ti ti-arrow-right" style="font-size:14px;color:var(--gray-mid)"></i></td>
@@ -16832,7 +16390,7 @@ function renderCharts(){
       const overrun=d.pctBilled>100;
       return `<div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <div style="font-size:12px;color:var(--blue-dark);font-weight:500;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}')">${d.name}</div>
+          <div style="font-size:12px;color:var(--blue-dark);font-weight:500;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%" onclick="openProperty('${d.fullName.replace(/'/g,"\\'")}')">${escHtml(d.name)}</div>
           <div style="font-size:11px;color:var(--gray-mid);flex-shrink:0">${fmtCurrency(d.budget)}</div>
         </div>
         <div style="margin-bottom:3px">
@@ -16892,7 +16450,7 @@ function renderCharts(){
           </div>
           <!-- X labels -->
           <div style="display:flex;gap:${totalGap}px;padding:4px 4px 0;margin-left:0">
-            ${elevCoData.map(d=>`<div style="width:${barW}px;flex-shrink:0;text-align:center;font-size:${n>4?'8':'10'}px;color:${d.name==='TBD'?'var(--gray-mid)':'var(--navy)'};font-weight:${d.name==='TBD'?400:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${d.name}">${d.name}</div>`).join('')}
+            ${elevCoData.map(d=>`<div style="width:${barW}px;flex-shrink:0;text-align:center;font-size:${n>4?'8':'10'}px;color:${d.name==='TBD'?'var(--gray-mid)':'var(--navy)'};font-weight:${d.name==='TBD'?400:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(d.name)}">${escHtml(d.name)}</div>`).join('')}
           </div>
         </div>
       </div>
@@ -17420,7 +16978,7 @@ function showBarDrilldown(type,value){
         <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
         <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
         <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
-        <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${p.units||'—'}</td>
+        <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${escHtml(p.units||'—')}</td>
         <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--gray-mid)">${p.budget?fmtBudget(p.budget):'—'}</td>
       </tr>`;
     }).join('');
@@ -17943,7 +17501,7 @@ async function executeCancelCalEvent(type,id){
         ${calEventDetailTable(rows)}
         <p style="font-family:Arial,sans-serif;font-size:13px;color:#333333;line-height:1.6;margin:0">This ${isVisit?'site visit':'meeting'} has been cancelled. No action is needed on your part. If you have questions, please reach out to your VDA project contact.</p>`;
       const html=calEventEmailWrapper(bodyHtml);
-      const resp=await fetch(`${WORKER_URL}/send-email`,{
+      const resp=await workerFetch(`${WORKER_URL}/send-email`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({to:a.email,subject:`Cancelled: ${isVisit?'Site Visit':(record.type||'Meeting')} — ${record.property} · ${fmtShortDate(record.date)}`,html}),
@@ -18020,7 +17578,7 @@ async function executeRescheduleCalEvent(type,id){
   }
   if(!demoMode&&attendeeRecordIds.length){
     try{
-      await fetch(`${WORKER_URL}/send-meeting-invites`,{
+      await workerFetch(`${WORKER_URL}/send-meeting-invites`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({eventTable:isVisit?'Site Visits':'Meetings',eventRecordId:record.atId,attendeeRecordIds}),
@@ -18423,7 +17981,7 @@ function renderDashboard(){
       <td style="font-size:12px;font-weight:500">${p.n}</td>
       <td><span class="geo">${p.s}</span></td>
       <td style="font-size:11px">${p.ec||'TBD'}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${p.units||'—'} units</td>
+      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${escHtml(p.units||'—')} units</td>
       <td>${renderStatusBadge(p.st)}</td>
       <td>${renderHealthBadge(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
@@ -18582,7 +18140,7 @@ function renderDashboard(){
       const lbl=isRisk?'AT RISK':'ON TRACK';
       const overdueText=d.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:'';
       return `<div style="border:1.5px solid ${borderColor};border-radius:8px;padding:10px 12px;background:${bgColor};cursor:pointer;min-width:160px;max-width:240px;flex:1 1 160px" onclick="openProperty('${d.name.replace(/'/g,"\\'")}')">
-        <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">${d.name}</div>
+        <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(d.name)}</div>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:10px;font-weight:700;color:${lblColor};letter-spacing:.04em">${lbl}</span>
           <span style="font-size:10px;color:var(--gray-mid);font-family:'Plus Jakarta Sans',sans-serif">${d.pct}%</span>
@@ -18595,7 +18153,7 @@ function renderDashboard(){
     }).join('');
     const completeTiles=dashHeatShowComplete?dashHeatDataComplete.map(d=>{
       return `<div style="border:1.5px solid var(--green);border-radius:8px;padding:10px 12px;background:var(--green-pale);cursor:pointer;min-width:160px;max-width:240px;flex:1 1 160px" onclick="openProperty('${d.name.replace(/'/g,"\\'")}')">
-        <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">${d.name}</div>
+        <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(d.name)}</div>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:10px;font-weight:700;color:var(--green);letter-spacing:.04em"><i class="ti ti-circle-check" style="font-size:11px;margin-right:2px"></i>COMPLETE</span>
           <span style="font-size:10px;color:var(--gray-mid);font-family:'Plus Jakarta Sans',sans-serif">100%</span>
@@ -18687,7 +18245,7 @@ function renderDashboard(){
       ${horizonActions.length===0
         ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0"><i class="ti ti-circle-check" style="color:var(--green);margin-right:6px"></i>No overdue or upcoming actions. You\'re on top of it.</div>'
         :`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          ${horizonActions.map(a=>{const _dSc=a.scopeId?(window.SCOPES||[]).find(s=>s.id===a.scopeId):null;const _dScTag=_dSc?`<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo)">${_dSc.name}</span>`:'';return `<div class="action-item-row" style="cursor:pointer;border-left:2px solid ${a.bucketColor};padding-left:8px" onclick="openProperty('${(a.property||'').replace(/'/g,"\\'")}')">
+          ${horizonActions.map(a=>{const _dSc=a.scopeId?(window.SCOPES||[]).find(s=>s.id===a.scopeId):null;const _dScTag=_dSc?`<span style="font-size:9px;font-weight:600;padding:1px 6px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo)">${escHtml(_dSc.name)}</span>`:'';return `<div class="action-item-row" style="cursor:pointer;border-left:2px solid ${a.bucketColor};padding-left:8px" onclick="openProperty('${(a.property||'').replace(/'/g,"\\'")}')">
             <div style="flex:1;min-width:0">
               <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;flex-wrap:wrap">
                 <span style="font-size:9px;font-weight:700;color:${a.bucketColor};text-transform:uppercase">${a.bucket} · Due ${fmtDate(a.due)}</span>
@@ -18695,7 +18253,7 @@ function renderDashboard(){
                 ${_dScTag}
               </div>
               <div style="font-size:12px;font-weight:500;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.description||a.title||'Action'}</div>
-              <div style="font-size:10px;color:var(--gray-mid)">${a.property||'—'} · ${a.owner||'—'}</div>
+              <div style="font-size:10px;color:var(--gray-mid)">${a.property||'—'} · ${escHtml(a.owner||'—')}</div>
             </div>
           </div>`}).join('')}
         </div>`
@@ -18849,7 +18407,7 @@ function renderDashboard(){
             <i class="ti ${item._icon}" style="font-size:13px;color:${item._color}"></i>
           </div>
           <div class="action-desc" style="flex:1">
-            <span style="color:var(--blue-dark);font-weight:600">${item._title}</span>
+            <span style="color:var(--blue-dark);font-weight:600">${escHtml(item._title)}</span>
             <br><span style="color:var(--gray-mid);font-size:11px"><span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:${item._color}18;color:${item._color};margin-right:4px;text-transform:capitalize">${item._type}</span>${item._sub}</span>
           </div>
         </div>`;
@@ -19225,7 +18783,7 @@ let _marliInsightsCache = null; // last successful fetch, for the detail drilldo
 
 async function fetchMarliInsights(days){
   try{
-    const res = await fetch(`${WORKER_URL}/marli-insights?days=${encodeURIComponent(days)}`);
+    const res = await workerFetch(`${WORKER_URL}/marli-insights?days=${encodeURIComponent(days)}`);
     if(!res.ok)return null;
     return await res.json();
   }catch(e){
@@ -19455,7 +19013,7 @@ function _renderSuggestionStatsSection(stats){
 // one-shot submit, same pattern as MARLI session feedback.
 async function fetchWeeklyReportFeedback(){
   try{
-    const res = await fetch(`${WORKER_URL}/weekly-report-feedback?limit=12`);
+    const res = await workerFetch(`${WORKER_URL}/weekly-report-feedback?limit=12`);
     if(!res.ok)return null;
     return await res.json();
   }catch(e){
@@ -19512,7 +19070,7 @@ async function voteWeeklyReportFeedback(feedbackRecordId,vote){
   const notesEl=document.getElementById(`wrf-notes-${feedbackRecordId}`);
   if(notesEl)notesEl.style.display=vote==='down'?'':'none';
   try{
-    const response=await fetch(`${WORKER_URL}/weekly-report-feedback`,{
+    const response=await workerFetch(`${WORKER_URL}/weekly-report-feedback`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({feedbackRecordId,recordId:window._marliRecordId,vote,notes:''})
@@ -19533,7 +19091,7 @@ async function saveWeeklyReportFeedbackNotes(feedbackRecordId){
   const input=document.getElementById(`wrf-notes-input-${feedbackRecordId}`);
   if(!input)return;
   try{
-    const response=await fetch(`${WORKER_URL}/weekly-report-feedback`,{
+    const response=await workerFetch(`${WORKER_URL}/weekly-report-feedback`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({feedbackRecordId,recordId:window._marliRecordId,vote:'down',notes:input.value.trim()})
@@ -19598,7 +19156,7 @@ function showMarliFlagDetail(flagId){
 
 async function dismissMarliFlagAndClose(flagId){
   try{
-    await fetch(`${WORKER_URL}/marli-insights`,{
+    await workerFetch(`${WORKER_URL}/marli-insights`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({flagId})
@@ -19960,7 +19518,7 @@ function populateSmtgScopes(){
   const sel=document.getElementById('smtg-scope');
   if(!sel)return;
   const scopes=(window.SCOPES||[]).filter(s=>s.property===propName&&s.status!=='Capital Plan');
-  sel.innerHTML='<option value="">All projects / property-level</option>'+scopes.map(s=>`<option value="${s.id}">${s.name||'Project'}</option>`).join('');
+  sel.innerHTML='<option value="">All projects / property-level</option>'+scopes.map(s=>`<option value="${s.id}">${escHtml(s.name||'Project')}</option>`).join('');
   document.getElementById('smtg-scope-group').style.display=scopes.length>0?'':'none';
 }
 // v45h — dynamic Attendee rows replacing the fixed VDA/Elevator Co./Client
@@ -20170,7 +19728,7 @@ async function saveScheduledMeeting(){
       }
       if(attendeeRecordIds.length){
         try{
-          await fetch(`${WORKER_URL}/send-meeting-invites`,{
+          await workerFetch(`${WORKER_URL}/send-meeting-invites`,{
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({eventTable:'Meetings',eventRecordId:atId,attendeeRecordIds}),
@@ -20303,11 +19861,8 @@ async function sendCalendarMeetingNotifications({propName,date,time,tz,type,purp
       pinRecords=recs.filter(r=>r.fields['Active']&&r.fields['Email']).map(r=>({name:(r.fields['Name']||'').toLowerCase(),email:r.fields['Email']}));
     }catch(e){pinRecords=[];}
   }else{
-    pinRecords=[
-      {name:'nick nikolai',email:'nick@vdassoc.com'},
-      {name:'paul parios',email:'paul@vdassoc.com'},
-      {name:'demo client',email:'demo-client@example.com'},
-    ];
+    // v51a: real names/emails removed from this always-false demo branch.
+    pinRecords=[];
   }
   const tzAbbr=tzLabel(tz);
   const [hh,mm]=(time||'10:00').split(':');
@@ -20411,7 +19966,7 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
         }
         if(attendeeRecordIds.length){
           try{
-            await fetch(`${WORKER_URL}/send-meeting-invites`,{
+            await workerFetch(`${WORKER_URL}/send-meeting-invites`,{
               method:'POST',
               headers:{'Content-Type':'application/json'},
               body:JSON.stringify({eventTable:'Site Visits',eventRecordId:newVisit.atId,attendeeRecordIds}),
@@ -20510,14 +20065,14 @@ function docItemHtml(d){
     ${isClosedAction?`<input type="checkbox" class="closed-action-check" data-doc-id="${d.id}" style="margin-right:8px;flex-shrink:0" onchange="updateClosedActionSelection()">`:''}
     <div class="doc-item-icon" style="background:${st.bg}"><i class="ti ${st.icon}" style="font-size:18px;color:${st.color}"></i></div>
     <div style="flex:1;min-width:0">
-      <div class="doc-name">${d.name}</div>
+      <div class="doc-name">${escHtml(d.name)}</div>
       <div class="doc-meta">${d.type} · ${d.uploaded}${d.uploadedBy?' · '+d.uploadedBy:''}${d.notes?' · '+d.notes:''}</div>
     </div>
     ${role!=='client'?`<span class="badge ${vc}" style="flex-shrink:0">${d.visibility}</span>`:''}
     ${canPreview?`<button class="btn btn-icon" style="flex-shrink:0" onclick="previewDoc('${d.id}')" title="Preview"><i class="ti ti-eye"></i></button>`:''}
     ${(isFieldUpdate||isMeetingMinutes)?`<button class="btn btn-icon" style="flex-shrink:0" onclick="printDocRTF('${d.id}')" title="Print / PDF"><i class="ti ti-printer"></i></button>`:''}
     ${isClosedAction?`<button class="btn btn-icon" style="flex-shrink:0" onclick="printDocRTF('${d.id}')" title="Print / PDF"><i class="ti ti-printer"></i></button>`:''}
-    ${(!isClosedAction&&d.isDraft!==false&&d.visibility==='Draft'&&(role==='pm'||role==='admin'))?`<button class="btn btn-icon" style="flex-shrink:0;background:var(--red-pale);border-color:#f7c1c1" onclick="deleteDoc('${d.id}','${d.name}')"><i class="ti ti-trash" style="color:var(--red)"></i></button>`:''}
+    ${(!isClosedAction&&d.isDraft!==false&&d.visibility==='Draft'&&(role==='pm'||role==='admin'))?`<button class="btn btn-icon" style="flex-shrink:0;background:var(--red-pale);border-color:#f7c1c1" onclick="deleteDoc('${d.id}','${escHtml(d.name)}')"><i class="ti ti-trash" style="color:var(--red)"></i></button>`:''}
   </div>`;
 }
 
@@ -20643,7 +20198,7 @@ function renderDocFolders(){
       :perfReports.map(r=>`<div class="doc-item" style="cursor:pointer" onclick="openSavedReport('${r.id}')">
           <div class="doc-item-icon" style="background:var(--purple-pale)"><i class="ti ti-file-analytics" style="color:var(--purple);font-size:16px"></i></div>
           <div class="doc-item-info">
-            <div class="doc-item-name">${r.name||'Performance Report'}</div>
+            <div class="doc-item-name">${escHtml(r.name||'Performance Report')}</div>
             <div class="doc-item-meta">${r.uploaded||r.date||'—'} · ${r.reportType||'On-Demand'} · ${r.scope||'All Properties'}</div>
           </div>
           <button class="btn btn-icon" onclick="event.stopPropagation();openSavedReport('${r.id}')" title="Open"><i class="ti ti-external-link" style="font-size:13px"></i></button>
@@ -20789,15 +20344,15 @@ function previewDoc(docId, syntheticDoc){
       <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">Week of ${s.week} · Submitted ${s.submittedAt}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant}</strong></div>
-        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${s.units||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${s.phase}</strong></div>
+        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
+        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase)}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status}</strong></div>
         <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType}</strong></div>
         <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:${s.reviewStatus==='approved'?'var(--green)':'var(--amber)'}">${s.reviewStatus}</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
-      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${s.notes||'—'}</div>
+      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(s.notes||'—')}</div>
       ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Return Note:</strong> ${s.returnNote}</div>`:''}`;
   } else if(d.subfolder==='Meeting Minutes'&&d._meetingId){
     const m=meetings.find(x=>x.id===d._meetingId);
@@ -20809,20 +20364,20 @@ function previewDoc(docId, syntheticDoc){
       <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">${m.type} · ${m.date} · ${m.format||''}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         ${m.elevco?`<div><span style="color:var(--gray-mid)">Elevator Co:</span> <strong>${m.elevco}</strong></div>`:''}
-        ${m.attVDA?`<div><span style="color:var(--gray-mid)">VDA Team:</span> <strong>${m.attVDA}</strong></div>`:''}
-        ${m.attElev?`<div><span style="color:var(--gray-mid)">Elev. Co:</span> <strong>${m.attElev}</strong></div>`:''}
-        ${m.attClient?`<div><span style="color:var(--gray-mid)">Client:</span> <strong>${m.attClient}</strong></div>`:''}
+        ${m.attVDA?`<div><span style="color:var(--gray-mid)">VDA Team:</span> <strong>${escHtml(m.attVDA)}</strong></div>`:''}
+        ${m.attElev?`<div><span style="color:var(--gray-mid)">Elev. Co:</span> <strong>${escHtml(m.attElev)}</strong></div>`:''}
+        ${m.attClient?`<div><span style="color:var(--gray-mid)">Client:</span> <strong>${escHtml(m.attClient)}</strong></div>`:''}
       </div>
-      ${m.agenda?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Agenda</div><div style="font-size:13px;line-height:1.7;background:var(--gray-xpale);padding:12px;border-radius:6px">${m.agenda}</div></div>`:''}
-      ${m.notes?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Discussion Notes</div><div style="font-size:13px;line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${m.notes}</div></div>`:''}
-      ${propActions.length>0?`<div><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Action Items</div>${propActions.map(a=>`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-top:4px;flex-shrink:0"></div><div><strong>${a.description}</strong><br><span style="color:var(--gray-mid)">Owner: ${a.owner} · Due: ${a.due} · ${a.priority}</span></div></div>`).join('')}</div>`:''}`;
+      ${m.agenda?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Agenda</div><div style="font-size:13px;line-height:1.7;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(m.agenda)}</div></div>`:''}
+      ${m.notes?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Discussion Notes</div><div style="font-size:13px;line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(m.notes)}</div></div>`:''}
+      ${propActions.length>0?`<div><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Action Items</div>${propActions.map(a=>`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-top:4px;flex-shrink:0"></div><div><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · ${a.priority}</span></div></div>`).join('')}</div>`:''}`;
   } else {showToast('Preview not available','warn');return;}
   const overlay=document.createElement('div');
   overlay.id='doc-preview-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:640px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
     <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:13px;font-weight:600;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${d.name}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${escHtml(d.name)}</div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn" style="font-size:11px" onclick="printDocRTF('${docId}')"><i class="ti ti-printer"></i>Print / PDF</button>
         <button onclick="document.getElementById('doc-preview-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
@@ -21107,7 +20662,7 @@ function renderEditPropertyUnitStats(p){
   const complete=units.filter(u=>u.status==='Complete');
   const dormant=units.filter(u=>u.status==='Dormant');
 
-  const chip=u=>`<span title="${[u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · ')}" style="font-size:12px;background:var(--blue-xpale);color:var(--blue-dark);padding:5px 8px;border-radius:6px;display:inline-block;cursor:default">${u.name||'(unnamed)'}</span>`;
+  const chip=u=>`<span title="${[u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · ')}" style="font-size:12px;background:var(--blue-xpale);color:var(--blue-dark);padding:5px 8px;border-radius:6px;display:inline-block;cursor:default">${escHtml(u.name||'(unnamed)')}</span>`;
 
   const card=(key,label,list,color)=>{
     const isOpen=epUnitStatsOpen[key];
@@ -21169,7 +20724,7 @@ function openClientUnitInventoryView(propName){
     return v?`$${v.toLocaleString()}`:'—';
   };
   const rows=units.length?units.map(u=>`<tr style="border-top:0.5px solid var(--border)">
-      <td style="padding:6px 8px">${u.name||'(unnamed)'}</td>
+      <td style="padding:6px 8px">${escHtml(u.name||'(unnamed)')}</td>
       <td style="padding:6px 8px">${u.deviceLocation||'—'}</td>
       <td style="padding:6px 8px">${u.unitType||'—'}</td>
       <td style="padding:6px 8px">${u.status||'—'}</td>
@@ -21651,7 +21206,7 @@ function sortPortfolioByPriority(th){
       <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type||'—'}</span></td>
       <td style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
       <td style="font-size:11px">${p.ec||'TBD'}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${p.units||'—'}</td>
+      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${escHtml(p.units||'—')}</td>
       <td>${renderStatusBadge(p.st)}</td>
       <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
@@ -21677,11 +21232,11 @@ function previewFieldUpdateCard(subId){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         <div><span style="color:var(--gray-mid)">Submitted by</span><br><strong>${s.consultant}</strong></div>
         <div><span style="color:var(--gray-mid)">Date</span><br><strong>${s.submittedAt}</strong></div>
-        <div><span style="color:var(--gray-mid)">Phase</span><br><strong>${s.phase||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Phase</span><br><strong>${escHtml(s.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Status</span><br><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></div>
       </div>
-      <div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:4px">Weekly Notes</div><div style="font-size:13px;line-height:1.6">${s.notes||'—'}</div></div>
-      ${s.savings?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--green-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--green);margin-bottom:2px">Savings Identified</div><div style="font-size:13px;font-weight:600">${s.savings}</div></div>`:''}
+      <div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:4px">Weekly Notes</div><div style="font-size:13px;line-height:1.6">${escHtml(s.notes||'—')}</div></div>
+      ${s.savings?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--green-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--green);margin-bottom:2px">Savings Identified</div><div style="font-size:13px;font-weight:600">${escHtml(s.savings)}</div></div>`:''}
       ${s.returnNote?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--red-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--red);margin-bottom:2px">Return Note</div><div style="font-size:13px">${s.returnNote}</div></div>`:''}
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
@@ -21701,16 +21256,16 @@ function renderPropUpdates(p){
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
   el.innerHTML=visible.slice().reverse().map(s=>`<div class="update-card">
     <div class="update-card-header">
-      <div class="update-card-title">Week of ${s.week} · ${s.units}</div>
+      <div class="update-card-title">Week of ${s.week} · ${escHtml(s.units)}</div>
       <div style="display:flex;align-items:center;gap:6px">
         <span class="badge ${scl[s.reviewStatus]}">${s.reviewStatus}</span>
         <button class="btn btn-icon" onclick="previewFieldUpdateCard('${s.id}')" title="Preview"><i class="ti ti-eye" style="font-size:14px"></i></button>
         <button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:14px"></i></button>
       </div>
     </div>
-    <div class="update-card-meta">${s.phase} · ${s.status} · ${s.submittedAt}</div>
-    <div class="update-card-body">${s.notes}</div>
-    <div class="update-card-tags"><span class="badge b-nac">${s.commentType}</span><span class="badge b-nac">${s.issueStatus}</span>${s.savings?`<span class="badge b-track">${s.savings}</span>`:''}</div>
+    <div class="update-card-meta">${escHtml(s.phase)} · ${s.status} · ${s.submittedAt}</div>
+    <div class="update-card-body">${escHtml(s.notes)}</div>
+    <div class="update-card-tags"><span class="badge b-nac">${s.commentType}</span><span class="badge b-nac">${s.issueStatus}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
   </div>`).join('');
 }
 
@@ -21732,7 +21287,7 @@ function refreshQueue(){
           <button class="btn btn-icon" onclick="previewQueueItem('${s.id}')" title="Preview update"><i class="ti ti-eye" style="font-size:14px"></i></button>
         </div>
       </div>
-      <div class="queue-item-meta">Submitted by ${s.consultant} · ${s.submittedAt} · Units: ${s.units} · Phase: ${s.phase}</div>
+      <div class="queue-item-meta">Submitted by ${s.consultant} · ${s.submittedAt} · Units: ${escHtml(s.units)} · Phase: ${escHtml(s.phase)}</div>
       <div class="queue-item-body">${(s.notes||'').slice(0,120)}${(s.notes||'').length>120?'...':''}</div>
       <div class="queue-actions">
         <button class="btn btn-success" onclick="approveSubmission('${s.id}')"><i class="ti ti-check"></i>Approve</button>
@@ -21910,7 +21465,7 @@ async function checkAndGenerateSuggestions(){
     // tryRestorePulseSession()) — the closest existing equivalent to a PIN
     // Access record id, reused here rather than inventing a new variable.
     const triggeredBy=window._marliRecordId||'';
-    fetch(`${WORKER_URL}/generate-suggestions`,{
+    workerFetch(`${WORKER_URL}/generate-suggestions`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({triggeredBy})
     }).then(async res=>{
@@ -22101,7 +21656,8 @@ async function sendWeeklyReminders(){
     );
     let consultants=[];
     if(demoMode){
-      consultants=[{name:'Nick Nikolai',email:'nick@vdassoc.com'},{name:'Paul Parios',email:'paul@vdassoc.com'}];
+      // v51a: real consultant emails removed from this always-false branch.
+      consultants=[];
     }else{
       const recs=await atGet('Access PINs');
       consultants=recs
@@ -22162,15 +21718,15 @@ function previewFieldUpdateDetail(subId){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Submitted:</span> <strong>${s.submittedAt||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${s.units||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${s.phase||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
+        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--green)">Approved</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
-      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${s.notes||'—'}</div>
+      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(s.notes||'—')}</div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex">
       <button class="btn" style="margin-left:auto" onclick="document.getElementById('fu-detail-overlay').remove()">Close</button>
@@ -22197,13 +21753,13 @@ function previewPMUpdateDetail(pmuId){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         <div><span style="color:var(--gray-mid)">Author:</span> <strong>${u.author||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Published:</span> <strong>${u.published||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${u.units||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${u.phase||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(u.units||'—')}</strong></div>
+        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(u.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${u.progressStatus||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${u.commentType||'—'}</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Update</div>
-      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${u.text||'—'}</div>
+      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(u.text||'—')}</div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex">
       <button class="btn" style="margin-left:auto" onclick="document.getElementById('pmu-detail-overlay').remove()">Close</button>
@@ -22228,20 +21784,20 @@ function previewQueueItem(subId){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Submitted:</span> <strong>${s.submittedAt||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${s.units||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${s.phase||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
+        <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--amber)">Pending</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
-      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${s.notes||'—'}</div>
+      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(s.notes||'—')}</div>
       ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Previous Return Note:</strong> ${s.returnNote}</div>`:''}
       ${s.draftAction?`<div style="margin-top:12px;padding:12px;background:var(--blue-xpale);border:1px solid var(--blue-pale);border-radius:6px">
         <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px"><i class="ti ti-flag" style="margin-right:4px"></i>Consultant-flagged follow-up</div>
-        <div style="font-size:12px;margin-bottom:4px"><strong>${s.draftAction.description}</strong></div>
-        <div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px">${s.draftAction.owner?`Owner: ${s.draftAction.owner} · `:''}Priority: ${s.draftAction.priority}${s.draftAction.due?` · Due ${s.draftAction.due}`:''}</div>
+        <div style="font-size:12px;margin-bottom:4px"><strong>${escHtml(s.draftAction.description)}</strong></div>
+        <div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px">${s.draftAction.owner?`Owner: ${escHtml(s.draftAction.owner)} · `:''}Priority: ${s.draftAction.priority}${s.draftAction.due?` · Due ${s.draftAction.due}`:''}</div>
         ${s.draftAction.published?
           `<span style="font-size:11px;color:var(--green);font-weight:600"><i class="ti ti-circle-check"></i> Published to Action Items</span>`:
           s.draftAction.dismissed?
@@ -22870,7 +22426,7 @@ async function submitFlag(){
           .map(r=>r.fields['Email']);
       }catch(e){console.error('Flag notify — could not load PM recipients:',e);}
       if(pmEmails.length>0){
-        await fetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
+        await workerFetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
           method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({
             to:pmEmails,
@@ -23103,7 +22659,7 @@ function renderPMUpdates(){
         </div>
         ${statusBadge}
       </div>
-      <div style="font-size:13px;color:var(--navy);margin-top:10px;white-space:pre-wrap">${u.text}</div>
+      <div style="font-size:13px;color:var(--navy);margin-top:10px;white-space:pre-wrap">${escHtml(u.text)}</div>
       ${actions}
     </div>`;
   }).join('');
@@ -23792,7 +23348,7 @@ function renderCommentsView(expandedThreads){
       <div id="${collapseId}" style="display:${defaultCollapsed?'none':'block'}">
       ${thread.map(c=>`<div class="comment-item">
         <div class="comment-av ${c.authorRole==='client'?'c-av-client':'c-av-team'}">${c.authorRole==='client'?clientInitials:c.authorRole==='consultant'?consultantInitials:'PM'}</div>
-        <div><div><span class="comment-author">${c.authorName}</span><span class="comment-time">${new Date(c.created).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span></div><div class="comment-text">${c.message}</div></div>
+        <div><div><span class="comment-author">${escHtml(c.authorName)}</span><span class="comment-time">${new Date(c.created).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span></div><div class="comment-text">${escHtml(c.message)}</div></div>
       </div>`).join('')}
       <div class="comment-input-row">
         <textarea class="comment-textarea" id="reply-input-${threadId}" placeholder="Add a reply..."></textarea>
@@ -23903,7 +23459,7 @@ function renderReportLibrary(){
         <div style="display:flex;align-items:center;gap:12px">
           <i class="ti ti-file-analytics" style="font-size:22px;color:var(--blue-dark);flex-shrink:0"></i>
           <div>
-            <div style="font-size:13px;font-weight:600;color:var(--navy)">${r.name||'Performance Report'}</div>
+            <div style="font-size:13px;font-weight:600;color:var(--navy)">${escHtml(r.name||'Performance Report')}</div>
             <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${dateLabel} · ${scopeLabel}</div>
           </div>
         </div>
@@ -24010,7 +23566,7 @@ function renderMilestoneReport(){
     const budget=_msrBudgetPerf(s);
     return `<tr>
       <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')">${s.property||'—'}</td>
-      <td style="font-size:12px;color:var(--navy);border-right:1px solid var(--border)">${s.name||'Property Modernization'}</td>
+      <td style="font-size:12px;color:var(--navy);border-right:1px solid var(--border)">${escHtml(s.name||'Property Modernization')}</td>
       <td style="font-size:11px;color:var(--gray-mid);text-align:center">${c5.start}</td>
       <td style="font-size:11px;color:var(--gray-mid);text-align:center;border-right:1px solid var(--border)">${c5.complete}</td>
       <td style="font-size:11px;color:var(--gray-mid);text-align:center">${c6.start}</td>
@@ -24621,7 +24177,7 @@ function buildReportHTML(filter,periodDays,isWeekly){
                   <td style="font-weight:500;color:var(--blue-dark)">${p.n}</td>
                   <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
                   <td style="font-size:10px">${p.ec||'TBD'}</td>
-                  <td style="font-family:'Plus Jakarta Sans',sans-serif">${p.units||'—'}</td>
+                  <td style="font-family:'Plus Jakarta Sans',sans-serif">${escHtml(p.units||'—')}</td>
                   <td>${renderStatusBadge(p.st)}</td>
                   <td>${healthBadge}</td>
                   <td style="font-size:10px">${rowBillingBasis.amount?fmtBudget(rowBillingBasis.amount):'TBD'}</td>
@@ -24644,7 +24200,7 @@ function buildReportHTML(filter,periodDays,isWeekly){
       </div>
       ${openAI.length>0?`<div class="report-section">
         <div class="report-section-title">Open action items</div>
-        ${openAI.slice(0,10).map(a=>`<div class="risk-row"><div style="width:10px;height:10px;border-radius:50%;background:var(--red);flex-shrink:0;margin-top:3px"></div><div><div class="risk-content-title">${a.description}</div><div class="risk-content-desc">${a.property} · Owner: ${a.owner} · Due: ${a.due} · Priority: ${a.priority}</div></div></div>`).join('')}
+        ${openAI.slice(0,10).map(a=>`<div class="risk-row"><div style="width:10px;height:10px;border-radius:50%;background:var(--red);flex-shrink:0;margin-top:3px"></div><div><div class="risk-content-title">${escHtml(a.description)}</div><div class="risk-content-desc">${a.property} · Owner: ${escHtml(a.owner)} · Due: ${a.due} · Priority: ${a.priority}</div></div></div>`).join('')}
       </div>`:''}
       <div style="text-align:center;padding:1rem 0;border-top:1px solid var(--border);font-size:10px;color:var(--gray-light);font-family:'Plus Jakarta Sans',sans-serif">
         PULSE · ${clientName} · Generated ${today} · Modernization Project Assurance · Confidential
@@ -24689,7 +24245,7 @@ function getDemoMarliAnswer(msg){
 function sendChat(){
   const input=document.getElementById('chat-input');const msg=input.value.trim();if(!msg)return;input.value='';
   const msgs=document.getElementById('chat-messages');
-  msgs.innerHTML+=`<div class="chat-msg user-msg"><div class="msg-av u-av">U</div><div class="msg-bubble u-bubble">${msg}</div></div>`;
+  msgs.innerHTML+=`<div class="chat-msg user-msg"><div class="msg-av u-av">U</div><div class="msg-bubble u-bubble">${escHtml(msg)}</div></div>`;
   msgs.scrollTop=msgs.scrollHeight;
   if(demoMode){
     sendDemoChat(msg);
@@ -24738,7 +24294,7 @@ async function sendLiveChat(msg){
   // appends it as the final user turn itself).
   const historyToSend=window._marliHistory.slice(-MARLI_HISTORY_MAX_TURNS);
   try{
-    const response=await fetch(`${WORKER_URL}/marli`,{
+    const response=await workerFetch(`${WORKER_URL}/marli`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({recordId,query:msg,role,history:historyToSend})
@@ -24814,7 +24370,7 @@ async function sendMarliSessionFeedback(vote){
   if(upBtn)upBtn.classList.toggle('active-up',vote==='up');
   if(downBtn)downBtn.classList.toggle('active-down',vote==='down');
   try{
-    const response=await fetch(`${WORKER_URL}/marli-session-feedback`,{
+    const response=await workerFetch(`${WORKER_URL}/marli-session-feedback`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({sessionId:window._marliSessionId,recordId:window._marliRecordId,role,vote})
@@ -24911,7 +24467,7 @@ function closeHelpDrawer() {
 
 async function fetchHelpContent() {
   try {
-    const res = await fetch(`${WORKER_URL}/help`);
+    const res = await workerFetch(`${WORKER_URL}/help`);
     if (res.ok) {
       window._helpCache = await res.json();
     } else {
@@ -25209,7 +24765,7 @@ function renderGantt() {
         const w = Math.max(4, x2 - x1);
         const label = ph.phase.replace(/^Phase \d+ — /, '');
         barHtml = `<div class="gantt-bar" style="left:${x1}px;width:${w}px;background:${health.bg}"
-          title="${ph.phase} — ${start} → ${end} — ${health.label}" onclick="openProperty('${row.prop.n.replace(/'/g, "\\'")}')">
+          title="${escHtml(ph.phase)} — ${start} → ${end} — ${health.label}" onclick="openProperty('${row.prop.n.replace(/'/g, "\\'")}')">
           ${w > 60 ? label : ''}
         </div>`;
       }
@@ -25296,13 +24852,13 @@ function renderOpsCenter(){
     ?`<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--green-pale);color:var(--green)">Site Visit</span>`
     :`<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--gray-pale);color:var(--gray-mid)">Action</span>`;
   const typeDot=t=>t==='meeting'?'var(--blue-dark)':t==='visit'?'var(--green)':'var(--indigo)';
-  const scopeTag=scopeId=>{if(!scopeId)return '';const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);return sc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo);margin-right:4px">${sc.name}</span>`:'';}
+  const scopeTag=scopeId=>{if(!scopeId)return '';const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);return sc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo);margin-right:4px">${escHtml(sc.name)}</span>`:'';}
 
   function actionRow(h){
     return `<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(h._prop||'').replace(/'/g,"\\'")}')">
       <div class="action-dot" style="background:${h._type==='action'?(priColor[h._priority]||'var(--gray-mid)'):typeDot(h._type)}"></div>
       <div class="action-desc" style="flex:1">
-        <strong>${h._label}</strong>
+        <strong>${escHtml(h._label)}</strong>
         <br><span style="color:var(--gray-mid)">${h._sub}</span>
       </div>
       <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${scopeTag(h._scopeId)}${typeBadge(h._type)}</div>
@@ -25426,7 +24982,7 @@ function renderOpsCenter(){
         <div class="card-header"><div class="card-title">Recent Meetings</div></div>
         ${recentMeetings.length===0
           ?'<div style="font-size:12px;color:var(--gray-mid)">No meetings logged yet.</div>'
-          :recentMeetings.map(m=>{const _mSc=m.scopeId?(window.SCOPES||[]).find(s=>s.id===m.scopeId):null;const _mScTag=_mSc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo)">${_mSc.name}</span>`:'';return `<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
+          :recentMeetings.map(m=>{const _mSc=m.scopeId?(window.SCOPES||[]).find(s=>s.id===m.scopeId):null;const _mScTag=_mSc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo)">${escHtml(_mSc.name)}</span>`:'';return `<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
             <div class="action-dot" style="background:var(--blue-dark)"></div>
             <div class="action-desc" style="flex:1"><strong>${(m.type||'Meeting')}: ${m.property}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+m.elevco:''}</span></div>
             <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${_mScTag}<i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px"></i></div>
@@ -26920,7 +26476,7 @@ window.debugPulse = async function() {
   try {
     const url = `${WORKER_URL}?table=Properties`;
     console.log('Fetching:', url);
-    const r = await fetch(url);
+    const r = await workerFetch(url);
     console.log('GET Status:', r.status);
     const d = await r.json();
     console.log('GET Result:', d.records ? `${d.records.length} records` : JSON.stringify(d).slice(0,200));
@@ -26929,7 +26485,7 @@ window.debugPulse = async function() {
   // Test POST with one record
   console.log('Testing POST (1 record)...');
   try {
-    const r = await fetch(`${WORKER_URL}?table=Properties`, {
+    const r = await workerFetch(`${WORKER_URL}?table=Properties`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ records: [{ fields: { 'Property Name': 'DEBUG TEST - DELETE ME', 'State': 'XX', 'Status': 'On Hold', 'Asset Type': 'Non-Core' } }] })
