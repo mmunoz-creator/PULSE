@@ -1930,8 +1930,29 @@ function pushHistoryState(){
   try{ history.pushState({pulseSession:true}, '', location.href); }
   catch(e){ /* ignore — not fatal if history API is unavailable */ }
 }
+// v50f — property-view history state, distinct from the plain session
+// state above. Pushed once from openProperty() (see there) so the
+// popstate listener below can tell "back was pressed while inside a
+// property" apart from "back was pressed at the top level" and route the
+// former into goBack() instead of just re-guarding the session. Narrow by
+// design per the Build Schema doc: one level only, mirrors the in-app
+// "← Back" link exactly. Does not add tab-level or modal-level history.
+function pushPropertyHistoryState(){
+  try{ history.pushState({pulseSession:true,inProperty:true}, '', location.href); }
+  catch(e){ /* ignore — not fatal if history API is unavailable */ }
+}
 window.addEventListener('popstate', function(e){
   const portalActive=document.getElementById('portal-screen')?.classList.contains('active');
+  const inPropertyView=!document.getElementById('view-property')?.classList.contains('hidden');
+  if(portalActive&&inPropertyView){
+    // Back pressed while inside a property — same one-level jump the
+    // in-app "← Back" link already does, then push a fresh plain session
+    // state so the *next* back press falls through to the normal portal
+    // re-guard below instead of stepping further than intended.
+    goBack();
+    pushHistoryState();
+    return;
+  }
   if(portalActive){
     // Re-push state so the next back press doesn't fall through to a real
     // navigation, and keep the portal visible instead of showing login.
@@ -2727,7 +2748,6 @@ from unitEffectiveValue() onto each checkbox). -->
         <div class="nav-section-label">Intelligence</div>
         <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('marliinsights',this)"><i class="ti ti-shield-check"></i>MARLI Insights</button>
-        <button class="nav-item" onclick="gotoView('weeklyreportfeedback',this)"><i class="ti ti-thumb-up"></i>Weekly Report Feedback</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Reports</button>
         <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
@@ -2827,7 +2847,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v50g</div>
     </div>
   </nav>
 
@@ -2894,20 +2914,9 @@ from unitEffectiveValue() onto each checkbox). -->
         </div>
       </div>
 
-      <!-- WEEKLY REPORT FEEDBACK (v43a) — Admin-only. Thumbs up/down on
-           each week's AI-generated executive summary, with an optional
-           reason on a down vote, so the summary prompt can be tuned over
-           time from real feedback instead of guesswork. Sourced from the
-           Worker's /weekly-report-feedback endpoint. See
-           renderWeeklyReportFeedback(). -->
-      <div id="view-weeklyreportfeedback" class="hidden">
-        <div class="page-header">
-          <div class="page-header-left"><h1>Weekly Report Feedback</h1><p>Rate each week's AI summary to help improve future reports · Admin only</p></div>
-        </div>
-        <div class="page-body" id="weekly-report-feedback-body">
-          <!-- Populated by renderWeeklyReportFeedback() -->
-        </div>
-      </div>
+      <!-- v50f — Weekly Report Feedback (v43a) moved into the Performance
+      Reports view as a tab (#report-library-feedback-panel), no longer a
+      standalone sidebar destination. See there and switchReportLibraryTab(). -->
 
       <!-- PORTFOLIO -->
       <!-- VDA PROJECT — v47a. Billing-tracking feature: tracks VDA Project
@@ -3403,8 +3412,23 @@ from unitEffectiveValue() onto each checkbox). -->
               <button class="btn btn-add" onclick="showGenerateReportModal()"><i class="ti ti-file-plus"></i>Generate Performance Report</button>
             </div>
           </div>
-          <div class="page-body">
+          <!-- v50f — Weekly Report Feedback moved here from its own sidebar
+          item, as a tab within Performance Reports rather than a separate
+          nav destination. Admin-only, same as before; the tab button itself
+          is hidden for every other role. See renderWeeklyReportFeedback()
+          and switchReportLibraryTab(). -->
+          <div class="page-header no-print" id="report-library-tabs" style="padding-top:0;border-bottom:1px solid var(--border)">
+            <div style="display:flex;gap:4px">
+              <button class="tab-btn active" id="report-lib-tab-reports" onclick="switchReportLibraryTab('reports')">Reports</button>
+              <button class="tab-btn" id="report-lib-tab-feedback" onclick="switchReportLibraryTab('feedback')" style="display:none">Weekly Report Feedback</button>
+            </div>
+          </div>
+          <div class="page-body" id="report-library-reports-panel">
             <div id="report-library-list"></div>
+          </div>
+          <div class="page-body" id="report-library-feedback-panel" style="display:none">
+            <p style="font-size:12px;color:var(--gray-mid);margin:-8px 0 16px">Rate each week's AI summary to help improve future reports · Admin only</p>
+            <div id="weekly-report-feedback-body"></div>
           </div>
         </div>
         <!-- Report reader view -->
@@ -3995,6 +4019,56 @@ from unitEffectiveValue() onto each checkbox). -->
             <div class="card-title" style="margin-bottom:1rem">Feed</div>
             <div id="pmu-feed"><div class="empty-state" style="padding:2rem"><i class="ti ti-broadcast-off"></i><div class="empty-state-title">No updates yet</div></div></div>
           </div>
+        </div>
+      </div>
+
+      <!-- v50g — Edit PM Update modal. The eye icon on a Draft used to
+      call publishPMUpdate() directly with no review/edit step at all —
+      confirmed real bug, not just a mislabel. Replaced with a pencil icon
+      that opens this modal instead: pre-filled with the draft's current
+      fields, Save Changes writes back via atUpdate() without changing
+      Status, Publish to Client writes the edited fields AND flips Status
+      to Published in the same call. Only reachable for a Draft update —
+      an already-Published one still only shows Unpublish/Delete, per
+      existing behavior. Deliberately its own field IDs (pmue-*) and small
+      helper set rather than repointing the New Update composer's pmu-*
+      fields into an edit mode, since the composer stays visible on the
+      page underneath and repointing it live would be fragile. -->
+      <div id="pmue-overlay" onclick="closeEditPMUpdateModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
+      <div id="pmue-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:560px;max-width:95vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2);max-height:90vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div style="font-size:16px;font-weight:700;color:var(--navy)">Edit Draft Update</div>
+          <button class="btn btn-icon" onclick="closeEditPMUpdateModal()"><i class="ti ti-x"></i></button>
+        </div>
+        <input type="hidden" id="pmue-id">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Property</label><select class="form-select" id="pmue-property" onchange="pmuePopulateScopes()"></select></div>
+          <div class="form-group"><label class="form-label">Project (optional)</label><select class="form-select" id="pmue-scope" onchange="onPmueScopeChange()"><option value="">All Projects</option></select>
+            <div id="pmue-scope-vdanum" style="font-size:11px;color:var(--gray-mid);margin-top:4px;display:none"><i class="ti ti-hash" style="font-size:11px"></i> <span id="pmue-scope-vdanum-text"></span></div>
+          </div>
+        </div>
+        <div id="pmue-structured-fields" style="display:none">
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
+              <input type="checkbox" id="pmue-whole-project" onchange="togglePmueWholeProject()">
+              Applies to Whole Project
+            </label>
+          </div>
+          <div class="form-group" id="pmue-units-group">
+            <label class="form-label">Linked Units</label>
+            <div id="pmue-units-list" style="max-height:140px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">Project phase</label><select class="form-select" id="pmue-phase"><option>Pre-Construction</option><option>Construction</option><option>Post Construction</option><option>Closeout</option></select></div>
+            <div class="form-group"><label class="form-label">Progress status</label><select class="form-select" id="pmue-status"><option>Not Started</option><option>In Progress</option><option>Complete</option></select></div>
+          </div>
+          <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="pmue-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Update</label><textarea class="form-input" id="pmue-text" rows="4" placeholder="What's the latest on this property?"></textarea></div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn" onclick="closeEditPMUpdateModal()">Cancel</button>
+          <button class="btn" onclick="saveEditedPMUpdate()"><i class="ti ti-device-floppy"></i>Save Changes</button>
+          <button class="btn btn-primary" onclick="publishEditedPMUpdate()"><i class="ti ti-send"></i>Publish to Client</button>
         </div>
       </div>
 
@@ -5073,7 +5147,6 @@ function gotoView(viewId,btn){
   if(viewId==='queue'){refreshQueue();loadDueDaySetting();checkAndGenerateSuggestions();}
   if(viewId==='scorecard')renderScorecard();
   if(viewId==='marliinsights')renderMarliInsights();
-  if(viewId==='weeklyreportfeedback')renderWeeklyReportFeedback();
   if(viewId==='my-updates')refreshMyUpdates();
   if(viewId==='report')renderReportLibrary();
   if(viewId==='documents'){docNavLevel=0;docNavProperty='';docNavSubfolder='';docSearchQuery='';renderDocFolders();}
@@ -5159,6 +5232,10 @@ function gotoView(viewId,btn){
 
 function openProperty(name){
   prevView=document.querySelector('[id^="view-"]:not(.hidden)')?.id?.replace('view-','') || 'portfolio';
+  // v50f — see pushPropertyHistoryState() above. Lets the browser's
+  // native back button take the person out of the property one level,
+  // same as the in-app "← Back" link, per the Build Schema doc.
+  pushPropertyHistoryState();
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const prop=port.find(p=>p.n===name);if(!prop)return;
   console.log('openProperty: id='+prop.id+' name='+prop.n);
@@ -11466,6 +11543,16 @@ function renderPhasesTab(p){
     const derivedStatus=derivePhaseStatus(ph.id,p.n,ph.phase)||ph.status;
     const schedStatus=getPhaseScheduleStatus(p.n,ph.phase,ph.id);
     const statusBadge=renderPhaseStatusBadge(derivedStatus,schedStatus);
+    // v50g — fall back to deriving unit names live from linkedUnitIds when
+    // the cached ph.unitNames string is blank (older phases created before
+    // that field was reliably written, or edited directly in Airtable).
+    // Keeps the collapsed card's unit-name line from silently going blank
+    // just because the cached string never got backfilled.
+    const displayUnitNames=(ph.unitNames&&ph.unitNames.trim())
+      ?ph.unitNames
+      :(ph.linkedUnitIds&&ph.linkedUnitIds.length>0
+        ?sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>ph.linkedUnitIds.includes(u.id))).map(u=>u.name).filter(Boolean).join(', ')
+        :'');
     const phCardId='ph-card-'+ph.id.replace(/[^a-zA-Z0-9]/g,'_');
     const phIdx=phases.indexOf(ph);
     const isFirst=phIdx===0;
@@ -11484,7 +11571,7 @@ function renderPhasesTab(p){
             ${statusBadge}
           </div>
           <div style="font-size:11px;color:var(--gray-mid)">
-            ${ph.unitNames?`<span style="font-style:italic">${ph.unitNames}</span> · `:''}
+            ${displayUnitNames?`<span style="font-style:italic">${displayUnitNames}</span> · `:''}
             ${(ph.unitNames||'').trim()&&(!ph.linkedUnitIds||ph.linkedUnitIds.length===0)?`<span style="color:var(--amber);font-weight:600" title="This phase has old typed unit names but no units picked yet — open Edit to check the correct units"><i class="ti ti-alert-triangle"></i> Needs unit picker · </span>`:''}
             ${fmtShort(ph.plannedStart)} → ${fmtShort(ph.plannedCompletion)}
           </div>
@@ -19363,7 +19450,10 @@ async function renderWeeklyReportFeedback(){
       </div>
       <div style="font-size:13px;line-height:1.55;color:var(--gray-dark);white-space:pre-wrap;margin-bottom:10px">${(r.summaryText||'No summary recorded.').replace(/</g,'&lt;')}</div>
       <div id="wrf-notes-${r.id}" style="${isDown?'':'display:none'}">
-        <textarea class="form-input" id="wrf-notes-input-${r.id}" placeholder="What was wrong with this summary? (optional, but helpful for tuning future reports)" style="font-size:12px;min-height:56px;width:100%" onblur="saveWeeklyReportFeedbackNotes('${r.id}')">${(r.notes||'').replace(/</g,'&lt;')}</textarea>
+        <textarea class="form-input" id="wrf-notes-input-${r.id}" placeholder="What was wrong with this summary? (optional, but helpful for tuning future reports)" style="font-size:12px;min-height:56px;width:100%">${(r.notes||'').replace(/</g,'&lt;')}</textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" onclick="saveWeeklyReportFeedbackNotes('${r.id}')"><i class="ti ti-check"></i>Save</button>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -19396,11 +19486,19 @@ async function saveWeeklyReportFeedbackNotes(feedbackRecordId){
   const input=document.getElementById(`wrf-notes-input-${feedbackRecordId}`);
   if(!input)return;
   try{
-    await fetch(`${WORKER_URL}/weekly-report-feedback`,{
+    const response=await fetch(`${WORKER_URL}/weekly-report-feedback`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({feedbackRecordId,recordId:window._marliRecordId,vote:'down',notes:input.value.trim()})
     });
+    const data=await response.json();
+    if(!data.ok){
+      showToast('Could not save your note — please try again','warn');
+      return;
+    }
+    // v50f — now an explicit Save button rather than silent autosave on
+    // blur, so a clear confirmation matters here in a way it didn't before.
+    showToast('Note saved','success');
   }catch(e){
     showToast('Could not save your note — please try again','warn');
   }
@@ -22874,7 +22972,7 @@ function renderPMUpdates(){
     const actions=canAuthor?`<div style="display:flex;gap:6px;margin-top:8px">
         ${u.status==='Published'
           ?`<button class="btn btn-icon" onclick="unpublishPMUpdate('${u.id}')" title="Unpublish"><i class="ti ti-eye-off" style="font-size:13px"></i></button>`
-          :`<button class="btn btn-icon" onclick="publishPMUpdate('${u.id}')" title="Publish to Client"><i class="ti ti-eye" style="font-size:13px"></i></button>`}
+          :`<button class="btn btn-icon" onclick="openEditPMUpdateModal('${u.id}')" title="Edit draft"><i class="ti ti-pencil" style="font-size:13px"></i></button>`}
         <button class="btn btn-icon" style="background:var(--red-pale);border-color:#f7c1c1" onclick="deletePMUpdate('${u.id}')" title="Delete"><i class="ti ti-trash" style="color:var(--red);font-size:13px"></i></button>
       </div>`:'';
     return `<div class="card" style="margin-bottom:10px">
@@ -23129,6 +23227,199 @@ async function unpublishPMUpdate(id){
   showToast('Unpublished — hidden from client again','success');
   renderPMUpdates();
 }
+
+// v50g — Edit PM Update modal. See the markup comment above #pmue-overlay
+// for why this is a separate field set rather than repointing the New
+// Update composer. pmueUnitAssign mirrors pmuUnitAssign's shape/purpose,
+// scoped to this modal only.
+let pmueUnitAssign={};
+function openEditPMUpdateModal(id){
+  const u=(window.PM_UPDATES||[]).find(x=>x.id===id);
+  if(!u)return;
+  document.getElementById('pmue-id').value=id;
+  const propSel=document.getElementById('pmue-property');
+  const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
+  propSel.innerHTML=port.map(p=>`<option value="${p.n}">${p.n}</option>`).join('');
+  propSel.value=u.property;
+  pmueUnitAssign={};
+  (u.linkedUnitIds||[]).forEach(uid=>{pmueUnitAssign[uid]=true;});
+  pmuePopulateScopes(u.scopeId||'');
+  document.getElementById('pmue-text').value=u.text||'';
+  if(u.scopeId){
+    document.getElementById('pmue-whole-project').checked=!!u.appliesToWholeProject;
+    document.getElementById('pmue-units-group').style.display=u.appliesToWholeProject?'none':'block';
+    if(u.phase)document.getElementById('pmue-phase').value=u.phase;
+    if(u.progressStatus)document.getElementById('pmue-status').value=u.progressStatus;
+    if(u.commentType)document.getElementById('pmue-comment-type').value=u.commentType;
+  }
+  document.getElementById('pmue-overlay').style.display='block';
+  document.getElementById('pmue-modal').style.display='block';
+}
+window.openEditPMUpdateModal=openEditPMUpdateModal;
+function closeEditPMUpdateModal(){
+  document.getElementById('pmue-overlay').style.display='none';
+  document.getElementById('pmue-modal').style.display='none';
+  pmueUnitAssign={};
+}
+window.closeEditPMUpdateModal=closeEditPMUpdateModal;
+function pmuePopulateScopes(selectScopeId){
+  const propSel=document.getElementById('pmue-property');
+  const scopeSel=document.getElementById('pmue-scope');
+  if(!propSel||!scopeSel)return;
+  const propName=propSel.value;
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===propName);
+  const current=selectScopeId!==undefined?selectScopeId:scopeSel.value;
+  scopeSel.innerHTML='<option value="">All Projects</option>'+
+    scopes.map(s=>`<option value="${s.id}"${s.id===current?' selected':''}>${(s.name||'Project').replace(/</g,'&lt;')}</option>`).join('');
+  onPmueScopeChange();
+}
+window.pmuePopulateScopes=pmuePopulateScopes;
+function onPmueScopeChange(){
+  const scopeSel=document.getElementById('pmue-scope');
+  const scopeId=scopeSel?.value||'';
+  const scope=scopeId?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  const structuredFields=document.getElementById('pmue-structured-fields');
+  const vdaWrap=document.getElementById('pmue-scope-vdanum');
+  const vdaText=document.getElementById('pmue-scope-vdanum-text');
+  if(structuredFields)structuredFields.style.display=scope?'block':'none';
+  if(vdaWrap&&vdaText){
+    if(scope){
+      vdaText.textContent=`VDA Project #${scope.vdaNum||'—'}`;
+      vdaWrap.style.display='block';
+    }else{
+      vdaWrap.style.display='none';
+    }
+  }
+  if(scope)renderPmueUnitsList();
+}
+window.onPmueScopeChange=onPmueScopeChange;
+function renderPmueUnitsList(){
+  const listEl=document.getElementById('pmue-units-list');
+  if(!listEl)return;
+  const propName=document.getElementById('pmue-property')?.value||'';
+  const scopeId=document.getElementById('pmue-scope')?.value||'';
+  if(!propName||!scopeId){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a project first.</div>';
+    return;
+  }
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName&&u.scopeId===scopeId).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
+  if(units.length===0){
+    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units linked to this project in Unit Inventory List yet.</div>';
+    return;
+  }
+  listEl.innerHTML=units.map(u=>{
+    const checked=!!pmueUnitAssign[u.id];
+    const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
+    return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
+      <input type="checkbox" ${checked?'checked':''} onchange="togglePmueUnit('${u.id}',this.checked)">
+      <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
+      ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
+    </label>`;
+  }).join('');
+}
+window.renderPmueUnitsList=renderPmueUnitsList;
+function togglePmueUnit(unitId,checked){
+  if(checked)pmueUnitAssign[unitId]=true;
+  else delete pmueUnitAssign[unitId];
+}
+window.togglePmueUnit=togglePmueUnit;
+function togglePmueWholeProject(){
+  const whole=document.getElementById('pmue-whole-project').checked;
+  const group=document.getElementById('pmue-units-group');
+  if(whole){
+    pmueUnitAssign={};
+    group.style.display='none';
+  }else{
+    group.style.display='block';
+    renderPmueUnitsList();
+  }
+}
+window.togglePmueWholeProject=togglePmueWholeProject;
+// Shared by both Save Changes and Publish to Client — reads the modal's
+// fields, writes to the existing record via atUpdate (never atCreate;
+// this always edits an existing Draft, it never makes a new row), and
+// keeps window.PM_UPDATES in sync so the feed reflects the edit without
+// a full reload. publishStatus is 'Draft' to just save, or 'Published' to
+// save AND publish in the same action.
+async function _saveEditedPMUpdateCore(publishStatus){
+  const id=document.getElementById('pmue-id').value;
+  const u=(window.PM_UPDATES||[]).find(x=>x.id===id);
+  if(!u)return false;
+  const propName=document.getElementById('pmue-property')?.value;
+  const scopeId=document.getElementById('pmue-scope')?.value||'';
+  const text=document.getElementById('pmue-text')?.value.trim();
+  if(!propName){showToast('Select a property','warn');return false;}
+  if(!text){showToast('Enter an update','warn');return false;}
+  const hasProject=!!scopeId;
+  const appliesToWholeProject=hasProject&&document.getElementById('pmue-whole-project').checked;
+  const linkedUnitIds=hasProject&&!appliesToWholeProject?Object.keys(pmueUnitAssign):[];
+  let units='';
+  if(hasProject){
+    units='All';
+    if(!appliesToWholeProject&&linkedUnitIds.length>0){
+      const unitNames=sortUnitNames(linkedUnitIds.map(uid=>(window.UNIT_INVENTORY||[]).find(x=>x.id===uid)?.name).filter(Boolean));
+      if(unitNames.length>0)units=unitNames.join(', ');
+    }else if(!appliesToWholeProject&&linkedUnitIds.length===0){
+      alert('Please check at least one unit, or select "Applies to Whole Project".');
+      return false;
+    }
+  }
+  const phase=hasProject?document.getElementById('pmue-phase').value:'';
+  const progressStatus=hasProject?document.getElementById('pmue-status').value:'';
+  const commentType=hasProject?document.getElementById('pmue-comment-type').value:'';
+  const fields={
+    'Property Name':propertyNameToLink(propName),
+    'Update Text':text,
+  };
+  fields['Linked Scope']=scopeId?[scopeId]:[];
+  if(hasProject){
+    fields['Units Updated']=units;
+    fields['Project Phase']=phase;
+    fields['Progress Status']=progressStatus;
+    fields['Comment Type']=commentType;
+    fields['Applies to Whole Project']=appliesToWholeProject;
+    fields['Linked Units']=linkedUnitIds;
+  }else{
+    fields['Units Updated']='';
+    fields['Project Phase']='';
+    fields['Progress Status']='';
+    fields['Comment Type']='';
+    fields['Applies to Whole Project']=false;
+    fields['Linked Units']=[];
+  }
+  const todayStr=new Date().toISOString().split('T')[0];
+  if(publishStatus==='Published'){
+    fields['Status']='Published';
+    fields['Published Date']=todayStr;
+  }
+  const res=await atUpdate('PM Updates',id,fields);
+  if(!res){showToast('Error saving update','error');return false;}
+  u.property=propName;u.scopeId=scopeId;u.text=text;
+  u.units=units;u.phase=phase;u.progressStatus=progressStatus;
+  u.commentType=commentType;u.appliesToWholeProject=appliesToWholeProject;
+  u.linkedUnitIds=linkedUnitIds;
+  if(publishStatus==='Published'){
+    u.status='Published';u.published=todayStr;
+    await archivePMUpdateToDocuments(u);
+  }
+  return true;
+}
+async function saveEditedPMUpdate(){
+  const ok=await _saveEditedPMUpdateCore('Draft');
+  if(!ok)return;
+  showToast('Draft updated','success');
+  closeEditPMUpdateModal();
+  renderPMUpdates();
+}
+window.saveEditedPMUpdate=saveEditedPMUpdate;
+async function publishEditedPMUpdate(){
+  const ok=await _saveEditedPMUpdateCore('Published');
+  if(!ok)return;
+  showToast('Update published','success');
+  closeEditPMUpdateModal();
+  renderPMUpdates();
+}
+window.publishEditedPMUpdate=publishEditedPMUpdate;
 async function deletePMUpdate(id){
   if(!confirm('Delete this update? This can\'t be undone.'))return;
   const res=await atDelete('PM Updates',id);
@@ -23352,9 +23643,33 @@ function filterReportsForRole(reports){
   return reports;
 }
 
+// v50f — Weekly Report Feedback's tab is Admin-only, same access as the
+// standalone sidebar item it replaced. Every other role never sees the
+// tab button at all, so switchReportLibraryTab() is unreachable for them.
+function updateReportLibraryFeedbackTabVisibility(){
+  const tabBtn=document.getElementById('report-lib-tab-feedback');
+  if(tabBtn)tabBtn.style.display=role==='admin'?'':'none';
+}
+function switchReportLibraryTab(tab){
+  const reportsBtn=document.getElementById('report-lib-tab-reports');
+  const feedbackBtn=document.getElementById('report-lib-tab-feedback');
+  const reportsPanel=document.getElementById('report-library-reports-panel');
+  const feedbackPanel=document.getElementById('report-library-feedback-panel');
+  if(reportsBtn)reportsBtn.classList.toggle('active',tab==='reports');
+  if(feedbackBtn)feedbackBtn.classList.toggle('active',tab==='feedback');
+  if(reportsPanel)reportsPanel.style.display=tab==='reports'?'':'none';
+  if(feedbackPanel)feedbackPanel.style.display=tab==='feedback'?'':'none';
+  if(tab==='feedback')renderWeeklyReportFeedback();
+}
+window.switchReportLibraryTab=switchReportLibraryTab;
 function renderReportLibrary(){
   document.getElementById('report-library-view').style.display='';
   document.getElementById('report-reader-view').style.display='none';
+  updateReportLibraryFeedbackTabVisibility();
+  // Always land back on the Reports tab when (re)entering Performance
+  // Reports fresh, e.g. via nav click — mirrors gotoView() resetting other
+  // multi-panel views (Analytics' Budget Outlook/Reforecast) on entry.
+  switchReportLibraryTab('reports');
   const list=document.getElementById('report-library-list');if(!list)return;
   // v38i — Performance Report privacy. Admin continues to see every
   // report regardless of who generated it, since Admin oversees all PMs.
@@ -26091,7 +26406,6 @@ const TOUR_STEPS = {
       'Step 1: MARLI Insights is Admin-only — usage stats, question category breakdowns, and a review queue for responses flagged by MARLI\'s hallucination safety net.',
       'Step 2: The date window defaults to trailing 30 days; narrow it to 7 or widen it to 90 as needed. Use this to spot gaps in what MARLI can answer well versus where users are getting stuck.'
     ]},
-    {target:'#nav-admin [onclick*="\'weeklyreportfeedback\'"]',view:'weeklyreportfeedback',title:'Weekly Report Feedback',body:['Admin-only. Rate each week\'s AI-generated executive summary with a thumbs up or down, with an optional reason on a down vote, so the summary prompt can be tuned over time from real feedback instead of guesswork.']},
     {target:'#nav-admin [onclick*="\'charts\'"]',view:'charts',title:'Analytics',body:[
       'Step 1: Visual breakdowns of program performance — completion forecasts, spend, contractor performance, and more.',
       'Step 2: Click any bar or segment on these charts to open a list of the properties (and, on Forecasted Spend, the specific units and dollar amounts) behind that number.',
@@ -26100,7 +26414,8 @@ const TOUR_STEPS = {
     {target:'#nav-admin [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
       'Step 1: Generate a report anytime, on demand, for any property or the full portfolio.',
       'Step 2: Every Monday, PULSE automatically generates a report with an AI-written summary and emails it out for review.',
-      'Step 3: Review it, then forward it by email if you want to share it with a client contact.'
+      'Step 3: Review it, then forward it by email if you want to share it with a client contact.',
+      'Step 4: Admin-only Weekly Report Feedback tab here lets you rate each week\'s AI-generated executive summary with a thumbs up or down, with an optional written note on a down vote, so the summary prompt can be tuned over time from real feedback instead of guesswork.'
     ]},
     {target:'#nav-admin [onclick*="\'glossary\'"]',view:'glossary',title:'VT Glossary',body:['A searchable glossary of vertical transportation terms and abbreviations — handy if you run into unfamiliar industry language.']},
   ],
