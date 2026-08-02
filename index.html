@@ -1,3 +1,56 @@
+<!--
+pulse_v51d. Changes from v51c, this round:
+  1. XSS escaping sweep, completion pass. The v51c header claimed all 27
+     flagged interpolation sites were routed through escHtml(), but an
+     independent audit found the sweep was incomplete: dozens of sites
+     across scope edit cards, phase task names, agenda topic rows, bid
+     line items, property dropdowns/tables, meeting/field-update cards,
+     billing/retainage panels, unit names, supplier names, return notes,
+     comment types, and team update authors were still interpolating
+     Airtable-sourced text directly into innerHTML with no escaping.
+     Every one of those (~90 sites) now routes through escHtml(). Fields
+     that are never rendered as HTML — console.error() debug logs,
+     .textContent assignments, and download filenames — were correctly
+     left alone, since escaping those would be a no-op at best and a
+     display bug at worst (e.g. a property name containing "&" would
+     render as "&amp;" if escHtml() were wrongly applied to a
+     .textContent sink).
+  2. doLogout()'s /logout call is now properly awaited-and-caught
+     (workerFetch(...).catch(()=>{})) instead of wrapped in a
+     synchronous try/catch around an unawaited async call, which could
+     never actually catch a network failure. Still best-effort — a
+     failed call doesn't block sign-out.
+Requires worker_v44a.mjs (both new endpoints are worker-side).
+
+pulse_v51c. Changes from v51b, this round:
+  1. Activity feed date formatting. Milestone, Phase Complete, and Phase
+     Started entries were interpolating raw ISO date strings from
+     Airtable (e.g. "2026-04-15") while Meeting, Site Visit, and Project
+     Status entries already ran through fmtWeek() ("Apr 15, 2026").
+     All entry types now use fmtWeek() consistently.
+  2. XSS escaping sweep, second pass. 27 interpolation sites (Action
+     Items desc/owner in the meeting panel, project name/consultant/VDA
+     project #/client project #/elevator co across four different scope
+     edit forms, phase task names/notes, unit equipment type, attendee
+     name/email, agenda topic rows, property dropdown options in eight
+     places, bid line item description) were using a partial manual
+     escape — .replace(/"/g,'&quot;'), which only escapes double quotes
+     — instead of the hardened escHtml() from the v51b sweep, which also
+     escapes &, <, and >. All 27 now route through escHtml(). [Note:
+     this claim was incomplete — see v51d above.]
+  3. doLogout() now POSTs to the new worker /logout endpoint (with the
+     still-live Bearer token) before clearing local session state, so
+     signing out actually revokes the token server side instead of just
+     forgetting it client side until the 12 hour TTL expires. Best
+     effort — a failed call doesn't block sign-out.
+  4. New IT Admin-only "Blocked Writes" tab in Performance Reports
+     (alongside Weekly Report Feedback), reading the worker's new GET
+     /blocked-writes. Shows counts by role/table and the 20 most recent
+     attempts, so Misty can measure how often the known consultant UI
+     mismatch (meeting/site-visit/bid buttons visible, writes 403)
+     actually happens before deciding whether to hide the buttons or
+     restore the write rights. See renderBlockedWrites().
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2740,7 +2793,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51c</div>
     </div>
   </nav>
 
@@ -3314,6 +3367,13 @@ from unitEffectiveValue() onto each checkbox). -->
             <div style="display:flex;gap:4px">
               <button class="tab-btn active" id="report-lib-tab-reports" onclick="switchReportLibraryTab('reports')">Reports</button>
               <button class="tab-btn" id="report-lib-tab-feedback" onclick="switchReportLibraryTab('feedback')" style="display:none">Weekly Report Feedback</button>
+              <!-- v51c — Blocked Writes tab. Admin-only, same visibility
+              pattern as Weekly Report Feedback above. Shows how often the
+              consultant UI mismatch (buttons still visible, writes 403)
+              actually gets hit, so Misty can decide whether to hide those
+              buttons or restore the write rights using real usage data
+              instead of a guess. See renderBlockedWrites(). -->
+              <button class="tab-btn" id="report-lib-tab-blocked" onclick="switchReportLibraryTab('blocked')" style="display:none">Blocked Writes</button>
             </div>
           </div>
           <div class="page-body" id="report-library-reports-panel">
@@ -3322,6 +3382,10 @@ from unitEffectiveValue() onto each checkbox). -->
           <div class="page-body" id="report-library-feedback-panel" style="display:none">
             <p style="font-size:12px;color:var(--gray-mid);margin:-8px 0 16px">Rate each week's AI summary to help improve future reports · Admin only</p>
             <div id="weekly-report-feedback-body"></div>
+          </div>
+          <div class="page-body" id="report-library-blocked-panel" style="display:none">
+            <p style="font-size:12px;color:var(--gray-mid);margin:-8px 0 16px">Writes rejected by the role permission matrix, by role and table · Admin only</p>
+            <div id="blocked-writes-body"></div>
           </div>
         </div>
         <!-- Report reader view -->
@@ -4572,6 +4636,14 @@ function doLogout(){
   // same doLogin() path every time, no separate bypass condition exists
   // anymore), but still needs clearing here so a stale name from
   // sessionStorage never leaks into a different person's session.
+  // v51c. Tell the Worker to revoke this session's token server side
+  // before dropping it locally, so a signed-out token can't still be
+  // replayed for up to the remaining 12 hour TTL. Best-effort: if this
+  // fails (offline, Worker unreachable), sign-out still proceeds locally
+  // exactly as before, and the token dies naturally at its TTL.
+  if(window._sessionToken){
+    workerFetch(`${WORKER_URL}/logout`,{method:'POST'}).catch(()=>{});
+  }
   currentConsultantName='';
   window._userName=null;
   sessionStorage.removeItem('pulse_consultant');
@@ -6454,7 +6526,7 @@ function renderScopeTabs(containerId, propName){
     const bg=isActive?'var(--navy)':isCP?'var(--gray-pale)':'var(--blue-xpale)';
     const color=isActive?'#fff':isCP?'var(--gray-mid)':'var(--blue-dark)';
     const border=isCP?'1px dashed var(--border)':'1px solid transparent';
-    const label=`${s.name||'Project'}${isCP?'':' · '+msPct+'%'}`;
+    const label=`${escHtml(s.name||'Project')}${isCP?'':' · '+msPct+'%'}`;
     return `<button onclick="setCurrentScope('${s.id.replace(/'/g,"\\'")}');renderScopeTabs('${containerId}','${propName.replace(/'/g,"\\'")}');" style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px;border:${border};background:${bg};color:${color};cursor:pointer;white-space:nowrap;${isCP?'opacity:.7':''}">${label}</button>`;
   }).join('');
   container.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:6px;padding:0 0 12px 0">${pills}</div>`;
@@ -6563,7 +6635,7 @@ function renderScopeCards(p){
     return `<span style="font-size:10px;font-weight:600;background:${st.bg};color:${st.c};border-radius:6px;padding:2px 7px">${lbl}</span>`;
   };
   const _isCore=(p.type||'Non-Core')==='Core';
-  const coreBadge=`<span style="font-size:10px;font-weight:600;background:${_isCore?'var(--navy)':'var(--gray-pale)'};color:${_isCore?'#fff':'var(--gray-mid)'};border-radius:6px;padding:2px 7px">${p.type||'Non-Core'}</span>`;
+  const coreBadge=`<span style="font-size:10px;font-weight:600;background:${_isCore?'var(--navy)':'var(--gray-pale)'};color:${_isCore?'#fff':'var(--gray-mid)'};border-radius:6px;padding:2px 7px">${escHtml(p.type||'Non-Core')}</span>`;
   const unitLine=s=>{
     const e=s.elevatorCount||0,es=s.escalatorCount||0,l=s.liftCount||0,o=s.otherCount||0;
     if(!e&&!es&&!l&&!o)return s.unitList||'—';
@@ -6616,7 +6688,7 @@ function renderScopeCards(p){
         :(ms1Real&&ms1Real.actualDate)?'In Progress'
         :(s.status==='Capital Plan'?'Capital Plan':'Planned');
       if(milestonesJustify!==s.status&&!(s.status==='On Hold')){
-        driftMsg=`Status says <strong>${s.status}</strong>, but milestones show <strong>${milestonesJustify}</strong>`;
+        driftMsg=`Status says <strong>${escHtml(s.status)}</strong>, but milestones show <strong>${milestonesJustify}</strong>`;
       }
     }
     const driftBadge=driftMsg?`<div style="display:flex;align-items:center;gap:6px;background:#fff7ed;border-radius:6px;padding:5px 8px;margin-top:6px">
@@ -6688,21 +6760,21 @@ function renderScopeCards(p){
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-bottom:12px">
           <div>
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Consultant</div>
-            <div style="font-size:13px;font-weight:500;color:var(--navy)">${s.v||p.v||'—'}</div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">${escHtml(s.v||p.v||'—')}</div>
           </div>
           <div>
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Elevator Co.</div>
-            <div style="font-size:13px;font-weight:500;color:var(--navy)">${s.ec||p.ec||'TBD'}</div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">${escHtml(s.ec||p.ec||'TBD')}</div>
           </div>
           <div>
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">VDA Project #</div>
-            <div style="font-size:13px;font-weight:500;color:var(--navy)">${s.vdaNum||'—'}</div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">${escHtml(s.vdaNum||'—')}</div>
           </div>
           <!-- v37a — Client Project #, same field pattern as VDA Project #
           just above, displayed right next to it on the card. -->
           <div>
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Client Project #</div>
-            <div style="font-size:13px;font-weight:500;color:var(--navy)">${s.clientProjectNum||'—'}</div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">${escHtml(s.clientProjectNum||'—')}</div>
           </div>
           <div>
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${awardVal?'Contract Award':'Planned Budget'}</div>
@@ -6807,7 +6879,7 @@ function renderScopeCards(p){
   // Header bar — property-level fields always shown above cards
   const headerBar=`<div style="display:flex;align-items:center;gap:20px;padding:8px 14px;background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px;flex-wrap:wrap">
     <span class="prop-overview-priority-line" style="font-size:12px;color:var(--gray-mid)">Priority <span style="font-weight:600;color:var(--navy)">${(p.priority||'—').split(':')[1]?.trim()||p.priority||'—'}</span></span>
-    <span style="font-size:12px;color:var(--gray-mid)">Notes ${p.comment?`<span style="color:var(--navy)">${p.comment.slice(0,60)}${p.comment.length>60?'…':''}</span>`:'<span style="color:var(--gray-light)">—</span>'}</span>
+    <span style="font-size:12px;color:var(--gray-mid)">Notes ${p.comment?`<span style="color:var(--navy)">${escHtml(p.comment.slice(0,60))}${p.comment.length>60?'…':''}</span>`:'<span style="color:var(--gray-light)">—</span>'}</span>
     <span style="margin-left:auto;display:flex;gap:8px">
       ${canEdit?`<button class="btn btn-edit" onclick="openEditPropertyPanel()" style="font-size:12px"><i class="ti ti-pencil"></i>Edit Property</button>`:''}
       ${manageBtn}
@@ -6867,18 +6939,18 @@ function renderScopeEditModal(s,p){
       way to rename a project was via Split Into Projects, even though this
       modal's own title implied you could rename from here). Same 'Scope
       Name' Airtable field Split Into Projects already writes to. -->
-      <div class="form-group"><label class="form-label">Project Name</label><input class="form-input" id="se-name" type="text" value="${(s.name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Elevators, Escalators"></div>
+      <div class="form-group"><label class="form-label">Project Name</label><input class="form-input" id="se-name" type="text" value="${escHtml(s.name||'')}" placeholder="e.g. Elevators, Escalators"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">Consultant</label><input class="form-input" id="se-consultant" type="text" value="${(s.v||p.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
-        <div class="form-group"><label class="form-label">Elevator Co.</label><input class="form-input" id="se-ec" type="text" value="${(s.ec||p.ec||'').replace(/"/g,'&quot;')}" placeholder="e.g. Otis, Schindler"></div>
+        <div class="form-group"><label class="form-label">Consultant</label><input class="form-input" id="se-consultant" type="text" value="${escHtml(s.v||p.v||'')}" placeholder="Consultant name"></div>
+        <div class="form-group"><label class="form-label">Elevator Co.</label><input class="form-input" id="se-ec" type="text" value="${escHtml(s.ec||p.ec||'')}" placeholder="e.g. Otis, Schindler"></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input" id="se-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
+        <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input" id="se-vdanum" type="text" value="${escHtml(s.vdaNum||'')}" placeholder="e.g. 65153"></div>
         <div class="form-group"><label class="form-label">Priority</label><select class="form-input" id="se-priority">${priOptions}</select></div>
       </div>
       <!-- v37a — Client Project #, same field pattern as VDA Project # above. -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input" id="se-client-project-num" type="text" value="${(s.clientProjectNum||'').replace(/"/g,'&quot;')}" placeholder="Client's own project number"></div>
+        <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input" id="se-client-project-num" type="text" value="${escHtml(s.clientProjectNum||'')}" placeholder="Client's own project number"></div>
         <!-- v38m — Planned Year, previously only editable via the Capital
         Plan modal (which only applies pre-graduation) or directly in
         Airtable. A graduated project's Year/Budget Cycle had no in-app
@@ -6971,7 +7043,7 @@ function openDemoteScopeModal(scopeId){
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:460px;box-shadow:var(--shadow-md);margin:auto">
     <div style="padding:18px 22px;border-bottom:1px solid var(--border)">
       <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-corner-down-right" style="font-size:14px;margin-right:6px;color:var(--indigo)"></i>Demote to Unit Phase</div>
-      <div style="font-size:12px;color:var(--gray-mid);margin-top:2px">${(s.name||'Project').replace(/</g,'&lt;')} &middot; ${s.property}</div>
+      <div style="font-size:12px;color:var(--gray-mid);margin-top:2px">${(s.name||'Project').replace(/</g,'&lt;')} &middot; ${escHtml(s.property)}</div>
     </div>
     <div style="padding:20px 22px">
       <div class="form-group"><label class="form-label">Fold Into Project</label>
@@ -7031,7 +7103,7 @@ async function confirmDemoteScope(){
 
   for(const type of Object.keys(typeGroups)){
     const grp=typeGroups[type];
-    const phaseName=`${s.name||'Demoted project'}: ${type||'Unassigned equipment type'}`;
+    const phaseName=`${escHtml(s.name||'Demoted project')}: ${type||'Unassigned equipment type'}`;
     const linkedUnitIds=grp.map(u=>u.id);
     const ugFields={
       'Property Name':propertyNameToLink(target.property),
@@ -7086,7 +7158,7 @@ async function confirmDemoteScope(){
   if(currentScope?.id===s.id)currentScope=target;
   if(currentProp)renderPropertyView(currentProp);
   if(demoMode){showToast('Project demoted — Demo mode: changes reset on logout','info');}
-  else{showToast(`${s.name||'Project'} demoted into ${target.name||'target project'}`,'success');}
+  else{showToast(`${escHtml(s.name||'Project')} demoted into ${target.name||'target project'}`,'success');}
 }
 window.confirmDemoteScope=confirmDemoteScope;
 
@@ -7363,7 +7435,7 @@ function renderMilestones(p){
     // restores normal auto-calc display immediately, no data loss.
     const isCalendar=rule.type==='calendar'||p.milestoneManualOverride;
     const derivedDates=isCalendar?null:getDerivedDatesForMilestone(p.n,m.milestoneNumber,m.scopeId);
-    const statusBadge=`<span style="display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;background:${circleColor};color:${textColor};text-transform:uppercase;letter-spacing:.03em">${m.status}</span>`;
+    const statusBadge=`<span style="display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;background:${circleColor};color:${textColor};text-transform:uppercase;letter-spacing:.03em">${escHtml(m.status)}</span>`;
 
     return `<div class="milestone-row" id="ms-row-${m.id||idx}">
       <div id="${circleId}" style="background:${circleColor};color:${textColor};border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .2s;position:relative;z-index:1">
@@ -7409,7 +7481,7 @@ function renderMilestones(p){
           ${canEdit?`
           <div style="min-width:100px;max-width:160px">
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Notes</div>
-            <input type="text" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:100%" value="${(m.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes..."
+            <input type="text" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:100%" value="${escHtml(m.notes||'')}" placeholder="Notes..."
               onblur="updateMilestoneField('${m.id}','Notes',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>`:''}
         </div>`:
@@ -7563,9 +7635,9 @@ function populateMilestonesTable(){
       :p.r==='On Track'?`<span class="badge b-track" style="font-size:9px">On Track</span>`
       :`<span style="color:var(--gray-light)">—</span>`;
     return `<tr onclick="openPropertyTab('${p.n.replace(/'/g,"\\'")}','milestones')" style="cursor:pointer">
-      <td style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.n}</td>
-      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
-      <td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.ec||'TBD'}</td>
+      <td style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.n)}</td>
+      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type)}</span></td>
+      <td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.ec||'TBD')}</td>
       <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:12px;font-weight:600;text-align:center">${escHtml(p.units||'—')}</td>
       <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${currentMs}</td>
       <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${currentPhase}</td>
@@ -7586,10 +7658,10 @@ function openLogMinutesModal(){
   const scheduledHtml=scheduled.length?scheduled.map(m=>{
     const d=m.date?new Date(m.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
     const topics=m.agenda?m.agenda.split('\n').filter(Boolean):[];
-    const topicPreview=topics.length?`<div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${topics.slice(0,2).join(' · ')}${topics.length>2?' · …':''}</div>`:'';
+    const topicPreview=topics.length?`<div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${topics.slice(0,2).map(t=>escHtml(t)).join(' · ')}${topics.length>2?' · …':''}</div>`:'';
     return `<button onclick="openLogMinutesFromScheduled('${m.id}')" style="display:block;width:100%;text-align:left;background:var(--gray-pale);border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:13px;font-weight:600;color:var(--navy)">${m.type||'Meeting'} — ${m.property}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--navy)">${escHtml(m.type||'Meeting')} — ${escHtml(m.property)}</div>
         <div style="font-size:11px;color:var(--indigo);font-weight:500">${d}</div>
       </div>
       ${topicPreview}
@@ -7684,7 +7756,7 @@ function openActionItemModal(propName){
       ${isGlobal?`<div class="form-group"><label class="form-label">Property</label>
         <select class="form-select" id="ai-property" onchange="populateAiScopes()">
           <option value="">Select property…</option>
-          ${port.map(p=>`<option value="${p.n}">${p.n}</option>`).join('')}
+          ${port.map(p=>`<option value="${escHtml(p.n)}">${escHtml(p.n)}</option>`).join('')}
         </select>
       </div>`:`<div class="form-group"><label class="form-label">Property</label><input class="form-input" type="text" value="${propName}" readonly style="background:var(--gray-pale);color:var(--gray-mid)"><input type="hidden" id="ai-property" value="${propName}"></div>`}
       <div class="form-group" id="ai-scope-group" style="display:none"><label class="form-label">Linked Project <span style="font-weight:400;color:var(--gray-mid)">(optional)</span></label><select class="form-select" id="ai-scope"><option value="">All projects / property-level</option></select></div>
@@ -7876,8 +7948,8 @@ async function openDraft(meetingId){
   draftActions.forEach(a=>{
     const id='ar-'+actionRowCount++;
     const row=document.createElement('div');row.className='action-row';row.id=id;
-    row.innerHTML=`<input class="form-input" type="text" placeholder="Action description" id="${id}-desc" value="${(a.description||'').replace(/"/g,'&quot;')}">
-      <input class="form-input" type="text" placeholder="Owner" id="${id}-owner" value="${(a.owner||'').replace(/"/g,'&quot;')}">
+    row.innerHTML=`<input class="form-input" type="text" placeholder="Action description" id="${id}-desc" value="${escHtml(a.description||'')}">
+      <input class="form-input" type="text" placeholder="Owner" id="${id}-owner" value="${escHtml(a.owner||'')}">
       <input class="form-input" type="date" id="${id}-due" value="${a.due&&a.due!=='TBD'?a.due:''}">
       <select class="form-select" id="${id}-priority"><option value="High"${a.priority==='High'?' selected':''}>High</option><option value="Medium"${a.priority==='Medium'?' selected':''}>Medium</option><option value="Low"${a.priority==='Low'?' selected':''}>Low</option></select>
       <button class="remove-action-btn" onclick="this.parentElement.remove()"><i class="ti ti-x"></i></button>`;
@@ -8118,7 +8190,7 @@ function renderPropMeetings(p){
     `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged</div><div class="empty-state-sub">${role==='pm'?'Click Log meeting above to add':role==='client'?'No published meetings yet':''}</div></div>`:
     recent.map(m=>`<div class="meeting-card">
       <div class="meeting-card-header">
-        <div><div class="meeting-card-title">${m.type}</div><div class="meeting-card-meta">${m.date} · ${m.elevco} · ${m.format}</div></div>
+        <div><div class="meeting-card-title">${escHtml(m.type)}</div><div class="meeting-card-meta">${m.date} · ${m.elevco} · ${m.format}</div></div>
         <div style="display:flex;align-items:center;gap:6px">
           ${m.status==='Scheduled'
             ?`<span class="badge" style="background:#e8f4ff;color:var(--indigo);border:1px solid #c5d9f5">Scheduled</span>
@@ -8165,7 +8237,7 @@ function previewMeetingCard(meetingId){
   // Create a synthetic doc object pointing to this meeting
   const syntheticDoc={
     id:'preview-'+meetingId,
-    name:`${m.property} — ${m.type} ${m.date}`,
+    name:`${escHtml(m.property)} — ${escHtml(m.type)} ${m.date}`,
     subfolder:'Meeting Minutes',
     uploaded:m.date,
     uploadedBy:m.attVDA||'VDA',
@@ -8180,7 +8252,7 @@ async function archiveMeetingToDocuments(m){
   if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
   // Already archived?
   if(window.DOCUMENTS_LIVE.some(d=>d._meetingId===m.id))return;
-  const docName=`${m.property} — ${m.type} ${m.date}`;
+  const docName=`${escHtml(m.property)} — ${escHtml(m.type)} ${m.date}`;
   const today=new Date().toISOString().split('T')[0];
   const vis=m.published?'Public':'Internal';
   const res=await atCreate('Documents',{
@@ -8191,7 +8263,7 @@ async function archiveMeetingToDocuments(m){
     'Visibility':vis,
     'Uploaded By':'System',
     'Upload Date':today,
-    'Notes':`Auto-archived from Field Operations · ${m.type} · ${m.date}`,
+    'Notes':`Auto-archived from Field Operations · ${escHtml(m.type)} · ${m.date}`,
   });
   const newDoc={
     id:res?.records?.[0]?.id||'doc_mm_'+m.id,
@@ -8217,7 +8289,7 @@ async function closeAction(id){
   }
   // Archive to Documents → Closed Actions
   if(!demoMode){
-    const docName=`${a.property} — Closed Action: ${a.description.slice(0,50)}`;
+    const docName=`${escHtml(a.property)} — Closed Action: ${escHtml(a.description.slice(0,50))}`;
     const res=await atCreate('Documents',{
       'Document Name':docName,
       'Property Name':propertyNameToLink(a.property),
@@ -8226,7 +8298,7 @@ async function closeAction(id){
       'Visibility':'Public',
       'Uploaded By':a.owner||'PM',
       'Upload Date':a.closedDate,
-      'Notes':`Owner: ${a.owner} · Priority: ${a.priority} · Due: ${a.due}`,
+      'Notes':`Owner: ${escHtml(a.owner)} · Priority: ${a.priority} · Due: ${a.due}`,
     });
     if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
     window.DOCUMENTS_LIVE.push({
@@ -8235,7 +8307,7 @@ async function closeAction(id){
       type:'Closed Actions Report',subfolder:'Closed Actions',
       visibility:'Public',uploaded:a.closedDate,
       uploadedBy:a.owner||'PM',
-      notes:`Owner: ${a.owner} · Priority: ${a.priority} · Due: ${a.due}`,
+      notes:`Owner: ${escHtml(a.owner)} · Priority: ${a.priority} · Due: ${a.due}`,
       _actionId:a.id,
       // Store action data for report generation
       _action:{description:a.description,owner:a.owner,priority:a.priority,due:a.due,closedDate:a.closedDate,property:a.property},
@@ -8414,7 +8486,7 @@ function renderAllMeetings(){
     `<div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No Open Actions</div></div>`:
     openAI.map(a=>`<div class="action-item-row">
       <div class="action-dot dot-open"></div>
-      <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">${a.property} · ${escHtml(a.owner)} · Due: ${a.due}</span></div>
+      <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">${escHtml(a.property)} · ${escHtml(a.owner)} · Due: ${a.due}</span></div>
       <button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>
     </div>`).join('');
   const loadingEl=document.getElementById('schedule-loading');
@@ -8425,7 +8497,7 @@ function renderAllMeetings(){
   if(mList)mList.innerHTML=meetings.length===0?
     `<div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">${AT_CONNECTED?'No meetings logged yet':'Loading from database...'}</div><div class="empty-state-sub">${AT_CONNECTED?'Log meetings from a property page or the button above':'Live meetings will appear here shortly'}</div></div>`:
     recentMeetings.map(m=>`<div class="meeting-card">
-      <div class="meeting-card-header"><div><div class="meeting-card-title">${m.type} — ${m.property}</div><div class="meeting-card-meta">${m.date}${m.elevco?' · '+m.elevco:''}</div></div>
+      <div class="meeting-card-header"><div><div class="meeting-card-title">${escHtml(m.type)} — ${escHtml(m.property)}</div><div class="meeting-card-meta">${m.date}${m.elevco?' · '+m.elevco:''}</div></div>
       <div style="display:flex;align-items:center;gap:6px">
         ${m.status==='Scheduled'
           ?`<span class="badge" style="background:#e8f4ff;color:var(--indigo);border:1px solid #c5d9f5">Scheduled</span>
@@ -8437,7 +8509,7 @@ function renderAllMeetings(){
                 <button class="btn btn-icon" onclick="printMeetingMinutes('${m.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:14px"></i></button>`}
           `}
       </div></div>
-      ${m.notes?`<div class="meeting-card-body" style="font-size:11px;color:var(--gray-mid);margin-top:6px">${m.notes.slice(0,120)}${m.notes.length>120?'...':''}</div>`:''}
+      ${m.notes?`<div class="meeting-card-body" style="font-size:11px;color:var(--gray-mid);margin-top:6px">${escHtml(m.notes.slice(0,120))}${m.notes.length>120?'...':''}</div>`:''}
     </div>`).join('')+
     (totalMeetings>3?`<div style="text-align:center;margin-top:10px"><button class="btn" style="font-size:11px" onclick="gotoView('portfolio',null)">View all ${totalMeetings} meetings</button></div>`:'');
 
@@ -8450,13 +8522,13 @@ function renderAllMeetings(){
       `<div class="empty-state" style="padding:1rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No field updates yet</div><div class="empty-state-sub">Approved field updates will appear here</div></div>`:
       approvedSubs.map(s=>`<div class="meeting-card">
         <div class="meeting-card-header">
-          <div><div class="meeting-card-title">${s.property} — Field Update</div><div class="meeting-card-meta">Week of ${s.week} · ${s.consultant}</div></div>
+          <div><div class="meeting-card-title">${escHtml(s.property)} — Field Update</div><div class="meeting-card-meta">Week of ${s.week} · ${s.consultant}</div></div>
           <div style="display:flex;align-items:center;gap:6px">
             <span class="badge b-public">Approved</span>
             <button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:14px"></i></button>
           </div>
         </div>
-        ${s.notes?`<div class="meeting-card-body" style="font-size:11px;color:var(--gray-mid);margin-top:6px">${s.notes.slice(0,120)}${s.notes.length>120?'...':''}</div>`:''}
+        ${s.notes?`<div class="meeting-card-body" style="font-size:11px;color:var(--gray-mid);margin-top:6px">${escHtml(s.notes.slice(0,120))}${s.notes.length>120?'...':''}</div>`:''}
       </div>`).join('')+
       (totalSubs>3?`<div style="text-align:center;margin-top:10px"><button class="btn" style="font-size:11px" onclick="gotoView('documents',null)">View all ${totalSubs} field updates</button></div>`:'');
   }
@@ -9062,7 +9134,7 @@ async function renderBidLevelingTable(round,roundSubs,p){
     ${suppliers.map(s=>{
       const statusBadge=s.status==='No Bid'?'<span style="font-size:9px;color:var(--gray-mid);font-weight:600;margin-left:6px">NO BID</span>'
         :s.status==='Withdrawn'?'<span style="font-size:9px;color:var(--red);font-weight:600;margin-left:6px">WITHDRAWN</span>':'';
-      return `<th style="padding:10px 12px;text-align:center;font-size:12px;font-weight:700;color:var(--navy);background:var(--gray-xpale);white-space:nowrap;border-left:1px solid var(--border)">${s.supplierName}${statusBadge}</th>`;
+      return `<th style="padding:10px 12px;text-align:center;font-size:12px;font-weight:700;color:var(--navy);background:var(--gray-xpale);white-space:nowrap;border-left:1px solid var(--border)">${escHtml(s.supplierName)}${statusBadge}</th>`;
     }).join('')}
   </tr>`;
 
@@ -9684,7 +9756,7 @@ function renderUnitRows(){
   const priceWrap=document.getElementById('bsf-unit-price-rows');
   if(priceWrap){
     priceWrap.innerHTML=`<div style="display:grid;grid-template-columns:1fr 140px;gap:8px;font-size:12px;align-items:center;margin-bottom:10px">
-      ${bidFormUnitDetail.map((u,i)=>`<span>${u.unitName}</span><input type="text" class="form-input bsf-unit-price-input" data-idx="${i}" placeholder="$0.00" style="font-size:12px;padding:6px 8px" value="${u.unitPrice!=null?Number(u.unitPrice).toLocaleString('en-US'):''}">`).join('')}
+      ${bidFormUnitDetail.map((u,i)=>`<span>${escHtml(u.unitName)}</span><input type="text" class="form-input bsf-unit-price-input" data-idx="${i}" placeholder="$0.00" style="font-size:12px;padding:6px 8px" value="${u.unitPrice!=null?Number(u.unitPrice).toLocaleString('en-US'):''}">`).join('')}
     </div>`;
     priceWrap.querySelectorAll('.bsf-unit-price-input').forEach(el=>{
       initCurrencyInput(el.id||(el.id='bsf-unit-price-'+el.dataset.idx));
@@ -9694,7 +9766,7 @@ function renderUnitRows(){
   const oosWrap=document.getElementById('bsf-unit-oos-rows');
   if(oosWrap){
     oosWrap.innerHTML=`<div style="display:grid;grid-template-columns:1fr 140px;gap:8px;font-size:12px;align-items:center">
-      ${bidFormUnitDetail.map((u,i)=>`<span>${u.unitName} (weeks)</span><input type="text" class="form-input bsf-unit-oos-input" data-idx="${i}" placeholder="0" style="font-size:12px;padding:6px 8px" value="${u.outOfServiceWeeks??''}">`).join('')}
+      ${bidFormUnitDetail.map((u,i)=>`<span>${escHtml(u.unitName)} (weeks)</span><input type="text" class="form-input bsf-unit-oos-input" data-idx="${i}" placeholder="0" style="font-size:12px;padding:6px 8px" value="${u.outOfServiceWeeks??''}">`).join('')}
     </div>`;
     oosWrap.querySelectorAll('.bsf-unit-oos-input').forEach(el=>{
       el.addEventListener('input',()=>{
@@ -9797,9 +9869,9 @@ function lineItemRowHtml(type,item,rowId){
       return `<select class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" style="font-size:12px;padding:6px 8px">${f.options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select>`;
     }
     if(f.type==='textarea'){
-      return `<textarea class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" rows="2" placeholder="${f.placeholder}" style="font-size:12px;padding:6px 8px;resize:vertical">${val}</textarea>`;
+      return `<textarea class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" rows="2" placeholder="${f.placeholder}" style="font-size:12px;padding:6px 8px;resize:vertical">${escHtml(val)}</textarea>`;
     }
-    return `<input type="text" class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" data-currency="${f.type==='currency'}" placeholder="${f.placeholder}" style="font-size:12px;padding:6px 8px" value="${val}">`;
+    return `<input type="text" class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" data-currency="${f.type==='currency'}" placeholder="${f.placeholder}" style="font-size:12px;padding:6px 8px" value="${escHtml(val)}">`;
   }).join('');
   return `<div class="bsf-li-row" data-type="${type}" data-row-id="${rowId}" style="display:grid;grid-template-columns:${cols};gap:8px;margin-bottom:8px;align-items:start">
     ${cells}
@@ -10454,7 +10526,7 @@ async function notifyClientCO(coId){
       <i class="ti ti-user" style="color:var(--blue-dark);font-size:14px"></i>
       <div>
         <div style="font-size:12px;font-weight:600;color:var(--navy)">${escHtml(c.name)}</div>
-        <div style="font-size:11px;color:var(--gray-mid)">${c.email}${c.property?` · ${c.property}`:''}</div>
+        <div style="font-size:11px;color:var(--gray-mid)">${escHtml(c.email)}${c.property?` · ${escHtml(c.property)}`:''}</div>
       </div>
     </div>`).join('');
 
@@ -11029,7 +11101,7 @@ function renderUnitPhaseSuggestions(scopeId){
     return `<div style="background:var(--amber-pale);border:0.5px solid #fac775;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
       <div style="font-size:12px;color:var(--amber)">
         <i class="ti ti-bulb" style="margin-right:5px"></i>
-        <strong>${units.length} unit${units.length===1?'':'s'}</strong> (${s.equipmentType||'unspecified type'}${s.capexYear?', CapEx '+s.capexYear:''}) could become a phase: ${names}
+        <strong>${units.length} unit${units.length===1?'':'s'}</strong> (${escHtml(s.equipmentType||'unspecified type')}${s.capexYear?', CapEx '+s.capexYear:''}) could become a phase: ${names}
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
         <button class="btn" style="font-size:11px;padding:4px 10px" onclick="acceptSuggestedUnitPhase('${s.id}')"><i class="ti ti-check"></i>Accept</button>
@@ -11205,7 +11277,7 @@ function renderStepLegend(propName, phaseName, expanded, phaseId){
   const statusColors={'Complete':'var(--green)','In Progress':'var(--blue-dark)','At Risk':'var(--red)','Not Started':'var(--gray-light)'};
   if(!expanded){
     // Compact dot row for collapsed phase header
-    const dots=steps.map(s=>`<span title="${s.taskName}: ${s.status}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${statusColors[s.status]||'var(--gray-light)'};opacity:${s.status==='Not Started'?0.3:1}"></span>`).join('');
+    const dots=steps.map(s=>`<span title="${escHtml(s.taskName)}: ${escHtml(s.status)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${statusColors[s.status]||'var(--gray-light)'};opacity:${s.status==='Not Started'?0.3:1}"></span>`).join('');
     const done=steps.filter(s=>s.status==='Complete').length;
     return `<div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap">${dots}<span style="font-size:9px;color:var(--gray-mid);margin-left:2px">${done}/${steps.length} tasks</span></div>`;
   }
@@ -11263,7 +11335,7 @@ function renderStepTimeline(ph, propName){
     return `<div style="border-bottom:1px solid var(--gray-xpale)">
       <div style="display:flex;align-items:center;gap:8px;padding:5px 0">
         ${dot}
-        <span style="font-size:11px;color:${isBehind&&!isComplete?'var(--red)':'var(--navy)'};flex:1;font-weight:${isBehind&&!isComplete?600:400}">${s.taskName}${overdueTag}</span>
+        <span style="font-size:11px;color:${isBehind&&!isComplete?'var(--red)':'var(--navy)'};flex:1;font-weight:${isBehind&&!isComplete?600:400}">${escHtml(s.taskName)}${overdueTag}</span>
         <span style="width:110px;text-align:right">${startDisplay}</span>
         <span style="width:110px;text-align:right">${endDisplay}</span>
       </div>
@@ -11292,10 +11364,10 @@ function openStepDatesForm(phaseId){
     const ex=existingSteps.find(s=>s.taskName===name);
     return ex||{id:'',taskName:name,taskOrder:i+1,plannedStart:'',plannedEnd:'',actualStart:'',completionDate:'',status:'Not Started',checked:true};
   });
-  const rows=merged.map((s,i)=>`<div style="border-bottom:1px solid var(--gray-pale);padding:6px 0" data-step-idx="${i}" data-step-id="${s.id||''}" data-step-name="${s.taskName.replace(/"/g,'&quot;')}">
+  const rows=merged.map((s,i)=>`<div style="border-bottom:1px solid var(--gray-pale);padding:6px 0" data-step-idx="${i}" data-step-id="${s.id||''}" data-step-name="${escHtml(s.taskName)}">
     <div style="display:grid;grid-template-columns:28px 1fr 95px 95px 95px 95px 82px;gap:4px;align-items:center">
       <input type="checkbox" class="step-apply-check" ${s.checked===false?'':'checked'} style="width:14px;height:14px;cursor:pointer" title="Include this task">
-      <div style="font-size:11px;font-weight:500;color:var(--navy)">${s.taskName}</div>
+      <div style="font-size:11px;font-weight:500;color:var(--navy)">${escHtml(s.taskName)}</div>
       <input type="date" class="form-input step-planned-start" style="font-size:10px;padding:2px 3px;height:24px" value="${s.plannedStart||''}">
       <input type="date" class="form-input step-planned-end" style="font-size:10px;padding:2px 3px;height:24px" value="${s.plannedEnd||''}">
       <input type="date" class="form-input step-actual-start" style="font-size:10px;padding:2px 3px;height:24px" value="${s.actualStart||''}">
@@ -11306,7 +11378,7 @@ function openStepDatesForm(phaseId){
     </div>
     <div style="display:grid;grid-template-columns:28px 1fr;gap:4px;margin-top:3px;align-items:center">
       <div></div>
-      <input type="text" class="form-input step-notes" style="font-size:10px;padding:2px 6px;height:22px;color:var(--gray-mid)" placeholder="Note (e.g. permit delay, labor shortage...)" value="${(s.notes||'').replace(/"/g,'&quot;')}">
+      <input type="text" class="form-input step-notes" style="font-size:10px;padding:2px 6px;height:22px;color:var(--gray-mid)" placeholder="Note (e.g. permit delay, labor shortage...)" value="${escHtml(s.notes||'')}">
     </div>
   </div>`).join('');
   const overlay=document.createElement('div');
@@ -11692,7 +11764,7 @@ function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhase
     const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
     const claim=!checked&&claimedElsewhere[u.id]?`<span style="color:var(--amber);font-size:10px" title="Already in ${claimedElsewhere[u.id]}"><i class="ti ti-alert-triangle"></i> in ${claimedElsewhere[u.id]}</span>`:'';
     return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
-      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${(u.equipmentType||'').replace(/"/g,'&quot;')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
+      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${escHtml(u.equipmentType||'')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
       <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
       ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
       ${claim}
@@ -12367,7 +12439,7 @@ function cfPropertyInput(val){
   drop.innerHTML=matches.map(p=>{
     const active=CF.property.includes(p.n);
     return `<div onclick="cfSelectProperty('${p.n.replace(/'/g,"\\'")}')" style="padding:7px 12px;font-size:12px;cursor:pointer;color:${active?'var(--blue-dark)':'var(--navy)'};font-weight:${active?600:400};background:${active?'var(--blue-xpale)':'white'};display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background='${active?'var(--blue-xpale)':'white'}'">
-      <span>${p.n}</span>${active?'<i class="ti ti-check" style="font-size:12px"></i>':''}
+      <span>${escHtml(p.n)}</span>${active?'<i class="ti ti-check" style="font-size:12px"></i>':''}
     </div>`;
   }).join('');
 }
@@ -13058,17 +13130,17 @@ function renderCapitalPlan(){
             const graduating=m1Date&&m1Date!=='';
             return `<tr style="${graduating?'background:var(--green-xpale,#f0faf4)':''}">
               <td>
-                <div style="font-weight:600;color:var(--navy);font-size:13px">${p.n}</div>
-                ${p.comment?`<div style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:normal">${p.comment.slice(0,60)}${p.comment.length>60?'…':''}</div>`:''}
+                <div style="font-weight:600;color:var(--navy);font-size:13px">${escHtml(p.n)}</div>
+                ${p.comment?`<div style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:normal">${escHtml(p.comment.slice(0,60))}${p.comment.length>60?'…':''}</div>`:''}
                 ${graduating?`<div style="font-size:10px;color:var(--green);font-weight:600;margin-top:2px"><i class="ti ti-arrow-up-right" style="font-size:10px"></i> Activating</div>`:''}
               </td>
               <td style="font-size:12px;color:var(--navy)">${escHtml(s.name||'—')}</td>
-              <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
+              <td style="font-size:12px">${escHtml(p.city||p.s||'—')}, ${escHtml(p.s||'')}</td>
               <td><span class="badge" style="background:${priBg(s.priority)};color:${priColor(s.priority)};border:none;font-size:10px">${(s.priority||'—').split(':')[0]}</span></td>
               <td style="font-size:12px">${(()=>{const scU=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id).length;return scU>0?scU:(s.unitList||'—');})()}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Scope units (${g.scopeUnitSum}) don't match property total"></i>`:''}</td>
               <td style="font-size:12px;font-weight:600;color:var(--navy)">${(()=>{const b=scopeUnitBudgetTotal(s.id);return b?fmtCurrency(b):'TBD';})()}</td>
               <td>${budgetStatusBadge(s.budgetStatus)}</td>
-              <td style="font-size:12px">${s.v||p.v||'—'}</td>
+              <td style="font-size:12px">${escHtml(s.v||p.v||'—')}</td>
               <td style="font-size:12px">${m1Date||'<span style="color:var(--gray-mid)">Not set</span>'}</td>
               ${canEdit?`<td><div style="display:flex;gap:4px"><button class="btn btn-icon" title="Split into Projects" style="color:var(--blue-dark);border-color:var(--blue-dark)" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork" style="font-size:13px"></i></button><button class="btn btn-icon" onclick="openCapitalPlanEdit('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-pencil" style="font-size:13px"></i></button></div></td>`:''}
             </tr>`;
@@ -13106,11 +13178,11 @@ function renderCapitalPlan(){
             <td>
               <div style="display:flex;align-items:center;gap:6px">
                 <i id="${groupId}-chevron" class="ti ti-chevron-down" style="font-size:13px;color:var(--gray-mid);transition:transform .15s;transform:rotate(-90deg)"></i>
-                <div style="font-weight:600;color:var(--navy);font-size:13px">${p.n}</div>
+                <div style="font-weight:600;color:var(--navy);font-size:13px">${escHtml(p.n)}</div>
               </div>
             </td>
             <td style="font-size:12px;color:var(--gray-mid)">${scopeLabel}</td>
-            <td style="font-size:12px">${p.city||p.s||'—'}, ${p.s||''}</td>
+            <td style="font-size:12px">${escHtml(p.city||p.s||'—')}, ${escHtml(p.s||'')}</td>
             <td><span class="badge" style="background:${priBg(topPriority)};color:${priColor(topPriority)};border:none;font-size:10px">${(topPriority||'—').split(':')[0]}</span></td>
             <td style="font-size:12px">${escHtml(p.units||'—')}${g.unitMismatch?` <i class="ti ti-alert-triangle" style="color:var(--amber);font-size:11px;vertical-align:middle" title="Project units (${g.scopeUnitSum}) don't match property total (${escHtml(p.units)})"></i>`:''}</td>
             <td style="font-size:12px;font-weight:600;color:var(--navy)">${g.totalBudget?fmtCurrency(g.totalBudget):'TBD'}</td>
@@ -13500,12 +13572,12 @@ function addSupProjectBlock(scope){
       <div id="${id}-title" style="font-size:13px;font-weight:600;color:var(--navy)">${s.name?String(s.name).replace(/</g,'&lt;'):'New Project'}</div>
       <span id="${id}-estimate" class="badge" style="background:var(--blue-xpale);color:var(--blue-dark);font-weight:600">Est. $0</span>
     </div>
-    <div class="form-group"><label class="form-label">Project Name</label><input class="form-input sup-name" type="text" value="${(s.name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Elevators, Escalators" oninput="document.getElementById('${id}-title').textContent=this.value.trim()||'New Project'"></div>
+    <div class="form-group"><label class="form-label">Project Name</label><input class="form-input sup-name" type="text" value="${escHtml(s.name||'')}" placeholder="e.g. Elevators, Escalators" oninput="document.getElementById('${id}-title').textContent=this.value.trim()||'New Project'"></div>
     <div class="form-group"><label class="form-label">Year</label><input class="form-input sup-year" type="number" value="${s.year||''}" min="2024" max="2040" placeholder="2026"></div>
-    <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input sup-consultant" type="text" value="${(s.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
+    <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input sup-consultant" type="text" value="${escHtml(s.v||'')}" placeholder="Consultant name"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input sup-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
-      <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input sup-clientprojectnum" type="text" value="${(s.clientProjectNum||'').replace(/"/g,'&quot;')}" placeholder="Client's own project number"></div>
+      <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input sup-vdanum" type="text" value="${escHtml(s.vdaNum||'')}" placeholder="e.g. 65153"></div>
+      <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input sup-clientprojectnum" type="text" value="${escHtml(s.clientProjectNum||'')}" placeholder="Client's own project number"></div>
     </div>
     <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin:10px 0 6px">Assign Units</div>
     <div id="${id}-units-list" style="max-height:160px;overflow-y:auto;border:1px solid var(--border-light,var(--border));border-radius:6px;padding:8px"></div>
@@ -15426,7 +15498,7 @@ function addSplitScopeBlock(scope){
   const bsOptions=['TBD','Preliminary','Approved'].map(bs=>`<option value="${bs}"${(s.budgetStatus||'TBD')===bs?' selected':''}>${bs}</option>`).join('');
   block.innerHTML=`
     <button onclick="document.getElementById('${id}').remove();updateSplitScopesReconcile()" style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px" title="Remove this scope"><i class="ti ti-x"></i></button>
-    <div class="form-group"><label class="form-label">Project Name</label><input class="form-input split-sc-name" type="text" value="${(s.name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Elevators, Escalators"></div>
+    <div class="form-group"><label class="form-label">Project Name</label><input class="form-input split-sc-name" type="text" value="${escHtml(s.name||'')}" placeholder="e.g. Elevators, Escalators"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
       <div class="form-group"><label class="form-label">Year</label><input class="form-input split-sc-year" type="number" value="${defaultYear||''}" min="2024" max="2040" placeholder="2026"></div>
       <div class="form-group"><label class="form-label">Budget ($)</label><input class="form-input split-sc-budget" type="text" inputmode="numeric" value="${s.plannedBudget||''}" placeholder="0" oninput="initCurrencyInputEl(this);updateSplitScopesReconcile()"></div>
@@ -15434,15 +15506,15 @@ function addSplitScopeBlock(scope){
       <div class="form-group"><label class="form-label">Budget Status</label><select class="form-input split-sc-budgetstatus">${bsOptions}</select></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input split-sc-consultant" type="text" value="${(s.v||prop?.v||'').replace(/"/g,'&quot;')}" placeholder="Consultant name"></div>
-      <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input split-sc-vdanum" type="text" value="${(s.vdaNum||'').replace(/"/g,'&quot;')}" placeholder="e.g. 65153"></div>
+      <div class="form-group"><label class="form-label">VDA Consultant</label><input class="form-input split-sc-consultant" type="text" value="${escHtml(s.v||prop?.v||'')}" placeholder="Consultant name"></div>
+      <div class="form-group"><label class="form-label">VDA Project #</label><input class="form-input split-sc-vdanum" type="text" value="${escHtml(s.vdaNum||'')}" placeholder="e.g. 65153"></div>
     </div>
     <!-- v37a — Client Project #, same field pattern as VDA Project # above. -->
     <!-- v40a — Elevator Co., filling the one field Edit Project had that
     this modal didn't, so this block covers the same field set. -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input split-sc-client-project-num" type="text" value="${(s.clientProjectNum||'').replace(/"/g,'&quot;')}" placeholder="Client's own project number"></div>
-      <div class="form-group"><label class="form-label">Elevator Co.</label><input class="form-input split-sc-ec" type="text" value="${(s.ec||prop?.ec||'').replace(/"/g,'&quot;')}" placeholder="e.g. Otis, Schindler"></div>
+      <div class="form-group"><label class="form-label">Client Project #</label><input class="form-input split-sc-client-project-num" type="text" value="${escHtml(s.clientProjectNum||'')}" placeholder="Client's own project number"></div>
+      <div class="form-group"><label class="form-label">Elevator Co.</label><input class="form-input split-sc-ec" type="text" value="${escHtml(s.ec||prop?.ec||'')}" placeholder="e.g. Otis, Schindler"></div>
     </div>
     <div class="form-group" style="margin-bottom:12px"><label class="form-label">Mod. Survey Date <span style="font-weight:400;color:var(--gray-mid)">(graduates this project)</span></label><input class="form-input split-sc-m1date" type="date" value="${m1dateVal}"></div>
     <!-- v50b — Planned Start / Target Completion, powering the even
@@ -16359,7 +16431,7 @@ function renderCharts(){
             const name=p.n.length>22?p.n.slice(0,20)+'…':p.n;
             return `<div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <div style="font-size:12px;font-weight:500;color:var(--navy);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%" onclick="openProperty('${p.n.replace(/'/g,"\'")}')" title="${p.n}">${name}</div>
+                <div style="font-size:12px;font-weight:500;color:var(--navy);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')" title="${escHtml(p.n)}">${escHtml(name)}</div>
                 <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
                   <span style="font-size:10px;font-weight:600;color:${h.color}">${h.label}</span>
                   <span style="font-size:11px;font-weight:700;color:var(--navy);font-family:'Plus Jakarta Sans',sans-serif">${units} Units</span>
@@ -16932,8 +17004,8 @@ function showBarDrilldown(type,value){
       bodyHtml=`<div style="padding:24px;text-align:center;font-size:12px;color:var(--gray-mid)">No units match this selection.</div>`;
     }else{
       const rows=unitRows.map(r=>`<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${(r.property||'').replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
-        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${r.property||''}</td>
-        <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${r.unitName||'—'}</td>
+        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${escHtml(r.property||'')}</td>
+        <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${escHtml(r.unitName||'—')}</td>
         <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${r.amount!=null?fmtCurrency(r.amount):'—'}</td>
       </tr>`).join('');
       bodyHtml=`<table style="width:100%;border-collapse:collapse">
@@ -16957,7 +17029,7 @@ function showBarDrilldown(type,value){
       const unitNames=sortUnitNames(units.map(u=>u.name).filter(Boolean));
       const total=units.reduce((a,u)=>a+unitEffectiveValue(u),0);
       return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
-        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
+        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${escHtml(p.n)}</td>
         <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${unitNames.length?unitNames.join(', '):'—'}</td>
         <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${fmtCurrency(total)}</td>
       </tr>`;
@@ -16975,7 +17047,7 @@ function showBarDrilldown(type,value){
       const health=derivePropertyStatusFromPhases(p.n);
       const healthColor=health==='At Risk'?'var(--red)':health==='Ahead'?'var(--green)':health==='Complete'?'#3DAA7A':'var(--blue-dark)';
       return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
-        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
+        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${escHtml(p.n)}</td>
         <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
         <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
         <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${escHtml(p.units||'—')}</td>
@@ -17596,7 +17668,7 @@ function showEditCalEvent(type,id){
   const record=isVisit?siteVisits.find(v=>v.id===id):meetings.find(m=>m.id===id);
   if(!record)return;
   const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
-  const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===record.property?' selected':''}>${p.n}</option>`).join('');
+  const options=port.map(p=>`<option value="${escHtml(p.n)}"${p.n===record.property?' selected':''}>${escHtml(p.n)}</option>`).join('');
   const tzOptions=`<option value="America/New_York"${(record.tz||'America/New_York')==='America/New_York'?' selected':''}>Eastern (ET)</option><option value="America/Chicago"${record.tz==='America/Chicago'?' selected':''}>Central (CT)</option><option value="America/Denver"${record.tz==='America/Denver'?' selected':''}>Mountain (MT)</option><option value="America/Los_Angeles"${record.tz==='America/Los_Angeles'?' selected':''}>Pacific (PT)</option><option value="America/Anchorage"${record.tz==='America/Anchorage'?' selected':''}>Alaska (AKT)</option><option value="Pacific/Honolulu"${record.tz==='Pacific/Honolulu'?' selected':''}>Hawaii (HT)</option>`;
   const overlay=document.createElement('div');
   overlay.id='cal-edit-overlay';
@@ -17691,8 +17763,8 @@ function addCaleditAttendeeRow(existing){
   row.style.cssText='display:grid;grid-template-columns:1fr 1.3fr 1.3fr auto;gap:8px;align-items:center';
   const roleOptions=['VDA','Elevator Co.','Client','Other'].map(r=>`<option value="${r}"${existing&&existing.role===r?' selected':''}>${r}</option>`).join('');
   row.innerHTML=`<select class="form-input" id="${rowId}-role" style="font-size:13px">${roleOptions}</select>
-    <input class="form-input" type="text" id="${rowId}-name" placeholder="Full name" style="font-size:13px" value="${(existing&&existing.name||'').replace(/"/g,'&quot;')}">
-    <input class="form-input" type="email" id="${rowId}-email" placeholder="name@company.com" style="font-size:13px" value="${(existing&&existing.email||'').replace(/"/g,'&quot;')}">
+    <input class="form-input" type="text" id="${rowId}-name" placeholder="Full name" style="font-size:13px" value="${escHtml(existing&&existing.name||'')}">
+    <input class="form-input" type="email" id="${rowId}-email" placeholder="name@company.com" style="font-size:13px" value="${escHtml(existing&&existing.email||'')}">
     <button type="button" onclick="document.getElementById('${rowId}').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px;padding:0 2px;line-height:1">&times;</button>`;
   list.appendChild(row);
 }
@@ -17714,7 +17786,7 @@ function addCaleditAgendaTopic(val){
   const list=document.getElementById('caledit-agenda-list');if(!list)return;
   const rowId='caledit-topic-'+Date.now()+'-'+Math.random().toString(36).slice(2,6);
   const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center';
-  row.innerHTML=`<input class="form-input" type="text" id="${rowId}" placeholder="Agenda topic" value="${(val||'').replace(/"/g,'&quot;')}" style="flex:1;font-size:13px">
+  row.innerHTML=`<input class="form-input" type="text" id="${rowId}" placeholder="Agenda topic" value="${escHtml(val||'')}" style="flex:1;font-size:13px">
     <button type="button" onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px;padding:0 2px;line-height:1">&times;</button>`;
   list.appendChild(row);
 }
@@ -17971,16 +18043,16 @@ function renderDashboard(){
   const planned=port.filter(p=>p.st==='Planned').length;
   const complete=port.filter(p=>p.st==='Complete').length;
   // Schedule risk — dynamic from portfolio
-  const behindAlerts=behind.map(p=>`<div class="alert alert-danger"><i class="ti ti-alert-triangle"></i><span><strong>${p.n}</strong>${p.comment?' — '+p.comment.slice(0,60)+(p.comment.length>60?'...':''):''}</span></div>`).join('');
+  const behindAlerts=behind.map(p=>`<div class="alert alert-danger"><i class="ti ti-alert-triangle"></i><span><strong>${escHtml(p.n)}</strong>${p.comment?' — '+escHtml(p.comment.slice(0,60))+(p.comment.length>60?'...':''):''}</span></div>`).join('');
   const atRiskProps=active.filter(p=>p.r!=='Behind'&&getMilestonesForProp(p.n).some(m=>m.status==='At Risk'));
-  const warnAlerts=atRiskProps.map(p=>`<div class="alert alert-warn"><i class="ti ti-alert-triangle"></i><span><strong>${p.n}</strong>${p.comment?' — '+p.comment.slice(0,60)+(p.comment.length>60?'...':''):''}</span></div>`).join('');
+  const warnAlerts=atRiskProps.map(p=>`<div class="alert alert-warn"><i class="ti ti-alert-triangle"></i><span><strong>${escHtml(p.n)}</strong>${p.comment?' — '+escHtml(p.comment.slice(0,60))+(p.comment.length>60?'...':''):''}</span></div>`).join('');
   const noRisk=behind.length===0&&atRiskProps.length===0;
   // Active properties table — top 6
   const activeRows=active.slice(0,6).map(p=>{
     return `<tr onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
-      <td style="font-size:12px;font-weight:500">${p.n}</td>
+      <td style="font-size:12px;font-weight:500">${escHtml(p.n)}</td>
       <td><span class="geo">${p.s}</span></td>
-      <td style="font-size:11px">${p.ec||'TBD'}</td>
+      <td style="font-size:11px">${escHtml(p.ec||'TBD')}</td>
       <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${escHtml(p.units||'—')} units</td>
       <td>${renderStatusBadge(p.st)}</td>
       <td>${renderHealthBadge(p.n)}</td>
@@ -18252,8 +18324,8 @@ function renderDashboard(){
                 <span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:6px;background:${a.priority==='High'?'var(--red-pale)':a.priority==='Medium'?'var(--amber-pale)':'var(--blue-pale)'};color:${priColor[a.priority]||'var(--gray-mid)'}">${a.priority||'—'}</span>
                 ${_dScTag}
               </div>
-              <div style="font-size:12px;font-weight:500;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.description||a.title||'Action'}</div>
-              <div style="font-size:10px;color:var(--gray-mid)">${a.property||'—'} · ${escHtml(a.owner||'—')}</div>
+              <div style="font-size:12px;font-weight:500;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.description||a.title||'Action')}</div>
+              <div style="font-size:10px;color:var(--gray-mid)">${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')}</div>
             </div>
           </div>`}).join('')}
         </div>`
@@ -18283,25 +18355,25 @@ function renderDashboard(){
     ;(submissions||[]).filter(s=>s.reviewStatus==='approved').forEach(s=>{
       const d=new Date(s.submittedAt||s.week||0);
       feedItems.push({_date:d,_type:'Field Update',_icon:'ti-file-check',_color:'var(--green)',
-        _title:`${s.property} — Field Update`,_sub:`Week of ${fmtWeek(s.week)} · ${s.consultant||'—'}`,_prop:s.property});
+        _title:`${escHtml(s.property)} — Field Update`,_sub:`Week of ${fmtWeek(s.week)} · ${s.consultant||'—'}`,_prop:s.property});
     });
     // Meetings (logged)
     ;(meetings||[]).filter(m=>m.status!=='Scheduled').forEach(m=>{
       const d=new Date(m.date||0);
       feedItems.push({_date:d,_type:'Meeting',_icon:'ti-notes',_color:'var(--blue-dark)',
-        _title:`${m.property} — ${m.type||'Meeting'}`,_sub:`${m.date||'—'}${m.elevco?' · '+m.elevco:''}`,_prop:m.property});
+        _title:`${escHtml(m.property)} — ${escHtml(m.type||'Meeting')}`,_sub:`${fmtWeek(m.date)}${m.elevco?' · '+m.elevco:''}`,_prop:m.property});
     });
     // Site visits
     ;(siteVisits||[]).forEach(v=>{
       const d=new Date(v.date||0);
       feedItems.push({_date:d,_type:'Site Visit',_icon:'ti-building',_color:'var(--teal)',
-        _title:`${v.property} — Site Visit`,_sub:`${v.date||'—'}${v.consultant?' · '+v.consultant:''}`,_prop:v.property});
+        _title:`${v.property} — Site Visit`,_sub:`${fmtWeek(v.date)}${v.consultant?' · '+v.consultant:''}`,_prop:v.property});
     });
     // Action items closed
     ;(actionItems||[]).filter(a=>a.status==='Closed'||a.status==='closed').forEach(a=>{
       const d=new Date(a.due||0);
       feedItems.push({_date:d,_type:'Action Closed',_icon:'ti-circle-check',_color:'var(--green)',
-        _title:`${a.property||'—'} — Action Closed: ${a.title||a.description||'Action Item'}`,_sub:`${a.owner||'—'}`,_prop:a.property||''});
+        _title:`${escHtml(a.property||'—')} — Action Closed: ${escHtml(a.title||a.description||'Action Item')}`,_sub:`${escHtml(a.owner||'—')}`,_prop:a.property||''});
     });
     // v37g — Milestone completions. Uses each Milestone's own real
     // actualDate/completionDate (already tracked, no new field needed) —
@@ -18331,7 +18403,7 @@ function renderDashboard(){
       const completedDate=new Date(dateStr);
       const modifiedDate=m.lastModified?new Date(m.lastModified):null;
       const mostRecent=(modifiedDate&&!isNaN(modifiedDate)&&modifiedDate>completedDate)?modifiedDate:completedDate;
-      const groupKey=`${m.property||''}|${m.completionDate||dateStr}`;
+      const groupKey=`${escHtml(m.property||'')}|${m.completionDate||dateStr}`;
       if(!_msGroups[groupKey])_msGroups[groupKey]={property:m.property||'',dateStr:m.completionDate||dateStr,items:[],_date:mostRecent};
       _msGroups[groupKey].items.push(m);
       if(mostRecent>_msGroups[groupKey]._date)_msGroups[groupKey]._date=mostRecent;
@@ -18339,11 +18411,11 @@ function renderDashboard(){
     Object.values(_msGroups).forEach(g=>{
       if(g.items.length>1){
         feedItems.push({_date:g._date,_type:'Milestone',_icon:'ti-flag-check',_color:'var(--indigo)',
-          _title:`${g.property} — ${g.items.length} milestones updated`,_sub:g.dateStr,_prop:g.property});
+          _title:`${g.property} — ${g.items.length} milestones updated`,_sub:fmtWeek(g.dateStr),_prop:g.property});
       }else{
         const m=g.items[0];
         feedItems.push({_date:g._date,_type:'Milestone',_icon:'ti-flag-check',_color:'var(--indigo)',
-          _title:`${g.property} — M${m.milestoneNumber}: ${m.milestoneName} Complete`,_sub:g.dateStr,_prop:g.property});
+          _title:`${g.property} — M${m.milestoneNumber}: ${m.milestoneName} Complete`,_sub:fmtWeek(g.dateStr),_prop:g.property});
       }
     });
     // v37g — Unit Phase start/completion. Same approach — Unit Groups
@@ -18353,11 +18425,11 @@ function renderDashboard(){
     ;(window.UNIT_GROUPS||[]).forEach(g=>{
       if(g.actualCompletion){
         feedItems.push({_date:new Date(g.actualCompletion),_type:'Phase Complete',_icon:'ti-checks',_color:'var(--green)',
-          _title:`${g.property||'—'} — ${g.phase||'Phase'} complete`,_sub:`${g.actualCompletion}`,_prop:g.property||''});
+          _title:`${g.property||'—'} — ${g.phase||'Phase'} complete`,_sub:fmtWeek(g.actualCompletion),_prop:g.property||''});
       }
       if(g.actualStart){
         feedItems.push({_date:new Date(g.actualStart),_type:'Phase Started',_icon:'ti-player-play',_color:'var(--blue-dark)',
-          _title:`${g.property||'—'} — ${g.phase||'Phase'} started`,_sub:`${g.actualStart}`,_prop:g.property||''});
+          _title:`${g.property||'—'} — ${g.phase||'Phase'} started`,_sub:fmtWeek(g.actualStart),_prop:g.property||''});
       }
     });
     // v37g — Scope status changes. Requires the new Status Changed Date
@@ -18373,7 +18445,7 @@ function renderDashboard(){
       // the already-parsed _date rather than re-parsing the raw string.
       const _scopeDate=new Date(s.statusChangedDate);
       feedItems.push({_date:_scopeDate,_type:'Project Status',_icon:'ti-git-fork',_color:'var(--purple)',
-        _title:`${s.property||'—'} — ${s.name||'Project'} → ${s.status}`,_sub:_scopeDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),_prop:s.property||''});
+        _title:`${escHtml(s.property||'—')} — ${escHtml(s.name||'Project')} → ${escHtml(s.status)}`,_sub:_scopeDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),_prop:s.property||''});
     });
     // v37g — 7-day lookback window, per direct instruction: show up to 10
     // most recent items, but only from the last 7 days — a quiet week
@@ -18728,7 +18800,7 @@ function showScorecardGapDrilldown(){
     const health=derivePropertyStatusFromPhases(p.n);
     const healthColor=health==='At Risk'?'var(--red)':health==='Ahead'?'var(--green)':health==='Complete'?'#3DAA7A':'var(--blue-dark)';
     return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${p.n.replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
-      <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${p.n}</td>
+      <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${escHtml(p.n)}</td>
       <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${p.s||'—'}</span></td>
       <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
       <td style="padding:8px 10px;font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
@@ -19065,6 +19137,78 @@ async function renderWeeklyReportFeedback(){
 }
 window.renderWeeklyReportFeedback=renderWeeklyReportFeedback;
 
+// v51c — Blocked Writes dashboard card. Admin-only, reads GET
+// /blocked-writes (itself admin-gated server side, so a non-admin
+// session can't pull this even by calling the endpoint directly). Shows
+// role/table counts plus the 20 most recent attempts, so Misty can see
+// in practice how often the known consultant UI mismatch — buttons
+// still visible, writes 403 — actually gets hit before deciding whether
+// to hide the buttons or restore the write rights.
+function _bwFmtTimestamp(ts){
+  if(!ts)return '—';
+  try{return new Date(ts).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' · '+new Date(ts).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});}catch(e){return ts;}
+}
+async function renderBlockedWrites(){
+  const body=document.getElementById('blocked-writes-body');
+  if(!body)return;
+  body.innerHTML=`<div style="padding:2rem;text-align:center;color:var(--gray-mid);font-size:13px">Loading blocked write attempts...</div>`;
+  let data;
+  try{
+    const r=await workerFetch(`${WORKER_URL}/blocked-writes`);
+    data=await r.json();
+  }catch(e){
+    data=null;
+  }
+  if(!data||!data.ok){
+    body.innerHTML=`<div style="padding:2rem;text-align:center;color:var(--red);font-size:13px">Could not load blocked write attempts — check connection and try again.</div>`;
+    return;
+  }
+  if(data.totalCount===0){
+    body.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-shield-check"></i><div class="empty-state-title">No blocked writes recorded</div><div class="empty-state-sub">Nothing has hit the role permission matrix yet.</div></div>`;
+    return;
+  }
+  const countRows=(data.counts||[]).map(c=>`
+    <tr>
+      <td style="padding:6px 10px;font-size:12px;text-transform:capitalize">${escHtml(c.role||'unknown')}</td>
+      <td style="padding:6px 10px;font-size:12px">${escHtml(c.table||'unknown')}</td>
+      <td style="padding:6px 10px;font-size:12px;text-align:right;font-weight:600">${c.count}</td>
+    </tr>`).join('');
+  const recentRows=(data.recent||[]).map(r=>`
+    <tr>
+      <td style="padding:6px 10px;font-size:12px">${_bwFmtTimestamp(r.timestamp)}</td>
+      <td style="padding:6px 10px;font-size:12px;text-transform:capitalize">${escHtml(r.role||'')}</td>
+      <td style="padding:6px 10px;font-size:12px">${escHtml(r.name||'—')}</td>
+      <td style="padding:6px 10px;font-size:12px">${escHtml(r.table||'')}</td>
+      <td style="padding:6px 10px;font-size:12px">${escHtml(r.method||'')}</td>
+    </tr>`).join('');
+  body.innerHTML=`
+    <div class="card" style="margin-bottom:16px">
+      <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:10px">By role and table (${data.totalCount} total)</div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:6px 10px;font-size:11px;text-align:left;color:var(--gray-mid)">Role</th>
+          <th style="padding:6px 10px;font-size:11px;text-align:left;color:var(--gray-mid)">Table</th>
+          <th style="padding:6px 10px;font-size:11px;text-align:right;color:var(--gray-mid)">Count</th>
+        </tr></thead>
+        <tbody>${countRows}</tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div style="font-size:13px;font-weight:700;color:var(--navy);margin-bottom:10px">Most recent</div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:6px 10px;font-size:11px;text-align:left;color:var(--gray-mid)">When</th>
+          <th style="padding:6px 10px;font-size:11px;text-align:left;color:var(--gray-mid)">Role</th>
+          <th style="padding:6px 10px;font-size:11px;text-align:left;color:var(--gray-mid)">Name</th>
+          <th style="padding:6px 10px;font-size:11px;text-align:left;color:var(--gray-mid)">Table</th>
+          <th style="padding:6px 10px;font-size:11px;text-align:left;color:var(--gray-mid)">Method</th>
+        </tr></thead>
+        <tbody>${recentRows}</tbody>
+      </table>
+    </div>`;
+}
+window.renderBlockedWrites=renderBlockedWrites;
+
 async function voteWeeklyReportFeedback(feedbackRecordId,vote){
   const rowEl=document.getElementById(`wrf-row-${feedbackRecordId}`);
   const notesEl=document.getElementById(`wrf-notes-${feedbackRecordId}`);
@@ -19219,7 +19363,7 @@ function showVisitEntry(){
   const overlay=document.createElement('div');
   overlay.id='visit-prop-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
-  const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===propName?' selected':''}>${p.n}</option>`).join('');
+  const options=port.map(p=>`<option value="${escHtml(p.n)}"${p.n===propName?' selected':''}>${escHtml(p.n)}</option>`).join('');
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:420px;box-shadow:var(--shadow-md);padding:24px">
     <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:16px">Schedule a Site Visit</div>
     <div class="form-group" style="margin-bottom:12px">
@@ -19290,7 +19434,7 @@ function showSiteVisitForm(){
   const overlay=document.createElement('div');
   overlay.id='visit-prop-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
-  const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}">${p.n}</option>`).join('');
+  const options=port.map(p=>`<option value="${escHtml(p.n)}">${escHtml(p.n)}</option>`).join('');
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:440px;box-shadow:var(--shadow-md);padding:24px;margin:auto">
     <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:16px">Schedule a Site Visit</div>
     <div class="form-group" style="margin-bottom:12px">
@@ -19391,7 +19535,7 @@ function openScheduleMeetingModal(prefillPropName){
   const overlay=document.createElement('div');
   overlay.id='schedule-mtg-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
-  const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}" ${prefillPropName&&p.n===prefillPropName?'selected':''}>${p.n}</option>`).join('');
+  const options=port.map(p=>`<option value="${escHtml(p.n)}" ${prefillPropName&&p.n===prefillPropName?'selected':''}>${escHtml(p.n)}</option>`).join('');
   const tzOptions=`<option value="America/New_York">Eastern (ET)</option><option value="America/Chicago">Central (CT)</option><option value="America/Denver">Mountain (MT)</option><option value="America/Los_Angeles">Pacific (PT)</option><option value="America/Anchorage">Alaska (AKT)</option><option value="Pacific/Honolulu">Hawaii (HT)</option>`;
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:640px;box-shadow:var(--shadow-md);padding:24px;margin:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -19505,7 +19649,7 @@ function addSmtgAgendaTopic(val){
   const list=document.getElementById('smtg-agenda-list');if(!list)return;
   const rowId='smtg-topic-'+Date.now()+'-'+Math.random().toString(36).slice(2,6);
   const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center';
-  row.innerHTML=`<input class="form-input" type="text" id="${rowId}" placeholder="Agenda topic" value="${(val||'').replace(/"/g,'&quot;')}" style="flex:1;font-size:13px">
+  row.innerHTML=`<input class="form-input" type="text" id="${rowId}" placeholder="Agenda topic" value="${escHtml(val||'')}" style="flex:1;font-size:13px">
     <button type="button" onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:16px;padding:0 2px;line-height:1">&times;</button>`;
   list.appendChild(row);
   document.getElementById(rowId)?.focus();
@@ -20340,28 +20484,28 @@ function previewDoc(docId, syntheticDoc){
     if(!s){showToast('Source record not found','warn');return;}
     html=`<div style="font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px">PULSE</div>
       <div style="font-size:11px;color:var(--gray-mid);margin-bottom:12px">Modernization Project Assurance · Weekly Field Update</div>
-      <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${s.property}</div>
+      <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${escHtml(s.property)}</div>
       <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">Week of ${s.week} · Submitted ${s.submittedAt}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant}</strong></div>
         <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase)}</strong></div>
-        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status}</strong></div>
-        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType}</strong></div>
+        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${escHtml(s.status)}</strong></div>
+        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${escHtml(s.commentType)}</strong></div>
         <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:${s.reviewStatus==='approved'?'var(--green)':'var(--amber)'}">${s.reviewStatus}</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
       <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(s.notes||'—')}</div>
-      ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Return Note:</strong> ${s.returnNote}</div>`:''}`;
+      ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Return Note:</strong> ${escHtml(s.returnNote)}</div>`:''}`;
   } else if(d.subfolder==='Meeting Minutes'&&d._meetingId){
     const m=meetings.find(x=>x.id===d._meetingId);
     if(!m){showToast('Source record not found','warn');return;}
     const propActions=actionItems.filter(a=>a.meetingId===d._meetingId);
     html=`<div style="font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px">PULSE</div>
       <div style="font-size:11px;color:var(--gray-mid);margin-bottom:12px">Modernization Project Assurance · Meeting Minutes</div>
-      <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${m.property}</div>
-      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">${m.type} · ${m.date} · ${m.format||''}</div>
+      <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${escHtml(m.property)}</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">${escHtml(m.type)} · ${m.date} · ${m.format||''}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
         ${m.elevco?`<div><span style="color:var(--gray-mid)">Elevator Co:</span> <strong>${m.elevco}</strong></div>`:''}
         ${m.attVDA?`<div><span style="color:var(--gray-mid)">VDA Team:</span> <strong>${escHtml(m.attVDA)}</strong></div>`:''}
@@ -20548,10 +20692,10 @@ function populatePortfolio(){
     const propUnitsInv=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
     const propUnitCount=propUnitsInv.length;
     const propUnitBudget=propUnitsInv.reduce((a,u)=>a+unitEffectiveValue(u),0);
-    tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${p.type}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
-      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${p.n}</td>
+    tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${escHtml(p.type)}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
+      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${escHtml(p.n)}</td>
       <td><span class="geo">${p.s||'—'}</span></td>
-      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type||'—'}</span></td>
+      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
       <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
       <td style="font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
       <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
@@ -20727,7 +20871,7 @@ function openClientUnitInventoryView(propName){
       <td style="padding:6px 8px">${escHtml(u.name||'(unnamed)')}</td>
       <td style="padding:6px 8px">${u.deviceLocation||'—'}</td>
       <td style="padding:6px 8px">${u.unitType||'—'}</td>
-      <td style="padding:6px 8px">${u.status||'—'}</td>
+      <td style="padding:6px 8px">${escHtml(u.status||'—')}</td>
       <td style="padding:6px 8px">${u.capexYear||'—'}</td>
       <td style="padding:6px 8px;text-align:right">${fmtMoney(u.elevEst)}</td>
       <td style="padding:6px 8px;text-align:right">${fmtMoney(u.relatedEst)}</td>
@@ -20789,7 +20933,7 @@ async function deleteProperty(){
   // If called from property detail, pre-select current property
   const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   const preSelected=currentProp?.n||'';
-  const options=port.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===preSelected?' selected':''}>${p.n}</option>`).join('');
+  const options=port.map(p=>`<option value="${escHtml(p.n)}"${p.n===preSelected?' selected':''}>${escHtml(p.n)}</option>`).join('');
   const overlay=document.createElement('div');
   overlay.id='delete-prop-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -21200,12 +21344,12 @@ function sortPortfolioByPriority(th){
   sorted.forEach(p=>{
     const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
     const endDate=getProjectEndDate(p.n);
-    tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${p.type}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
-      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${p.n}</td>
+    tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${escHtml(p.type)}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
+      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${escHtml(p.n)}</td>
       <td><span class="geo">${p.s||'—'}</span></td>
-      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type||'—'}</span></td>
+      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
       <td style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
-      <td style="font-size:11px">${p.ec||'TBD'}</td>
+      <td style="font-size:11px">${escHtml(p.ec||'TBD')}</td>
       <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${escHtml(p.units||'—')}</td>
       <td>${renderStatusBadge(p.st)}</td>
       <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
@@ -21225,7 +21369,7 @@ function previewFieldUpdateCard(subId){
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
     <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:13px;font-weight:600;color:var(--navy)">${s.property} — Week of ${s.week}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--navy)">${escHtml(s.property)} — Week of ${s.week}</div>
       <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
     </div>
     <div style="overflow-y:auto;padding:20px;flex:1">
@@ -21237,7 +21381,7 @@ function previewFieldUpdateCard(subId){
       </div>
       <div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:4px">Weekly Notes</div><div style="font-size:13px;line-height:1.6">${escHtml(s.notes||'—')}</div></div>
       ${s.savings?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--green-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--green);margin-bottom:2px">Savings Identified</div><div style="font-size:13px;font-weight:600">${escHtml(s.savings)}</div></div>`:''}
-      ${s.returnNote?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--red-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--red);margin-bottom:2px">Return Note</div><div style="font-size:13px">${s.returnNote}</div></div>`:''}
+      ${s.returnNote?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--red-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--red);margin-bottom:2px">Return Note</div><div style="font-size:13px">${escHtml(s.returnNote)}</div></div>`:''}
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
       <button class="btn" onclick="printFieldUpdate('${s.id}')"><i class="ti ti-printer"></i>Print / PDF</button>
@@ -21263,7 +21407,7 @@ function renderPropUpdates(p){
         <button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:14px"></i></button>
       </div>
     </div>
-    <div class="update-card-meta">${escHtml(s.phase)} · ${s.status} · ${s.submittedAt}</div>
+    <div class="update-card-meta">${escHtml(s.phase)} · ${escHtml(s.status)} · ${s.submittedAt}</div>
     <div class="update-card-body">${escHtml(s.notes)}</div>
     <div class="update-card-tags"><span class="badge b-nac">${s.commentType}</span><span class="badge b-nac">${s.issueStatus}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
   </div>`).join('');
@@ -21281,7 +21425,7 @@ function refreshQueue(){
     empty.classList.add('hidden');
     const subItems=pending.map(s=>`<div class="queue-item">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-        <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--blue-dark);text-transform:uppercase;display:block;margin-bottom:2px">Field Update</span>${s.property} — Week of ${s.week}${s.draftAction&&!s.draftAction.published&&!s.draftAction.dismissed?` <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--red)" stroke="var(--red)" stroke-width="0" style="vertical-align:-1px" title="Consultant flagged a follow-up action"><path d="M5 3a1 1 0 0 1 1 -1h13.5a.5 .5 0 0 1 .5 .5v.038a.5 .5 0 0 1 -.106 .307l-3.5 4.5a.5 .5 0 0 0 0 .61l3.5 4.5a.5 .5 0 0 1 .106 .307v.238a.5 .5 0 0 1 -.5 .5h-13.5v8a1 1 0 1 1 -2 0v-17a1 1 0 0 1 1 -1z"></path></svg>`:''}</div>
+        <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--blue-dark);text-transform:uppercase;display:block;margin-bottom:2px">Field Update</span>${escHtml(s.property)} — Week of ${s.week}${s.draftAction&&!s.draftAction.published&&!s.draftAction.dismissed?` <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--red)" stroke="var(--red)" stroke-width="0" style="vertical-align:-1px" title="Consultant flagged a follow-up action"><path d="M5 3a1 1 0 0 1 1 -1h13.5a.5 .5 0 0 1 .5 .5v.038a.5 .5 0 0 1 -.106 .307l-3.5 4.5a.5 .5 0 0 0 0 .61l3.5 4.5a.5 .5 0 0 1 .106 .307v.238a.5 .5 0 0 1 -.5 .5h-13.5v8a1 1 0 1 1 -2 0v-17a1 1 0 0 1 1 -1z"></path></svg>`:''}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="badge b-pending">Pending</span>
           <button class="btn btn-icon" onclick="previewQueueItem('${s.id}')" title="Preview update"><i class="ti ti-eye" style="font-size:14px"></i></button>
@@ -21379,7 +21523,7 @@ function renderSuggestedActionItems(){
   const priColor={High:'var(--red)',Medium:'var(--amber)',Low:'var(--blue-light)'};
   list.innerHTML=open.map(s=>`<div class="queue-item" style="border-left:3px solid ${priColor[s.suggestedPriority]||'var(--gray-mid)'}">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-      <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--blue-dark);text-transform:uppercase;display:block;margin-bottom:2px">Suggested by MARLI &middot; ${s.sourceType||'Source'}</span>${s.property||'—'}</div>
+      <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--blue-dark);text-transform:uppercase;display:block;margin-bottom:2px">Suggested by MARLI &middot; ${s.sourceType||'Source'}</span>${escHtml(s.property||'—')}</div>
       <div style="display:flex;gap:6px;align-items:center">
         <span class="badge b-pending">${s.triggerReason||'Suggested'}</span>
       </div>
@@ -21711,7 +21855,7 @@ function previewFieldUpdateDetail(subId){
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
     <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:13px;font-weight:600;color:var(--navy)">${s.property} — Week of ${s.week}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--navy)">${escHtml(s.property)} — Week of ${s.week}</div>
       <button onclick="document.getElementById('fu-detail-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
     </div>
     <div style="overflow-y:auto;padding:20px;flex:1">
@@ -21720,8 +21864,8 @@ function previewFieldUpdateDetail(subId){
         <div><span style="color:var(--gray-mid)">Submitted:</span> <strong>${s.submittedAt||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase||'—')}</strong></div>
-        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${escHtml(s.status||'—')}</strong></div>
+        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${escHtml(s.commentType||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--green)">Approved</strong></div>
       </div>
@@ -21746,17 +21890,17 @@ function previewPMUpdateDetail(pmuId){
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
     <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:13px;font-weight:600;color:var(--navy)">${u.property} — PM Update</div>
+      <div style="font-size:13px;font-weight:600;color:var(--navy)">${escHtml(u.property)} — PM Update</div>
       <button onclick="document.getElementById('pmu-detail-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
     </div>
     <div style="overflow-y:auto;padding:20px;flex:1">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
-        <div><span style="color:var(--gray-mid)">Author:</span> <strong>${u.author||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Author:</span> <strong>${escHtml(u.author||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Published:</span> <strong>${u.published||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(u.units||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(u.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${u.progressStatus||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${u.commentType||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${escHtml(u.commentType||'—')}</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Update</div>
       <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(u.text||'—')}</div>
@@ -21777,7 +21921,7 @@ function previewQueueItem(subId){
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
     <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:13px;font-weight:600;color:var(--navy)">${s.property} — Week of ${s.week}</div>
+      <div style="font-size:13px;font-weight:600;color:var(--navy)">${escHtml(s.property)} — Week of ${s.week}</div>
       <button onclick="document.getElementById('queue-preview-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
     </div>
     <div style="overflow-y:auto;padding:20px;flex:1">
@@ -21786,14 +21930,14 @@ function previewQueueItem(subId){
         <div><span style="color:var(--gray-mid)">Submitted:</span> <strong>${s.submittedAt||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase||'—')}</strong></div>
-        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${s.status||'—'}</strong></div>
-        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${s.commentType||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${escHtml(s.status||'—')}</strong></div>
+        <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${escHtml(s.commentType||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--amber)">Pending</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
       <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(s.notes||'—')}</div>
-      ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Previous Return Note:</strong> ${s.returnNote}</div>`:''}
+      ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Previous Return Note:</strong> ${escHtml(s.returnNote)}</div>`:''}
       ${s.draftAction?`<div style="margin-top:12px;padding:12px;background:var(--blue-xpale);border:1px solid var(--blue-pale);border-radius:6px">
         <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px"><i class="ti ti-flag" style="margin-right:4px"></i>Consultant-flagged follow-up</div>
         <div style="font-size:12px;margin-bottom:4px"><strong>${escHtml(s.draftAction.description)}</strong></div>
@@ -21891,7 +22035,7 @@ async function approveSubmission(id){
   s.reviewStatus='approved';
   s.approvedAt=new Date().toISOString();
   const today=new Date().toISOString().split('T')[0];
-  const docName=`${s.property} — Field Update ${s.week}`;
+  const docName=`${escHtml(s.property)} — Field Update ${s.week}`;
   notifications.push({type:'approved',property:s.property,week:s.week,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
   // Update Field Updates table
   if(s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Approved'});
@@ -22029,7 +22173,7 @@ function populateSubmitDropdown(){
   }
   const current=sel.value;
   sel.innerHTML='<option value="">Select a property...</option>'+
-    filtered.map(p=>`<option value="${p.n.replace(/"/g,'&quot;')}"${p.n===current?' selected':''}>${p.n}</option>`).join('');
+    filtered.map(p=>`<option value="${escHtml(p.n)}"${p.n===current?' selected':''}>${escHtml(p.n)}</option>`).join('');
 }
 function resetSubmitForm(){
   // v42q — 'f-units' (the old typed field) removed from this reset list —
@@ -22358,7 +22502,7 @@ function refreshMyUpdates(){
   if(visible.length===0){c.innerHTML=`<div class="empty-state" style="padding:3rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No Updates Submitted Yet</div></div>`;updateMyUpdatesBadge();return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
   c.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Property</th><th>Week</th><th>Submitted</th><th>Status</th><th>Return note</th><th></th></tr></thead><tbody>`+
-    visible.slice().reverse().map(s=>`<tr><td>${s.property}${s.draftAction&&s.draftAction.dismissed?` <i class="ti ti-flag-check" style="color:var(--gray-mid);font-size:12px" title="Your flagged follow-up was reviewed"></i>`:''}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.week}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td style="white-space:nowrap">${s.reviewStatus!=='approved'?`<button class="btn btn-icon" onclick="editSubmission('${s.id}')" title="Edit &amp; Resubmit"><i class="ti ti-edit" style="font-size:13px"></i></button>`:''}<button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:13px"></i></button></td></tr>`).join('')+
+    visible.slice().reverse().map(s=>`<tr><td>${escHtml(s.property)}${s.draftAction&&s.draftAction.dismissed?` <i class="ti ti-flag-check" style="color:var(--gray-mid);font-size:12px" title="Your flagged follow-up was reviewed"></i>`:''}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.week}</td><td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${s.submittedAt}</td><td><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></td><td style="font-size:11px;color:var(--gray-mid)">${s.returnNote||'—'}</td><td style="white-space:nowrap">${s.reviewStatus!=='approved'?`<button class="btn btn-icon" onclick="editSubmission('${s.id}')" title="Edit &amp; Resubmit"><i class="ti ti-edit" style="font-size:13px"></i></button>`:''}<button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:13px"></i></button></td></tr>`).join('')+
     `</tbody></table></div>`;
   updateMyUpdatesBadge();
 }
@@ -22391,7 +22535,7 @@ function openNewFlag(){
   form.style.display='block';
   const sel=document.getElementById('flag-property');
   const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
-  sel.innerHTML='<option value="">Select property...</option>'+port.map(p=>`<option>${p.n}</option>`).join('');
+  sel.innerHTML='<option value="">Select property...</option>'+port.map(p=>`<option value="${escHtml(p.n)}">${escHtml(p.n)}</option>`).join('');
   form.scrollIntoView({behavior:'smooth'});
 }
 
@@ -22622,7 +22766,7 @@ function renderPMUpdates(){
     const propSel=document.getElementById('pmu-property');
     if(propSel&&propSel.options.length===0){
       const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
-      propSel.innerHTML=port.map(p=>`<option value="${p.n}">${p.n}</option>`).join('');
+      propSel.innerHTML=port.map(p=>`<option value="${escHtml(p.n)}">${escHtml(p.n)}</option>`).join('');
       pmuPopulateScopes();
     }
   }
@@ -22654,8 +22798,8 @@ function renderPMUpdates(){
     return `<div class="card" style="margin-bottom:10px">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
         <div>
-          <div style="font-size:13px;font-weight:600;color:var(--navy)">${u.property}${scopeLabel?' · '+scopeLabel:''}</div>
-          <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${u.author||'PULSE Team'} · ${dateFmt}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--navy)">${escHtml(u.property)}${scopeLabel?' · '+scopeLabel:''}</div>
+          <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${escHtml(u.author||'PULSE Team')} · ${dateFmt}</div>
         </div>
         ${statusBadge}
       </div>
@@ -22752,7 +22896,7 @@ function updatePMUpdatesBadge(){
 // actual publish action.
 async function archivePMUpdateToDocuments(u){
   const today=new Date().toISOString().split('T')[0];
-  const docName=`${u.property} — Team Update ${u.published||today}`;
+  const docName=`${escHtml(u.property)} — Team Update ${u.published||today}`;
   if(!demoMode){
     const docRes=await atCreate('Documents',{
       'Document Name':docName,
@@ -22917,7 +23061,7 @@ function openEditPMUpdateModal(id){
   document.getElementById('pmue-id').value=id;
   const propSel=document.getElementById('pmue-property');
   const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
-  propSel.innerHTML=port.map(p=>`<option value="${p.n}">${p.n}</option>`).join('');
+  propSel.innerHTML=port.map(p=>`<option value="${escHtml(p.n)}">${escHtml(p.n)}</option>`).join('');
   propSel.value=u.property;
   pmueUnitAssign={};
   (u.linkedUnitIds||[]).forEach(uid=>{pmueUnitAssign[uid]=true;});
@@ -23399,17 +23543,25 @@ function filterReportsForRole(reports){
 function updateReportLibraryFeedbackTabVisibility(){
   const tabBtn=document.getElementById('report-lib-tab-feedback');
   if(tabBtn)tabBtn.style.display=role==='admin'?'':'none';
+  // v51c — same admin-only visibility for the new Blocked Writes tab.
+  const blockedBtn=document.getElementById('report-lib-tab-blocked');
+  if(blockedBtn)blockedBtn.style.display=role==='admin'?'':'none';
 }
 function switchReportLibraryTab(tab){
   const reportsBtn=document.getElementById('report-lib-tab-reports');
   const feedbackBtn=document.getElementById('report-lib-tab-feedback');
+  const blockedBtn=document.getElementById('report-lib-tab-blocked');
   const reportsPanel=document.getElementById('report-library-reports-panel');
   const feedbackPanel=document.getElementById('report-library-feedback-panel');
+  const blockedPanel=document.getElementById('report-library-blocked-panel');
   if(reportsBtn)reportsBtn.classList.toggle('active',tab==='reports');
   if(feedbackBtn)feedbackBtn.classList.toggle('active',tab==='feedback');
+  if(blockedBtn)blockedBtn.classList.toggle('active',tab==='blocked');
   if(reportsPanel)reportsPanel.style.display=tab==='reports'?'':'none';
   if(feedbackPanel)feedbackPanel.style.display=tab==='feedback'?'':'none';
+  if(blockedPanel)blockedPanel.style.display=tab==='blocked'?'':'none';
   if(tab==='feedback')renderWeeklyReportFeedback();
+  if(tab==='blocked')renderBlockedWrites();
 }
 window.switchReportLibraryTab=switchReportLibraryTab;
 function renderReportLibrary(){
@@ -23565,7 +23717,7 @@ function renderMilestoneReport(){
     const c5=_msrCell(m5),c6=_msrCell(m6),c14=_msrCell(m14);
     const budget=_msrBudgetPerf(s);
     return `<tr>
-      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')">${s.property||'—'}</td>
+      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')">${escHtml(s.property||'—')}</td>
       <td style="font-size:12px;color:var(--navy);border-right:1px solid var(--border)">${escHtml(s.name||'Property Modernization')}</td>
       <td style="font-size:11px;color:var(--gray-mid);text-align:center">${c5.start}</td>
       <td style="font-size:11px;color:var(--gray-mid);text-align:center;border-right:1px solid var(--border)">${c5.complete}</td>
@@ -24174,9 +24326,9 @@ function buildReportHTML(filter,periodDays,isWeekly){
                 const pctSpent=rowBillingBasis.amount&&billedYTD?Math.round(billedYTD/rowBillingBasis.amount*100):null;
                 const pctComplete=Math.round(msC/getMsExpectedTotal(p.n)*100);
                 return `<tr>
-                  <td style="font-weight:500;color:var(--blue-dark)">${p.n}</td>
-                  <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${p.type}</span></td>
-                  <td style="font-size:10px">${p.ec||'TBD'}</td>
+                  <td style="font-weight:500;color:var(--blue-dark)">${escHtml(p.n)}</td>
+                  <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type)}</span></td>
+                  <td style="font-size:10px">${escHtml(p.ec||'TBD')}</td>
                   <td style="font-family:'Plus Jakarta Sans',sans-serif">${escHtml(p.units||'—')}</td>
                   <td>${renderStatusBadge(p.st)}</td>
                   <td>${healthBadge}</td>
@@ -24194,13 +24346,13 @@ function buildReportHTML(filter,periodDays,isWeekly){
         ${riskRows.length===0?`<div style="font-size:12px;color:var(--gray-mid)">No critical risks for selected filter.</div>`:
         riskRows.map(r=>`<div class="risk-row">
           <div class="risk-dot ${r.level}"></div>
-          <div><div class="risk-content-title">${r.property} — ${r.type} <span style="font-size:10px;color:var(--gray-mid);font-weight:400">(${r.ec})</span></div><div class="risk-content-desc">${r.desc}</div></div>
+          <div><div class="risk-content-title">${escHtml(r.property)} — ${escHtml(r.type)} <span style="font-size:10px;color:var(--gray-mid);font-weight:400">(${escHtml(r.ec)})</span></div><div class="risk-content-desc">${r.desc}</div></div>
           <span class="badge b-${r.level}" style="margin-left:auto;flex-shrink:0;align-self:flex-start">${r.level.toUpperCase()}</span>
         </div>`).join('')}
       </div>
       ${openAI.length>0?`<div class="report-section">
         <div class="report-section-title">Open action items</div>
-        ${openAI.slice(0,10).map(a=>`<div class="risk-row"><div style="width:10px;height:10px;border-radius:50%;background:var(--red);flex-shrink:0;margin-top:3px"></div><div><div class="risk-content-title">${escHtml(a.description)}</div><div class="risk-content-desc">${a.property} · Owner: ${escHtml(a.owner)} · Due: ${a.due} · Priority: ${a.priority}</div></div></div>`).join('')}
+        ${openAI.slice(0,10).map(a=>`<div class="risk-row"><div style="width:10px;height:10px;border-radius:50%;background:var(--red);flex-shrink:0;margin-top:3px"></div><div><div class="risk-content-title">${escHtml(a.description)}</div><div class="risk-content-desc">${escHtml(a.property)} · Owner: ${escHtml(a.owner)} · Due: ${a.due} · Priority: ${a.priority}</div></div></div>`).join('')}
       </div>`:''}
       <div style="text-align:center;padding:1rem 0;border-top:1px solid var(--border);font-size:10px;color:var(--gray-light);font-family:'Plus Jakarta Sans',sans-serif">
         PULSE · ${clientName} · Generated ${today} · Modernization Project Assurance · Confidential
@@ -24828,18 +24980,18 @@ function renderOpsCenter(){
   // Build combined horizon items: actions + scheduled meetings + site visits
   const horizonItems=[];
   openActions.forEach(a=>{
-    if(a.due&&a.due!=='TBD') horizonItems.push({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${a.property||'—'} · ${a.owner||'—'} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''});
+    if(a.due&&a.due!=='TBD') horizonItems.push({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''});
   });
   (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)).forEach(m=>{
     const d=new Date(m.date+'T12:00:00');
-    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${m.property||'—'} · ${m.date}${m.attClient?' · '+m.attClient:''}`,_prop:m.property||'',_priority:'',_scopeId:m.scopeId||''});
+    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${escHtml(m.property||'—')} · ${m.date}${m.attClient?' · '+m.attClient:''}`,_prop:m.property||'',_priority:'',_scopeId:m.scopeId||''});
   });
   (siteVisits||[]).filter(v=>v.date&&propFilter(v.property)).forEach(v=>{
     const d=new Date(v.date+'T12:00:00');
     if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${v.property||'—'} · ${v.date}${v.consultant?' · '+v.consultant:''}`,_prop:v.property||'',_priority:''});
   });
 
-  const overdue=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today).map(a=>({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${a.property||'—'} · ${a.owner||'—'} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''})).sort((a,b)=>a._date-b._date);
+  const overdue=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today).map(a=>({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''})).sort((a,b)=>a._date-b._date);
   const next30=horizonItems.filter(i=>i._date>=today&&i._date<=d30).sort((a,b)=>a._date-b._date);
   const next60=horizonItems.filter(i=>i._date>d30&&i._date<=d60).sort((a,b)=>a._date-b._date);
   const next90=horizonItems.filter(i=>i._date>d60&&i._date<=d90).sort((a,b)=>a._date-b._date);
@@ -24951,7 +25103,7 @@ function renderOpsCenter(){
           ?'<div style="font-size:12px;color:var(--gray-mid)">No recently added properties.</div>'
           :recentAdded.map(p=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
             <div class="action-dot" style="background:var(--green)"></div>
-            <div class="action-desc"><strong>${p.n}</strong><br><span style="color:var(--gray-mid)">Added ${fmtShort(p.dateAdded)} · ${p.s||'—'} · ${p.ec||'TBD'}</span></div>
+            <div class="action-desc"><strong>${escHtml(p.n)}</strong><br><span style="color:var(--gray-mid)">Added ${fmtShort(p.dateAdded)} · ${p.s||'—'} · ${escHtml(p.ec||'TBD')}</span></div>
           </div>`).join('')
         }
       </div>
@@ -24961,7 +25113,7 @@ function renderOpsCenter(){
           ?'<div style="font-size:12px;color:var(--gray-mid)">No properties removed.</div>'
           :recentRemoved.map(p=>`<div class="action-item-row">
             <div class="action-dot" style="background:var(--red)"></div>
-            <div class="action-desc"><strong style="color:var(--gray-mid)">${p.n}</strong><br><span style="color:var(--gray-mid)">Removed ${fmtShort(p.dateRemoved)} · ${p.s||'—'}</span></div>
+            <div class="action-desc"><strong style="color:var(--gray-mid)">${escHtml(p.n)}</strong><br><span style="color:var(--gray-mid)">Removed ${fmtShort(p.dateRemoved)} · ${p.s||'—'}</span></div>
           </div>`).join('')
         }
       </div>
@@ -24973,7 +25125,7 @@ function renderOpsCenter(){
           ?'<div style="font-size:12px;color:var(--gray-mid)">No approved field updates yet.</div>'
           :recentUpdates.map(s=>`<div class="action-item-row">
             <div class="action-dot" style="background:var(--green)"></div>
-            <div class="action-desc" style="flex:1;cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')"><strong>${s.property}</strong><br><span style="color:var(--gray-mid)">${s.kind==='pmupdate'?'PM Update':'Submitted'} ${fmtShort(s.date)} · ${s.by||'—'}</span></div>
+            <div class="action-desc" style="flex:1;cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')"><strong>${escHtml(s.property)}</strong><br><span style="color:var(--gray-mid)">${s.kind==='pmupdate'?'PM Update':'Submitted'} ${fmtShort(s.date)} · ${s.by||'—'}</span></div>
             <i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px;flex-shrink:0;cursor:pointer" onclick="event.stopPropagation();${s.kind==='pmupdate'?`previewPMUpdateDetail('${s.id}')`:`previewFieldUpdateDetail('${s.id}')`}"></i>
           </div>`).join('')
         }
@@ -24984,7 +25136,7 @@ function renderOpsCenter(){
           ?'<div style="font-size:12px;color:var(--gray-mid)">No meetings logged yet.</div>'
           :recentMeetings.map(m=>{const _mSc=m.scopeId?(window.SCOPES||[]).find(s=>s.id===m.scopeId):null;const _mScTag=_mSc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo)">${escHtml(_mSc.name)}</span>`:'';return `<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
             <div class="action-dot" style="background:var(--blue-dark)"></div>
-            <div class="action-desc" style="flex:1"><strong>${(m.type||'Meeting')}: ${m.property}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+m.elevco:''}</span></div>
+            <div class="action-desc" style="flex:1"><strong>${(m.type||'Meeting')}: ${escHtml(m.property)}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+m.elevco:''}</span></div>
             <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${_mScTag}<i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px"></i></div>
           </div>`}).join('')
         }
@@ -25255,7 +25407,7 @@ function renderVdaProjects(){
         <div>
           <div style="font-size:14px;font-weight:700;color:var(--navy)">${p.number?'VDA Project #'+String(p.number).replace(/</g,'&lt;'):'No number assigned'}</div>
           ${p.nickname?`<div style="font-size:12px;color:var(--gray-mid);font-style:italic">${String(p.nickname).replace(/</g,'&lt;')}</div>`:''}
-          <span style="display:inline-block;margin-top:4px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;background:${badge.bg};color:${badge.fg}">${p.status||'Active'}</span>
+          <span style="display:inline-block;margin-top:4px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;background:${badge.bg};color:${badge.fg}">${escHtml(p.status||'Active')}</span>
         </div>
         ${canEdit?`<button class="btn-icon" onclick="openEditVdaPanel('${p.id}')" title="Edit Project" style="border:none;background:none;cursor:pointer;color:var(--blue-dark);font-size:16px"><i class="ti ti-pencil"></i></button>`:''}
       </div>
@@ -25366,7 +25518,7 @@ function addVdaTaskLineRow(containerId,existing){
       <div class="form-group" style="grid-column:1/-1">
         <label class="form-label">Description</label>
         <select class="form-select vdatl-desc" ${disabled} onchange="vdaTaskLineDescChange(this)">${descOptions}<option value="__custom__" ${!isKnownDesc&&descVal?'selected':''}>Other</option></select>
-        <input class="form-input vdatl-desc-other" type="text" placeholder="Enter description" value="${!isKnownDesc&&descVal?descVal.replace(/"/g,'&quot;'):''}" style="margin-top:6px;display:${!isKnownDesc&&descVal?'block':'none'}" ${disabled}>
+        <input class="form-input vdatl-desc-other" type="text" placeholder="Enter description" value="${!isKnownDesc&&descVal?escHtml(descVal):''}" style="margin-top:6px;display:${!isKnownDesc&&descVal?'block':'none'}" ${disabled}>
       </div>
       <div class="form-group"><label class="form-label">Amount</label><input class="form-input vdatl-amount" type="number" min="0" value="${existing?existing.amount:''}" ${disabled}></div>
       <div class="form-group"><label class="form-label">Billing Split</label><select class="form-select vdatl-split" ${disabled}>
@@ -26377,7 +26529,7 @@ function _tourShowMenu(open){
     <div style="flex:1;overflow-y:auto;padding:.5rem">
       <button onclick="_tourStartLinear()" style="display:block;width:100%;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;color:var(--purple);border-radius:6px" onmouseover="this.style.background='var(--purple-pale)'" onmouseout="this.style.background='none'"><i class="ti ti-player-play" style="margin-right:6px;font-size:13px"></i>Full Walk-thru</button>
       <div style="border-top:1px solid var(--border);margin:.4rem .25rem"></div>
-      ${steps.map((s,i)=>i===0?'':`<button onclick="_tourJumpTo(${i})" style="display:block;width:100%;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;font-size:13px;color:var(--gray-dark);border-radius:6px" onmouseover="this.style.background='var(--gray-pale)'" onmouseout="this.style.background='none'">${s.title}</button>`).join('')}
+      ${steps.map((s,i)=>i===0?'':`<button onclick="_tourJumpTo(${i})" style="display:block;width:100%;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;font-size:13px;color:var(--gray-dark);border-radius:6px" onmouseover="this.style.background='var(--gray-pale)'" onmouseout="this.style.background='none'">${escHtml(s.title)}</button>`).join('')}
     </div>`;
 }
 
