@@ -20,6 +20,24 @@ pulse_v51d. Changes from v51c, this round:
      synchronous try/catch around an unawaited async call, which could
      never actually catch a network failure. Still best-effort — a
      failed call doesn't block sign-out.
+  3. Dashboard heat map tiles could show a blue "ON TRACK" badge while
+     also showing red "Xd overdue" text underneath (e.g. Hilton Boston
+     Logan Airport) — the badge only checked propStatus (a manually-
+     tracked phase/milestone status field) and never looked at daysLate
+     (computed directly from planned-completion dates vs. today), so the
+     two could disagree. daysLate now also drives the At Risk badge, so
+     any property with a genuinely overdue step immediately shows red,
+     matching the overdue caption below it.
+  4. Budget Outlook's Units card (399) vs. Portfolio View's Units count
+     (449) for the same properties — not a bug, but never explained.
+     Budget Outlook only counts units that landed in a dollar-bearing
+     Scope allocation for a given year; Portfolio View counts every unit
+     in Unit Inventory List regardless of Scope. The gap is real
+     inventory sitting on properties/scopes with no budget attached yet.
+     The Units card now shows a small note with the gap size and a
+     "view" link (boShowUnaccountedUnits()) listing exactly which
+     properties and how many units account for it, so the two screens
+     no longer look like they silently disagree.
 Requires worker_v44a.mjs (both new endpoints are worker-side).
 
 pulse_v51c. Changes from v51b, this round:
@@ -13783,6 +13801,30 @@ function setBoFilter(f){
   boExpandedYear=null;
   renderBudgetOutlook();
 }
+// v51d — small breakdown overlay for the Units card's "view" link,
+// listing which properties account for the gap between this screen's
+// scoped-unit count and Portfolio View's full Unit Inventory List
+// count for the same properties. Read-only, no fetch — just formats
+// window._boUnaccountedByProp, computed alongside the summary cards.
+function boShowUnaccountedUnits(){
+  const byProp=window._boUnaccountedByProp||{};
+  const rows=Object.entries(byProp).filter(([,n])=>n>0).sort((a,b)=>b[1]-a[1]);
+  const overlay=document.createElement('div');
+  overlay.id='bo-unaccounted-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const rowsHtml=rows.length?rows.map(([name,n])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px"><span>${escHtml(name)}</span><span style="color:var(--gray-mid)">${n} unit${n!==1?'s':''}</span></div>`).join('')
+    :'<div style="font-size:13px;color:var(--gray-mid);padding:8px 0">No properties currently account for a gap.</div>';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:420px;box-shadow:var(--shadow-md);padding:24px;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-size:15px;font-weight:600;color:var(--navy)">Units without a scoped budget</div>
+      <button onclick="document.getElementById('bo-unaccounted-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px;line-height:1"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:12px">These units are in Unit Inventory List but not yet linked to a Scope with a year and estimate, so they don't appear in the Units total above.</div>
+    ${rowsHtml}
+  </div>`;
+  overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove();});
+  document.body.appendChild(overlay);
+}
 // v36j — year picker for Budget Outlook. Panel toggle, checklist render,
 // and the per-checkbox/All/None handlers below.
 function boToggleYearPanel(){
@@ -14330,13 +14372,40 @@ function renderBudgetOutlook(){
     ?getPortfolioClassification().activeProps.length+getPortfolioClassification().pipelineProps.length
     :new Set(allocsInYears.map(a=>a.property)).size;
   const totalUnitsCard=years.reduce((s,y)=>s+(byYear[y].unitTotal||0),0);
+  // v51d — Units card only counts units that landed in a dollar-bearing
+  // allocation item (a Scope with a year and a nonzero estimate/award),
+  // so it can read lower than Portfolio View's plain Unit Inventory List
+  // count for the same properties — e.g. 399 here vs. 449 there. The
+  // gap is real inventory sitting on properties/scopes that don't have
+  // a budget attached yet (no Scope, no year, or a $0 estimate), which
+  // is exactly what this screen is scoped to show, so 399 is left as
+  // the headline number. This just explains the gap instead of leaving
+  // it looking like two screens disagreeing by mistake.
+  const _boVisibleProps=boFilter==='all'
+    ?new Set([...getPortfolioClassification().activeProps,...getPortfolioClassification().pipelineProps].map(p=>p.n))
+    :new Set(allocsInYears.map(a=>a.property));
+  const _boUnaccountedByProp={};
+  (window.UNIT_INVENTORY||[]).forEach(u=>{
+    if(!_boVisibleProps.has(u.property))return;
+    _boUnaccountedByProp[u.property]=(_boUnaccountedByProp[u.property]||0)+1;
+  });
+  allocsInYears.forEach(a=>{
+    if(a.unitCount>0&&_boUnaccountedByProp[a.property]!=null){
+      _boUnaccountedByProp[a.property]=Math.max(0,_boUnaccountedByProp[a.property]-a.unitCount);
+    }
+  });
+  const _boUnaccountedTotal=Object.values(_boUnaccountedByProp).reduce((a,n)=>a+n,0);
+  const _boUnaccountedNote=_boUnaccountedTotal>0
+    ?`<div style="font-size:11px;color:var(--gray-mid);margin-top:6px;line-height:1.4">${_boUnaccountedTotal} more in inventory without a scoped budget yet <span style="color:var(--blue-dark);cursor:pointer;text-decoration:underline" onclick="boShowUnaccountedUnits()">· view</span></div>`
+    :'';
+  window._boUnaccountedByProp=_boUnaccountedByProp;
 
   document.getElementById('bo-summary-cards').innerHTML=`
     <div class="stat-card"><div class="stat-label">Total outlook</div><div class="stat-value">${fmtBudget(totalCommitted+totalPlanned)}</div></div>
     <div class="stat-card"><div class="stat-label">Award</div><div class="stat-value" style="color:var(--blue-dark)">${fmtBudget(totalCommitted)}</div></div>
     <div class="stat-card"><div class="stat-label">Estimate</div><div class="stat-value" style="color:var(--blue-mid)">${fmtBudget(totalPlanned)}</div></div>
     <div class="stat-card"><div class="stat-label">Properties</div><div class="stat-value">${propCount}</div></div>
-    <div class="stat-card"><div class="stat-label">Units</div><div class="stat-value">${totalUnitsCard}</div></div>`;
+    <div class="stat-card"><div class="stat-label">Units</div><div class="stat-value">${totalUnitsCard}</div>${_boUnaccountedNote}</div>`;
 
   const chartEl=document.getElementById('bo-chart');
   if(years.length===0){
@@ -18205,7 +18274,13 @@ function renderDashboard(){
   const dashGrid=document.getElementById('dash-heat-grid');
   if(dashGrid){
     const activeTiles=dashHeatData.map(d=>{
-      const isRisk=d.propStatus==='At Risk';
+      // v51d — propStatus (manually-tracked phase/milestone status) and
+      // daysLate (computed directly from planned-completion dates vs.
+      // today) could disagree, showing a blue "ON TRACK" tile with red
+      // "Xd overdue" text underneath it — e.g. Hilton Boston Logan
+      // Airport. daysLate is a hard fact computed from real dates, so it
+      // now also drives the At Risk badge, not just the overdue caption.
+      const isRisk=d.propStatus==='At Risk'||d.daysLate>0;
       const borderColor=isRisk?'var(--red)':'var(--blue-dark)';
       const bgColor=isRisk?'var(--red-pale)':'#eff6ff';
       const lblColor=isRisk?'var(--red)':'var(--blue-dark)';
