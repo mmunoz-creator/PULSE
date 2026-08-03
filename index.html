@@ -1,4 +1,74 @@
 <!--
+pulse_v51f. Changes from v51e, this round:
+  1. Scopes table gets two new Airtable fields: Actual Start, Actual
+     Completion (date fields, added by Misty directly in Airtable before
+     this round's live test pass — required before deriveAndWriteScope-
+     Dates below can write to them).
+  2. A Scope's Planned Start/Target Completion used to be entered once at
+     project creation and never revisited. Per Misty's direct call, these
+     now derive from the Scope's own Unit Phases once any phase has real
+     dates: Planned Start = earliest phase Planned Start, Target
+     Completion = latest phase Planned Completion. Actual Start/Actual
+     Completion derive the same way (Actual Completion only once every
+     phase in the Scope is Complete, so an in-progress project never
+     looks finished early). Recomputed and written back to the Scope
+     record on every saveNewPhase/saveEditPhase/deletePhase call for that
+     phase's parent Scope (new deriveAndWriteScopeDates() function). A
+     Scope with zero dated phases is left untouched.
+  3. Budget Outlook's flat monthly-spread fallback (scopeMonthlySpread's
+     Level 1, the hasFlatSpread/flatYearTotals mechanism) is retired.
+     Previously, units in an undated phase (or not yet assigned to any
+     phase) had their dollar value smeared evenly across every month of
+     the Scope's static Planned Start-to-Target Completion window,
+     landing as abstract dollars with no unit count or names attached —
+     confirmed live on Caribe Hilton, where an undated Phase 3 caused a
+     "$2.3M / — units / —" row to appear under both 2028 and 2031.
+     Replaced with a "last year on record" default: an undated unit now
+     lands whole, with a real unit count and name list, in the latest
+     year any of its Scope's own dated Unit Group phases resolves to. A
+     Scope with zero dated phases anywhere still falls back to its own
+     Year field, unchanged from the original pre-Unit-Phase behavior.
+     Applied to both the on-screen Budget Outlook table/chart and the
+     Data Entry export's per-unit rows, so the two stay in agreement.
+  4. New informational banner on the Unit Phases tab (all roles with tab
+     access, not just PM/Admin), shown whenever a project has at least
+     one phase: "Unit Phase dates drive Budget Outlook's year-by-year
+     figures, and automatically set this project's own Start/End dates
+     above. Capital Plan still groups these units under the project's
+     own Year/Budget Cycle regardless of these dates." Wording matches
+     the voice already established by the existing Demote to Unit Phase
+     modal's warning.
+Requires no worker changes (worker_v44a.mjs unchanged). Requires the two
+new Scopes fields in Airtable (see #1) to exist before deploying, or
+deriveAndWriteScopeDates()'s atUpdate calls will 422 the same way the
+Unit Groups Actual Completion mismatch did last round.
+
+pulse_v51e. Changes from v51d, this round:
+  1. saveEditPhase() was not creating Phase Tasks records for newly-
+     checked construction tasks on an existing phase. It only ever
+     removed unchecked tasks and wrote the checked-step list into the
+     Unit Group's own Phase Tasks text field; unlike saveNewPhase(), it
+     never called atCreate('Phase Tasks', ...) for tasks checked during
+     an edit. A phase whose tasks were only ever checked/changed via Edit
+     (not picked at creation time) ended up with zero real Phase Tasks
+     records, so the phase card showed no expand arrow, no task dots, and
+     no way to enter per-task dates. Now mirrors saveNewPhase()'s
+     creation block: any newly-checked step without an existing record
+     gets one created (locally and in Airtable), seeded with the phase's
+     own Planned Start/Planned Completion as a starting point.
+  2. Date-only strings (YYYY-MM-DD) parsed via bare new Date(str) read as
+     UTC midnight, which displays one calendar day early in any timezone
+     behind UTC (confirmed live: Puerto Rico, UTC-4 — a Planned Start of
+     Jan 1, 2027 was showing as Dec 31, 2026 on the Unit Phases tab).
+     Fixed at all four remaining unsafe call sites (Unit Phases project
+     dates and phase card dates, Dashboard Action Horizon due dates,
+     Dashboard recently added/removed dates) by appending T12:00:00
+     before parsing, the same fix already used by fmtShortDate()
+     elsewhere in this file. No change to what's stored in Airtable —
+     display only.
+Requires no worker changes (worker_v44a.mjs unchanged, both fixes are
+client-side only).
+
 pulse_v51d. Changes from v51c, this round:
   1. XSS escaping sweep, completion pass. The v51c header claimed all 27
      flagged interpolation sites were routed through escHtml(), but an
@@ -1542,6 +1612,14 @@ async function loadAllData() {
         // entered — no retroactive backfill or inference from milestones.
         plannedStart: r.fields['Planned Start']||'',
         targetCompletion: r.fields['Target Completion']||'',
+        // v51f — Actual Start / Actual Completion, project-level actuals for
+        // on-time delivery measurement. Derived and written back whenever a
+        // Unit Phase is saved (see deriveAndWriteScopeDates), same pattern
+        // Unit Groups already uses for its own Actual Start/Actual
+        // Completion. Blank for every existing Scope until a phase with
+        // real dates triggers the first derivation.
+        actualStart: r.fields['Actual Start']||'',
+        actualCompletion: r.fields['Actual Completion']||'',
         coRateST: r.fields['ST Rate']!=null?Number(r.fields['ST Rate']):null,
         coRateOT: r.fields['OT Rate']!=null?Number(r.fields['OT Rate']):null,
         coMaterialMarkup: r.fields['Material Markup']!=null?Number(r.fields['Material Markup'])*100:null,
@@ -2811,7 +2889,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51f</div>
     </div>
   </nav>
 
@@ -3114,6 +3192,10 @@ from unitEffectiveValue() onto each checkbox). -->
                   <div id="phases-stats" style="display:flex;gap:0;align-items:center"></div>
                 </div>
               </div>
+              <!-- v51f — Unit Phase dates / Budget Outlook dependency note.
+              Visible to all roles with tab access, same voice as the
+              existing Demote to Unit Phase modal's warning. -->
+              <div id="phases-budget-flag"></div>
               <div id="unit-progress-detail"></div>
             </div>
             <!-- Add phase form -->
@@ -11032,14 +11114,69 @@ function getProjectDates(propName){
     return (a.phaseOrder||0)-(b.phaseOrder||0);
   });
   // v30e: use min across ALL phase starts, not just phase1
+  // v51e — date-only strings (YYYY-MM-DD) parse as UTC midnight under bare
+  // new Date(str), which displays one calendar day early in any timezone
+  // behind UTC (e.g. Puerto Rico, UTC-4). Appending T12:00:00 forces local-
+  // noon interpretation instead, matching the fix already used elsewhere
+  // in this file (see fmtShortDate).
   const startDates=phases.flatMap(u=>[
-    u.actualStart?new Date(u.actualStart):null,
-    u.plannedStart?new Date(u.plannedStart):null
+    u.actualStart?new Date(u.actualStart+'T12:00:00'):null,
+    u.plannedStart?new Date(u.plannedStart+'T12:00:00'):null
   ]).filter(Boolean);
   const projectStart=startDates.length>0?new Date(Math.min(...startDates.map(d=>d.getTime()))):null;
-  const endDates=phases.map(u=>u.plannedCompletion).filter(Boolean).map(d=>new Date(d));
+  const endDates=phases.map(u=>u.plannedCompletion).filter(Boolean).map(d=>new Date(d+'T12:00:00'));
   const latestEnd=endDates.length>0?new Date(Math.max(...endDates)):null;
   return{projectStart,latestEnd,phases};
+}
+// v51f — deriveAndWriteScopeDates(). A Scope's Planned Start/Target
+// Completion used to be static, entered once at project creation and
+// never revisited. Per Misty's direct call: once a Scope has Unit Phases
+// with real dates, those phase dates should drive the Scope's own
+// effective date range instead, and the Scope should also carry real
+// Actual Start/Actual Completion for on-time delivery measurement,
+// mirroring what Unit Groups already tracks per phase.
+//   Planned Start = earliest Planned Start across the Scope's own Unit
+//     Group phases that have one.
+//   Target Completion = latest Planned Completion across those phases.
+//   Actual Start = earliest Actual Start across those phases.
+//   Actual Completion = latest Actual Completion across those phases,
+//     but ONLY once every phase belonging to this Scope is Complete —
+//     a partial Actual Completion would misrepresent an in-progress
+//     project as finished early.
+// A Scope with zero dated phases is left untouched (no phases yet, or
+// no phase has a date), so a brand-new Scope's originally-entered
+// Planned Start/Target Completion (or blank) survives exactly as before
+// until real phase dates exist to supersede it. Called after every
+// Unit Group save (saveNewPhase, saveEditPhase) for that phase's parent
+// Scope. No-ops in demo mode, same convention as every other write path.
+async function deriveAndWriteScopeDates(scopeId){
+  if(!scopeId||demoMode)return;
+  const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+  if(!sc)return;
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.scopeId===scopeId);
+  if(phases.length===0)return;
+  const toTime=d=>d?new Date(d+'T12:00:00').getTime():null;
+  const plannedStarts=phases.map(p=>toTime(p.plannedStart)).filter(Boolean);
+  const plannedEnds=phases.map(p=>toTime(p.plannedCompletion)).filter(Boolean);
+  const actualStarts=phases.map(p=>toTime(p.actualStart)).filter(Boolean);
+  const allComplete=phases.every(p=>p.status==='Complete');
+  const actualEnds=allComplete?phases.map(p=>toTime(p.actualCompletion)).filter(Boolean):[];
+  if(plannedStarts.length===0&&plannedEnds.length===0&&actualStarts.length===0&&actualEnds.length===0)return;
+  const toIso=t=>t?new Date(t).toISOString().split('T')[0]:null;
+  const newPlannedStart=plannedStarts.length>0?toIso(Math.min(...plannedStarts)):sc.plannedStart||null;
+  const newTargetCompletion=plannedEnds.length>0?toIso(Math.max(...plannedEnds)):sc.targetCompletion||null;
+  const newActualStart=actualStarts.length>0?toIso(Math.min(...actualStarts)):sc.actualStart||null;
+  const newActualCompletion=actualEnds.length>0?toIso(Math.max(...actualEnds)):sc.actualCompletion||null;
+  sc.plannedStart=newPlannedStart||'';
+  sc.targetCompletion=newTargetCompletion||'';
+  sc.actualStart=newActualStart||'';
+  sc.actualCompletion=newActualCompletion||'';
+  await atUpdate('Scopes',scopeId,{
+    'Planned Start':newPlannedStart,
+    'Target Completion':newTargetCompletion,
+    'Actual Start':newActualStart,
+    'Actual Completion':newActualCompletion,
+  });
 }
 // v50c — MARLI Unit Phase suggestions. Structural (not text/AI-based)
 // suggestions: for a Scope past Capital Plan status, groups its own
@@ -11213,6 +11350,22 @@ function renderPhasesTab(p){
       <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:2px">Project End</span><span style="font-weight:600;color:var(--navy)">${fmtDate(latestEnd)}</span></div>
       <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:2px">Total Duration</span><span style="font-weight:600;color:var(--blue-dark)">${durationText}</span></div>`:'';
   }
+  // v51f — Unit Phase dates / Budget Outlook dependency note. Same voice
+  // as the existing Demote to Unit Phase modal's warning, shown to every
+  // role that can see this tab (not just PM/Admin who can edit), since
+  // it's informational context about how figures on other screens are
+  // derived. Only shown once phases exist — nothing to explain on an
+  // empty tab.
+  const budgetFlagEl=document.getElementById('phases-budget-flag');
+  if(budgetFlagEl){
+    budgetFlagEl.innerHTML=phases.length>0?`
+      <div style="display:flex;align-items:flex-start;gap:8px;background:var(--blue-xpale);border:0.5px solid var(--blue-light);border-radius:var(--radius);padding:10px 12px;margin:12px 0">
+        <i class="ti ti-chart-bar" style="font-size:15px;color:var(--blue-dark);margin-top:1px"></i>
+        <div style="font-size:12px;color:var(--blue-dark);line-height:1.5">
+          Unit Phase dates drive Budget Outlook's year-by-year figures, and automatically set this project's own Start/End dates above. Capital Plan still groups these units under the project's own Year/Budget Cycle regardless of these dates.
+        </div>
+      </div>`:'';
+  }
   // Stats under Add Phase button — plain inline, no boxes
   const phasesStats=document.getElementById('phases-stats');
   if(phasesStats){
@@ -11224,7 +11377,9 @@ function renderPhasesTab(p){
   }
   // Unit progress — collapsed/expanded phase cards
   const unitEl=document.getElementById('unit-progress-detail');
-  const fmtShort=d=>{try{return d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';}catch(e){return d||'—';}};
+  // v51e — T12:00:00 forces local-noon parsing so date-only strings don't
+  // roll back a day in timezones behind UTC (see getProjectDates above).
+  const fmtShort=d=>{try{return d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';}catch(e){return d||'—';}};
   if(!unitEl)return;
   if(phases.length===0){unitEl.innerHTML=`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Phases Defined. Click \"Add phase\" to set up the modernization sequence.':'No unit phases defined yet.'}</div>`;return;}
   unitEl.innerHTML=phases.map(ph=>{
@@ -11933,6 +12088,10 @@ async function saveNewPhase(){
   // leave a stale reference behind (see reclaimUnitsFromOtherPhases).
   await reclaimUnitsFromOtherPhases(currentProp.n,linkedUnitIds,newPhaseId);
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([newPhase]);
+  // v51f — recompute this Scope's own effective Planned Start/Target
+  // Completion (and Actual Start/Actual Completion) now that a new dated
+  // phase exists. See deriveAndWriteScopeDates for the full rule.
+  if(scopeId)await deriveAndWriteScopeDates(scopeId);
   // Write tasks to PHASE_STEPS locally so they render immediately
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
   // Bug fix (v21c) — previously every task was created with blank Planned
@@ -12103,6 +12262,52 @@ async function saveEditPhase(){
       }
     }
   }
+  // v51e — create Phase Tasks records for any newly-checked step that
+  // doesn't already have one. Before this fix, saveEditPhase() only ever
+  // removed unchecked tasks and wrote the checked-step list into the Unit
+  // Group's own Phase Tasks text field; it never created the actual Phase
+  // Tasks table rows saveNewPhase() creates at phase creation. Result: a
+  // phase whose tasks were only ever checked/changed via Edit (not picked
+  // at creation) had zero real Phase Tasks records, so renderStepLegend()
+  // found nothing to show and the phase card never got an expand
+  // affordance or a way to enter per-task dates. Mirrors saveNewPhase()'s
+  // creation block exactly, seeding each new task with this phase's own
+  // Planned Start/Planned Completion as a starting point, same as a
+  // brand-new phase gets.
+  const existingTaskNames=new Set((window.PHASE_STEPS||[]).filter(s=>s.property===ph.property&&s.phaseName===name).map(s=>s.taskName));
+  const newTaskNames=selectedSteps.filter(t=>!existingTaskNames.has(t));
+  if(newTaskNames.length>0){
+    if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
+    const existingCount=(window.PHASE_STEPS||[]).filter(s=>s.property===ph.property&&s.phaseName===name).length;
+    newTaskNames.forEach((taskName,i)=>{
+      const localId='pts-'+Date.now()+'-'+i;
+      const taskOrder=existingCount+i+1;
+      window.PHASE_STEPS.push({
+        id:localId,
+        property:ph.property,
+        scopeId:ph.scopeId||'',
+        phaseName:name,
+        taskName,
+        taskOrder,
+        plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',
+        actualStart:'',completionDate:'',
+        status:'Not Started',notes:''
+      });
+      if(!demoMode){
+        const taskFields={
+          'Property Name':propertyNameToLink(ph.property),
+          'Phase Name':name,
+          'Task Name':taskName,
+          'Task Order':taskOrder,
+          'Planned Start':plannedStart||null,
+          'Planned End':plannedEnd||null,
+          'Status':'Not Started',
+        };
+        if(ph.scopeId)taskFields['Linked Scope']=[ph.scopeId];
+        atCreate('Phase Tasks',taskFields);
+      }
+    });
+  }
   // v50c — strip any of these units out of whatever OTHER phase on this
   // property currently claims them, same reasoning as saveNewPhase. Must
   // run before the atUpdate below so a unit moved INTO this phase from
@@ -12122,6 +12327,10 @@ async function saveEditPhase(){
       'Notes':notes||'',
     });
   }
+  // v51f — recompute this Scope's own effective Planned Start/Target
+  // Completion (and Actual Start/Actual Completion) now that this phase's
+  // dates may have changed. See deriveAndWriteScopeDates for the full rule.
+  if(ph.scopeId)await deriveAndWriteScopeDates(ph.scopeId);
   document.getElementById('edit-phase-form').style.display='none';
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
@@ -12187,9 +12396,14 @@ async function reorderPhase(id,propName,dir){
 
 async function deletePhase(id,propName){
   if(!confirm('Delete this phase?'))return;
+  // v51f — capture scopeId before removal so the Scope's derived dates can
+  // be recomputed against what's left once this phase is gone.
+  const deletedPhase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
+  const scopeIdForDerivation=deletedPhase?.scopeId||'';
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).filter(u=>u.id!==id);
   if(!demoMode)await atDelete('Unit Groups',id);
   await deriveAndWritePropertyStatus(propName);
+  if(scopeIdForDerivation)await deriveAndWriteScopeDates(scopeIdForDerivation);
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
   showToast('Phase deleted','success');
@@ -14159,56 +14373,40 @@ function renderBudgetOutlook(){
     const anyUnitAwarded=units.some(u=>u.awardValue>0);
     const scopeGroups=(window.UNIT_GROUPS||[]).filter(ug=>ug.scopeId===sc.id);
     // Map each unit to its Unit Group's year, if it belongs to one with a
-    // usable date; otherwise it stays in the Scope-year bucket below.
+    // usable date; otherwise it falls to the last-year-on-record default
+    // below.
     const unitToYear=new Map();
     scopeGroups.forEach(ug=>{
       const y=unitGroupYear(ug);
       if(y==null)return;
       (ug.linkedUnitIds||[]).forEach(uid=>unitToYear.set(uid,y));
     });
-    // Bucket units by resolved year (Unit Group year if known, else Scope year)
+    // v51f — "last year on record" default, replacing the old flat
+    // monthly-spread fallback. Per Misty's direct call: a unit sitting in
+    // an undated phase (or not yet assigned to any phase) should land
+    // whole, with a real unit count, in the latest year any of this
+    // Scope's own dated Unit Group phases resolves to — not smeared as
+    // abstract dollars with no units attached across the Scope's static
+    // Planned Start/Target Completion window. Only if the Scope has zero
+    // dated phases anywhere does this fall back to the Scope's own Year
+    // field, unchanged from the original pre-Unit-Phase behavior.
+    const scopeDatedYears=scopeGroups.map(ug=>unitGroupYear(ug)).filter(y=>y!=null);
+    const lastYearOnRecord=scopeDatedYears.length>0?Math.max(...scopeDatedYears):sc.year;
+    // Bucket units by resolved year (Unit Group year if known, else the
+    // last dated year on this Scope's own phases, else the Scope's Year)
     const byYear=new Map();
     units.forEach(u=>{
-      const y=unitToYear.has(u.id)?unitToYear.get(u.id):sc.year;
+      const y=unitToYear.has(u.id)?unitToYear.get(u.id):lastYearOnRecord;
       if(!byYear.has(y))byYear.set(y,[]);
       byYear.get(y).push(u);
     });
     if(units.length===0)byYear.set(sc.year,[]);
-    // v50b — flat-spread fallback amounts for units resolved via neither a
-    // dated Unit Group nor sitting whole in the sc.year bucket. When the
-    // Scope has Planned Start/Target Completion, scopeMonthlySpread()
-    // already computed a real month-by-month spread for exactly these
-    // units (its own Level 1); roll that up into years here and ADD to
-    // (never replace) whatever yearAmount the existing per-unit sum
-    // produces, then skip the old whole-value sum for those same units so
-    // nothing double-counts. Units with a dated Unit Group are untouched —
-    // they keep the existing whole-unit-in-one-year behavior above.
-    const flatUnitIds=new Set(units.filter(u=>!unitToYear.has(u.id)).map(u=>u.id));
-    const hasFlatSpread=flatUnitIds.size>0&&sc.plannedStart&&sc.targetCompletion;
-    const flatYearTotals=new Map();
-    if(hasFlatSpread){
-      const spread=scopeMonthlySpread(sc.id);
-      Object.keys(spread).forEach(mo=>{
-        const yr=parseInt(mo.split('-')[0],10);
-        flatYearTotals.set(yr,(flatYearTotals.get(yr)||0)+spread[mo]);
-        // A flat-spread year not already a byYear bucket (project spans
-        // into a year no dated unit or sc.year ever visits) needs its own
-        // empty bucket added, or its dollars would never get summed below.
-        if(!byYear.has(yr))byYear.set(yr,[]);
-      });
-    }
     byYear.forEach((yearUnits,yr)=>{
       let yearAmount;
       if(isCommitted){
         yearAmount=(!anyUnitAwarded&&units.length>0)
           ?sc.contractAwardValue*(yearUnits.length/units.length)
           :yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
-      }else if(hasFlatSpread){
-        // Sum only units NOT covered by the flat spread (i.e. already
-        // resolved to this year via a dated Unit Group), then add this
-        // year's share of the flat spread separately.
-        const datedOnly=yearUnits.filter(u=>!flatUnitIds.has(u.id));
-        yearAmount=datedOnly.reduce((a,u)=>a+unitEffectiveValue(u),0)+(flatYearTotals.get(yr)||0);
       }else{
         yearAmount=yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
       }
@@ -14288,11 +14486,15 @@ function renderBudgetOutlook(){
       if(y==null)return;
       (ug.linkedUnitIds||[]).forEach(uid=>unitToYear.set(uid,y));
     });
+    // v51f — same last-year-on-record default as the main items loop
+    // above, so the Data Entry export matches what's on screen.
+    const scopeDatedYearsAll=scopeGroups.map(ug=>unitGroupYear(ug)).filter(y=>y!=null);
+    const lastYearOnRecordAll=scopeDatedYearsAll.length>0?Math.max(...scopeDatedYearsAll):sc.year;
     const scopeMilestone=scopeCurrentMilestoneLabel(sc.id);
     const propForEc=(window.PORTFOLIO||[]).find(p=>p.n===sc.property);
     const elevatorCoResolved=sc.ec||propForEc?.ec||'';
     units.forEach(u=>{
-      const yr=unitToYear.has(u.id)?unitToYear.get(u.id):sc.year;
+      const yr=unitToYear.has(u.id)?unitToYear.get(u.id):lastYearOnRecordAll;
       const amt=(isCommitted&&!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
       allUnitItems.push({
         year:yr,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',
@@ -18374,7 +18576,9 @@ function renderDashboard(){
   // Action Horizon — below heat map
   const horizonEl=document.getElementById('dash-action-horizon');
   if(horizonEl){
-    const fmtDate=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
+    // v51e — T12:00:00 forces local-noon parsing, avoiding the UTC-midnight
+    // one-day-early rollback in timezones behind UTC.
+    const fmtDate=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
     const priColor={High:'var(--red)',Medium:'var(--amber)',Low:'var(--blue-light)'};
     const horizonActions=[
       ...overdueActions.map(a=>({...a,bucket:'Overdue',bucketColor:'var(--red)'})),
@@ -25071,7 +25275,9 @@ function renderOpsCenter(){
   const next60=horizonItems.filter(i=>i._date>d30&&i._date<=d60).sort((a,b)=>a._date-b._date);
   const next90=horizonItems.filter(i=>i._date>d60&&i._date<=d90).sort((a,b)=>a._date-b._date);
 
-  const fmtDate=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'No due date';
+  // v51e — T12:00:00 forces local-noon parsing, avoiding the UTC-midnight
+  // one-day-early rollback in timezones behind UTC.
+  const fmtDate=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'No due date';
   const priColor={High:'var(--red)',Medium:'var(--amber)',Low:'var(--blue-light)'};
   const typeBadge=t=>t==='meeting'
     ?`<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--blue-xpale);color:var(--blue-dark)">Meeting</span>`
@@ -25139,7 +25345,9 @@ function renderOpsCenter(){
     if(!(p.dateRemoved||p.st==='Removed')||!propFilter(p.n))return false;
     return p.dateRemoved&&new Date(p.dateRemoved)>_recentCutoff;
   }).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,4);
-  const fmtShort=d=>d?new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+  // v51e — T12:00:00 forces local-noon parsing, avoiding the UTC-midnight
+  // one-day-early rollback in timezones behind UTC.
+  const fmtShort=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
 
   // Recent field updates — v50h, merged with Published PM Updates into one
   // combined, date-sorted feed per direct instruction. Each entry keeps a
