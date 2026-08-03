@@ -1,4 +1,67 @@
 <!--
+pulse_v51g. Changes from v51f, this round:
+  1. unitGroupYear() (Budget Outlook's per-unit year resolution) still had
+     the bare new Date(d) UTC-midnight bug the v51e display-site sweep
+     missed, because it feeds real bucketing logic rather than just what's
+     shown on screen. Confirmed live: Caribe Hilton Phase 6's Jan 1, 2027
+     Planned Start was silently bucketing its unit into 2026, and Phase
+     2's Jan 1, 2028 Planned Start into 2027 — both one year early.
+     Same T12:00:00 fix as the other v51e sites, applied here too.
+  2. A Scope's Year/Budget Cycle (the single integer year Capital Plan
+     groups by) previously stayed independent of Planned Start/Target
+     Completion, so Capital Plan and Budget Outlook could silently show a
+     project under two different years once Unit Phases existed. Per
+     Misty's direct decision, deriveAndWriteScopeDates() now also derives
+     Year/Budget Cycle: the year of the earliest dated Unit Phase, the
+     same source value as the derived Planned Start, so the two fields
+     stay permanently in lockstep. A Scope with zero dated phases keeps
+     its existing Year/Budget Cycle untouched.
+  3. Demote to Unit Phase never offered a construction task picker at
+     all — every phase it created got phaseTasks:[] and zero real Phase
+     Tasks records, confirmed live as the actual root cause behind
+     Caribe Hilton phases showing no expand arrow / no task list (not a
+     rendering bug — those phases genuinely had no task data until
+     manually re-saved via Edit). Per Misty's direct requirement, task
+     selection is now part of phase creation everywhere, including
+     Demote: each equipment-type group the modal creates gets its own
+     independent checklist (different equipment types can need different
+     task sequences), defaulting to the same standard
+     PHASE_MILESTONE_TEMPLATES set Add Phase uses, all checked by
+     default. confirmDemoteScope() now creates real Phase Tasks records
+     for each phase's selected tasks, mirroring saveNewPhase()'s pattern.
+  4. New persistent "Back to [Property]" quick-link in the sidebar,
+     visible from every view (Analytics, Budget Outlook, Capital Plan,
+     etc.), not just from inside the property itself. Solves Misty's
+     stated pain: opening a property from Portfolio View, then
+     navigating to Analytics > Budget Outlook, had no easy way back to
+     that property — the existing back-button wiring (pushPropertyHistory
+     State) was deliberately narrow, one level only, and never covered
+     cross-section navigation. Deliberately does not touch browser
+     history/back-button behavior; full view-level routing is being held
+     for its own separately-planned future round per Misty's direction.
+  5. Budget Outlook's expanded year rows and Capital Plan's year-band
+     property groupings now sort alphabetically by property instead of by
+     dollar amount (Budget Outlook) or insertion order (Capital Plan), per
+     Misty's direct request.
+  6. Unit Phases tab banner copy replaced with Misty's own wording,
+     covering three points: Budget Outlook buckets by phase dates,
+     Project Start/End auto-align to phase dates, and undated phases
+     default to the last project year. No Capital Plan caveat needed
+     this round — see #2 above, Capital Plan now genuinely stays in sync.
+  7. Minor: saveNewPhase()'s newPhase object used completionDate:''
+     instead of actualCompletion:'' (the correct Unit Groups field name
+     every other read/write site uses). Harmless today, corrected for
+     consistency.
+  8. Weekly Report Feedback notes previously only confirmed a save via a
+     toast, which disappears in a few seconds and leaves no lasting sign
+     on the page that a note was recorded. Per Misty's direct request:
+     after a successful save, the Save button is replaced by a persistent
+     grayed "Saved" tag with a pencil icon; clicking the pencil (or typing
+     in the textarea again) switches back to the editable Save-button
+     state. A note that already has saved text starts in the Saved state
+     on page load, matching what's actually stored.
+Requires no worker changes (worker_v44a.mjs unchanged).
+
 pulse_v51f. Changes from v51e, this round:
   1. Scopes table gets two new Airtable fields: Actual Start, Actual
      Completion (date fields, added by Misty directly in Airtable before
@@ -2766,6 +2829,14 @@ from unitEffectiveValue() onto each checkbox). -->
       <div class="sidebar-logo" onclick="gotoView('dashboard',null)" style="cursor:pointer" title="Go to Dashboard"><div class="sidebar-logo-mark"><i class="ti ti-activity"></i></div><div class="sidebar-logo-name">PULSE</div></div>
       <div class="sidebar-client-pill"><i class="ti ti-building"></i><span id="sb-client-name">Park Hotels</span></div>
       <div id="sb-role-tag" class="sidebar-role-tag tag-admin">IT Admin</div>
+      <!-- v51g — Back to [Property] quick-link. Visible everywhere the
+      sidebar renders (Analytics, Budget Outlook, Capital Plan, etc.), not
+      just from inside the property view, so jumping from Budget Outlook
+      back to the property you were just on doesn't require the browser
+      back button (which was never wired for that path — see
+      pushPropertyHistoryState). Populated/cleared by
+      updateBackToPropertyLink(). -->
+      <button id="sb-back-to-property" class="hidden" style="width:100%;margin-top:8px;background:rgba(255,255,255,0.08);border:0.5px solid rgba(255,255,255,0.15);border-radius:var(--radius,8px);color:rgba(255,255,255,0.85);font-size:12px;padding:6px 10px;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onclick="jumpToLastProperty()"></button>
     </div>
     <div id="nav-admin">
       <div class="nav-section">
@@ -2889,7 +2960,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51g</div>
     </div>
   </nav>
 
@@ -4756,6 +4827,10 @@ function doLogout(){
   window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.UNIT_INVENTORY=[];window.PM_UPDATES=[];
   clientFlags=[];flagIdCounter=0;
   window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
+  // v51g — clear the Back to [Property] quick-link so the next person to
+  // sign in on this browser doesn't see a stale property name.
+  window._lastOpenedProperty=null;
+  if(typeof updateBackToPropertyLink==='function')updateBackToPropertyLink();
   // Reset chatbot to Park Hotels context
   const chatMsgs=document.getElementById('chat-messages');
   // v42l — window.PORTFOLIO is cleared to [] a few lines above this point
@@ -5000,6 +5075,39 @@ function gotoView(viewId,btn){
   }
 }
 
+// v51g — Back to [Property] quick-link. Renders in the sidebar (visible
+// from every view, not just inside the property itself) whenever a
+// property has been opened this session, and stays visible after
+// navigating elsewhere (Analytics, Budget Outlook, Capital Plan, etc.).
+// Deliberately NOT the same value as sessionStorage's pulse_last_view key
+// — gotoView() overwrites that key with propName:null on every single
+// navigation (by design, for its own separate refresh-restore purpose:
+// "gotoView means we've left property-detail context"), so reusing it
+// here would clear the quick-link the instant you left the property,
+// which is exactly the pain this is meant to fix. window._lastOpenedProperty
+// only ever changes when a property is actually opened, and only clears
+// on logout, so it survives Property -> Analytics -> Budget Outlook.
+function updateBackToPropertyLink(){
+  const btn=document.getElementById('sb-back-to-property');
+  if(!btn)return;
+  const name=window._lastOpenedProperty;
+  if(name){
+    btn.innerHTML=`<i class="ti ti-corner-up-left" style="margin-right:5px"></i>Back to ${escHtml(name)}`;
+    btn.classList.remove('hidden');
+  }else{
+    btn.classList.add('hidden');
+  }
+}
+window.updateBackToPropertyLink=updateBackToPropertyLink;
+// Jumps straight back to the last-opened property from anywhere in the
+// app without depending on browser back/forward, which was never wired
+// for cross-section navigation (see pushPropertyHistoryState's Build
+// Schema note above).
+function jumpToLastProperty(){
+  if(!window._lastOpenedProperty){updateBackToPropertyLink();return;}
+  openProperty(window._lastOpenedProperty);
+}
+window.jumpToLastProperty=jumpToLastProperty;
 function openProperty(name){
   prevView=document.querySelector('[id^="view-"]:not(.hidden)')?.id?.replace('view-','') || 'portfolio';
   // v50f — see pushPropertyHistoryState() above. Lets the browser's
@@ -5015,6 +5123,11 @@ function openProperty(name){
   // instead of landing on Dashboard. See gotoView()'s matching save and
   // tryRestorePulseSession()/_finishLogin() for the read side.
   try{sessionStorage.setItem('pulse_last_view',JSON.stringify({viewId:'property',propName:name}));}catch(e){}
+  // v51g — separate from pulse_last_view above (which gotoView() clears on
+  // every navigation away). This one persists until logout, powering the
+  // sidebar's Back to [Property] quick-link from anywhere in the app.
+  window._lastOpenedProperty=name;
+  updateBackToPropertyLink();
   // v31j: show help button for property detail.
   // v45a — widened from PM/Admin-only to include client, per Misty's
   // direction. Client-facing help:property-overview content already
@@ -7136,9 +7249,30 @@ function openDemoteScopeModal(scopeId){
     const key=u.equipmentType||'(no equipment type set)';
     (typeGroups[key]=typeGroups[key]||[]).push(u);
   });
+  // v51g — per-equipment-type construction task picker. Demote previously
+  // created every resulting phase with no tasks at all (phaseTasks:[], no
+  // real Phase Tasks records) — the modal never offered a picker, unlike
+  // Add Phase and Edit Phase. Per Misty's direct requirement, task
+  // selection is now part of every phase-creation path, and since Demote
+  // can create multiple phases at once (one per equipment type found),
+  // each gets its own independent checklist — different equipment types
+  // legitimately need different construction sequences — defaulting to
+  // the same standard PHASE_MILESTONE_TEMPLATES set Add Phase uses, all
+  // checked by default to match Add Phase's own default. sanitizeTypeId
+  // keys each group's checkbox class so multiple groups don't collide.
+  const sanitizeTypeId=t=>(t||'none').replace(/[^a-zA-Z0-9]/g,'_');
   const resultRows=Object.keys(typeGroups).map(type=>{
     const grp=typeGroups[type];
-    return `<div><i class="ti ti-tool" style="font-size:13px;margin-right:5px;color:var(--blue-dark)"></i>Phase &mdash; ${type} (${grp.length} unit${grp.length===1?'':'s'})</div>`;
+    const typeId=sanitizeTypeId(type);
+    const templateSteps=PHASE_MILESTONE_TEMPLATES[type]||[];
+    const taskChecks=templateSteps.length>0?`
+      <div style="margin-top:6px;padding-left:19px">
+        ${templateSteps.map((step,i)=>`<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid);cursor:pointer;padding:2px 0">
+          <input type="checkbox" class="demote-task-check-${typeId}" value="${step}" checked style="width:13px;height:13px;flex-shrink:0">
+          <span>${step}</span>
+        </label>`).join('')}
+      </div>`:`<div style="margin-top:4px;padding-left:19px;font-size:11px;color:var(--gray-mid)">No standard task list for this equipment type — tasks can be added later via Edit.</div>`;
+    return `<div><i class="ti ti-tool" style="font-size:13px;margin-right:5px;color:var(--blue-dark)"></i>Phase &mdash; ${type} (${grp.length} unit${grp.length===1?'':'s'})</div>${taskChecks}`;
   }).join('');
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:460px;box-shadow:var(--shadow-md);margin:auto">
     <div style="padding:18px 22px;border-bottom:1px solid var(--border)">
@@ -7201,10 +7335,15 @@ async function confirmDemoteScope(){
   let nextPhaseOrder=existingPhasesForTarget.length+1;
   const createdPhaseIds=[];
 
+  // v51g — read each type group's checked construction tasks, keyed the
+  // same way openDemoteScopeModal rendered them.
+  const sanitizeTypeIdConfirm=t=>(t||'none').replace(/[^a-zA-Z0-9]/g,'_');
   for(const type of Object.keys(typeGroups)){
     const grp=typeGroups[type];
     const phaseName=`${escHtml(s.name||'Demoted project')}: ${type||'Unassigned equipment type'}`;
     const linkedUnitIds=grp.map(u=>u.id);
+    const typeId=sanitizeTypeIdConfirm(type);
+    const selectedTasks=[...document.querySelectorAll(`.demote-task-check-${typeId}:checked`)].map(c=>c.value);
     const ugFields={
       'Property Name':propertyNameToLink(target.property),
       'Phase Name':phaseName,
@@ -7216,6 +7355,7 @@ async function confirmDemoteScope(){
       'Linked Units':linkedUnitIds,
       'Linked Scope':[target.id],
       'Phase Order':nextPhaseOrder,
+      'Phase Tasks':selectedTasks.join(', '),
     };
     let newPhaseId='demo_ug_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
     if(!demoMode){
@@ -7225,10 +7365,44 @@ async function confirmDemoteScope(){
     window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([{
       id:newPhaseId,property:target.property,scopeId:target.id,phase:phaseName,units:grp.length,
       status:'Not Started',plannedStart,plannedCompletion:plannedEnd,
-      actualStart:'',completionDate:'',notes:'',
+      actualStart:'',actualCompletion:'',notes:'',
       productType:type,unitNames:sortUnitsByName(grp).map(u=>u.name).filter(Boolean).join(', '),
-      linkedUnitIds,phaseTasks:[],phaseOrder:nextPhaseOrder,
+      linkedUnitIds,phaseTasks:selectedTasks,phaseOrder:nextPhaseOrder,
     }]);
+    // v51g — create real Phase Tasks records for the checked tasks, same
+    // pattern saveNewPhase() already uses, seeded with this phase's own
+    // Planned Start/Completion. Without this, Demote-created phases had
+    // zero real task records regardless of what was checked at creation —
+    // confirmed live on Caribe Hilton, where every Demote-created phase's
+    // task list stayed empty until manually re-saved via Edit.
+    if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
+    selectedTasks.forEach((taskName,i)=>{
+      const localId='pts-'+Date.now()+'-'+i;
+      window.PHASE_STEPS.push({
+        id:localId,
+        property:target.property,
+        scopeId:target.id,
+        phaseName,
+        taskName,
+        taskOrder:i+1,
+        plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',
+        actualStart:'',completionDate:'',
+        status:'Not Started',notes:''
+      });
+      if(!demoMode){
+        const taskFields={
+          'Property Name':propertyNameToLink(target.property),
+          'Phase Name':phaseName,
+          'Task Name':taskName,
+          'Task Order':i+1,
+          'Planned Start':plannedStart||null,
+          'Planned End':plannedEnd||null,
+          'Status':'Not Started',
+          'Linked Scope':[target.id],
+        };
+        atCreate('Phase Tasks',taskFields);
+      }
+    });
     createdPhaseIds.push(newPhaseId);
     nextPhaseOrder++;
     // Relink each unit to the target Scope in Airtable and in memory —
@@ -11171,11 +11345,24 @@ async function deriveAndWriteScopeDates(scopeId){
   sc.targetCompletion=newTargetCompletion||'';
   sc.actualStart=newActualStart||'';
   sc.actualCompletion=newActualCompletion||'';
+  // v51g — Year/Budget Cycle (the single integer year Capital Plan groups
+  // by) previously stayed a manually-set field, independent of the date
+  // fields above, so Capital Plan and Budget Outlook could silently show
+  // a project under two different years once Unit Phases existed. Per
+  // Misty's direct decision, it now derives the same way as Planned
+  // Start: the year of the earliest dated phase (plannedStarts.length>0
+  // is the same condition gating newPlannedStart, so the two stay
+  // permanently in lockstep). Only updates once a phase actually has a
+  // date; a Scope with zero dated phases keeps its existing Year/Budget
+  // Cycle untouched, same no-op behavior as the other derived fields.
+  const newYear=plannedStarts.length>0?new Date(Math.min(...plannedStarts)).getFullYear():null;
+  if(newYear!=null)sc.year=newYear;
   await atUpdate('Scopes',scopeId,{
     'Planned Start':newPlannedStart,
     'Target Completion':newTargetCompletion,
     'Actual Start':newActualStart,
     'Actual Completion':newActualCompletion,
+    ...(newYear!=null?{'Year/Budget Cycle':newYear}:{}),
   });
 }
 // v50c — MARLI Unit Phase suggestions. Structural (not text/AI-based)
@@ -11350,10 +11537,16 @@ function renderPhasesTab(p){
       <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:2px">Project End</span><span style="font-weight:600;color:var(--navy)">${fmtDate(latestEnd)}</span></div>
       <div style="font-size:12px"><span style="color:var(--gray-mid);font-size:10px;text-transform:uppercase;font-family:'Plus Jakarta Sans',sans-serif;display:block;margin-bottom:2px">Total Duration</span><span style="font-weight:600;color:var(--blue-dark)">${durationText}</span></div>`:'';
   }
-  // v51f — Unit Phase dates / Budget Outlook dependency note. Same voice
-  // as the existing Demote to Unit Phase modal's warning, shown to every
-  // role that can see this tab (not just PM/Admin who can edit), since
-  // it's informational context about how figures on other screens are
+  // v51g — Unit Phase dates / Budget Outlook dependency note. Wording is
+  // Misty's own, given directly, replacing the v51f draft, plus a third
+  // sentence added this round covering the last-year-on-record default
+  // (see the byYear bucketing logic in renderBudgetOutlook). No Capital
+  // Plan caveat — Year/Budget Cycle now derives from the same
+  // earliest-phase-date source as Planned Start (see
+  // deriveAndWriteScopeDates), so Capital Plan genuinely stays in sync
+  // rather than needing a warning that it doesn't. Shown to every role
+  // that can see this tab (not just PM/Admin who can edit), since it's
+  // informational context about how figures on other screens are
   // derived. Only shown once phases exist — nothing to explain on an
   // empty tab.
   const budgetFlagEl=document.getElementById('phases-budget-flag');
@@ -11362,7 +11555,7 @@ function renderPhasesTab(p){
       <div style="display:flex;align-items:flex-start;gap:8px;background:var(--blue-xpale);border:0.5px solid var(--blue-light);border-radius:var(--radius);padding:10px 12px;margin:12px 0">
         <i class="ti ti-chart-bar" style="font-size:15px;color:var(--blue-dark);margin-top:1px"></i>
         <div style="font-size:12px;color:var(--blue-dark);line-height:1.5">
-          Unit Phase dates drive Budget Outlook's year-by-year figures, and automatically set this project's own Start/End dates above. Capital Plan still groups these units under the project's own Year/Budget Cycle regardless of these dates.
+          Budget Outlook will bucket unit phases by the planned dates below. As the unit phase dates get populated, the primary Project Start and Project End dates above will update to align with what's here. Phases without dates will roll to the last project year for budgeting.
         </div>
       </div>`:'';
   }
@@ -12078,7 +12271,13 @@ async function saveNewPhase(){
     property:currentProp.n,scopeId:scopeId||'',phase:name,units,
     status:'Not Started',
     plannedStart,plannedCompletion:plannedEnd,
-    actualStart:'',completionDate:'',notes:'',
+    // v51g — was completionDate:'' (the PHASE_STEPS/Phase Tasks field
+    // name), not actualCompletion (the correct UNIT_GROUPS/Unit Group
+    // field name every other read/write site uses). Harmless today since
+    // a brand-new phase never has an actual completion at creation time,
+    // but corrected for consistency with loadAllData's mapping,
+    // saveEditPhase, updatePhaseStatus, and deriveAndWriteScopeDates.
+    actualStart:'',actualCompletion:'',notes:'',
     productType,unitNames,linkedUnitIds,
     phaseTasks:selectedMs,
     phaseOrder:nextPhaseOrder,
@@ -13274,7 +13473,11 @@ function renderCapitalPlan(){
         totalCapPlanScopeCount,
         otherYears,
       };
-    });
+    // v51g — alphabetical by property within each year band, replacing the
+    // old implicit insertion-order (whichever property's scope was
+    // encountered first while building propMap above), per Misty's direct
+    // request.
+    }).sort((a,b)=>(a.property||'').localeCompare(b.property||''));
   });
 
   const yearKeys=Object.keys(byYear).sort((a,b)=>{
@@ -14327,7 +14530,14 @@ function renderBudgetOutlook(){
   function unitGroupYear(ug){
     const d=ug.actualStart||ug.plannedStart;
     if(!d)return null;
-    const y=new Date(d).getFullYear();
+    // v51g — bare new Date(d) parses date-only strings as UTC midnight,
+    // which reads back one year early whenever the date falls on Jan 1
+    // in a timezone behind UTC (e.g. Puerto Rico, UTC-4 — confirmed live:
+    // Caribe Hilton Phase 6's Jan 1, 2027 Planned Start was bucketing its
+    // unit into 2026, not 2027). Same T12:00:00 fix as the display sites
+    // fixed in v51e, applied here since this function feeds real
+    // Budget Outlook bucketing, not just what's shown on screen.
+    const y=new Date(d+'T12:00:00').getFullYear();
     return isNaN(y)?null:y;
   }
   // v41a — Scope-level current milestone, for the Budget Outlook exports'
@@ -14639,7 +14849,10 @@ function renderBudgetOutlook(){
   document.getElementById('bo-tbody').innerHTML=years.map(y=>{
     const d=byYear[y];
     const isOpen=boExpandedYear===y;
-    const detailRows=isOpen?d.items.slice().sort((a,b)=>(b.committed||b.amount)-(a.committed||a.amount)).map(it=>{
+    // v51g — alphabetical by property (then scope name as a tiebreaker for
+    // multiple projects on the same property), replacing the old sort-by-
+    // dollar-amount-descending order, per Misty's direct request.
+    const detailRows=isOpen?d.items.slice().sort((a,b)=>(a.property||'').localeCompare(b.property||'')||(a.scopeName||'').localeCompare(b.scopeName||'')).map(it=>{
       const namesText=it.unitNames&&it.unitNames.length>0?it.unitNames.join(', '):'<span style="color:var(--gray-light)">—</span>';
       return `
       <tr style="background:var(--gray-pale)">
@@ -19406,9 +19619,18 @@ async function renderWeeklyReportFeedback(){
       </div>
       <div style="font-size:13px;line-height:1.55;color:var(--gray-dark);white-space:pre-wrap;margin-bottom:10px">${(r.summaryText||'No summary recorded.').replace(/</g,'&lt;')}</div>
       <div id="wrf-notes-${r.id}" style="${isDown?'':'display:none'}">
-        <textarea class="form-input" id="wrf-notes-input-${r.id}" placeholder="What was wrong with this summary? (optional, but helpful for tuning future reports)" style="font-size:12px;min-height:56px;width:100%">${(r.notes||'').replace(/</g,'&lt;')}</textarea>
-        <div style="display:flex;justify-content:flex-end;margin-top:6px">
-          <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" onclick="saveWeeklyReportFeedbackNotes('${r.id}')"><i class="ti ti-check"></i>Save</button>
+        <textarea class="form-input" id="wrf-notes-input-${r.id}" placeholder="What was wrong with this summary? (optional, but helpful for tuning future reports)" style="font-size:12px;min-height:56px;width:100%" oninput="wrfNoteEdited('${r.id}')">${(r.notes||'').replace(/</g,'&lt;')}</textarea>
+        <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:6px">
+          <!-- v51h — persistent saved-state indicator, replacing the toast
+          as the only sign a note was recorded. Starts visible if this note
+          already has saved text (a fresh page load / re-render after
+          save), same "already saved" logic saveWeeklyReportFeedbackNotes
+          switches into on success. -->
+          <span id="wrf-saved-tag-${r.id}" class="${(r.notes||'').trim()?'':'hidden'}" style="display:${(r.notes||'').trim()?'flex':'none'};align-items:center;gap:4px;font-size:11px;color:var(--gray-mid)">
+            <i class="ti ti-check" style="font-size:13px;color:var(--green)"></i>Saved
+            <i class="ti ti-pencil" title="Edit note" style="font-size:13px;cursor:pointer;color:var(--gray-mid)" onclick="wrfEditNote('${r.id}')"></i>
+          </span>
+          <button id="wrf-save-btn-${r.id}" class="btn btn-primary" style="font-size:11px;padding:4px 12px;display:${(r.notes||'').trim()?'none':'inline-flex'}" onclick="saveWeeklyReportFeedbackNotes('${r.id}')"><i class="ti ti-check"></i>Save</button>
         </div>
       </div>
     </div>`;
@@ -19527,11 +19749,45 @@ async function saveWeeklyReportFeedbackNotes(feedbackRecordId){
     // v50f — now an explicit Save button rather than silent autosave on
     // blur, so a clear confirmation matters here in a way it didn't before.
     showToast('Note saved','success');
+    // v51h — the toast alone disappears in a few seconds and leaves no
+    // trace on the page that a note was actually recorded. Per Misty's
+    // direct request: on successful save, gray out/hide the Save button
+    // and show a persistent "Saved" tag with a pencil icon to re-enter
+    // edit mode, so the saved state is visible on the page itself, not
+    // just in a transient toast.
+    wrfShowSavedState(feedbackRecordId);
   }catch(e){
     showToast('Could not save your note — please try again','warn');
   }
 }
 window.saveWeeklyReportFeedbackNotes=saveWeeklyReportFeedbackNotes;
+// v51h — swap a note row into its "Saved" state: hide the Save button,
+// show the checkmark + Saved label + pencil-to-edit affordance.
+function wrfShowSavedState(feedbackRecordId){
+  const saveBtn=document.getElementById(`wrf-save-btn-${feedbackRecordId}`);
+  const savedTag=document.getElementById(`wrf-saved-tag-${feedbackRecordId}`);
+  if(saveBtn)saveBtn.style.display='none';
+  if(savedTag){savedTag.style.display='flex';savedTag.classList.remove('hidden');}
+}
+// Pencil icon click — swap back to the editable Save-button state and
+// focus the textarea so the person can start typing immediately.
+function wrfEditNote(feedbackRecordId){
+  const saveBtn=document.getElementById(`wrf-save-btn-${feedbackRecordId}`);
+  const savedTag=document.getElementById(`wrf-saved-tag-${feedbackRecordId}`);
+  if(savedTag){savedTag.style.display='none';savedTag.classList.add('hidden');}
+  if(saveBtn)saveBtn.style.display='inline-flex';
+  const input=document.getElementById(`wrf-notes-input-${feedbackRecordId}`);
+  if(input)input.focus();
+}
+window.wrfEditNote=wrfEditNote;
+// Typing in the textarea after a save means the saved text is now stale —
+// drop back to the editable state immediately rather than leaving a
+// "Saved" tag showing next to text that no longer matches what's stored.
+function wrfNoteEdited(feedbackRecordId){
+  const savedTag=document.getElementById(`wrf-saved-tag-${feedbackRecordId}`);
+  if(savedTag&&savedTag.style.display!=='none')wrfEditNote(feedbackRecordId);
+}
+window.wrfNoteEdited=wrfNoteEdited;
 
 // Detail drilldown for a single flagged item — reuses the same overlay
 // pattern as showBarDrilldown/showScorecardGapDrilldown. Reads from the
