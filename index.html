@@ -1,4 +1,133 @@
 <!--
+pulse_v51l. Changes from v51k, this round:
+  1. Reworked how a Scope's Planned Start / Target Completion / Actual
+     Start / Actual Completion are derived, per Misty's direct call.
+     Previous logic (v51e through v51g) derived all four purely from Unit
+     Phase dates, which only covers the construction window, missing the
+     pre-construction lead time (Modernization Survey through Contract
+     Award, all before any phase exists) and the post-construction
+     closeout tail (Punch Lists through Closeout Documentation, all after
+     phases finish). Milestones are now the primary source:
+       Planned Start = M1 (Modernization Survey)'s Planned Date. M1 and M2
+         are always manually-entered "calendar" milestones per
+         MILESTONE_DERIVATION, confirmed in code, never phase-derived even
+         with Manual Override off, so M1 is the unambiguous earliest real
+         activity on a project. No phase fallback.
+       Target Completion = M14 (Closeout Documentation)'s Planned Date
+         once it exists. M14 is also always-manual and typically stays
+         undated until very late in a project, so until M14 has a date
+         this falls back to the latest Planned Completion across the
+         Scope's own Unit Phases (the v51f logic), so the field is never
+         blank or stale for most of an active project's life.
+       Actual Start / Actual Completion mirror the same M1/M14-first,
+         phase-fallback-for-Completion-only pattern.
+     deriveAndWriteScopeDates() now also runs whenever M1 or M14's own
+     date or status is edited directly (previously only ran after a Unit
+     Phase save), since those two milestones are now the primary driver
+     and editing them directly is expected to be the normal way these
+     fields change going forward.
+  2. Fixed the Analytics filter bar edge case flagged in the v51k header:
+     the Milestone Category and Health dropdown filters (cfGetFiltered)
+     used to test only a property's one blended value before Active
+     Projects by Stage and Elevator Company Performance ever got a chance
+     to bucket by individual Scope, so a property could pass or fail the
+     filter based on a value none of its actual Scopes matched. Both
+     filters now test "does at least one of this property's own,
+     non-Capital-Plan Scopes match the selected value," consistent with
+     how the Scope-aware charts already think about a property's projects.
+Requires no worker changes (worker_v44a.mjs unchanged).
+
+pulse_v51k. Changes from v51j, this round:
+  1. Hardened createScopeForYearKey() at its two remaining unguarded call
+     sites (both branches of autoDeriveScopeForUnit's Capex-year
+     reassignment flow, and the TBD-scope link inside New Property unit
+     creation). This function always returns an object even when its
+     Airtable write fails, falling back to a client-only id, so a failed
+     write previously still announced "Moved to [Scope Name]" or silently
+     linked a new unit to a scope that only existed in the browser tab.
+     All 4 real call sites now detect the fallback id and report failure
+     honestly instead of announcing false success.
+  2. Confirmed showScorecardGapDrilldown()'s Contract Award Value check is
+     correct, not a bug. Properties and Scopes each carry their own
+     separate Contract Award Value field in Airtable for different
+     purposes (Property level feeds the Scorecard's Budget Variance
+     baseline, Scope level feeds Budget Outlook and Capital Plan). No
+     change needed.
+  3. Renamed the printed Weekly/On-Demand Performance Report's "Project
+     Status" and "Project Health" columns to "Property Status" and
+     "Property Health", matching what they've always actually shown
+     (property wide values, not per project). Labeling fix only.
+  4. Active Projects by Stage and Elevator Company Performance (Analytics)
+     now count and bucket by Scope ("Project" in the UI), not by property.
+     Previously both charts pooled every Scope on a property into one
+     blended figure, so a property with two Scopes in different stages, or
+     on different elevator companies, only ever contributed to one bar.
+     New getMilestoneCategoryForScope() gives each Scope its own stage
+     using the same thresholds as before, applied per Scope instead of
+     pooled. Elevator Company Performance also gets a new always visible
+     total count above each stacked bar (additive, the existing Y axis and
+     hover detail are unchanged) and now uses per Scope health instead of
+     property wide health. Both charts' drilldowns now list one row per
+     Scope (Property and Project shown separately) instead of one row per
+     property. Known edge case, not fixed this round: the Analytics filter
+     bar's Milestone Category and Health dropdowns still pre-filter at the
+     property level before the charts expand to Scopes, so a property
+     could pass that filter while one of its individual Scopes lands
+     outside the selected bucket once exploded. Narrow, flagged for a
+     future look.
+  5. Portfolio View: Status column renamed "Property Status" (cosmetic
+     only, the underlying value is unchanged, still read and written the
+     same as before everywhere else in the app). New Current Project and
+     Current Phase columns, using a new getCurrentProjectForProperty(),
+     the non-Complete Scope furthest along toward or into construction,
+     ties broken by earliest start date. Health column and its filter
+     dropdown now reflect that one current project's own health instead of
+     a property wide blend. The two separately hand-maintained copies of
+     the table's row template (populatePortfolio and sortPortfolioByPriority)
+     are now one shared function, closing a real drift where the sort
+     path was quietly using older unit/budget fields than the main table.
+  6. Fixed a genuinely pre-existing, unrelated bug found while wiring the
+     Health filter: its "On Track" option's value never matched the health
+     functions' actual output ("In Progress"), so that filter choice has
+     never worked, before or after this round. Corrected.
+Requires no worker changes (worker_v44a.mjs unchanged).
+
+pulse_v51j. Changes from v51i, this round:
+  1. Root cause of a live production bug: Misty scheduled a meeting through
+     the UI, saw a green "Meeting scheduled" success toast, and it never
+     reached Airtable (confirmed empty Meetings and Meeting Attendees
+     tables, and confirmed the empty Blocked Write Attempts table ruled out
+     a permission-gate rejection). Traced live with Misty via the Resend
+     dashboard (no send attempt logged for that meeting, ruling out an
+     email-delivery problem) and Airtable directly. Root cause:
+     saveScheduledMeeting() never checked whether the Airtable write
+     actually succeeded before pushing a local meeting object, closing the
+     modal, and showing success, so any failure (expired session, Airtable
+     rejecting a field value, a network error) looked identical to success
+     with no error anywhere.
+  2. A full audit of every atCreate() call site in the file (the shared
+     helper used for all new-record writes) found this same pattern in 29
+     other functions, plus 9 more with a partial gap, plus 2 writes fired
+     without even capturing the result. All 40 sites fixed this round with
+     the same pattern: check the write actually succeeded before treating
+     it as successful, show a plain-English error and leave the form/modal
+     in place on failure instead of fabricating a local record. Covers
+     Action Items, Billing Log, Retainage Releases, Bid Submissions, Unit
+     Groups (Add Phase, Demote), Site Visits, Client Comments/Flags,
+     Documents archiving, PM Update follow-up actions, VDA Project task
+     lines, and more. One shared low-level helper (createScopeForYearKey)
+     was intentionally given a smaller fix (logs loudly instead of fully
+     aborting) since two of its four callers use its return value with no
+     null-guard yet; fully hardening it needs a caller-by-caller pass of
+     its own, flagged here rather than risking a new crash bug this round.
+  3. Every new user-facing message in this round is plain English, states
+     what specifically failed, and avoids em-dashes per house style. New
+     code comments keep the file's existing "// vXXX, dash, explanation"
+     comment convention for consistency with the other 500+ comments
+     already in the file; a repo-wide comment-style cleanup, if wanted, is
+     its own separate cosmetic pass, not folded into this bug-fix round.
+Requires no worker changes (worker_v44a.mjs unchanged).
+
 pulse_v51i. Changes from v51h, this round:
   1. Root-caused a false "At Risk" badge on the Dashboard/Portfolio Heat
      Map for Hilton Boston Logan Airport (showing 8 days overdue with
@@ -3034,7 +3163,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51l</div>
     </div>
   </nav>
 
@@ -3180,7 +3309,11 @@ from unitEffectiveValue() onto each checkbox). -->
               <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Health</div>
               <select id="pf-health" style="font-size:12px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer;width:100%" onchange="pfApply()">
                 <option value="all">All Health</option>
-                <option value="On Track">On Track</option>
+                <!-- v51k, this option's value was "On Track", but the health
+                functions have only ever returned "In Progress", so this
+                filter never matched any row. Value corrected, label kept
+                as "On Track" since that matches what the badge shows. -->
+                <option value="In Progress">On Track</option>
                 <option value="At Risk">At Risk</option>
                 <option value="Ahead">Ahead</option>
                 <option value="Not Started">Not Started</option>
@@ -3222,7 +3355,12 @@ from unitEffectiveValue() onto each checkbox). -->
         <div class="page-body">
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th style="width:20%">Property</th><th style="width:5%">State</th><th style="width:7%">Type</th><th id="portfolio-priority-th" style="width:7%;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority <i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th><th style="width:10%">Elev. Company</th><th style="width:5%">Units</th><th style="width:7%">Status</th><th style="width:9%">Health</th><th style="width:10%">Project End</th><th style="width:11%">VDA Consultant</th><th>Budget</th></tr></thead>
+              <!-- v51k, added Current Project / Current Phase columns (both
+              driven by getCurrentProjectForProperty) right after Elev.
+              Company, renamed Status header to "Property Status" (cosmetic
+              only, p.st itself is unchanged), widths trimmed proportionally
+              to make room. -->
+              <thead><tr><th style="width:16%">Property</th><th style="width:5%">State</th><th style="width:6%">Type</th><th id="portfolio-priority-th" style="width:6%;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority <i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th><th style="width:9%">Elev. Company</th><th style="width:10%">Current Project</th><th style="width:8%">Current Phase</th><th style="width:4%">Units</th><th style="width:7%">Property Status</th><th style="width:8%">Health</th><th style="width:9%">Project End</th><th style="width:10%">VDA Consultant</th><th>Budget</th></tr></thead>
               <tbody id="portfolio-tbody"></tbody>
             </table>
           </div>
@@ -5498,6 +5636,12 @@ async function uimApplyTotalUnits(propName){
     const toAdd=newTotal-current;
     showToast(`Adding ${toAdd} unit${toAdd===1?'':'s'}...`,'info');
     let tbdScope=findScopeForYearKey(propName,'TBD');
+    // v51j — a failed unit create here was already correctly skipped (the
+    // if(newId) guard kept a failed write out of UNIT_INVENTORY), but the
+    // failure itself was silently dropped with no fail count, so "Units
+    // added" fired unconditionally even if some units never reached
+    // Airtable. Now counts failures and reports them.
+    let unitAddFailCount=0;
     for(let i=0;i<toAdd;i++){
       const fields={'Unit Name':`Unit ${nextNum}`,'Property Name':propertyNameToLink(propName)};
       const res=await atCreate('Unit Inventory List',fields);
@@ -5507,10 +5651,16 @@ async function uimApplyTotalUnits(propName){
         window.UNIT_INVENTORY.push(newUnit);
         if(!tbdScope&&propObj)tbdScope=await createScopeForYearKey(propName,propObj.id,'TBD');
         if(tbdScope)await linkUnitToScope(newUnit,tbdScope);
+      }else{
+        unitAddFailCount++;
       }
       nextNum++;
     }
-    showToast('Units added','success');
+    if(unitAddFailCount>0){
+      showToast(`${toAdd-unitAddFailCount} of ${toAdd} units added, ${unitAddFailCount} failed. Check your connection and try again.`,'error');
+    }else{
+      showToast('Units added','success');
+    }
     renderUimTotalUnitsControl(propName);
     renderUimTable(propName);
   }else{
@@ -5659,7 +5809,21 @@ async function createScopeForYearKey(propName,propId,yearKey){
   let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
   if(!demoMode){
     const res=await atCreate('Scopes',fields);
-    newId=res?.records?.[0]?.id||newId;
+    // v51j — a failed write here used to fall back to the fabricated
+    // demo_sc_ id with no signal anywhere, so every caller (backfill,
+    // unit-total add, Capex year reassignment, New Property unit creation)
+    // silently linked units to a Scope that only exists in this browser
+    // tab, not in Airtable. Every caller already null-checks or otherwise
+    // trusts this return value without a per-call safety net, so rather
+    // than change the return contract here (risking a null-dereference in
+    // callers that assume an object, e.g. autoDeriveScopeForUnit reading
+    // targetScope.name right after this call), this at minimum makes the
+    // failure loud in the console instead of invisible.
+    if(!res?.records?.[0]?.id){
+      console.error('createScopeForYearKey: Airtable write failed for',name,'on property',propName,res);
+    }else{
+      newId=res.records[0].id;
+    }
   }
   const newScope={id:newId,property:propName,propertyId:propId||'',name,year:yearNum,unitList:'',plannedBudget:0,approvedBudget:0,budgetStatus:'TBD',priority:'4: Standard',status:initialStatus,v:'',ec:'',vdaNum:'',clientProjectNum:'',elevatorCount:0,escalatorCount:0,liftCount:0,otherCount:0,linkedUnitIds:[],isTbd:yearKey==='TBD',isCompleteBucket:isComplete};
   window.SCOPES=(window.SCOPES||[]).concat([newScope]);
@@ -5805,14 +5969,31 @@ async function autoDeriveScopeForUnit(unitId){
       ? `You're moving this unit out of an active scope ("${oldScope.name}") into a planned scope ("${targetName}"). Do you wish to continue?`
       : `This will move the unit from "${oldScope.name}" to "${targetName}". Continue?`;
     const confirmed=window.confirm(msg);
-    if(!confirmed){showToast('Capex year saved — scope assignment left unchanged','info');return;}
+    if(!confirmed){showToast('Capex year saved, scope assignment left unchanged','info');return;}
     if(!targetScope)targetScope=await createScopeForYearKey(unit.property,prop.id,yearKey);
+    // v51k — createScopeForYearKey always returns an object (never null),
+    // even when the underlying Airtable write fails, falling back to a
+    // client-only id prefixed 'demo_sc_'. Before this check, a failed
+    // write here still announced "Moved to [Scope Name]" as if it had
+    // really happened, the unit was only ever linked to a Scope that
+    // exists in this browser tab, not in Airtable, and would silently
+    // revert or orphan on the next refresh. Now this is caught and
+    // reported instead of announced as success.
+    if((targetScope.id||'').startsWith('demo_sc_')){
+      showToast('Could not create the target scope in Airtable. Unit move cancelled, try again.','error');
+      return;
+    }
     await unlinkUnitFromScope(unit,oldScope);
     await linkUnitToScope(unit,targetScope,oldScope);
     showToast(`Moved to ${targetScope.name}`,'success');
   }else{
     // First assignment — no prior scope to warn about leaving.
     if(!targetScope)targetScope=await createScopeForYearKey(unit.property,prop.id,yearKey);
+    // v51k — same fake-scope guard as the move branch above.
+    if((targetScope.id||'').startsWith('demo_sc_')){
+      showToast('Could not create the target scope in Airtable. Assignment cancelled, try again.','error');
+      return;
+    }
     await linkUnitToScope(unit,targetScope);
     showToast(`Assigned to ${targetScope.name}`,'success');
   }
@@ -6511,6 +6692,13 @@ async function autoPopulateMilestones(propName,scopeId){
     if(existing.length===MILESTONES_DEF.length){window._msPopulating[dedupeKey]=false;return;} // all milestones already exist
     if(!demoMode&&existing.length===0)showToast('Setting up milestones for '+propName+'...','info');
     const newMs=[];
+    // v51j — a failed Milestones create used to fall back to a fabricated
+    // ms- id and get pushed into window.MILESTONES like a real row, then
+    // "Milestones initialized" fired unconditionally, so a property could
+    // end up missing rows in Airtable with the UI (and the M1-graduation
+    // logic elsewhere that depends on these rows existing) never knowing.
+    // Now counts failures and skips adding a milestone that didn't write.
+    let msFailCount=0;
     for(let i=0;i<MILESTONES_DEF.length;i++){
       const msNum=i+1;
       // Skip if this milestone number already exists for this property+Scope
@@ -6523,11 +6711,19 @@ async function autoPopulateMilestones(propName,scopeId){
       };
       if(scopeId)fields['Linked Scope']=[scopeId];
       const res=demoMode?null:await atCreate('Milestones',fields);
+      if(!demoMode&&!res?.records?.[0]?.id){
+        msFailCount++;
+        continue;
+      }
       const newId=res?.records?.[0]?.id||'ms-'+Date.now()+'-'+i;
       newMs.push({id:newId,property:propName,scopeId:scopeId||'',milestoneNumber:msNum,milestoneName:MILESTONES_DEF[i],status:'Not Started',plannedDate:'',actualDate:'',variance:null,notes:''});
       window.MILESTONES=(window.MILESTONES||[]).concat([newMs[newMs.length-1]]);
     }
-    if(!demoMode&&newMs.length>0)showToast('Milestones initialized','success');
+    if(!demoMode&&msFailCount>0){
+      showToast(`Milestones setup incomplete for ${propName}: ${msFailCount} failed to save. Check your connection and try again.`,'error');
+    }else if(!demoMode&&newMs.length>0){
+      showToast('Milestones initialized','success');
+    }
   }finally{
     window._msPopulating[dedupeKey]=false;
   }
@@ -6565,6 +6761,17 @@ async function updateMilestone(msId,fields,propName){
   // from milestone data — v28b, was deriveAndWritePropertyStatus(propName)
   // directly; now scoped to the specific Scope this milestone belongs to.
   if(fields['Status']&&ms?.scopeId)await deriveAndWriteScopeStatus(ms.scopeId);
+  // v51l — M1 and M14 now directly drive the Scope's Planned Start/Target
+  // Completion/Actual Start/Actual Completion (see deriveAndWriteScopeDates).
+  // Re-derive whenever either milestone's date or status changes, or those
+  // fields would only update the next time a Unit Phase happens to be
+  // saved, not when someone edits M1/M14 directly, which is now the
+  // primary way these fields change. Harmless no-op call for every other
+  // milestone number or edited field.
+  if(ms?.scopeId&&(ms.milestoneNumber===1||ms.milestoneNumber===14)&&
+     (fields['Planned Date']!==undefined||fields['Actual Date']!==undefined||fields['Status']!==undefined)){
+    await deriveAndWriteScopeDates(ms.scopeId);
+  }
 }
 
 // v28b — Scope-aware status derivation (continuity brief 1E, "Status
@@ -7415,6 +7622,14 @@ async function confirmDemoteScope(){
   const existingPhasesForTarget=(window.UNIT_GROUPS||[]).filter(u=>u.property===target.property&&u.scopeId===target.id);
   let nextPhaseOrder=existingPhasesForTarget.length+1;
   const createdPhaseIds=[];
+  // v51j — the "Demoting project..." overlay is already removed above
+  // before any of this runs, so unlike a modal-still-open form this
+  // function can't abort and leave the input intact. What it can still do
+  // is stop claiming a clean "demoted" success when a Unit Groups or Phase
+  // Tasks write actually failed. Counted below and folded into the final
+  // toast instead of the unconditional success message that used to fire
+  // regardless of these results.
+  let demoteWriteFailCount=0;
 
   // v51g — read each type group's checked construction tasks, keyed the
   // same way openDemoteScopeModal rendered them.
@@ -7451,7 +7666,12 @@ async function confirmDemoteScope(){
     let newPhaseId='demo_ug_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
     if(!demoMode){
       const res=await atCreate('Unit Groups',ugFields);
-      newPhaseId=res?.records?.[0]?.id||newPhaseId;
+      if(!res?.records?.[0]?.id){
+        demoteWriteFailCount++;
+        console.error('confirmDemoteScope: Unit Groups create failed for',phaseName);
+      }else{
+        newPhaseId=res.records[0].id;
+      }
     }
     window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([{
       id:newPhaseId,property:target.property,scopeId:target.id,phase:phaseName,units:grp.length,
@@ -7467,7 +7687,13 @@ async function confirmDemoteScope(){
     // confirmed live on Caribe Hilton, where every Demote-created phase's
     // task list stayed empty until manually re-saved via Edit.
     if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
-    selectedTasks.forEach((taskName,i)=>{
+    // v51j — this loop called atCreate('Phase Tasks',...) with no await and
+    // never captured the result, true fire-and-forget, same pattern found
+    // and fixed in saveNewPhase(). A failed write was invisible and the
+    // local PHASE_STEPS entry was pushed regardless. Now awaited and
+    // checked, counted into demoteWriteFailCount above.
+    for(let i=0;i<selectedTasks.length;i++){
+      const taskName=selectedTasks[i];
       const localId='pts-'+Date.now()+'-'+i;
       window.PHASE_STEPS.push({
         id:localId,
@@ -7491,9 +7717,10 @@ async function confirmDemoteScope(){
           'Status':'Not Started',
           'Linked Scope':[target.id],
         };
-        atCreate('Phase Tasks',taskFields);
+        const taskRes=await atCreate('Phase Tasks',taskFields);
+        if(!taskRes?.records?.[0]?.id)demoteWriteFailCount++;
       }
-    });
+    }
     createdPhaseIds.push(newPhaseId);
     nextPhaseOrder++;
     // Relink each unit to the target Scope in Airtable and in memory —
@@ -7523,6 +7750,7 @@ async function confirmDemoteScope(){
   if(currentScope?.id===s.id)currentScope=target;
   if(currentProp)renderPropertyView(currentProp);
   if(demoMode){showToast('Project demoted — Demo mode: changes reset on logout','info');}
+  else if(demoteWriteFailCount>0){showToast(`${escHtml(s.name||'Project')} demoted, but ${demoteWriteFailCount} write${demoteWriteFailCount>1?'s':''} failed (phase or task). Check your connection and review before continuing.`,'error');}
   else{showToast(`${escHtml(s.name||'Project')} demoted into ${target.name||'target project'}`,'success');}
 }
 window.confirmDemoteScope=confirmDemoteScope;
@@ -8175,7 +8403,15 @@ async function autoCreateContractRatesAction(propName){
   const dueStr=due.toISOString().split('T')[0];
   const fields={'Property Name':propertyNameToLink(propName),'Description':description,'Owner':'','Due Date':dueStr,'Priority':'Medium','Status':'Open'};
   const res=demoMode?null:await atCreate('Action Items',fields);
-  if(res?.error){console.error('autoCreateContractRatesAction Airtable error:',res);}
+  // v51j — this auto-trigger used to fabricate a local action item and
+  // announce success even if the Airtable write failed, same silent-loss
+  // pattern found and fixed across the file this round. This one has no
+  // modal to leave open, so on failure it just logs and skips the local
+  // add/toast rather than claiming an action item exists that doesn't.
+  if(!demoMode&&!res?.records?.[0]?.id){
+    console.error('autoCreateContractRatesAction: Airtable write failed, no local action item created',res);
+    return;
+  }
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
   actionItems.push({id:newId,property:propName,description,owner:'',due:dueStr,priority:'Medium',status:'Open',meetingId:null});
   refreshDashActions();
@@ -8242,6 +8478,14 @@ async function saveActionItem(){
   if(aiScopeId)fields['Linked Scope']=[aiScopeId];
   const res=demoMode?null:await atCreate('Action Items',fields);
   if(res?.error){console.error('saveActionItem Airtable error:',res);}
+  // v51j — this form used to push a fabricated local action item and show
+  // a success toast even when the Airtable write failed (bad status,
+  // network error, expired session all return null from atCreate). Now
+  // aborts here so the form stays open and nothing fake gets added.
+  if(!demoMode&&!res?.records?.[0]?.id){
+    showToast('Could not save action item to Airtable. Check your connection and try again.','error');
+    return;
+  }
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
   actionItems.push({id:newId,property,description,owner,due,priority,status:'Open',meetingId:null,scopeId:aiScopeId||''});
   notifyActionItemOwner(owner,description,property,due,priority);
@@ -8362,6 +8606,14 @@ async function saveMeetingDraft(){
   } else {
     const res=await atCreate('Meetings',fields);
     atId=res?.records?.[0]?.id||null;
+    // v51j — same silent-loss pattern found across the file this round:
+    // this used to push a local draft and claim success even if the
+    // Airtable write failed. Now aborts with a real error and leaves the
+    // panel open so nothing typed is lost.
+    if(!atId){
+      showToast('Could not save draft to Airtable. Check your connection and try again.','error');
+      return;
+    }
     const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     meetings.push({id:atId||'m'+Date.now(),atId,property:propName,date:meetingDate,type:meetingType,format:meetingFormat,elevco,location,attVDA,attElev,attClient,agenda,notes,published:false,isDraft:true,createdAt:dateStr});
     if(atId)document.getElementById('editing-draft-id').value=atId;
@@ -8378,7 +8630,12 @@ async function saveMeetingDraft(){
     const owner=ownerTyped||'PM';
     const due=row.querySelector('[id$="-due"]')?.value||'TBD';
     const priority=row.querySelector('[id$="-priority"]')?.value||'Medium';
-    await atCreate('Action Items',{'Property Name':propertyNameToLink(propName),'Meeting ID':atId||'','Description':desc,'Owner':owner,'Due Date':due,'Priority':priority,'Status':'Open'});
+    // v51j — action items typed into a meeting draft used to be written
+    // with no result check at all. Now logs (not blocks) on failure, since
+    // the meeting/draft itself already saved above and one action item
+    // failing shouldn't be reported as the whole draft failing.
+    const draftAiRes=await atCreate('Action Items',{'Property Name':propertyNameToLink(propName),'Meeting ID':atId||'','Description':desc,'Owner':owner,'Due Date':due,'Priority':priority,'Status':'Open'});
+    if(!draftAiRes?.records?.[0]?.id)console.error('saveMeetingDraft: action item failed to save:',desc);
     if(ownerTyped)notifyActionItemOwner(ownerTyped,desc,propName,due,priority);
   }
   closePanel(false); // keep draft ID so re-opening panel updates same record
@@ -8481,8 +8738,19 @@ async function saveMeeting(){
     // New meeting — create fresh record
     const res=await atCreate('Meetings',fields);
     atId=res?.records?.[0]?.id||null;
+    // v51j — the "Airtable write failed" warning already existed at the
+    // bottom of this function, but by that point closePanel() had already
+    // closed the modal, the form fields had been cleared, and (if
+    // published) archiveMeetingToDocuments() and both re-renders had
+    // already run against a fabricated local meeting that was never
+    // actually saved. Moved the check here so a failed create aborts
+    // before any of that happens, and the modal/notes stay intact.
+    if(!atId){
+      showToast('Could not save meeting to Airtable. Check your connection and try again.','error');
+      return;
+    }
     const meeting={
-      id:atId||'m'+Date.now(),atId,property:propName,
+      id:atId,atId,property:propName,
       date:meetingDate,type:meetingType,format:meetingFormat,
       elevco,location,attVDA,attElev,attClient,agenda,
       notes,published,isDraft:false,createdAt:dateStr,
@@ -8491,6 +8759,7 @@ async function saveMeeting(){
   }
   // Write any new action items from the form
   const actionRows=document.querySelectorAll('#action-items-list .action-row');
+  let meetingActionFailCount=0;
   for(const row of actionRows){
     const desc=row.querySelector('[id$="-desc"]')?.value?.trim();
     if(!desc)continue;
@@ -8513,11 +8782,20 @@ async function saveMeeting(){
       'Priority':priority,
       'Status':'Open',
     });
+    // v51j — the outer meeting save now aborts honestly on failure (see
+    // above); this nested loop still didn't check its own result at all.
+    // Logs a console warning consistent with the outer fix rather than
+    // blocking the whole save on one action item, since the meeting itself
+    // already saved successfully by the time this loop runs.
+    if(!aRes?.records?.[0]?.id){
+      meetingActionFailCount++;
+      console.error('saveMeeting: action item failed to save:',desc);
+    }
     // Only push to local if not already there
     const alreadyExists=actionItems.some(a=>a.description===desc&&a.meetingId===(atId||''));
-    if(!alreadyExists){
+    if(!alreadyExists&&aRes?.records?.[0]?.id){
       actionItems.push({
-        id:aRes?.records?.[0]?.id||'a'+Date.now()+Math.random(),
+        id:aRes.records[0].id,
         meetingId:atId||'',property:propName,
         description:desc,owner,due,priority,status:'Open',createdAt:dateStr,
       });
@@ -8535,7 +8813,13 @@ async function saveMeeting(){
   }
   if(currentProp&&currentProp.n===propName){renderPropMeetings(currentProp);renderPropertyView(currentProp);}
   renderAllMeetings();refreshDashActions();
+  // v51j — atId is now guaranteed non-null by this point (the create branch
+  // above aborts early on failure), so this !atId case is unreachable in
+  // practice, but left in place as a defensive fallback rather than
+  // removed. Also now reports if any action items from this meeting failed
+  // to save, instead of the plain success toast claiming everything saved.
   if(!atId)showToast('Meeting saved locally — Airtable write failed','warn');
+  else if(meetingActionFailCount>0)showToast(`Meeting logged, but ${meetingActionFailCount} action item${meetingActionFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
   else showToast('Meeting logged'+(published?' and published to client portal.':' — internal only.'),'success');
 }
 
@@ -8630,8 +8914,17 @@ async function archiveMeetingToDocuments(m){
     'Upload Date':today,
     'Notes':`Auto-archived from Field Operations · ${escHtml(m.type)} · ${m.date}`,
   });
+  // v51j — this silently fabricated a local Documents entry (doc_mm_ fallback
+  // id) even when the Airtable write failed, so the meeting minutes looked
+  // archived in the UI while no record existed in Airtable. No modal is open
+  // here to leave in place, so on failure this just logs and skips the local
+  // add instead of claiming a document exists that doesn't.
+  if(!res?.records?.[0]?.id){
+    console.error('archiveMeetingToDocuments: Airtable write failed, no local document created',res);
+    return;
+  }
   const newDoc={
-    id:res?.records?.[0]?.id||'doc_mm_'+m.id,
+    id:res.records[0].id,
     name:docName,property:m.property,
     type:'Meeting Minutes',subfolder:'Meeting Minutes',
     visibility:vis,uploaded:today,
@@ -8665,24 +8958,39 @@ async function closeAction(id){
       'Upload Date':a.closedDate,
       'Notes':`Owner: ${escHtml(a.owner)} · Priority: ${a.priority} · Due: ${a.due}`,
     });
-    if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
-    window.DOCUMENTS_LIVE.push({
-      id:res?.records?.[0]?.id||'doc_ca_'+a.id,
-      name:docName,property:a.property,
-      type:'Closed Actions Report',subfolder:'Closed Actions',
-      visibility:'Public',uploaded:a.closedDate,
-      uploadedBy:a.owner||'PM',
-      notes:`Owner: ${escHtml(a.owner)} · Priority: ${a.priority} · Due: ${a.due}`,
-      _actionId:a.id,
-      // Store action data for report generation
-      _action:{description:a.description,owner:a.owner,priority:a.priority,due:a.due,closedDate:a.closedDate,property:a.property},
-    });
+    // v51j — the Documents write here used to fall back to a fabricated
+    // doc_ca_ id on failure and still claim "archived to Documents" in the
+    // final toast, so a failed archive looked identical to a successful
+    // one. The Action Item itself is already closed by this point (updated
+    // above), so this only tracks whether the Closed Actions Report doc
+    // write specifically succeeded, to keep the toast honest.
+    var _archiveDocFailed=!res?.records?.[0]?.id;
+    if(_archiveDocFailed){
+      console.error('closeAction: Documents archive write failed',res);
+    }else{
+      if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
+      window.DOCUMENTS_LIVE.push({
+        id:res.records[0].id,
+        name:docName,property:a.property,
+        type:'Closed Actions Report',subfolder:'Closed Actions',
+        visibility:'Public',uploaded:a.closedDate,
+        uploadedBy:a.owner||'PM',
+        notes:`Owner: ${escHtml(a.owner)} · Priority: ${a.priority} · Due: ${a.due}`,
+        _actionId:a.id,
+        // Store action data for report generation
+        _action:{description:a.description,owner:a.owner,priority:a.priority,due:a.due,closedDate:a.closedDate,property:a.property},
+      });
+    }
   }
   if(currentProp)renderPropMeetings(currentProp);
   renderAllMeetings();
   refreshDashActions();
   renderDocFolders();
-  showToast('Action closed — archived to Documents · Closed Actions','success');
+  if(typeof _archiveDocFailed!=='undefined'&&_archiveDocFailed){
+    showToast('Action closed, but the Documents archive entry failed to save. Check your connection.','error');
+  }else{
+    showToast('Action closed — archived to Documents · Closed Actions','success');
+  }
 }
 
 // DOWNLOAD HELPERS
@@ -10437,19 +10745,35 @@ async function saveBidSubmissionForm(asDraft){
       await atDelete('Bid Unit Detail',old.id);
     }
   }
+  // v51j — neither loop below checked the atCreate result, so a bid could
+  // be marked Submitted/saved while some or all of its line items or unit
+  // detail rows silently failed to write, an incomplete bid nobody could
+  // see was incomplete. Now counts failures and reports them instead of an
+  // unconditional success toast.
+  let lineItemFailCount=0;
   for(const item of bidFormLineItems){
-    await atCreate('Bid Line Items',{...item,'Bid Submission':[submissionId]});
+    const liRes=await atCreate('Bid Line Items',{...item,'Bid Submission':[submissionId]});
+    if(!liRes?.records?.[0]?.id)lineItemFailCount++;
   }
+  let unitDetailFailCount=0;
   for(const u of bidFormUnitDetail){
     if(u.unitPrice==null&&u.outOfServiceWeeks==null)continue; // skip units the PM left entirely blank
     const unitFields={'Bid Submission':[submissionId],'Unit Name':u.unitName};
     if(u.unitPrice!=null)unitFields['Unit Price']=u.unitPrice;
     if(u.outOfServiceWeeks!=null)unitFields['Out-of-Service Weeks']=u.outOfServiceWeeks;
-    await atCreate('Bid Unit Detail',unitFields);
+    const udRes=await atCreate('Bid Unit Detail',unitFields);
+    if(!udRes?.records?.[0]?.id)unitDetailFailCount++;
   }
 
   document.getElementById('bid-submission-overlay')?.remove();
-  showToast(asDraft?'Draft saved':'Bid submitted','success');
+  if(lineItemFailCount>0||unitDetailFailCount>0){
+    const parts=[];
+    if(lineItemFailCount>0)parts.push(`${lineItemFailCount} line item${lineItemFailCount>1?'s':''}`);
+    if(unitDetailFailCount>0)parts.push(`${unitDetailFailCount} unit detail row${unitDetailFailCount>1?'s':''}`);
+    showToast(`Bid saved, but ${parts.join(' and ')} failed to save. Check your connection and try re-saving.`,'error');
+  }else{
+    showToast(asDraft?'Draft saved':'Bid submitted','success');
+  }
   await renderBidsTab(currentProp);
 }
 
@@ -11240,8 +11564,12 @@ function renderBudgetTab(p){
 }
 
 
-function renderHealthBadge(propName){
-  const status=derivePropertyStatusFromPhases(propName);
+// v51k — status-string-to-badge-markup map factored out of renderHealthBadge
+// so Portfolio View's new per-project Health column (fed by
+// deriveScopeHealth, not the property-wide derivePropertyStatusFromPhases)
+// can render the exact same badge styling from the same status vocabulary
+// without duplicating the map.
+function renderScopeHealthBadge(status){
   const map={
     'At Risk':`<span class="badge b-health-atrisk">At Risk</span>`,
     'In Progress':`<span class="badge b-health-ontrack">On Track</span>`,
@@ -11251,12 +11579,20 @@ function renderHealthBadge(propName){
   };
   return map[status]||map['Not Started'];
 }
+function renderHealthBadge(propName){
+  const status=derivePropertyStatusFromPhases(propName);
+  return renderScopeHealthBadge(status);
+}
 
 function renderStatusBadge(st){
+  // v51k — Property Status column is cosmetic-only: In Progress and Planned
+  // now render the same visible "Active" badge text. p.st itself is
+  // untouched everywhere else (still 'In Progress'/'Planned' under the
+  // hood) — this only changes what label this badge shows.
   const map={
-    'In Progress':`<span class="badge b-nip" style="font-size:9px;padding:1px 6px">In Progress</span>`,
+    'In Progress':`<span class="badge b-nip" style="font-size:9px;padding:1px 6px">Active</span>`,
     'Complete':`<span class="badge b-done" style="font-size:9px;padding:1px 6px">Complete</span>`,
-    'Planned':`<span class="badge b-vda" style="font-size:9px;padding:1px 6px">Planned</span>`,
+    'Planned':`<span class="badge b-vda" style="font-size:9px;padding:1px 6px">Active</span>`,
   };
   return map[st]||`<span class="badge b-nac" style="font-size:9px;padding:1px 6px">${st||'—'}</span>`;
 }
@@ -11321,6 +11657,38 @@ function derivePropertyStatusFromPhases(propName){
   }
   const phaseStatuses=phases.map(ph=>{
     const fromSteps=derivePhaseStatusFromSteps(propName,ph.phase);
+    return fromSteps||ph.status||'Not Started';
+  });
+  if(phaseStatuses.every(s=>s==='Complete'))return'Complete';
+  if(phaseStatuses.some(s=>s==='Behind')||anyMilestoneAtRisk)return'At Risk';
+  if(phaseStatuses.some(s=>s==='In Progress'||s==='Ahead'))return'In Progress';
+  return'Not Started';
+}
+// v51k — deriveScopeHealth(). Same signal sources and same output values
+// (At Risk / In Progress / Ahead / Complete / Not Started) as
+// derivePropertyStatusFromPhases above, but scoped to one Scope's own
+// milestones and phases instead of pooling every Scope on the property.
+// Built as its own function rather than adding an optional scopeId
+// parameter to derivePropertyStatusFromPhases, since that function's
+// property-wide callers (the Dashboard heat map, the printed report)
+// deliberately want the blended view and shouldn't have their behavior
+// perturbed by a refactor here. Uses derivePhaseStatusFromSteps' existing
+// phaseId disambiguation (already present, just never exercised by any
+// property-wide caller) so two Scopes with a same-named phase, e.g. both
+// called "Phase 1", don't cross-contaminate each other's health.
+function deriveScopeHealth(scope){
+  if(!scope)return'Not Started';
+  if(scope.status==='Complete')return'Complete';
+  if(scope.status!=='In Progress'&&scope.status!=='On Hold')return'Not Started';
+  const scopeMilestones=(window.MILESTONES||[]).filter(m=>m.property===scope.property&&m.scopeId===scope.id);
+  const anyMilestoneAtRisk=scopeMilestones.some(m=>m.status==='At Risk');
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===scope.property&&u.scopeId===scope.id);
+  if(phases.length===0){
+    if(anyMilestoneAtRisk)return'At Risk';
+    return'In Progress';
+  }
+  const phaseStatuses=phases.map(ph=>{
+    const fromSteps=derivePhaseStatusFromSteps(scope.property,ph.phase,ph.id);
     return fromSteps||ph.status||'Not Started';
   });
   if(phaseStatuses.every(s=>s==='Complete'))return'Complete';
@@ -11395,43 +11763,67 @@ function getProjectDates(propName){
 }
 // v51f — deriveAndWriteScopeDates(). A Scope's Planned Start/Target
 // Completion used to be static, entered once at project creation and
-// never revisited. Per Misty's direct call: once a Scope has Unit Phases
-// with real dates, those phase dates should drive the Scope's own
-// effective date range instead, and the Scope should also carry real
-// Actual Start/Actual Completion for on-time delivery measurement,
-// mirroring what Unit Groups already tracks per phase.
-//   Planned Start = earliest Planned Start across the Scope's own Unit
-//     Group phases that have one.
-//   Target Completion = latest Planned Completion across those phases.
-//   Actual Start = earliest Actual Start across those phases.
-//   Actual Completion = latest Actual Completion across those phases,
-//     but ONLY once every phase belonging to this Scope is Complete —
-//     a partial Actual Completion would misrepresent an in-progress
-//     project as finished early.
-// A Scope with zero dated phases is left untouched (no phases yet, or
-// no phase has a date), so a brand-new Scope's originally-entered
-// Planned Start/Target Completion (or blank) survives exactly as before
-// until real phase dates exist to supersede it. Called after every
-// Unit Group save (saveNewPhase, saveEditPhase) for that phase's parent
-// Scope. No-ops in demo mode, same convention as every other write path.
+// never revisited.
+// v51l — reworked per Misty's direct call. Unit Phases only cover the
+// construction window, so deriving Start/Completion from phases alone
+// missed the pre-construction lead time (Modernization Survey, Technical
+// Spec, RFP/Bid, Contract Award all happen before any phase exists) and
+// the post-construction closeout tail (Punch Lists, Inspections, Owner
+// Acceptance, Closeout Documentation all happen after phases finish).
+// Milestones are now the primary source, phases are a fallback only for
+// the Completion pair, not the primary source, and not used for Start at
+// all:
+//   Planned Start = M1 (Modernization Survey)'s Planned Date. M1 and M2
+//     are both always-manual "calendar" milestones per MILESTONE_DERIVATION
+//     (never phase-derived, override toggle or not), so M1 is the earliest
+//     real activity on a project with no ambiguity about which milestone
+//     to use. No phase fallback, a Scope with M1 undated keeps whatever
+//     Planned Start it already had (usually the value entered at project
+//     creation).
+//   Target Completion = M14 (Closeout Documentation)'s Planned Date once
+//     it exists. M14 is also always-manual and typically doesn't get a
+//     real date until very late (it's the closeout paperwork milestone),
+//     so until M14 is dated this falls back to the latest Planned
+//     Completion across the Scope's own Unit Phases, same logic v51f
+//     originally used, so Target Completion is never blank or stale for
+//     most of an active project's life.
+//   Actual Start = M1's Actual Date once M1 is marked Complete with one.
+//     Same no-fallback reasoning as Planned Start.
+//   Actual Completion = M14's Actual Date once M14 is Complete with one,
+//     otherwise falls back to the latest Actual Completion across the
+//     Scope's phases, but ONLY once every phase belonging to this Scope
+//     is Complete, a partial Actual Completion would misrepresent an
+//     in-progress project as finished early (same guard v51f had).
+// Called after every Unit Group save (saveNewPhase, saveEditPhase, for
+// the Target/Actual Completion fallback) AND after M1 or M14's own dates
+// change (updateMilestone, since those two milestones now directly drive
+// Start/Completion and nothing else currently re-derives on a milestone
+// date edit). No-ops in demo mode, same convention as every other write
+// path.
 async function deriveAndWriteScopeDates(scopeId){
   if(!scopeId||demoMode)return;
   const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
   if(!sc)return;
-  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.scopeId===scopeId);
-  if(phases.length===0)return;
   const toTime=d=>d?new Date(d+'T12:00:00').getTime():null;
-  const plannedStarts=phases.map(p=>toTime(p.plannedStart)).filter(Boolean);
-  const plannedEnds=phases.map(p=>toTime(p.plannedCompletion)).filter(Boolean);
-  const actualStarts=phases.map(p=>toTime(p.actualStart)).filter(Boolean);
-  const allComplete=phases.every(p=>p.status==='Complete');
-  const actualEnds=allComplete?phases.map(p=>toTime(p.actualCompletion)).filter(Boolean):[];
-  if(plannedStarts.length===0&&plannedEnds.length===0&&actualStarts.length===0&&actualEnds.length===0)return;
   const toIso=t=>t?new Date(t).toISOString().split('T')[0]:null;
-  const newPlannedStart=plannedStarts.length>0?toIso(Math.min(...plannedStarts)):sc.plannedStart||null;
-  const newTargetCompletion=plannedEnds.length>0?toIso(Math.max(...plannedEnds)):sc.targetCompletion||null;
-  const newActualStart=actualStarts.length>0?toIso(Math.min(...actualStarts)):sc.actualStart||null;
-  const newActualCompletion=actualEnds.length>0?toIso(Math.max(...actualEnds)):sc.actualCompletion||null;
+  const scopeMilestones=(window.MILESTONES||[]).filter(m=>m.scopeId===scopeId);
+  const m1=scopeMilestones.find(m=>m.milestoneNumber===1);
+  const m14=scopeMilestones.find(m=>m.milestoneNumber===14);
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.scopeId===scopeId);
+  const phasePlannedEnds=phases.map(p=>toTime(p.plannedCompletion)).filter(Boolean);
+  const allPhasesComplete=phases.length>0&&phases.every(p=>p.status==='Complete');
+  const phaseActualEnds=allPhasesComplete?phases.map(p=>toTime(p.actualCompletion)).filter(Boolean):[];
+  const newPlannedStart=m1?.plannedDate||sc.plannedStart||null;
+  const newTargetCompletion=m14?.plannedDate
+    ||(phasePlannedEnds.length>0?toIso(Math.max(...phasePlannedEnds)):sc.targetCompletion||null);
+  const newActualStart=(m1?.status==='Complete'&&m1?.actualDate)?m1.actualDate:(sc.actualStart||null);
+  const newActualCompletion=(m14?.status==='Complete'&&m14?.actualDate)?m14.actualDate
+    :(phaseActualEnds.length>0?toIso(Math.max(...phaseActualEnds)):sc.actualCompletion||null);
+  const nothingChanged=newPlannedStart===(sc.plannedStart||null)
+    &&newTargetCompletion===(sc.targetCompletion||null)
+    &&newActualStart===(sc.actualStart||null)
+    &&newActualCompletion===(sc.actualCompletion||null);
+  if(nothingChanged)return;
   sc.plannedStart=newPlannedStart||'';
   sc.targetCompletion=newTargetCompletion||'';
   sc.actualStart=newActualStart||'';
@@ -11440,13 +11832,11 @@ async function deriveAndWriteScopeDates(scopeId){
   // by) previously stayed a manually-set field, independent of the date
   // fields above, so Capital Plan and Budget Outlook could silently show
   // a project under two different years once Unit Phases existed. Per
-  // Misty's direct decision, it now derives the same way as Planned
-  // Start: the year of the earliest dated phase (plannedStarts.length>0
-  // is the same condition gating newPlannedStart, so the two stay
-  // permanently in lockstep). Only updates once a phase actually has a
-  // date; a Scope with zero dated phases keeps its existing Year/Budget
-  // Cycle untouched, same no-op behavior as the other derived fields.
-  const newYear=plannedStarts.length>0?new Date(Math.min(...plannedStarts)).getFullYear():null;
+  // Misty's direct decision, it derives the same way as Planned Start.
+  // v51l — now keyed off the same M1-first Planned Start this function
+  // already computed above, rather than re-deriving separately from phase
+  // dates, so the two can never drift apart from each other.
+  const newYear=newPlannedStart?new Date(newPlannedStart+'T12:00:00').getFullYear():null;
   if(newYear!=null)sc.year=newYear;
   await atUpdate('Scopes',scopeId,{
     'Planned Start':newPlannedStart,
@@ -11911,6 +12301,7 @@ async function saveStepDates(phaseId){
     }
   }
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
+  let stepSaveFailCount=0;
   for(const row of rows){
     const stepName=row.dataset.stepName||row.dataset.taskName;
     const existingId=row.dataset.stepId||'';
@@ -11929,6 +12320,14 @@ async function saveStepDates(phaseId){
       if(ex)Object.assign(ex,{plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',completionDate:actualEnd||'',status,taskOrder:stepOrder,checked,notes});
     } else {
       const res=demoMode?null:await atCreate('Phase Tasks',fields);
+      // v51j — new task rows were pushed into PHASE_STEPS with a fabricated
+      // step_ id whenever the Airtable write failed, so a failed save looked
+      // identical to a successful one and the final "Tasks saved" toast
+      // fired unconditionally either way. Now counts failures per row.
+      if(!demoMode&&!res?.records?.[0]?.id){
+        stepSaveFailCount++;
+        continue;
+      }
       const newId=res?.records?.[0]?.id||'step_'+Date.now()+'_'+stepOrder;
       window.PHASE_STEPS.push({id:newId,property:propName,phaseName,taskName:stepName,taskOrder:stepOrder,plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',completionDate:actualEnd||'',status,notes,checked});
     }
@@ -11936,7 +12335,11 @@ async function saveStepDates(phaseId){
   document.getElementById('step-dates-overlay')?.remove();
   if(currentProp)renderPhasesTab(currentProp);
   await checkMilestoneTriggers(propName);
-  showToast('Tasks saved','success');
+  if(stepSaveFailCount>0){
+    showToast(`Tasks saved, but ${stepSaveFailCount} task${stepSaveFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
+  }else{
+    showToast('Tasks saved','success');
+  }
 }
 function togglePhaseCard(cardId){
   const card=document.getElementById(cardId);if(!card)return;
@@ -11973,7 +12376,15 @@ async function saveBillingEntry(){
   };
   if(scopeId)fields['Linked Scope']=[scopeId];
   const res=await atCreate('Billing Log',fields);
-  const newEntry={id:res?.records?.[0]?.id||'bl-'+Date.now(),property:currentProp.n,scopeId,billedYTD:ytd,entryDate:date,notes,loggedBy};
+  // v51j — this used to fabricate a local bl- id and show "Billing entry
+  // saved" even if the Airtable write failed, so a failed billing entry
+  // looked identical to a successful one. Now aborts with a real error and
+  // leaves the form open so the entered amount isn't lost.
+  if(!res?.records?.[0]?.id){
+    showToast('Could not save billing entry to Airtable. Check your connection and try again.','error');
+    return;
+  }
+  const newEntry={id:res.records[0].id,property:currentProp.n,scopeId,billedYTD:ytd,entryDate:date,notes,loggedBy};
   window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
   document.getElementById('billing-entry-form').style.display='none';
   document.getElementById('billing-ytd-input').value='';
@@ -12049,6 +12460,14 @@ async function saveRetainageRelease(){
     };
     if(scopeId)retFields['Linked Scope']=[scopeId];
     const res=demoMode?null:await atCreate('Retainage Releases',retFields);
+    // v51j — a failed Airtable write here still fabricated a local rr- id
+    // and pushed it into RETAINAGE_RELEASES with a "logged" success toast,
+    // so a retainage release that never reached Airtable looked the same
+    // as one that did. Now aborts with a real error instead.
+    if(!demoMode&&!res?.records?.[0]?.id){
+      showToast('Could not save retainage release to Airtable. Check your connection and try again.','error');
+      return;
+    }
     const newEntry={id:res?.records?.[0]?.id||'rr-'+Date.now(),property:currentProp.n,scopeId,amountReleased:amount,releaseDate:date,notes,loggedBy};
     window.RETAINAGE_RELEASES=(window.RETAINAGE_RELEASES||[]).concat([newEntry]);
     showToast('Retainage release logged','success');
@@ -12356,7 +12775,17 @@ async function saveNewPhase(){
   };
   if(scopeId)ugFields['Linked Scope']=[scopeId];
   const res=await atCreate('Unit Groups',ugFields);
-  const newPhaseId=res?.records?.[0]?.id||'ug-'+Date.now();
+  // v51j — this used to fabricate a local ug- id and continue unconditionally
+  // (reclaiming units from other phases, writing Phase Tasks, showing "Phase
+  // added") even if the Unit Groups write itself failed, so a phase that
+  // never reached Airtable looked identical to one that did. Now aborts here
+  // so nothing downstream (unit reclaiming, tasks, scope dates) runs against
+  // a phase that doesn't really exist.
+  if(!res?.records?.[0]?.id){
+    showToast('Could not save phase to Airtable. Check your connection and try again.','error');
+    return;
+  }
+  const newPhaseId=res.records[0].id;
   const newPhase={
     id:newPhaseId,
     property:currentProp.n,scopeId:scopeId||'',phase:name,units,
@@ -12389,7 +12818,14 @@ async function saveNewPhase(){
   // every phase creation just to add dates. Now each selected task inherits
   // the phase's own Planned Start/Planned Completion as a starting point,
   // refined later in Edit Tasks as construction reality diverges.
-  selectedMs.forEach((taskName,i)=>{
+  // v51j — this loop called atCreate('Phase Tasks',...) with no await and
+  // never captured the result, true fire-and-forget: a failed write was
+  // invisible, the local PHASE_STEPS entry was pushed regardless, and
+  // nothing downstream ever knew a task failed to reach Airtable. Now
+  // awaited and checked, with a fail count folded into the final toast.
+  let phaseTaskFailCount=0;
+  for(let i=0;i<selectedMs.length;i++){
+    const taskName=selectedMs[i];
     const localId='pts-'+Date.now()+'-'+i;
     window.PHASE_STEPS.push({
       id:localId,
@@ -12414,9 +12850,10 @@ async function saveNewPhase(){
         'Status':'Not Started',
       };
       if(scopeId)taskFields['Linked Scope']=[scopeId];
-      atCreate('Phase Tasks',taskFields);
+      const taskRes=await atCreate('Phase Tasks',taskFields);
+      if(!taskRes?.records?.[0]?.id)phaseTaskFailCount++;
     }
-  });
+  }
   document.getElementById('add-phase-form').style.display='none';
   ['phase-description-input','phase-units-input','phase-planned-start','phase-planned-end'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('phase-product-type').value='';
@@ -12427,6 +12864,7 @@ async function saveNewPhase(){
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
   if(demoMode){showToast('Phase added — Demo mode: changes reset on logout','info');}
+  else if(phaseTaskFailCount>0){showToast(`Phase added, but ${phaseTaskFailCount} task${phaseTaskFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');}
   else{showToast('Phase added','success');}
 
 }
@@ -12876,7 +13314,15 @@ async function saveBillingModal(){
           'Logged By':'PM User',
         });
         console.log('Billing Log create result:',JSON.stringify(res)?.slice(0,200));
-        newEntry.id=res?.records?.[0]?.id||newEntry.id;
+        // v51j — this logged the result but never actually checked it, the
+        // fallback newEntry.id (a fabricated bl- id) let the function push a
+        // local entry and show "Billing entry saved" even if the Airtable
+        // write failed. Now aborts here instead of continuing on a fake id.
+        if(!res?.records?.[0]?.id){
+          showToast('Could not save billing entry to Airtable. Check your connection and try again.','error');
+          return;
+        }
+        newEntry.id=res.records[0].id;
       }
       window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
       showToast('Billing entry saved','success');
@@ -12968,14 +13414,32 @@ function cfGetFiltered(){
     if(CF.ec&&p.ec!==CF.ec)return false;
     if(CF.state&&p.s!==CF.state)return false;
     if(CF.consultant&&!propertyHasConsultant(p.n,CF.consultant))return false;
+    // v51l — CF.health and CF.mscat used to test only the property's one
+    // blended value (derivePropertyStatusFromPhases / getMilestoneCategoryForProp),
+    // pooling every Scope on the property. Since v51k the Active Projects
+    // by Stage and Elevator Company Performance charts bucket by individual
+    // Scope instead, so a property could pass this gate on its blended
+    // value while none of its actual Scopes matched once exploded, or fail
+    // this gate while a Scope that would show up on those charts did
+    // match. Both checks now test "does at least one of this property's
+    // own non-Capital-Plan Scopes match the selected filter" instead,
+    // consistent with how the Scope-aware charts already think. Slightly
+    // loosens which properties pass compared to the old single-blended-
+    // value test, an "any Scope matches" test is broader by nature, but
+    // keeps this property-level gate from silently disagreeing with what
+    // the charts built on top of it actually show.
+    const propScopesForFilter=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan');
     if(CF.health){
-      const h=derivePropertyStatusFromPhases(p.n);
-      const hLabel=h==='In Progress'?'On Track':h||'Not Started';
-      if(hLabel!==CF.health)return false;
+      const anyHealthMatch=propScopesForFilter.some(s=>{
+        const h=deriveScopeHealth(s);
+        const hLabel=h==='In Progress'?'On Track':h||'Not Started';
+        return hLabel===CF.health;
+      });
+      if(!anyHealthMatch)return false;
     }
     if(CF.mscat){
-      const cat=getMilestoneCategoryForProp(p.n);
-      if(cat!==CF.mscat)return false;
+      const anyStageMatch=propScopesForFilter.some(s=>getMilestoneCategoryForScope(s)===CF.mscat);
+      if(!anyStageMatch)return false;
     }
     if(CF.priority&&!(p.priority||'').startsWith(CF.priority.charAt(0)))return false;
     return true;
@@ -13088,6 +13552,28 @@ function getMilestoneCategoryForProp(propName){
   const ms=getMilestonesForProp(propName);
   const complete=ms.filter(m=>m.status==='Complete').length;
   const expectedTotal=getMsExpectedTotal(propName);
+  if(complete>=expectedTotal)return'Complete';
+  if(complete>=Math.ceil((12/18)*expectedTotal))return'Project Closeout';
+  if(complete>=Math.ceil((4/18)*expectedTotal))return'Construction';
+  return'Pre-Construction';
+}
+// v51k — per-Scope version of getMilestoneCategoryForProp above. That
+// function pools every Scope on a property into one blended percentage
+// (via getMsExpectedTotal's 14*scopeCount denominator), so a property
+// with one finished Scope and one not-yet-started Scope shows as a single
+// smeared "Construction" stage instead of two Scopes at two different
+// real stages. This version takes one Scope directly and reuses
+// getMilestonesForProp's existing scopeId-filtered path, which already
+// always returns exactly 14 slots for one Scope, so no expectedTotal
+// multiplication is needed here. Used by the Analytics stage/elevator-
+// company charts and Portfolio View's Current Phase column, all of which
+// need genuine per-project granularity, not the property-wide blend.
+function getMilestoneCategoryForScope(scope){
+  if(!scope)return'Pre-Construction';
+  if(scope.status==='Complete')return'Complete';
+  const ms=getMilestonesForProp(scope.property,scope.id);
+  const complete=ms.filter(m=>m.status==='Complete').length;
+  const expectedTotal=MILESTONES_DEF.length;
   if(complete>=expectedTotal)return'Complete';
   if(complete>=Math.ceil((12/18)*expectedTotal))return'Project Closeout';
   if(complete>=Math.ceil((4/18)*expectedTotal))return'Construction';
@@ -13397,6 +13883,34 @@ function getCompletedScopes(){
 // "split" between active construction and pending pipeline work.
 function isRealActiveScopeStatus(status){
   return status==='Planned'||status==='In Progress'||status==='On Hold';
+}
+// v51k — getCurrentProjectForProperty(). A property can carry several
+// Scopes at once (a mod survey/CapEx plan spawns all of them together,
+// so they often share the same early planning milestones), but only one
+// is usually actually under construction at a time, urgency-sequenced by
+// unit condition per Misty's direct explanation. "Current Project" is
+// whichever non-Complete Scope has broken furthest into that sequence,
+// Construction/Project Closeout outranks Pre-Construction, ties broken
+// by earliest Planned/Actual Start (falling back to Year/Budget Cycle
+// when both dates are blank, since a newly graduated Scope often has no
+// phase dates yet). Capital Plan Scopes are excluded, they haven't
+// graduated into real execution yet. Returns null if the property has no
+// eligible Scope (nothing graduated, or everything already Complete).
+const _CURRENT_PROJECT_STAGE_RANK={'Construction':2,'Project Closeout':2,'Pre-Construction':1};
+function getCurrentProjectForProperty(propName){
+  const candidates=(window.SCOPES||[]).filter(s=>s.property===propName&&s.status!=='Capital Plan'&&s.status!=='Complete');
+  if(candidates.length===0)return null;
+  if(candidates.length===1)return candidates[0];
+  const scored=candidates.map(s=>({
+    scope:s,
+    rank:_CURRENT_PROJECT_STAGE_RANK[getMilestoneCategoryForScope(s)]||0,
+    startKey:s.actualStart||s.plannedStart||(s.year!=null?`${s.year}-01-01`:'9999-12-31'),
+  }));
+  scored.sort((a,b)=>{
+    if(b.rank!==a.rank)return b.rank-a.rank;
+    return a.startKey<b.startKey?-1:a.startKey>b.startKey?1:0;
+  });
+  return scored[0].scope;
 }
 // v35i — unitLifecycleBucket(). Single shared classifier for "what
 // lifecycle bucket is this Unit Inventory List row in," built after
@@ -14029,18 +14543,39 @@ async function npCreateUnitsFromCounts(propName,propId){
   let nextNum=(existingNums.length?Math.max(...existingNums):0)+1;
   let tbdScope=findScopeForYearKey(propName,'TBD');
   const created=[];
+  // v51j — a failed Airtable write here used to fall back to a fabricated
+  // demo_unit_ id and get pushed into UNIT_INVENTORY exactly like a real
+  // unit, then the caller (npCreateUnitInventory) unconditionally showed
+  // "Units created". Now skips adding a unit that failed to write and
+  // tracks a fail count so the caller can report it honestly.
+  npCreateUnitsFromCounts._failCount=0;
   for(const [,count,unitType] of typeMap){
     for(let i=0;i<(count||0);i++){
       const fields={'Unit Name':`Unit ${nextNum}`,'Property Name':propertyNameToLink(propName),'Unit Type':unitType};
       let newId='demo_unit_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
       if(!demoMode){
         const res=await atCreate('Unit Inventory List',fields);
-        newId=res?.records?.[0]?.id||newId;
+        if(!res?.records?.[0]?.id){
+          npCreateUnitsFromCounts._failCount++;
+          nextNum++;
+          continue;
+        }
+        newId=res.records[0].id;
       }
       const newUnit={id:newId,name:`Unit ${nextNum}`,property:propName,scopeId:'',deviceLocation:'',unitType,priority:null,status:'',capexYear:'',vdaRecYear:'',elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,clientBudget:0};
       window.UNIT_INVENTORY=(window.UNIT_INVENTORY||[]).concat([newUnit]);
       if(!tbdScope&&propId)tbdScope=await createScopeForYearKey(propName,propId,'TBD');
-      if(tbdScope)await linkUnitToScope(newUnit,tbdScope);
+      // v51k — createScopeForYearKey always returns a truthy object even
+      // when its Airtable write fails (client-only id prefixed
+      // 'demo_sc_'), so the old `if(tbdScope)` check here always passed
+      // and silently linked new units to a Scope that only exists in this
+      // browser tab. Skip linking (unit itself was already created
+      // successfully above) and count it as a scope-link failure instead.
+      if(tbdScope&&!(tbdScope.id||'').startsWith('demo_sc_')){
+        await linkUnitToScope(newUnit,tbdScope);
+      }else if(tbdScope){
+        npCreateUnitsFromCounts._scopeLinkFailCount=(npCreateUnitsFromCounts._scopeLinkFailCount||0)+1;
+      }
       created.push(newUnit);
       nextNum++;
     }
@@ -14066,7 +14601,14 @@ async function npCreateUnitInventory(){
   }
   showToast(`Creating ${totalCount} unit${totalCount===1?'':'s'}...`,'info');
   await npCreateUnitsFromCounts(propObj.n,propObj.id);
-  showToast('Units created','success');
+  // v51j — see npCreateUnitsFromCounts: report if any units silently failed
+  // to write instead of always claiming full success.
+  const _failCount=npCreateUnitsFromCounts._failCount||0;
+  if(_failCount>0){
+    showToast(`${totalCount-_failCount} of ${totalCount} units created, ${_failCount} failed. Check your connection and try again.`,'error');
+  }else{
+    showToast('Units created','success');
+  }
   openUnitInventoryManager(propObj.n);
 }
 window.npCreateUnitInventory=npCreateUnitInventory;
@@ -14232,6 +14774,13 @@ async function saveSetUpProjects(){
   const prop=(window.PORTFOLIO||[]).find(p=>p.id===supPropId||p.n===supPropName);
   if(!prop){showToast('Property not found','error');return;}
 
+  // v51j — a failed Scopes create used to fall back to a fabricated
+  // demo_sc_ id and get pushed into window.SCOPES exactly like a real
+  // project, so a project that never reached Airtable looked identical to
+  // one that did (and the unit-linking reconciliation below would then
+  // silently attach real units to a scope that doesn't exist in Airtable).
+  // Now skips projects that failed to save and counts them.
+  let scopeSaveFailCount=0;
   for(const r of rows){
     const fields={
       'Scope Name':r.name,
@@ -14250,7 +14799,12 @@ async function saveSetUpProjects(){
       let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
       if(!demoMode){
         const res=await atCreate('Scopes',createFields);
-        newId=res?.records?.[0]?.id||newId;
+        if(!res?.records?.[0]?.id){
+          scopeSaveFailCount++;
+          r.scopeId='';
+          continue;
+        }
+        newId=res.records[0].id;
       }
       scopeId=newId;
       window.SCOPES=(window.SCOPES||[]).concat([{
@@ -14301,7 +14855,11 @@ async function saveSetUpProjects(){
   closeNewPropertyPanel();
   npUnitCounts={elevators:0,escalators:0,lifts:0,other:0};
   renderCapitalPlan();
-  showToast('Projects saved','success');
+  if(scopeSaveFailCount>0){
+    showToast(`${rows.length-scopeSaveFailCount} of ${rows.length} projects saved, ${scopeSaveFailCount} failed. Check your connection and try again.`,'error');
+  }else{
+    showToast('Projects saved','success');
+  }
 }
 window.saveSetUpProjects=saveSetUpProjects;
 
@@ -15931,6 +16489,7 @@ async function saveCapitalPlanEntry(skipClose){
   }
 
   let atId=editId||null;
+  let defaultScopeFailed=false;
   // v30e: write Date Added on new property creation
   const todayIso=new Date().toISOString().split('T')[0];
   if(!demoMode){
@@ -15968,6 +16527,15 @@ async function saveCapitalPlanEntry(skipClose){
     } else {
       const res=await atCreate('Properties',fields);
       atId=res?.records?.[0]?.id||null;
+      // v51j — this used to fall through to the default-Scope creation and
+      // local PORTFOLIO push below unconditionally, even when the Properties
+      // write itself failed (atId stayed null), so a brand-new property
+      // that never reached Airtable still showed up in the Capital Plan
+      // table with a success toast. Now aborts here.
+      if(!atId){
+        showToast('Could not save property to Airtable. Check your connection and try again.','error');
+        return;
+      }
       // v28a — auto-create default Scope (continuity brief 1L). Every new
       // property gets one Scope named "Property Modernization" at the same
       // budget/year/priority entered on this form, so there is never a
@@ -15995,7 +16563,14 @@ async function saveCapitalPlanEntry(skipClose){
             budgetStatus,priority,status:'Capital Plan',
           }]);
         } else {
-          console.warn('[saveCapitalPlanEntry] default Scope creation failed for',name);
+          // v51j — promoted from console.warn to console.error, and now
+          // flagged via defaultScopeFailed so the final toast tells the PM
+          // the property saved but has no default Scope yet (previously
+          // this failure was invisible outside the console, and the
+          // property would silently have no Scope to anchor Milestones/
+          // Phases to until someone noticed).
+          console.error('[saveCapitalPlanEntry] default Scope creation failed for',name);
+          defaultScopeFailed=true;
         }
       }
     }
@@ -16034,7 +16609,11 @@ async function saveCapitalPlanEntry(skipClose){
 
   window.PORTFOLIO=port.sort((a,b)=>a.n.localeCompare(b.n));
   renderCapitalPlan();
-  showToast(editId?`${name} updated`:`${name} added to capital plan`,'success');
+  if(defaultScopeFailed){
+    showToast(`${name} added, but its default Scope failed to save. Use Split into scopes to add one.`,'error');
+  }else{
+    showToast(editId?`${name} updated`:`${name} added to capital plan`,'success');
+  }
   if(skipClose){
     document.getElementById('np-edit-id').value=propObj.id;
     return propObj;
@@ -16351,6 +16930,12 @@ async function saveSplitIntoScopes(){
   window.SCOPES=(window.SCOPES||[]).filter(s=>s.property!==prop.n||keptIds.has(s.id));
 
   let anyGraduated=false;
+  // v51j — the Scopes create below fell back to a fabricated demo_sc_ id on
+  // failure and kept going (unit-linking reconciliation, milestone
+  // creation, all of it) as if the scope existed in Airtable, then the
+  // final toast unconditionally claimed all rows saved. Now counts
+  // failures so the toast can be honest.
+  let scopeCreateFailCount=0;
   for(const r of rows){
     const fields={
       'Scope Name':r.name,
@@ -16392,7 +16977,12 @@ async function saveSplitIntoScopes(){
       let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
       if(!demoMode){
         const res=await atCreate('Scopes',createFields);
-        newId=res?.records?.[0]?.id||newId;
+        if(!res?.records?.[0]?.id){
+          scopeCreateFailCount++;
+          console.error('saveSplitIntoScopes: Scopes create failed for',r.name);
+        }else{
+          newId=res.records[0].id;
+        }
       }
       scopeId=newId;
       window.SCOPES=(window.SCOPES||[]).concat([{
@@ -16428,7 +17018,17 @@ async function saveSplitIntoScopes(){
             'Planned Date':r.m1date,
             'Status':'Not Started',
           });
-          newM1Id=newMs?.records?.[0]?.id||newM1Id;
+          // v51j — same fabricated-id-on-failure pattern as the Scopes
+          // create above: a failed M1 Milestone write still got a local
+          // ms- id and was treated as graduated (autoPopulateMilestones and
+          // status advancement ran regardless). Counted here so the toast
+          // can flag it instead of claiming a clean save.
+          if(!newMs?.records?.[0]?.id){
+            scopeCreateFailCount++;
+            console.error('saveSplitIntoScopes: M1 Milestone create failed for scope',scopeId);
+          }else{
+            newM1Id=newMs.records[0].id;
+          }
         }
         window.MILESTONES=(window.MILESTONES||[]).concat([{id:newM1Id,property:prop.n,scopeId,milestoneNumber:1,milestoneName:'Modernization Survey',plannedDate:r.m1date,status:'Not Started',actualDate:'',completionDate:'',variance:null,notes:''}]);
       } else if(existingM1.plannedDate!==r.m1date){
@@ -16514,7 +17114,11 @@ async function saveSplitIntoScopes(){
   // v29d Bug 5 fix: re-render Overview tab so scope status pills update immediately
   // after a Mod Survey Date is saved via Manage Scopes / Split into Scopes.
   if(currentProp&&currentProp.n===prop.n){renderPropertyView(currentProp);renderUnitsTab(currentProp);renderEditPropertyUnitStats(currentProp);}
-  showToast(`${rows.length} scope${rows.length===1?'':'s'} saved for ${prop.n}`,'success');
+  if(scopeCreateFailCount>0){
+    showToast(`Scopes saved, but ${scopeCreateFailCount} write${scopeCreateFailCount>1?'s':''} failed (Scope or Milestone). Check your connection and review before continuing.`,'error');
+  }else{
+    showToast(`${rows.length} scope${rows.length===1?'':'s'} saved for ${prop.n}`,'success');
+  }
 }
 
 
@@ -16643,20 +17247,29 @@ function renderCharts(){
   }).sort((a,b)=>b.budget-a.budget).slice(0,12);
 
   // 2. Elevator Company Performance
+  // v51k — switched from one-count-per-property (rolled-up elevator company
+  // list via propertyElevatorCos + property-wide derivePropertyStatusFromPhases)
+  // to one-count-per-Scope: each Scope has exactly one ec field and its own
+  // deriveScopeHealth, so a property with two Scopes on two different
+  // contractors now shows up correctly under both contractors instead of
+  // being smeared into one property-wide bucket. Capital Plan Scopes excluded.
   const elevCoSource=CF.property.length>0?chartFiltered:active.filter(p=>p.st==='In Progress');
   const elevCoMap={};
+  let elevCoTotalScopeCount=0;
+  const elevCoScopes=[];
   elevCoSource.forEach(p=>{
-    const ecList=propertyElevatorCos(p.n);
-    const ecs=ecList.length>0?ecList:['TBD'];
-    const propStatus=derivePropertyStatusFromPhases(p.n);
-    ecs.forEach(ec=>{
-      if(!elevCoMap[ec])elevCoMap[ec]={name:ec,complete:0,onTrack:0,atRisk:0,notStarted:0,total:0};
-      elevCoMap[ec].total++;
-      if(propStatus==='Complete')elevCoMap[ec].complete++;
-      else if(propStatus==='At Risk')elevCoMap[ec].atRisk++;
-      else if(propStatus==='In Progress'||propStatus==='Ahead')elevCoMap[ec].onTrack++;
-      else elevCoMap[ec].notStarted++;
-    });
+    (window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan').forEach(s=>elevCoScopes.push(s));
+  });
+  elevCoScopes.forEach(scope=>{
+    const ec=scope.ec||'TBD';
+    const scopeHealth=deriveScopeHealth(scope);
+    if(!elevCoMap[ec])elevCoMap[ec]={name:ec,complete:0,onTrack:0,atRisk:0,notStarted:0,total:0};
+    elevCoMap[ec].total++;
+    elevCoTotalScopeCount++;
+    if(scopeHealth==='Complete')elevCoMap[ec].complete++;
+    else if(scopeHealth==='At Risk')elevCoMap[ec].atRisk++;
+    else if(scopeHealth==='In Progress'||scopeHealth==='Ahead')elevCoMap[ec].onTrack++;
+    else elevCoMap[ec].notStarted++;
   });
   const elevCoData=Object.values(elevCoMap).sort((a,b)=>{
     if(a.name==='TBD')return 1;if(b.name==='TBD')return -1;
@@ -16664,11 +17277,19 @@ function renderCharts(){
   });
 
   // 3. Active Projects by Milestone Category
+  // v51k — switched from one-count-per-property (getMilestoneCategoryForProp)
+  // to one-count-per-Scope (getMilestoneCategoryForScope), excluding Capital
+  // Plan Scopes the same way Capital Plan properties were already excluded.
+  // A property with two active Scopes now contributes up to two increments.
   const msCatCounts={'Pre-Construction':0,'Construction':0,'Project Closeout':0,'Complete':0};
   const allProps=chartFiltered.filter(p=>p.st!=='Removed');
+  let totalScopeCount=0;
   allProps.forEach(p=>{
-    const cat=getMilestoneCategoryForProp(p.n);
-    if(msCatCounts[cat]!==undefined)msCatCounts[cat]++;
+    const scopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan');
+    scopes.forEach(scope=>{
+      const cat=getMilestoneCategoryForScope(scope);
+      if(msCatCounts[cat]!==undefined){msCatCounts[cat]++;totalScopeCount++;}
+    });
   });
 
   // v42a — Forecasted Completion and Forecasted Spend redesign. Real-world
@@ -17156,6 +17777,7 @@ function renderCharts(){
               }).reverse().join('');
               const ecName=d.name;
               return `<div style="display:flex;flex-direction:column;align-items:center;width:${barW}px;flex-shrink:0;position:relative;z-index:1;cursor:pointer" onclick="showBarDrilldown('ec','${ecName.replace(/'/g,"\'")}')" title="Click to see properties">
+                <div style="font-size:11px;font-weight:700;color:var(--navy);margin-bottom:4px">${d.total}</div>
                 <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;border-radius:4px 4px 0 0;overflow:hidden;border-bottom:2px solid var(--border)">${segments}</div>
               </div>`;
             }).join('')}
@@ -17169,7 +17791,7 @@ function renderCharts(){
       <div style="display:flex;gap:10px;flex-wrap:wrap;padding:10px 4px 0">
         ${Object.entries(statusColors).map(([k,c])=>`<span style="font-size:10px;color:var(--gray-mid);display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:${c};display:inline-block;opacity:.85"></span>${statusLabels[k]}</span>`).join('')}
       </div>
-      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${elevCoSource.length} properties · ${elevCoData.filter(d=>d.name!=='TBD').length} contractor${elevCoData.filter(d=>d.name!=='TBD').length!==1?'s':''}</div>`;
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${elevCoTotalScopeCount} projects · ${elevCoData.filter(d=>d.name!=='TBD').length} contractor${elevCoData.filter(d=>d.name!=='TBD').length!==1?'s':''}</div>`;
   }else if(elevCoChart){
     elevCoChart.innerHTML='<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No contractor data available.</div>';
   }
@@ -17205,7 +17827,7 @@ function renderCharts(){
           <div style="font-size:9px;color:var(--gray-mid);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${cat}">${cat}</div>
         </div>`).join('')}
       </div>
-      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${allProps.length} total properties across all stages</div>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${totalScopeCount} total projects across ${allProps.length} properties</div>
         </div>
       </div>`;
   }
@@ -17584,6 +18206,7 @@ function showBarDrilldown(type,value){
   let props=[];
   let title='';
   let unitRows=null; // v42a — set for unit-level drilldowns (unit-status, fc-month, fs-month), rendered separately from the property-list branches below.
+  let scopeRows=null; // v51k — set for Scope-level drilldowns (ec, stage), one row per {property,scope} pair instead of one row per property.
   if(type==='unit-status'){
     // v42a — Portfolio % Complete ring, unit-based. value is one of
     // complete/active/onhold/pipeline, matching unitLifecycleBucket()'s
@@ -17601,15 +18224,27 @@ function showBarDrilldown(type,value){
     title=`Forecasted Spend ${value} (${monthDetail.length})`;
     unitRows=monthDetail.map(d=>({property:d.property,unitName:d.unitName||(d.isActual?'Actual billed':''),amount:d.amount}));
   } else if(type==='ec'){
-    props=filtered.filter(p=>{
-      const ecList=propertyElevatorCos(p.n);
-      const ecs=ecList.length>0?ecList:['TBD'];
-      return ecs.includes(value);
+    // v51k — switched from one-row-per-property to one-row-per-Scope,
+    // matching the Elevator Company Performance chart's own Scope-based
+    // counting above. Capital Plan Scopes excluded.
+    scopeRows=[];
+    filtered.forEach(p=>{
+      (window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan'&&(s.ec||'TBD')===value).forEach(scope=>{
+        scopeRows.push({property:p.n,scope});
+      });
     });
-    title=`${value} — Properties (${props.length})`;
+    title=`${value} — Projects (${scopeRows.length})`;
   } else if(type==='stage'){
-    props=filtered.filter(p=>getMilestoneCategoryForProp(p.n)===value);
-    title=`${value} Stage — Properties (${props.length})`;
+    // v51k — switched from one-row-per-property (getMilestoneCategoryForProp)
+    // to one-row-per-Scope (getMilestoneCategoryForScope), matching the
+    // Active Projects by Stage chart's own Scope-based counting above.
+    scopeRows=[];
+    filtered.forEach(p=>{
+      (window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan').forEach(scope=>{
+        if(getMilestoneCategoryForScope(scope)===value)scopeRows.push({property:p.n,scope});
+      });
+    });
+    title=`${value} — Projects (${scopeRows.length})`;
   } else if(type==='state'){
     props=filtered.filter(p=>p.s===value);
     title=`${value} — Properties (${props.length})`;
@@ -17653,6 +18288,38 @@ function showBarDrilldown(type,value){
             <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Property</th>
             <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Unit</th>
             <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:right">Amount</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+  }else if(scopeRows!==null){
+    // v51k — Scope-level drilldowns (ec, stage). Different row shape than
+    // the generic property-list branch below: Property | Project | Phase |
+    // Health | Budget, one row per {property,scope} pair.
+    if(scopeRows.length===0){
+      bodyHtml=`<div style="padding:24px;text-align:center;font-size:12px;color:var(--gray-mid)">No projects match this selection.</div>`;
+    }else{
+      const rows=scopeRows.map(r=>{
+        const scope=r.scope;
+        const phase=getMilestoneCategoryForScope(scope);
+        const health=deriveScopeHealth(scope);
+        const healthColor=health==='At Risk'?'var(--red)':health==='Ahead'?'var(--green)':health==='Complete'?'#3DAA7A':'var(--blue-dark)';
+        const budget=scope.plannedBudget||scope.approvedBudget||scope.contractAwardValue||0;
+        return `<tr onclick="document.getElementById('bar-drill-overlay').remove();openProperty('${(r.property||'').replace(/'/g,"\\'")}');gotoView('property',null)" style="cursor:pointer" onmouseover="this.style.background='var(--gray-xpale)'" onmouseout="this.style.background=''">
+        <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${escHtml(r.property||'')}</td>
+        <td style="padding:8px 10px;font-size:11px;color:var(--navy)">${escHtml(scope.name||'—')}</td>
+        <td style="padding:8px 10px;font-size:11px"><span style="background:var(--gray-pale);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;color:var(--gray-mid)">${escHtml(phase)}</span></td>
+        <td style="padding:8px 10px;font-size:11px;font-weight:600;color:${healthColor}">${health==='In Progress'?'On Track':health||'Not Started'}</td>
+        <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--gray-mid)">${budget?fmtBudget(budget):'—'}</td>
+      </tr>`;
+      }).join('');
+      bodyHtml=`<table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--gray-xpale)">
+            <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Property</th>
+            <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Project</th>
+            <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Phase</th>
+            <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Health</th>
+            <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:right">Budget</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`;
@@ -17711,7 +18378,7 @@ function showBarDrilldown(type,value){
       <button onclick="document.getElementById('bar-drill-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px"><i class="ti ti-x"></i></button>
     </div>
     <div style="overflow-y:auto;flex:1">${bodyHtml}</div>
-    <div style="padding:10px 20px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${props.length?'Click any row to open the property':''}</div>
+    <div style="padding:10px 20px;border-top:1px solid var(--border);font-size:11px;color:var(--gray-mid)">${(props.length||(scopeRows&&scopeRows.length))?'Click any row to open the property':''}</div>
   </div>`;
   document.body.appendChild(overlay);
 }
@@ -18443,6 +19110,10 @@ function addCaleditAgendaTopic(val){
 // Returns the refreshed attendee list so the caller can update
 // record.attendees in memory.
 async function syncCaleditAttendees(eventTable,eventRecordId,priorAttendees,currentRows){
+  // v51j — reset before use so a stale count from a previous call can't
+  // leak into this one; saveEditCalEvent reads this right after awaiting
+  // this function to decide whether to warn about a partial attendee sync.
+  syncCaleditAttendees.failCount=0;
   if(demoMode)return priorAttendees;
   const priorIds=new Set((priorAttendees||[]).map(a=>a.id));
   const keptIds=new Set(currentRows.filter(r=>r.attId).map(r=>r.attId));
@@ -18454,14 +19125,20 @@ async function syncCaleditAttendees(eventTable,eventRecordId,priorAttendees,curr
         await atUpdate('Meeting Attendees',row.attId,{'Name':row.name,'Email':row.email,'Role':row.role});
         const prior=(priorAttendees||[]).find(a=>a.id===row.attId);
         refreshed.push({id:row.attId,name:row.name,email:row.email,role:row.role,rsvpStatus:prior?.rsvpStatus||'Pending'});
-      }catch(e){console.error('Attendee update error:',e);}
+      }catch(e){console.error('Attendee update error:',e);syncCaleditAttendees.failCount++;}
     } else if(row.name||row.email){
       try{
         const linkField=eventTable==='Meetings'?'Meeting':'Site Visit';
         const attRes=await atCreate('Meeting Attendees',{[linkField]:[eventRecordId],'Name':row.name,'Email':row.email,'Role':row.role,'RSVP Status':'Pending'});
         const newId=attRes?.records?.[0]?.id;
-        if(newId)refreshed.push({id:newId,name:row.name,email:row.email,role:row.role,rsvpStatus:'Pending'});
-      }catch(e){console.error('Attendee create error:',e);}
+        // v51j — a failed create here was already correctly left out of
+        // refreshed[] (so it wouldn't be treated as a real attendee), but
+        // the failure itself was silently dropped with no signal to the
+        // caller, and the caller's toast said "Meeting/Site visit updated"
+        // either way. Now counted so saveEditCalEvent can warn.
+        if(newId){refreshed.push({id:newId,name:row.name,email:row.email,role:row.role,rsvpStatus:'Pending'});}
+        else{syncCaleditAttendees.failCount++;}
+      }catch(e){console.error('Attendee create error:',e);syncCaleditAttendees.failCount++;}
     }
   }
   for(const removedId of removedIds){
@@ -18505,7 +19182,14 @@ async function saveEditCalEvent(type,id){
   if(currentProp&&currentProp.n===record.property)renderPropertyView(currentProp);
   renderAllSiteVisits();
   renderCalendar();
-  showToast(`${isVisit?'Site visit':'Meeting'} updated`,'success');
+  // v51j — see syncCaleditAttendees: don't let "updated" claim full success
+  // if one or more attendee syncs actually failed.
+  const _attFailCount=syncCaleditAttendees.failCount||0;
+  if(_attFailCount>0){
+    showToast(`${isVisit?'Site visit':'Meeting'} updated, but ${_attFailCount} attendee${_attFailCount>1?'s':''} failed to sync.`,'warn');
+  }else{
+    showToast(`${isVisit?'Site visit':'Meeting'} updated`,'success');
+  }
 }
 function confirmDeleteCalEvent(type,id){
   const isVisit=type==='visit';
@@ -20538,6 +21222,19 @@ async function saveScheduledMeeting(){
   if(!demoMode){
     const res=await atCreate('Meetings',fields);
     atId=res?.records?.[0]?.id||null;
+    // v51j — atCreate returns null on any failure (bad status, network
+    // error, expired session) instead of throwing. This function used to
+    // continue unconditionally after this call: it pushed a local meeting
+    // object, closed the modal, and showed a success toast regardless of
+    // whether atId ended up null, so a failed Airtable write looked
+    // identical to a successful one, meeting logged in the UI, never
+    // written to Airtable, no error anywhere. Confirmed live: a real
+    // meeting vanished this way. Now aborts here with a real error toast
+    // and leaves the modal open so nothing is lost or falsely confirmed.
+    if(!atId){
+      showToast('Could not save meeting to Airtable. Check your connection and try again.','error');
+      return;
+    }
     // Write each attendee as its own Meeting Attendees record, linked
     // back to the Meeting. RSVP Status starts Pending. Once all rows are
     // written, /send-meeting-invites (Worker) fans out one invite email
@@ -20580,6 +21277,12 @@ async function saveScheduledMeeting(){
   document.getElementById('schedule-mtg-overlay')?.remove();
   if(currentProp&&currentProp.n===propName)renderPropertyView(currentProp);
   renderCalendar();
+  // v51j note: attendeeRecordIds.length < attendees.length above means one
+  // or more Meeting Attendees records failed to write, invites for those
+  // specific people were never attempted. Real gap, intentionally left as
+  // a documented follow-up rather than folded into this round, since it
+  // needs a UI decision (which attendees failed, retry affordance) rather
+  // than a one-line guard like the rest of this pass.
   showToast(attendees.length?'Meeting scheduled and invites sent':'Meeting scheduled','success');
 }
 function buildIcsContent(summary,description,location,dateStr,timeStr,tzName,durationMinutes){
@@ -20765,6 +21468,7 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
   attendees=attendees||[];
   const newVisit={id:'v'+Date.now(),property:propName,date,time,tz,consultant,purpose,attendees};
   // Write to Airtable
+  let attendeeSyncFailCount=0;
   if(!demoMode){
     try{
       const res=await atCreate('Site Visits',{
@@ -20773,7 +21477,21 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
         'Consultant':consultant,
         'Purpose':purpose,
       });
-      newVisit.id=res?.records?.[0]?.id||newVisit.id;
+      // v51j — the caller (saveGlobalVisit) already removes the "Add Site
+      // Visit" overlay before calling this function, so that modal-close
+      // can't be undone from here. What this function CAN still control is
+      // whether it fabricates a fake local visit and claims success after
+      // the Airtable write actually failed. Previously it fell back to the
+      // local v+timestamp id and pushed the visit into siteVisits either
+      // way, so a failed save looked identical to a successful one with no
+      // error anywhere. Now it refuses to add the fake record and shows a
+      // real error instead, telling the PM to re-add the visit.
+      if(!res?.records?.[0]?.id){
+        console.error('showVisitForm: Site Visits write failed',res);
+        showToast('Could not save site visit to Airtable. Check your connection and try adding it again.','error');
+        return;
+      }
+      newVisit.id=res.records[0].id;
       newVisit.atId=newVisit.id;
       // v45j — attendees write to the shared Meeting Attendees table via
       // the Site Visit link field (added alongside the existing Meeting
@@ -20792,7 +21510,7 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
             'RSVP Status':'Pending',
           });
           const attId2=attRes?.records?.[0]?.id;
-          if(attId2)attendeeRecordIds.push(attId2);
+          if(attId2){attendeeRecordIds.push(attId2);}else{attendeeSyncFailCount++;}
         }
         if(attendeeRecordIds.length){
           try{
@@ -20804,13 +21522,25 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
           }catch(e){console.error('send-meeting-invites failed:',e);}
         }
       }
-    }catch(e){console.error('Site visit Airtable error:',e);}
+    }catch(e){
+      console.error('Site visit Airtable error:',e);
+      showToast('Could not save site visit to Airtable. Check your connection and try adding it again.','error');
+      return;
+    }
   }
   siteVisits.push(newVisit);
   // Immediately refresh property view if on that property
   if(currentProp&&currentProp.n===propName)renderPropertyView(currentProp);
   renderAllSiteVisits();
   renderCalendar();
+  // v51j — attendeeSyncFailCount was tracked above but never surfaced. The
+  // visit itself saved fine, but silently under-reporting who was actually
+  // invited is its own real gap (see saveScheduledMeeting for the same
+  // documented tradeoff), so this at least tells the PM some invites may be
+  // missing instead of staying quiet about it.
+  if(attendeeSyncFailCount>0){
+    showToast(`Visit saved, but ${attendeeSyncFailCount} attendee${attendeeSyncFailCount>1?'s':''} failed to sync and won't receive an invite.`,'warn');
+  }
   // Send notifications if notify fields provided
   if(notify1||notify2||notifyClient){
     await sendSiteVisitNotifications({propName,date,time,tz,consultant,purpose,notify1:notify1||'',notify2:notify2||'',notifyClient:notifyClient||''});
@@ -21314,6 +22044,48 @@ function fmtShortDate(dateStr){
   const d=new Date(dateStr+'T12:00:00');
   return d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
 }
+// v51k — single shared Portfolio View row template, called by both
+// populatePortfolio() and sortPortfolioByPriority(). Those two functions
+// used to keep their own separate copies of this row markup, which had
+// already drifted (populatePortfolio used the corrected Unit-Inventory-
+// based units/budget and propertyElevatorCos(); sortPortfolioByPriority
+// still used the stale typed p.units/p.budget/p.ec fields) — any future
+// column change now only needs to happen once, here.
+// Also adds the new Current Project / Current Phase columns (both driven
+// by getCurrentProjectForProperty) and switches the Health column from the
+// old property-wide derivePropertyStatusFromPhases to the new per-project
+// deriveScopeHealth, per direct instruction.
+const PORTFOLIO_PHASE_COLORS={'Pre-Construction':'var(--gray-mid)','Construction':'var(--blue-dark)','Project Closeout':'var(--amber)','Complete':'var(--green)'};
+function renderPortfolioRow(p){
+  const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
+  const endDate=getProjectEndDate(p.n);
+  // v34p — per-property unit count and budget from Unit Inventory List
+  // (count of linked units; sum of their Total Work Est.), not the stale
+  // typed p.units/p.budget Properties-table fields.
+  const propUnitsInv=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+  const propUnitCount=propUnitsInv.length;
+  const propUnitBudget=propUnitsInv.reduce((a,u)=>a+unitEffectiveValue(u),0);
+  const curProj=getCurrentProjectForProperty(p.n);
+  const curProjCell=curProj?`<span style="font-size:11px;color:var(--navy)">${escHtml(curProj.name||'—')}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
+  const curPhase=curProj?getMilestoneCategoryForScope(curProj):null;
+  const curPhaseCell=curPhase?`<span class="badge" style="background:${PORTFOLIO_PHASE_COLORS[curPhase]};color:#fff">${escHtml(curPhase)}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
+  const healthCell=curProj?renderScopeHealthBadge(deriveScopeHealth(curProj)):`<span class="badge b-health-notstarted">Not Started</span>`;
+  return `<tr data-status="${p.st}" data-type="${escHtml(p.type)}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
+      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${escHtml(p.n)}</td>
+      <td><span class="geo">${p.s||'—'}</span></td>
+      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
+      <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
+      <td style="font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
+      <td>${curProjCell}</td>
+      <td>${curPhaseCell}</td>
+      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
+      <td>${renderStatusBadge(p.st)}</td>
+      <td>${healthCell}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
+    </tr>`;
+}
 function populatePortfolio(){
   const allPort=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   // Consultants only see their assigned properties; PM/Admin/Client see all —
@@ -21365,32 +22137,12 @@ function populatePortfolio(){
     // initial Airtable load completes (same flag already used for this
     // exact distinction elsewhere, e.g. the Meetings tab empty state).
     tbody.innerHTML=AT_CONNECTED
-      ?`<tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-building-skyscraper" style="font-size:1.5rem"></i><div style="margin-top:6px">No properties yet.</div><div style="font-size:11px;margin-top:2px">Go to Capital Plan and click + Capital Plan to add your first property.</div></td></tr>`
-      :`<tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Loading from database...</td></tr>`;
+      ?`<tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-building-skyscraper" style="font-size:1.5rem"></i><div style="margin-top:6px">No properties yet.</div><div style="font-size:11px;margin-top:2px">Go to Capital Plan and click + Capital Plan to add your first property.</div></td></tr>`
+      :`<tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Loading from database...</td></tr>`;
     return;
   }
   port.filter(p=>p.st!=='Removed').forEach(p=>{
-    const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
-    const endDate=getProjectEndDate(p.n);
-    // v34p — per-property unit count and budget now come from Unit
-    // Inventory List (count of linked units; sum of their Total Work
-    // Est.), not the stale typed p.units/p.budget fields.
-    const propUnitsInv=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
-    const propUnitCount=propUnitsInv.length;
-    const propUnitBudget=propUnitsInv.reduce((a,u)=>a+unitEffectiveValue(u),0);
-    tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${escHtml(p.type)}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
-      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${escHtml(p.n)}</td>
-      <td><span class="geo">${p.s||'—'}</span></td>
-      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
-      <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
-      <td style="font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
-      <td>${renderStatusBadge(p.st)}</td>
-      <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
-    </tr>`;
+    tbody.innerHTML+=renderPortfolioRow(p);
   });
   applyPriorityDisplaySetting();
 }
@@ -21925,16 +22677,23 @@ function pfApply(){
       else show=show&&(p.priority||'').startsWith(PF.priority);
     }
     if(PF.health!=='all'){
-      const health=derivePropertyStatusFromPhases(propName);
+      // v51k — Health filter now compares against the same per-project
+      // health the Health COLUMN itself shows (getCurrentProjectForProperty
+      // + deriveScopeHealth), not the old property-wide
+      // derivePropertyStatusFromPhases, so the dropdown and the visible
+      // column can never disagree. No current project -> 'Not Started',
+      // matching the column's own null-handling.
+      const curProj=getCurrentProjectForProperty(propName);
+      const health=curProj?deriveScopeHealth(curProj):'Not Started';
       show=show&&health===PF.health;
     }
     row.style.display=show?'':'none';
-    // v35i — Units column (6th <td>, index 5) recomputed per current
-    // filter state, not just left as the static total from
-    // populatePortfolio(). Column order: Property, State, Type, Priority,
-    // Elev. Company, Units, Status, Health, Project End, VDA Consultant,
-    // Budget.
-    const unitsCell=row.children[5];
+    // v51k — Units column index shifted from 5 to 7 (6th <td> to 8th <td>)
+    // after inserting the Current Project / Current Phase columns between
+    // Elev. Company and Units. Column order: Property, State, Type,
+    // Priority, Elev. Company, Current Project, Current Phase, Units,
+    // Property Status, Health, Project End, VDA Consultant, Budget.
+    const unitsCell=row.children[7];
     if(unitsCell){
       const{count,hasAnyUnits}=unitCountForPropertyRow(propName,useActiveScopeCount);
       unitsCell.textContent=hasAnyUnits?String(count):'—';
@@ -22028,21 +22787,7 @@ function sortPortfolioByPriority(th){
   const tbody=document.getElementById('portfolio-tbody');if(!tbody)return;
   tbody.innerHTML='';
   sorted.forEach(p=>{
-    const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
-    const endDate=getProjectEndDate(p.n);
-    tbody.innerHTML+=`<tr data-status="${p.st}" data-type="${escHtml(p.type)}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
-      <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${escHtml(p.n)}</td>
-      <td><span class="geo">${p.s||'—'}</span></td>
-      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
-      <td style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
-      <td style="font-size:11px">${escHtml(p.ec||'TBD')}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${escHtml(p.units||'—')}</td>
-      <td>${renderStatusBadge(p.st)}</td>
-      <td>${p.st==='Capital Plan'?'<span class="badge b-health-notstarted">Not Started</span>':renderHealthBadge(p.n)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${p.budget?fmtCurrency(p.budget):'—'}</td>
-    </tr>`;
+    tbody.innerHTML+=renderPortfolioRow(p);
   });
   // Update header icon
   if(th)th.innerHTML=`Priority <i class="ti ti-arrow-${_portfolioSortDir===1?'up':'down'}" style="font-size:10px"></i>`;
@@ -22240,6 +22985,15 @@ async function acceptSuggestedActionItem(id){
   if(s.status!=='Open')return; // already actioned — prevent duplicate Action Items
   const fields={'Property Name':propertyNameToLink(s.property),'Description':s.description,'Owner':s.suggestedOwner||'','Due Date':s.suggestedDue||null,'Priority':s.suggestedPriority||'Medium','Status':'Open'};
   const res=demoMode?null:await atCreate('Action Items',fields);
+  // v51j — accepting a MARLI suggestion used to fabricate a local ai_ id
+  // and mark the suggestion Accepted even if the real Action Items write
+  // failed, so the suggestion vanished from the queue while no action item
+  // actually existed anywhere. Now aborts before touching the suggestion's
+  // own status, so a failed accept can be retried instead of silently lost.
+  if(!demoMode&&!res?.records?.[0]?.id){
+    showToast('Could not save action item to Airtable. Check your connection and try again.','error');
+    return;
+  }
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
   actionItems.push({id:newId,property:s.property,description:s.description,owner:s.suggestedOwner||'',due:s.suggestedDue||'TBD',priority:s.suggestedPriority||'Medium',status:'Open',meetingId:null});
   if(s.suggestedOwner)notifyActionItemOwner(s.suggestedOwner,s.description,s.property,s.suggestedDue,s.suggestedPriority);
@@ -22660,6 +23414,15 @@ async function publishDraftAction(subId){
   const d=s.draftAction;
   const fields={'Property Name':propertyNameToLink(s.property),'Description':d.description,'Owner':d.owner||'','Due Date':d.due||null,'Priority':d.priority||'Medium','Status':'Open'};
   const res=demoMode?null:await atCreate('Action Items',fields);
+  // v51j — publishing a draft action used to fabricate a local ai_ id and
+  // mark the draft published even if the real Action Items write failed,
+  // so the PM saw "Action item published" and the draft's UI state showed
+  // resolved while nothing was actually created. Now aborts before marking
+  // it published, so it can be retried instead of silently disappearing.
+  if(!demoMode&&!res?.records?.[0]?.id){
+    showToast('Could not publish action item to Airtable. Check your connection and try again.','error');
+    return;
+  }
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
   actionItems.push({id:newId,property:s.property,description:d.description,owner:d.owner||'',due:d.due||'TBD',priority:d.priority||'Medium',status:'Open',meetingId:null});
   if(d.owner)notifyActionItemOwner(d.owner,d.description,s.property,d.due,d.priority);
@@ -22736,23 +23499,39 @@ async function approveSubmission(id){
     'Upload Date':today,
     'Notes':`Week of ${s.week} · Approved by PM`,
   });
-  // Add to local DOCUMENTS_LIVE
-  const newDoc={
-    id:docRes?.records?.[0]?.id||'doc_'+Date.now(),
-    name:docName,property:s.property,
-    type:'Field Update',subfolder:'Field Updates',
-    visibility:'Public',uploaded:today,
-    uploadedBy:s.consultant,notes:`Week of ${s.week}`,
-    _submissionId:s.id,
-  };
-  if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
-  window.DOCUMENTS_LIVE.push(newDoc);
-  // Client notification
-  notifications.push({type:'client-field-update',property:s.property,week:s.week,
-    message:'New Field Updates have been Posted',
-    time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
+  // v51j — the Documents archive write here used to fall back to a
+  // fabricated doc_ id on failure and still claim "archived to Documents"
+  // in the final toast, and still fired the client notification below even
+  // though nothing was actually archived. The Field Update itself is
+  // already approved by this point (Review Status updated above), so this
+  // only tracks whether the Documents archive specifically succeeded.
+  const docArchiveFailed=!docRes?.records?.[0]?.id;
+  if(docArchiveFailed){
+    console.error('approveSubmission: Documents archive write failed',docRes);
+  }else{
+    // Add to local DOCUMENTS_LIVE
+    const newDoc={
+      id:docRes.records[0].id,
+      name:docName,property:s.property,
+      type:'Field Update',subfolder:'Field Updates',
+      visibility:'Public',uploaded:today,
+      uploadedBy:s.consultant,notes:`Week of ${s.week}`,
+      _submissionId:s.id,
+    };
+    if(!window.DOCUMENTS_LIVE)window.DOCUMENTS_LIVE=[];
+    window.DOCUMENTS_LIVE.push(newDoc);
+    // Client notification — only sent if the doc actually archived, since
+    // this message specifically says an update was "Posted" (to Documents).
+    notifications.push({type:'client-field-update',property:s.property,week:s.week,
+      message:'New Field Updates have been Posted',
+      time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
+  }
   updateQueueBadge();refreshQueue();refreshMyUpdates();renderDocFolders();
-  showToast(`Update approved — archived to Documents · Field Updates`,'success');
+  if(docArchiveFailed){
+    showToast('Update approved, but the Documents archive entry failed to save. Check your connection.','error');
+  }else{
+    showToast(`Update approved — archived to Documents · Field Updates`,'success');
+  }
 }
 async function kickSubmission(id){
   const note=prompt('Return note for consultant:');if(note===null)return;
@@ -23167,11 +23946,21 @@ async function submitUpdate(){
   const atId=res?.records?.[0]?.id||null;
   submissions.push({id:atId||'sub_'+Date.now(),atId,property,week,units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',consultant:consultantName,draftAction,linkedUnitIds,scopeId,appliesToWholeProject});
   updateQueueBadge();
-  const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
-  se.classList.remove('hidden');
-  setTimeout(()=>se.classList.add('hidden'),5000);
+  // v51j — the "Update submitted" success banner used to show unconditionally
+  // before the atId check below, so even a fully failed Airtable write (atId
+  // null) showed the consultant a confident "You'll be notified once
+  // reviewed" banner, with the honest warn toast only appearing after,
+  // easy to miss underneath the banner. Now the banner only shows on an
+  // actual confirmed write; a failed write gets the error front and center
+  // instead.
+  if(atId){
+    const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} submitted. You'll be notified once reviewed.`;
+    se.classList.remove('hidden');
+    setTimeout(()=>se.classList.add('hidden'),5000);
+  }else{
+    showToast('Could not submit update to Airtable. Check your connection and try again.','error');
+  }
   resetSubmitForm();
-  if(!atId)showToast('Warning: submission saved locally but Airtable write failed','warn');
 }
 function refreshMyUpdates(){
   const c=document.getElementById('my-updates-container');if(!c)return;
@@ -23238,7 +24027,17 @@ async function submitFlag(){
   const record={id:'cc-'+Date.now(),property:prop,threadId,authorRole:'client',authorName:clientLabel,message:msg,flagType:type,status:'Open',visibility,created:dateStr};
   if(!demoMode){
     const res=await atCreate('Client Comments',{'Property Name':propertyNameToLink(prop),'Thread ID':threadId,'Author Role':'client','Author Name':clientLabel,'Message':msg,'Flag Type':type,'Status':'Open','Visibility':visibility,'Created':dateStr});
-    record.id=res?.records?.[0]?.id||record.id;
+    // v51j — a failed Client Comments write used to fall back to a
+    // fabricated cc- id and continue exactly as if the flag had been
+    // raised (message field cleared, form closed, "Flag submitted, PM has
+    // been notified" toast), so a client's flag could vanish with no
+    // record anywhere and no error shown. Now aborts before clearing the
+    // form so the typed message isn't lost.
+    if(!res?.records?.[0]?.id){
+      showToast('Could not submit flag to Airtable. Check your connection and try again.','error');
+      return;
+    }
+    record.id=res.records[0].id;
   }
   window.CLIENT_COMMENTS=(window.CLIENT_COMMENTS||[]).concat([record]);
   document.getElementById('flag-message').value='';
@@ -23288,7 +24087,16 @@ async function addReply(threadId){
   const record={id:'cc-'+Date.now(),property:flagRecord?.property||'',threadId,authorRole:isClient?'client':'pm',authorName:isClient?clientLabel:'Pulse — Project Manager',message:text,flagType:flagRecord?.flagType||'General',status:flagRecord?.status||'Open',visibility:flagRecord?.visibility||'PM Only',created:now};
   if(!demoMode){
     const res=await atCreate('Client Comments',{'Property Name':propertyNameToLink(record.property),'Thread ID':threadId,'Author Role':record.authorRole,'Author Name':record.authorName,'Message':text,'Flag Type':record.flagType,'Status':record.status,'Visibility':record.visibility,'Created':now});
-    record.id=res?.records?.[0]?.id||record.id;
+    // v51j — a failed reply write here used to fall back to a fabricated
+    // cc- id and continue on to flip the other party's read state and
+    // clear the input, so a reply that never reached Airtable still looked
+    // sent to whoever typed it. Now aborts before clearing the input so
+    // the typed reply isn't lost.
+    if(!res?.records?.[0]?.id){
+      showToast('Could not send reply to Airtable. Check your connection and try again.','error');
+      return;
+    }
+    record.id=res.records[0].id;
   }
   // Flip the other party's read state to unread on all thread records
   if(flagRecord){
@@ -23594,7 +24402,18 @@ async function archivePMUpdateToDocuments(u){
       'Upload Date':today,
       'Notes':u.text?u.text.slice(0,200):'',
     });
-    var newDocId=docRes?.records?.[0]?.id||'doc_'+Date.now();
+    // v51j — this used to fall back to a fabricated doc_ id on failure and
+    // push it into DOCUMENTS_LIVE regardless, so a PM Update that never
+    // archived to Documents still appeared archived in the UI. None of the
+    // three call sites check this function's return, so it now just logs
+    // and skips the local add on failure rather than claiming a document
+    // exists that doesn't (the PM Update itself still published fine, only
+    // the Documents copy is affected).
+    if(!docRes?.records?.[0]?.id){
+      console.error('archivePMUpdateToDocuments: Airtable write failed, no local document created',docRes);
+      return;
+    }
+    var newDocId=docRes.records[0].id;
   }else{
     var newDocId='demo_doc_'+Date.now();
   }
@@ -23689,6 +24508,7 @@ async function pmuCreate(status){
     units,phase,progressStatus,commentType,appliesToWholeProject,linkedUnitIds,
   };
   window.PM_UPDATES.unshift(newUpdate);
+  let draftActionSaveFailed=false;
   if(status==='Published'){
     await archivePMUpdateToDocuments(newUpdate);
     // Live Action Item, created now — not staged. Same atCreate('Action
@@ -23697,10 +24517,21 @@ async function pmuCreate(status){
       const aiFields={'Property Name':propertyNameToLink(propName),'Description':draftAction.description,'Owner':draftAction.owner||'','Due Date':draftAction.due||null,'Priority':draftAction.priority||'Medium','Status':'Open'};
       if(scopeId)aiFields['Linked Scope']=[scopeId];
       const aiRes=await atCreate('Action Items',aiFields);
-      const aiId=aiRes?.records?.[0]?.id||'ai_'+Date.now();
-      actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
-      if(draftAction.owner)notifyActionItemOwner(draftAction.owner,draftAction.description,propName,draftAction.due,draftAction.priority);
-      refreshDashActions();
+      // v51j — this nested action item create fell back to a fabricated
+      // ai_ id on failure and still reported "Update published, action item
+      // created" at the bottom, so a flagged follow-up action could fail to
+      // save with the toast claiming otherwise. The PM Update itself is
+      // already saved by this point (checked above), so this only tracks
+      // whether the follow-up action specifically succeeded.
+      if(!aiRes?.records?.[0]?.id){
+        draftActionSaveFailed=true;
+        console.error('pmuCreate: follow-up Action Item failed to save',draftAction);
+      }else{
+        const aiId=aiRes.records[0].id;
+        actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
+        if(draftAction.owner)notifyActionItemOwner(draftAction.owner,draftAction.description,propName,draftAction.due,draftAction.priority);
+        refreshDashActions();
+      }
     }
   }
   document.getElementById('pmu-text').value='';
@@ -23710,7 +24541,11 @@ async function pmuCreate(status){
   document.getElementById('pmu-draft-action-priority').value='Medium';
   pmuUnitAssign={};
   document.getElementById('pmu-whole-project').checked=false;
-  showToast(status==='Published'?(hasDraftAction?'Update published, action item created':'Update published'):'Draft saved','success');
+  if(draftActionSaveFailed){
+    showToast('Update published, but the follow-up action item failed to save. Check your connection and add it manually.','error');
+  }else{
+    showToast(status==='Published'?(hasDraftAction?'Update published, action item created':'Update published'):'Draft saved','success');
+  }
   renderPMUpdates();
 }
 function saveDraftPMUpdate(){pmuCreate('Draft');}
@@ -23940,6 +24775,11 @@ async function _saveEditedPMUpdateCore(publishStatus){
   u.commentType=commentType;u.appliesToWholeProject=appliesToWholeProject;
   u.linkedUnitIds=linkedUnitIds;
   u.draftAction=hasDraftAction?draftAction:null;
+  // v51j — reset before use so a previous call's failure doesn't leak into
+  // this one; callers (saveEditedPMUpdate/publishEditedPMUpdate) read this
+  // right after awaiting this function to decide whether the follow-up
+  // action item actually saved.
+  _saveEditedPMUpdateCore.draftActionSaveFailed=false;
   if(publishStatus==='Published'){
     u.status='Published';u.published=todayStr;
     await archivePMUpdateToDocuments(u);
@@ -23951,10 +24791,19 @@ async function _saveEditedPMUpdateCore(publishStatus){
       const aiFields={'Property Name':propertyNameToLink(propName),'Description':draftAction.description,'Owner':draftAction.owner||'','Due Date':draftAction.due||null,'Priority':draftAction.priority||'Medium','Status':'Open'};
       if(scopeId)aiFields['Linked Scope']=[scopeId];
       const aiRes=await atCreate('Action Items',aiFields);
-      const aiId=aiRes?.records?.[0]?.id||'ai_'+Date.now();
-      actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
-      if(draftAction.owner)notifyActionItemOwner(draftAction.owner,draftAction.description,propName,draftAction.due,draftAction.priority);
-      refreshDashActions();
+      // v51j — same fabricated-id-on-failure pattern fixed in pmuCreate()
+      // above: this used to fall back to a local ai_ id and let the caller
+      // report a plain "Update published" success even if the follow-up
+      // action failed to save. Flagged via draftActionSaveFailed instead.
+      if(!aiRes?.records?.[0]?.id){
+        _saveEditedPMUpdateCore.draftActionSaveFailed=true;
+        console.error('_saveEditedPMUpdateCore: follow-up Action Item failed to save',draftAction);
+      }else{
+        const aiId=aiRes.records[0].id;
+        actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
+        if(draftAction.owner)notifyActionItemOwner(draftAction.owner,draftAction.description,propName,draftAction.due,draftAction.priority);
+        refreshDashActions();
+      }
     }
   }
   return true;
@@ -23970,7 +24819,13 @@ window.saveEditedPMUpdate=saveEditedPMUpdate;
 async function publishEditedPMUpdate(){
   const ok=await _saveEditedPMUpdateCore('Published');
   if(!ok)return;
-  showToast('Update published','success');
+  // v51j — see _saveEditedPMUpdateCore: report if the follow-up action item
+  // failed to save instead of always claiming a clean "Update published".
+  if(_saveEditedPMUpdateCore.draftActionSaveFailed){
+    showToast('Update published, but the follow-up action item failed to save. Check your connection and add it manually.','error');
+  }else{
+    showToast('Update published','success');
+  }
   closeEditPMUpdateModal();
   renderPMUpdates();
 }
@@ -25001,7 +25856,7 @@ function buildReportHTML(filter,periodDays,isWeekly){
         <div class="report-section-title">Active property schedule performance</div>
         <div class="table-wrap">
           <table class="report-table">
-            <thead><tr><th style="width:20%">${isDemo?'Store':'Property'}</th><th style="width:8%">Type</th><th style="width:13%">Elev. Company</th><th style="width:6%">Units</th><th style="width:11%">Project Status</th><th style="width:11%">Project Health</th><th style="width:9%">Budget</th><th style="width:9%">% Spent</th><th style="width:9%">% Complete</th></tr></thead>
+            <thead><tr><th style="width:20%">${isDemo?'Store':'Property'}</th><th style="width:8%">Type</th><th style="width:13%">Elev. Company</th><th style="width:6%">Units</th><th style="width:11%">Property Status</th><th style="width:11%">Property Health</th><th style="width:9%">Budget</th><th style="width:9%">% Spent</th><th style="width:9%">% Complete</th></tr></thead>
             <tbody>
               ${activeProps.map(p=>{
                 const msC=getMsComplete(p.n);
@@ -26341,6 +27196,12 @@ async function saveConfigureVdaProject(){
   }
   const newId=createRes.records[0].id;
   const newTaskLines=[];
+  // v51j — a failed Task Line create was already correctly kept out of
+  // newTaskLines (the if(tlRes&&...) guard), but the failure itself was
+  // silently dropped with no count, so "VDA Project saved" fired
+  // unconditionally even if some task lines never reached Airtable. Now
+  // counted and folded into the final toast.
+  let taskLineFailCount=0;
   for(const row of taskLineRows){
     const tlRes=await atCreate('Task Line',{
       'Description':row.description,
@@ -26354,6 +27215,8 @@ async function saveConfigureVdaProject(){
     if(tlRes&&tlRes.records&&tlRes.records[0]){
       const r=tlRes.records[0];
       newTaskLines.push({id:r.id,vdaId:newId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()});
+    }else{
+      taskLineFailCount++;
     }
   }
   window.VDA_PROJECTS=(window.VDA_PROJECTS||[]).concat([{
@@ -26362,7 +27225,11 @@ async function saveConfigureVdaProject(){
   window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat(newTaskLines);
   closeConfigureVdaPanel();
   renderVdaProjects();
-  showToast('VDA Project saved','success');
+  if(taskLineFailCount>0){
+    showToast(`VDA Project saved, but ${taskLineFailCount} task line${taskLineFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
+  }else{
+    showToast('VDA Project saved','success');
+  }
 }
 window.saveConfigureVdaProject=saveConfigureVdaProject;
 
@@ -26598,6 +27465,13 @@ async function saveEditVdaProject(){
     await atDelete('Task Line',t.id);
     window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).filter(x=>x.id!==t.id);
   }
+  // v51j — a failed new-row Task Line create was already correctly kept out
+  // of VDA_TASK_LINES (the if(tlRes&&...) guard), but the failure itself
+  // was silently dropped with no count, so "VDA Project updated" fired
+  // unconditionally even if some new task lines never reached Airtable.
+  // Now counted and folded into the final toast, same treatment as
+  // saveConfigureVdaProject.
+  let taskLineFailCount=0;
   for(const row of rows){
     if(row.existingId){
       await atUpdate('Task Line',row.existingId,{
@@ -26626,13 +27500,19 @@ async function saveEditVdaProject(){
       if(tlRes&&tlRes.records&&tlRes.records[0]){
         const r=tlRes.records[0];
         window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat([{id:r.id,vdaId:_evpCurrentId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:row.status||'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()}]);
+      }else{
+        taskLineFailCount++;
       }
     }
   }
 
   closeEditVdaPanel();
   renderVdaProjects();
-  showToast('VDA Project updated','success');
+  if(taskLineFailCount>0){
+    showToast(`VDA Project updated, but ${taskLineFailCount} task line${taskLineFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
+  }else{
+    showToast('VDA Project updated','success');
+  }
 }
 window.saveEditVdaProject=saveEditVdaProject;
 
