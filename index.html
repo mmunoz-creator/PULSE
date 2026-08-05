@@ -1,4 +1,36 @@
 <!--
+pulse_v51i. Changes from v51h, this round:
+  1. Root-caused a false "At Risk" badge on the Dashboard/Portfolio Heat
+     Map for Hilton Boston Logan Airport (showing 8 days overdue with
+     nothing overdue anywhere in the visible Unit Phases tab). Traced live
+     with Misty via browser console, real cause: deletePhase() has always
+     deleted the Unit Group record but never touched that phase's own
+     Phase Tasks records, leaving them permanently orphaned (no matching
+     Unit Group, invisible in the Unit Phases tab and unreachable through
+     Edit Tasks) but still counted by calcScheduleRisk(), which reads
+     Phase Tasks directly and has no way to know the phase itself no
+     longer exists. Confirmed live: 3 orphaned phase groups on this one
+     property (31 stale task records total), one of which (11 tasks dated
+     2026-07-28) was old enough to be driving the badge. A portfolio-wide
+     scan, run twice against two different failure modes (orphaned phase
+     names, and separately unmatched property names), found this isolated
+     to Boston Logan; no other property affected.
+  2. deletePhase() now also deletes every Phase Tasks record belonging to
+     the phase being removed, scoped by property, phase name, and Scope id
+     (so deleting one Scope's "Phase 1" can't sweep up a different Scope's
+     own same-named "Phase 1" tasks on the same property), matching the
+     same real-Airtable-delete pattern already used for unchecked tasks in
+     saveEditPhase(). Closes the root cause so this can't recur.
+  3. Added cleanupOrphanedPhaseTasks(), a console-only, Admin-only utility
+     that finds and deletes any Phase Tasks records with no matching Unit
+     Group anywhere in the loaded portfolio, not hardcoded to Boston Logan
+     specifically. Logs what it finds before asking for confirmation, logs
+     what it deleted after. This is a one-time data-cleanup tool for
+     records that already existed before this round's fix; safe to leave
+     in the build going forward since it has nothing to do once orphans
+     are gone.
+Requires no worker changes (worker_v44a.mjs unchanged).
+
 pulse_v51h. Changes from v51g, this round:
   1. Security audit (Misty's direct request). Four real unescaped-
      interpolation gaps found and fixed, all wrapped in escHtml() at their
@@ -3002,7 +3034,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51h</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51i</div>
     </div>
   </nav>
 
@@ -12666,6 +12698,34 @@ async function deletePhase(id,propName){
   // be recomputed against what's left once this phase is gone.
   const deletedPhase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
   const scopeIdForDerivation=deletedPhase?.scopeId||'';
+  // v51i, this used to only delete the Unit Group record and never touched
+  // that phase's own Phase Tasks records. Every task under a deleted phase
+  // was left behind as an orphan: no matching Unit Group, so invisible in
+  // the Unit Phases tab and impossible to reach through Edit Tasks, but
+  // still counted by calcScheduleRisk() (the Dashboard At Risk badge and
+  // heat map) since that function reads PHASE_STEPS directly and does not
+  // check whether a Unit Group still exists for a given phase name. Found
+  // live on Hilton Boston Logan Airport, three orphaned phase groups
+  // (31 stale task records total) producing a false 8-day-overdue badge
+  // with nothing overdue anywhere in the visible Unit Phases tab. Deleting
+  // the phase now also deletes every Phase Tasks record that belonged to
+  // it, matching the same real-Airtable-delete pattern already used for
+  // unchecked tasks in saveEditPhase().
+  const phaseNameForCleanup=deletedPhase?.phase||'';
+  if(phaseNameForCleanup){
+    // Scoped by scopeId too, not just property+phaseName, so deleting one
+    // Scope's "Phase 1" can't also sweep up a different Scope's own
+    // same-named "Phase 1" tasks on the same property (see
+    // derivePhaseStatusFromSteps for the same disambiguation rule).
+    const matchesThisPhase=s=>s.property===propName&&s.phaseName===phaseNameForCleanup&&(!scopeIdForDerivation||!s.scopeId||s.scopeId===scopeIdForDerivation);
+    const orphanedTasks=(window.PHASE_STEPS||[]).filter(matchesThisPhase);
+    window.PHASE_STEPS=(window.PHASE_STEPS||[]).filter(s=>!matchesThisPhase(s));
+    if(!demoMode){
+      for(const task of orphanedTasks){
+        if(task.id&&task.id.startsWith('rec'))await atDelete('Phase Tasks',task.id);
+      }
+    }
+  }
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).filter(u=>u.id!==id);
   if(!demoMode)await atDelete('Unit Groups',id);
   await deriveAndWritePropertyStatus(propName);
@@ -12674,6 +12734,35 @@ async function deletePhase(id,propName){
   renderPropertyView(currentProp);
   showToast('Phase deleted','success');
 }
+
+// v51i, one-time cleanup utility for the three orphaned phase groups found
+// on Hilton Boston Logan Airport (Phase 1: PE, Phase 2: PE 2, Year 2030
+// Hydraulic — 31 Phase Tasks records total with no matching Unit Group,
+// left behind by deletePhase() before the fix above existed). Console-only
+// by design, this is a one-time data fix for pre-existing bad records, not
+// a feature; run cleanupOrphanedPhaseTasks() from the browser console
+// (Admin role) to execute. Logs exactly what it deletes and does nothing
+// silently. Safe to leave in the build; it only ever touches records whose
+// property+phaseName has zero matching Unit Group, so it has nothing to do
+// once the orphans are gone.
+async function cleanupOrphanedPhaseTasks(){
+  if(role!=='admin'){console.warn('cleanupOrphanedPhaseTasks: Admin only.');return;}
+  const orphans=(window.PHASE_STEPS||[]).filter(s=>!(window.UNIT_GROUPS||[]).some(u=>u.property===s.property&&u.phase===s.phaseName));
+  if(orphans.length===0){console.log('cleanupOrphanedPhaseTasks: no orphaned Phase Tasks found. Nothing to do.');return;}
+  console.log(`cleanupOrphanedPhaseTasks: found ${orphans.length} orphaned Phase Tasks records:`);
+  console.table(orphans.map(s=>({property:s.property,phaseName:s.phaseName,taskName:s.taskName,plannedEnd:s.plannedEnd,status:s.status})));
+  if(!confirm(`Delete ${orphans.length} orphaned Phase Tasks records? This cannot be undone.`))return;
+  let deleted=0;
+  for(const task of orphans){
+    if(task.id&&task.id.startsWith('rec')){
+      await atDelete('Phase Tasks',task.id);
+      deleted++;
+    }
+  }
+  window.PHASE_STEPS=(window.PHASE_STEPS||[]).filter(s=>!orphans.includes(s));
+  console.log(`cleanupOrphanedPhaseTasks: deleted ${deleted} records. Refresh to confirm Dashboard/Portfolio Heat Map badges updated.`);
+}
+window.cleanupOrphanedPhaseTasks=cleanupOrphanedPhaseTasks;
 
 async function updatePhaseStatus(id,newStatus,propName){
   const phase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
