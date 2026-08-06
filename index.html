@@ -1,4 +1,69 @@
 <!--
+pulse_v52k. Changes from v52j, this round. Single targeted bug fix,
+reported live by Misty on Hilton Denver City Center. Requires no worker
+changes.
+  1. getProjectDates(propName) — the shared helper computing the Unit
+     Phases tab's Project Start/Project End/Total Duration summary — was
+     never scope-aware, filtering window.UNIT_GROUPS by property name only.
+     On a property with multiple Projects/Scopes (e.g. a 2026 Project and
+     a 2028 Project, each its own Scope), this pooled every scope's phases
+     into one min-start/max-end range regardless of which scope tab was
+     actually being viewed. renderPhasesTab() already scopes its own phase
+     list to currentScope two lines above this call, so the visible phase
+     rows were always correct, only the header summary above them was
+     wrong. Confirmed live: Hilton Denver City Center's 2026 Project tab
+     (whose own Phase 1 correctly runs Apr 5, 2022 to Aug 31, 2026) was
+     showing Dec 25, 2028 as Project End, a date belonging entirely to the
+     2028 Project scope on the same property.
+     Fixed by adding an optional scopeId parameter: getProjectDates now
+     also filters by scopeId when one is passed. renderPhasesTab's call
+     site now passes currentScope?.id, matching the phase list right above
+     it. The Gantt chart's two call sites (property-wide summary rows,
+     which intentionally want every scope on a property pooled together)
+     are unchanged, since they don't pass a scopeId.
+
+pulse_v52j. Changes from v52i, this round. Fifth and final round of the
+renumbered silent-failure-audit series. This round covers Properties/
+Capital Plan/VDA Project/Field Updates, same bug class as every prior
+round: atUpdate()/atDelete() resolve to null on failure rather than
+throwing, so a dead try/catch or an unguarded discarded result looks
+identical to success on screen regardless of what actually happened in
+Airtable. Requires no worker changes. This closes out the full ~70-site
+high-stakes silent-failure audit across all 5 rounds (v52e, v52g-v52j).
+  1. confirmDeleteCapitalEntry() and confirmDeleteCapitalScope() both
+     wrapped every cascade-delete atUpdate/atDelete call in a dead
+     try/catch, so a failed cascade step was invisible and the closing
+     toast always claimed a clean delete. Both now track failures per
+     table/step, matching the failedSteps pattern confirmDeleteProperty()
+     already established, for an honest closing toast.
+  2. saveCapitalPlanEntry()'s edit-path atUpdate calls (the Properties
+     write, and the single-default-Scope sync write) both discarded their
+     results; the create-path gap was already fixed in v51j, this was the
+     sibling edit-path gap. Folded into a new editSaveFailed flag alongside
+     the existing defaultScopeFailed handling.
+  3. saveEditProperty() awaited its atUpdate inside a try block but never
+     checked the result — the catch below was dead code since atUpdate
+     doesn't throw, so a real write failure still showed "Property
+     updated" success. Now checks the real result before reporting either
+     outcome.
+  4. approveSubmission() and kickSubmission() (Field Updates queue actions)
+     both discarded their Review Status atUpdate result. A failed approval
+     write still flipped local status, archived to Documents, and notified
+     the client; a failed kick-back still notified the consultant their
+     update was returned. Both now abort on a failed write before any
+     downstream effects run.
+  5. The Field Updates resubmit path (inside the shared submit handler)
+     discarded its atUpdate result, so a failed resubmission still showed
+     the full "resubmitted, you'll be notified" success flow. Now aborts
+     on a failed write instead.
+  6. saveEditVdaProject() had three separate gaps: the main VDA Project
+     atUpdate (Status/Nickname/Linked Properties/Units), the Task Line
+     deletion loop, and the existing-Task-Line-row atUpdate loop all
+     discarded their results and updated local state unconditionally. All
+     three now fold into the same taskLineFailCount counter the sibling
+     new-Task-Line-create gap was already fixed against in v51j, so one
+     honest closing toast now covers every write this function makes.
+
 pulse_v52i. Changes from v52h, this round. Fourth of the renumbered
 silent-failure-audit rounds. This round covers Meetings/Site Visits/
 Attendees/Client Comments, same bug class as prior rounds:
@@ -3584,7 +3649,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52k</div>
     </div>
   </nav>
 
@@ -12525,8 +12590,21 @@ function derivePhaseStatusOLD(phaseId, propName, phaseName){return derivePhaseSt
 // Phases tab summary and the Gantt chart property row labels. Project Start
 // = Phase 1 actual start (if entered) else planned start. Project End =
 // latest planned completion across all phases for the property.
-function getProjectDates(propName){
-  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
+// v52k — added an optional scopeId param. Without it (the Gantt chart's
+// property-wide rows, which intentionally want every scope on a property
+// pooled together), behavior is unchanged. When passed, phases are also
+// filtered to that one scope — fixes a real cross-project date bleed on
+// the Unit Phases tab: renderPhasesTab() already scopes its own phase list
+// to currentScope, but was calling this function with only the property
+// name, so the header's Project Start/Project End/Total Duration summary
+// was silently pooling every scope's phases on the property (e.g. a
+// property with a 2026 Project and a 2028 Project would show the 2028
+// Project's later completion date while viewing the 2026 Project's tab).
+// Reported live: Hilton Denver City Center's 2026 Project tab showing Dec
+// 25, 2028 as Project End, a date that belongs to the 2028 Project scope,
+// not the one being viewed.
+function getProjectDates(propName,scopeId){
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName&&(!scopeId||u.scopeId===scopeId));
   // v29g: sort by name-derived number — phase name is authoritative order.
   phases.sort((a,b)=>{
     const aName=parseInt((a.phase||a.phaseName||'').match(/\d+/)?.[0]||0);
@@ -12790,8 +12868,11 @@ function renderPhasesTab(p){
   const unitsComplete=phases.filter(u=>derivePhaseStatus(u.id,p.n,u.phase)==='Complete').reduce((a,u)=>a+(parseInt(u.units)||0),0);
   const unitsInProg=phases.filter(u=>{const s=derivePhaseStatus(u.id,p.n,u.phase);return s==='In Progress'||s==='Behind'||s==='Ahead';}).reduce((a,u)=>a+(parseInt(u.units)||0),0);
   const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProg);
-  // Project Start/End — shared helper also used by the Gantt chart
-  const{projectStart,latestEnd}=getProjectDates(p.n);
+  // Project Start/End — shared helper also used by the Gantt chart.
+  // v52k — now passes scopeId so this summary matches the phase list
+  // rendered just above it (both keyed to currentScope), instead of
+  // pooling every scope's phases on the property into one date range.
+  const{projectStart,latestEnd}=getProjectDates(p.n,scopeId);
   let durationText='—';
   if(projectStart&&latestEnd){
     const diffMs=latestEnd-projectStart;
@@ -17297,32 +17378,48 @@ function deleteCapitalEntry(propId, propName){
 async function confirmDeleteCapitalEntry(propId, propName){
   document.getElementById('delete-capital-overlay')?.remove();
   const prop=(window.PORTFOLIO||[]).find(p=>p.id===propId||p.n===propName);
+  // v52j — every write below was wrapped in a dead try/catch: atUpdate/
+  // atDelete resolve to null on failure rather than throwing, so none of
+  // these catch blocks could ever actually fire on a real write failure.
+  // Local state was cleared and a "removed" success toast shown
+  // unconditionally regardless of what actually happened in Airtable.
+  // Now tracks failures the same way confirmDeleteProperty already does,
+  // for an honest closing toast.
+  const failedSteps=[];
   if(!demoMode){
     showToast(`Removing ${propName} from Capital Plan...`,'info');
     const todayIso=new Date().toISOString().split('T')[0];
     if(prop?.id){
       // v30e: soft delete — set Status='Removed' and Date Removed rather than hard-deleting
-      try{await atUpdate('Properties',prop.id,{'Status':'Removed','Date Removed':todayIso});}
-      catch(e){console.warn('Capital Plan property soft-delete failed',e);}
+      const updRes=await atUpdate('Properties',prop.id,{'Status':'Removed','Date Removed':todayIso});
+      if(!updRes)failedSteps.push('Property record');
     }
     // Cascade-delete child records (Milestones, Scopes) — these have no display value once removed
     const msToDelete=(window.MILESTONES||[]).filter(m=>m.property===propName&&m.id&&m.id.startsWith('rec'));
+    let msFailed=false;
     for(const m of msToDelete){
-      try{await atDelete('Milestones',m.id);}
-      catch(e){console.warn('Milestone delete failed',m.id,e);}
+      const delRes=await atDelete('Milestones',m.id);
+      if(!delRes)msFailed=true;
     }
+    if(msFailed)failedSteps.push('Milestones');
     const scToDelete=(window.SCOPES||[]).filter(s=>s.property===propName&&s.id&&s.id.startsWith('rec'));
+    let scFailed=false;
     for(const s of scToDelete){
-      try{await atDelete('Scopes',s.id);}
-      catch(e){console.warn('Scope delete failed',s.id,e);}
+      const delRes=await atDelete('Scopes',s.id);
+      if(!delRes)scFailed=true;
     }
+    if(scFailed)failedSteps.push('Scopes');
   }
   // Update in-memory: mark as Removed (will be filtered from active views) and set dateRemoved
   const propObj=(window.PORTFOLIO||[]).find(p=>p.n===propName);
   if(propObj){propObj.st='Removed';propObj.dateRemoved=new Date().toISOString().split('T')[0];}
   window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.property!==propName);
   window.SCOPES=(window.SCOPES||[]).filter(s=>s.property!==propName);
-  showToast(`${propName} removed from Capital Plan`,'success');
+  if(failedSteps.length>0){
+    showToast(`${propName} removed, but some related records may remain: ${failedSteps.join(', ')}. Contact IT if this needs cleanup.`,'error');
+  }else{
+    showToast(`${propName} removed from Capital Plan`,'success');
+  }
   renderCapitalPlan();
   renderCharts();
 }
@@ -17357,6 +17454,11 @@ async function deleteCapitalScope(scopeId, scopeName, propName){
 
 async function confirmDeleteCapitalScope(scopeId, scopeName, propName){
   document.getElementById('delete-scope-overlay')?.remove();
+  // v52j — same dead-try/catch pattern as confirmDeleteCapitalEntry above:
+  // every atDelete call was wrapped in a catch that could never actually
+  // fire, so a failed cascade delete was invisible and the closing toast
+  // always claimed a clean delete. Now tracks failures per table.
+  const failedSteps=[];
   if(!demoMode){
     showToast(`Deleting scope ${scopeName}...`,'info');
     // Cascade delete child records for this scope
@@ -17368,15 +17470,17 @@ async function confirmDeleteCapitalScope(scopeId, scopeName, propName){
     ];
     for(const {arr,table,keyField} of cascadeTargets){
       const toDelete=arr.filter(r=>r[keyField]===scopeId&&r.id&&r.id.startsWith('rec'));
+      let tableFailed=false;
       for(const r of toDelete){
-        try{await atDelete(table,r.id);}
-        catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);}
+        const delRes=await atDelete(table,r.id);
+        if(!delRes)tableFailed=true;
       }
+      if(tableFailed)failedSteps.push(table);
     }
     // Delete the scope record itself
     if(scopeId&&scopeId.startsWith('rec')){
-      try{await atDelete('Scopes',scopeId);}
-      catch(e){console.warn('Scope delete failed',scopeId,e);}
+      const delRes=await atDelete('Scopes',scopeId);
+      if(!delRes)failedSteps.push('Scopes');
     }
   }
   // Update in-memory
@@ -17385,7 +17489,11 @@ async function confirmDeleteCapitalScope(scopeId, scopeName, propName){
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).filter(u=>u.scopeId!==scopeId);
   window.BILLING_LOG=(window.BILLING_LOG||[]).filter(b=>b.scopeId!==scopeId);
   window.CO_SAVINGS=(window.CO_SAVINGS||[]).filter(c=>c.scopeId!==scopeId);
-  showToast(`${scopeName} deleted`,'success');
+  if(failedSteps.length>0){
+    showToast(`${scopeName} removed, but some related records may remain: ${failedSteps.join(', ')}. Contact IT if this needs cleanup.`,'error');
+  }else{
+    showToast(`${scopeName} deleted`,'success');
+  }
   renderCapitalPlan();
   renderCharts();
 }
@@ -17481,11 +17589,18 @@ async function saveCapitalPlanEntry(skipClose){
 
   let atId=editId||null;
   let defaultScopeFailed=false;
+  // v52j — the edit-path atUpdate calls below (Properties, and the
+  // single-default-Scope sync) both discarded their results entirely, so
+  // a failed edit save still updated local state and showed "X updated"
+  // success. Tracked here and folded into the closing toast alongside
+  // defaultScopeFailed.
+  let editSaveFailed=false;
   // v30e: write Date Added on new property creation
   const todayIso=new Date().toISOString().split('T')[0];
   if(!demoMode){
     if(editId){
-      await atUpdate('Properties',editId,fields);
+      const propUpdRes=await atUpdate('Properties',editId,fields);
+      if(!propUpdRes)editSaveFailed=true;
       // v28a — single-default-Scope sync. If this property has exactly
       // one Scope (the common case: the auto-created default that hasn't
       // been split yet), keep its budget/year/priority fields in
@@ -17512,7 +17627,10 @@ async function saveCapitalPlanEntry(skipClose){
           'Year/Budget Cycle':plannedYear,
           'Priority':scopePriority(priority),
         };
-        if(sc.id) await atUpdate('Scopes',sc.id,scFields);
+        if(sc.id){
+          const scUpdRes=await atUpdate('Scopes',sc.id,scFields);
+          if(!scUpdRes)editSaveFailed=true;
+        }
         sc.year=plannedYear;sc.priority=scopePriority(priority);
       }
     } else {
@@ -17602,6 +17720,8 @@ async function saveCapitalPlanEntry(skipClose){
   renderCapitalPlan();
   if(defaultScopeFailed){
     showToast(`${name} added, but its default Scope failed to save. Use Split into scopes to add one.`,'error');
+  }else if(editSaveFailed){
+    showToast(`Could not save all changes to ${name} in Airtable. Please try again.`,'error');
   }else{
     showToast(editId?`${name} updated`:`${name} added to capital plan`,'success');
   }
@@ -23749,11 +23869,22 @@ async function saveEditProperty(){
   }
 
   // Write to Airtable
+  // v52j — this awaited atUpdate inside a try block but never actually
+  // checked its result; since atUpdate resolves to null on failure rather
+  // than throwing, the catch block below was dead code and a real write
+  // failure still showed "Property updated" success. Now checks the real
+  // result before reporting success.
   if(!demoMode){
-    try{
-      if(p.id)await atUpdate('Properties',p.id,propFields);
+    if(p.id){
+      const updRes=await atUpdate('Properties',p.id,propFields);
+      if(updRes){
+        showToast('Property updated','success');
+      }else{
+        showToast('Could not save changes to Airtable. Please try again.','error');
+      }
+    }else{
       showToast('Property updated','success');
-    }catch(e){showToast('Saved locally — Airtable sync failed','warn');}
+    }
   } else {
     showToast('Updated locally','success');
   }
@@ -24672,13 +24803,23 @@ async function dismissDraftAction(subId){
 async function approveSubmission(id){
   const s=submissions.find(s=>s.id===id);if(!s)return;
   if(s.reviewStatus==='approved')return; // already approved — prevent duplicate Documents records (v20d fix)
+  // v52j — the Field Updates atUpdate result was discarded entirely; a
+  // failed approval write still flipped local status to approved, pushed
+  // a notification, and (below) archived to Documents and notified the
+  // client, all against a Review Status that never actually saved. Now
+  // aborts here on a failed write, before any of those downstream effects.
+  if(s.atId){
+    const reviewUpdRes=await atUpdate('Field Updates',s.atId,{'Review Status':'Approved'});
+    if(!reviewUpdRes){
+      showToast('Could not approve this update. Please try again.','error');
+      return;
+    }
+  }
   s.reviewStatus='approved';
   s.approvedAt=new Date().toISOString();
   const today=new Date().toISOString().split('T')[0];
   const docName=`${escHtml(s.property)} — Field Update ${s.week}`;
   notifications.push({type:'approved',property:s.property,week:s.week,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
-  // Update Field Updates table
-  if(s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Approved'});
   // Archive to Documents table → Field Updates subfolder
   const docRes=await atCreate('Documents',{
     'Document Name':docName,
@@ -24727,9 +24868,20 @@ async function approveSubmission(id){
 async function kickSubmission(id){
   const note=prompt('Return note for consultant:');if(note===null)return;
   const s=submissions.find(s=>s.id===id);if(!s)return;
+  // v52j — same gap as approveSubmission: the atUpdate result was
+  // discarded, so a failed "kick back" write still flipped local status
+  // to returned and notified the consultant that the update was returned,
+  // even if Airtable never actually recorded the return. Now aborts on a
+  // failed write instead.
+  if(s.atId){
+    const kickUpdRes=await atUpdate('Field Updates',s.atId,{'Review Status':'Returned','Return Note':note});
+    if(!kickUpdRes){
+      showToast('Could not return this update. Please try again.','error');
+      return;
+    }
+  }
   s.reviewStatus='returned';s.returnNote=note;
   notifications.push({type:'returned',property:s.property,week:s.week,note,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
-  if(s.atId) await atUpdate('Field Updates',s.atId,{'Review Status':'Returned','Return Note':note});
   updateQueueBadge();refreshQueue();refreshMyUpdates();
   showToast(`Update returned — ${s.consultant} has been notified`,'warn');
 }
@@ -25117,7 +25269,18 @@ async function submitUpdate(){
     if(!existing){showToast('Original submission not found','error');return;}
     fields['Review Status']='Pending';
     fields['Submitted Date']=dateStr;
-    if(existing.atId)await atUpdate('Field Updates',existing.atId,fields);
+    // v52j — the resubmit atUpdate result was discarded entirely; a
+    // failed write still updated local state and showed the full
+    // "resubmitted, you'll be notified" success flow, with the consultant
+    // having no idea Airtable never actually recorded the resubmission.
+    // Now aborts here on a failed write instead.
+    if(existing.atId){
+      const resubmitRes=await atUpdate('Field Updates',existing.atId,fields);
+      if(!resubmitRes){
+        showToast('Could not resubmit this update. Please try again.','error');
+        return;
+      }
+    }
     Object.assign(existing,{units,phase,status,notes,commentType,issueStatus,submittedAt:dateStr,reviewStatus:'pending',draftAction,linkedUnitIds,scopeId,appliesToWholeProject});
     updateQueueBadge();
     const se=document.getElementById('submit-success');document.getElementById('submit-success-msg').textContent=`Update for ${property} resubmitted. You'll be notified once reviewed.`;
@@ -28655,24 +28818,42 @@ async function saveEditVdaProject(){
   const linkedUnitIds=[...st.units];
 
   showToast('Saving changes...','info');
+  // v52j — the main VDA Project atUpdate result was discarded entirely;
+  // local state (p.status/nickname/linked IDs) updated unconditionally
+  // regardless of whether the write actually reached Airtable. Folded into
+  // the same taskLineFailCount counter declared below (moved up here) so
+  // one honest closing toast covers every write this function makes, not
+  // just the task line create/update/delete steps.
+  let taskLineFailCount=0;
   // Save is deliberately scoped to Status + Nickname + Linked Properties/
   // Units + Task Lines. Project Value is never written here — it's always
   // computed live from Task Line amounts (vdaProjectValue()).
-  await atUpdate('VDA Project',_evpCurrentId,{
+  const mainUpdRes=await atUpdate('VDA Project',_evpCurrentId,{
     'Status':status,
     'Nickname':nickname,
     'Linked Properties':linkedPropertyIds,
     'Linked Units':linkedUnitIds,
   });
-  p.status=status;p.nickname=nickname;p.linkedPropertyIds=linkedPropertyIds;p.linkedUnitIds=linkedUnitIds;
+  if(mainUpdRes){
+    p.status=status;p.nickname=nickname;p.linkedPropertyIds=linkedPropertyIds;p.linkedUnitIds=linkedUnitIds;
+  }else{
+    taskLineFailCount++;
+  }
 
   const rows=readVdaTaskLineRows('evp-tasklines');
   const existingIds=new Set(rows.filter(r=>r.existingId).map(r=>r.existingId));
   // Deletions: existing Task Lines for this VDA Project no longer present as a row.
+  // v52j — the atDelete result was discarded, so a failed delete still
+  // removed the task line from local state, an orphaned record left alive
+  // in Airtable with no signal anything went wrong.
   const toDelete=(window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===_evpCurrentId&&!existingIds.has(t.id));
   for(const t of toDelete){
-    await atDelete('Task Line',t.id);
-    window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).filter(x=>x.id!==t.id);
+    const delRes=await atDelete('Task Line',t.id);
+    if(delRes){
+      window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).filter(x=>x.id!==t.id);
+    }else{
+      taskLineFailCount++;
+    }
   }
   // v51j — a failed new-row Task Line create was already correctly kept out
   // of VDA_TASK_LINES (the if(tlRes&&...) guard), but the failure itself
@@ -28680,10 +28861,12 @@ async function saveEditVdaProject(){
   // unconditionally even if some new task lines never reached Airtable.
   // Now counted and folded into the final toast, same treatment as
   // saveConfigureVdaProject.
-  let taskLineFailCount=0;
   for(const row of rows){
     if(row.existingId){
-      await atUpdate('Task Line',row.existingId,{
+      // v52j — same gap as the deletes above: the existing-row atUpdate
+      // result was discarded, so a failed edit still updated the local
+      // object as if it had saved.
+      const tlUpdRes=await atUpdate('Task Line',row.existingId,{
         'Description':row.description,
         'Amount':row.amount,
         'Billing Split':row.billingSplit,
@@ -28691,6 +28874,10 @@ async function saveEditVdaProject(){
         'Status':row.status,
         'Monthly Forecast Estimate':row.monthlyForecastEstimate,
       });
+      if(!tlUpdRes){
+        taskLineFailCount++;
+        continue;
+      }
       const existingObj=(window.VDA_TASK_LINES||[]).find(x=>x.id===row.existingId);
       if(existingObj){
         existingObj.description=row.description;existingObj.amount=row.amount;existingObj.billingSplit=row.billingSplit;
