@@ -1,4 +1,36 @@
 <!--
+pulse_v52d. Changes from v52c, this round. Requires worker_v44c.mjs
+deployed alongside this file — the "Other" category detail depends on
+worker-side changes, the chart color fix is client-only but shipping
+together as one round:
+  1. MARLI Insights' "Other" question category previously showed only a
+     percentage with zero visibility into what those questions actually
+     were (flagged live: ~70% of real questions were landing there). Root
+     cause traced to extractCategoryTag() (worker): every path that falls
+     back to 'other' — no category tag found in MARLI's answer, a tag
+     that's started but never closed, or a tag whose value doesn't match
+     the 7-item category allowlist — did so silently, with nothing
+     recorded beyond the bucket itself. extractCategoryTag() now also
+     returns why it fell back (fallbackReason: no_tag / malformed_tag /
+     unmatched_value) and, for the unmatched case, the raw value MARLI
+     actually emitted (rawTag). logMarliUsage() records these alongside
+     the question text, but only when category is genuinely 'other', so
+     every other category's log entries are unchanged. getMarliInsights()
+     surfaces the 50 most recent as a new otherDetail array on the
+     response. On the client, the "Other" row in Question categories is
+     now clickable when detail exists, opening a read-only panel
+     (showMarliOtherDetail()) listing each question with its fallback
+     reason and raw tag value if any. This is visibility only — no
+     category logic changed, no allowlist widened; once real data is
+     visible here it'll be possible to tell whether the fix is a prompt
+     adjustment, a parser fix, or a genuinely missing category.
+  2. Query volume chart: PM/Consultant/Client previously stacked as three
+     shades of the same blue (blue-dark/blue-mid/blue-light), flagged as
+     too similar to tell apart at a glance. Now uses three distinct hues
+     already in the app's palette — blue-dark (PM), teal (Consultant),
+     purple (Client) — same legend/hover behavior otherwise unchanged.
+     'Other' still folds into the Client segment (near-zero in practice).
+
 pulse_v52c. Changes from v52b, this round:
   1. Property page's Meeting Log card now also shows the real invited
      attendee list (name and role, e.g. "Jeff Sena (VDA), Mike Loeffler
@@ -3309,7 +3341,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52d</div>
     </div>
   </nav>
 
@@ -20534,9 +20566,13 @@ async function renderMarliInsights(){
       const r=data.dailyByRole[d];
       const total=r.pm+r.consultant+r.client+r.other;
       const h=Math.max(2,Math.round((total/maxTotal)*100));
-      // Stack proportionally within the bar height — pm darkest, then
-      // consultant, then client, lightest. 'other' folded into client
-      // shade to avoid a 4th color for a near-zero bucket in practice.
+      // v52d fix — PM/Consultant/Client previously stacked as three shades
+      // of the same blue (blue-dark/blue-mid/blue-light), which Misty
+      // flagged as too similar to tell apart at a glance. Now uses three
+      // genuinely distinct hues already in the app's palette (blue-dark,
+      // teal, purple), same pattern used elsewhere for Active/Pipeline
+      // stat cards. 'other' still folds into the Client segment (a
+      // near-zero bucket in practice, not worth a 4th color/legend entry).
       const pmPct=total>0?Math.round((r.pm/total)*100):0;
       const conPct=total>0?Math.round((r.consultant/total)*100):0;
       const cliPct=Math.max(0,100-pmPct-conPct);
@@ -20548,8 +20584,8 @@ async function renderMarliInsights(){
         <div style="text-align:center;font-size:10px;color:var(--gray-mid);margin-bottom:2px;height:12px">${total>0?total:''}</div>
         <div style="width:100%;border-radius:2px 2px 0 0;overflow:hidden;display:flex;flex-direction:column;height:${h}%">
           ${pmPct>0?`<div style="background:var(--blue-dark);height:${pmPct}%"></div>`:''}
-          ${conPct>0?`<div style="background:var(--blue-mid);height:${conPct}%"></div>`:''}
-          ${cliPct>0?`<div style="background:var(--blue-light);height:${cliPct}%"></div>`:''}
+          ${conPct>0?`<div style="background:var(--teal);height:${conPct}%"></div>`:''}
+          ${cliPct>0?`<div style="background:var(--purple);height:${cliPct}%"></div>`:''}
         </div>
       </div>`;
     }).join('');
@@ -20560,17 +20596,27 @@ async function renderMarliInsights(){
       </div>
       <div style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--gray-mid)">
         <span><span style="display:inline-block;width:8px;height:8px;background:var(--blue-dark);border-radius:2px;margin-right:4px"></span>PM</span>
-        <span><span style="display:inline-block;width:8px;height:8px;background:var(--blue-mid);border-radius:2px;margin-right:4px"></span>Consultant</span>
-        <span><span style="display:inline-block;width:8px;height:8px;background:var(--blue-light);border-radius:2px;margin-right:4px"></span>Client</span>
+        <span><span style="display:inline-block;width:8px;height:8px;background:var(--teal);border-radius:2px;margin-right:4px"></span>Consultant</span>
+        <span><span style="display:inline-block;width:8px;height:8px;background:var(--purple);border-radius:2px;margin-right:4px"></span>Client</span>
       </div>`;
   }
 
   // --- Category breakdown ---
   const offTopic=data.categoryBreakdown.find(c=>c.category==='off_topic');
+  // v52d fix — the 'other' row is now clickable when there's detail to show
+  // (data.otherDetail, added by the matching worker fix), opening
+  // showMarliOtherDetail() below. This is what finally answers "what are
+  // these questions" instead of just showing a percentage with no way to
+  // drill in. Rows for every other category are unchanged (not clickable,
+  // no cursor/hover styling), and 'other' itself stays non-clickable if
+  // there's simply no detail yet (e.g. before this fix's log entries exist).
+  const hasOtherDetail=(data.otherDetail||[]).length>0;
   const catRows=data.categoryBreakdown.map(c=>{
     const isOffTopic=c.category==='off_topic';
-    return `<tr style="border-top:1px solid var(--gray-pale)">
-      <td style="padding:6px 0;font-size:12px;${isOffTopic?'color:var(--red);font-weight:600':''}">${MARLI_INSIGHTS_CATEGORY_LABELS[c.category]||c.category}</td>
+    const isOther=c.category==='other';
+    const clickable=isOther&&hasOtherDetail;
+    return `<tr style="border-top:1px solid var(--gray-pale);${clickable?'cursor:pointer':''}" ${clickable?'onclick="showMarliOtherDetail()"':''}>
+      <td style="padding:6px 0;font-size:12px;${isOffTopic?'color:var(--red);font-weight:600':''}">${MARLI_INSIGHTS_CATEGORY_LABELS[c.category]||c.category}${clickable?' <i class="ti ti-chevron-right" style="font-size:10px;color:var(--blue-dark)"></i>':''}</td>
       <td style="padding:6px 0;font-size:12px;text-align:right;font-weight:700;${isOffTopic?'color:var(--red)':''}">${c.pct}%</td>
     </tr>`;
   }).join('');
@@ -20933,6 +20979,49 @@ function showMarliFlagDetail(flagId){
   </div>`;
   document.body.appendChild(overlay);
 }
+
+// v52d — new. Shows the actual questions that landed in the "other"
+// category, sourced from data.otherDetail (added by the matching worker
+// fix to extractCategoryTag()/logMarliUsage()). Each row shows the
+// question plus why it fell through: 'no_tag' means MARLI's answer never
+// included the category marker at all, 'malformed_tag' means the marker
+// was started but never closed, 'unmatched_value' means MARLI emitted a
+// tag but the value isn't one of the 7 allowed categories (rawTag shows
+// what it actually said). This is read-only — no action to take here, just
+// visibility into what was previously a black box.
+const _MARLI_OTHER_REASON_LABELS={
+  no_tag:'No category tag found in the response',
+  malformed_tag:'Category tag was started but never closed',
+  unmatched_value:'Tag value did not match any known category',
+};
+function showMarliOtherDetail(){
+  if(!_marliInsightsCache)return;
+  const rows=_marliInsightsCache.otherDetail||[];
+  const overlay=document.createElement('div');
+  overlay.id='marli-other-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const bodyRows=rows.length===0
+    ?`<div style="padding:20px;text-align:center;font-size:12px;color:var(--gray-mid)">No detail available for this window</div>`
+    :rows.map(r=>`<div style="padding:10px 12px;border-top:1px solid var(--gray-pale)">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:4px">
+          <span style="font-size:10px;color:var(--gray-mid)">${_miFmtDate(r.ts)} · ${_miFmtRole(r.role)}</span>
+          <span style="font-size:10px;color:var(--amber);font-weight:600;white-space:nowrap">${_MARLI_OTHER_REASON_LABELS[r.fallbackReason]||r.fallbackReason||'Unknown'}${r.rawTag?`: "${escHtml(r.rawTag)}"`:''}</span>
+        </div>
+        <div style="font-size:13px;color:var(--navy)">${escHtml(r.question)}</div>
+      </div>`).join('');
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:680px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:14px;font-weight:600;color:var(--navy)">Questions categorized as "Other"</div>
+        <div style="margin-top:4px;font-size:11px;color:var(--gray-mid)">Most recent ${rows.length}, this window</div>
+      </div>
+      <button onclick="document.getElementById('marli-other-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="overflow-y:auto;flex:1">${bodyRows}</div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+window.showMarliOtherDetail=showMarliOtherDetail;
 
 async function dismissMarliFlagAndClose(flagId){
   try{
