@@ -1,4 +1,234 @@
 <!--
+pulse_v52i. Changes from v52h, this round. Fourth of the renumbered
+silent-failure-audit rounds. This round covers Meetings/Site Visits/
+Attendees/Client Comments, same bug class as prior rounds:
+atUpdate()/atDelete() resolve to null on failure rather than throwing, so
+a dead try/catch, an unguarded result, or (in a few places this round) no
+await at all looks identical to success on screen regardless of what
+actually happened in Airtable. Requires no worker changes.
+  1. saveMeetingDraft()'s edit-existing-draft branch discarded its atUpdate
+     result; the create branch already had this fixed in v51j, this was
+     the sibling gap. Now aborts with an error if the save fails, leaving
+     the panel open so nothing typed is lost.
+  2. closeAction() checked its Action Items atUpdate result but only ever
+     logged it to console — the item still showed Closed locally and the
+     closing toast only ever reflected the separate Documents-archive
+     write's outcome, never this one. Now rolls the item back to its prior
+     status and aborts before the archive/render steps if the close itself
+     fails.
+  3. executeCancelCalEvent() and executeRescheduleCalEvent() both wrapped
+     their main atUpdate call in dead try/catch (never actually catches,
+     since atUpdate doesn't throw); reschedule's per-attendee RSVP reset
+     loop had the same issue. Cancel now rolls the status back and aborts
+     on a failed write instead of sending cancellation emails against a
+     cancellation that never saved. Reschedule now aborts on a failed date
+     write, and skips re-inviting any attendee whose RSVP reset failed
+     rather than silently treating them as reset.
+  4. syncCaleditAttendees()'s attendee-update branch and delete loop were
+     both dead try/catch; the create branch and its fail counting already
+     existed from a prior round. Both now check real results and fold into
+     the same failCount, so a failed update or delete is no longer treated
+     as a successful sync.
+  5. saveEditCalEvent()'s two main-record atUpdate calls (Site Visits and
+     Meetings) were both dead try/catch. Now aborts before running the
+     attendee sync if the main event save itself failed, instead of
+     syncing attendees against a record whose new date/details never
+     actually saved.
+  6. deleteCalEvent()'s two atDelete calls were both dead try/catch, so a
+     failed delete still removed the event from local state and showed
+     "deleted" success while the record stayed alive in Airtable. Now
+     checks the real result before removing anything from local state.
+  7. resolveFlag() (Client Comments) had zero result checking on any of
+     its per-record atUpdate calls in the loop — a thread could show
+     "Resolved" and a success toast even if every underlying write failed.
+     Now rolls every record back to its prior status on any failure and
+     shows an error instead.
+
+pulse_v52h. Changes from v52g, this round. Third of the renumbered
+silent-failure-audit rounds. This round covers Phase Tasks/Unit Groups,
+same bug class as v52e/v52g: atUpdate()/atDelete()/atCreate() resolve to
+null (or, for atCreate, an object with no .id) on failure rather than
+throwing, so an unguarded result, a dead try/catch, or (in several places
+this round) a genuinely fire-and-forget call with no await at all looks
+identical to success on screen regardless of what actually happened in
+Airtable. Requires no worker changes.
+  1. saveNewPhase() and saveEditPhase() both call
+     reclaimUnitsFromOtherPhases(), which has returned a fail count since
+     v52e specifically so these two callers could consume it — flagged in
+     v52e's own header comment as the next round's job. Both now fold that
+     count into their existing fail counters.
+  2. saveEditPhase() also had four more unguarded points: the unchecked-
+     task atDelete loop, the phase-rename atUpdate loop, and the new-task
+     atCreate loop were all true fire-and-forget (no await, no result
+     check); the main Unit Groups atUpdate had its result discarded
+     entirely. One fail count (editPhaseFailCount) now covers all of it,
+     folded into the closing toast, matching the pattern saveNewPhase()
+     already used.
+  3. reorderPhase()'s two atUpdate calls (renumbering phase names, and
+     propagating the rename to that phase's Phase Tasks records) were also
+     fire-and-forget. Now awaited and counted, with an honest toast instead
+     of the previous unconditional "Phase order updated."
+  4. deletePhase()'s two atDelete calls (the phase's own Phase Tasks
+     records, then the Unit Group record itself) had their results
+     discarded — the same orphaned-record risk the v51i fix in this same
+     function was written to prevent, just via write failure instead of a
+     missing delete call. Now counted with an honest toast.
+  5. updatePhaseStatus() discarded its atUpdate result and showed success
+     unconditionally. Now rolls the local status (and any auto-set Actual
+     Start/Completion date) back on a failed write.
+  6. saveSetUpProjects() and saveSplitIntoScopes() (the two Capital
+     Plan/Split wizards) each had multiple unguarded Scopes/Milestones/Unit
+     Inventory List writes across their edit, unit-linking reconciliation,
+     and (for Split) removed-scope-cleanup and graduation-status passes.
+     All folded into each function's existing fail counter so one honest
+     closing toast now covers every write each wizard makes, not just the
+     original per-row create/update the v51j fix already caught.
+  7. confirmBulkUnitImport()'s per-unit Unit Group linkage write (attaching
+     a newly created unit to its resolved Unit Group) discarded its result;
+     every other write in that function already checked its result and
+     fed the same failCount, this was the one gap. Now folded in the same
+     way.
+
+pulse_v52g. Changes from v52f, this round. Second of the renumbered
+silent-failure-audit rounds (v52g-v52j, formerly v52f-v52i, renumbered to
+make room for the v52f manual milestone completion feature build). This
+round covers Billing/Retainage/Change Orders/Bid, same bug class as v52e:
+atUpdate()/atDelete()/atCreate() resolve to null (or, for atCreate, an
+object with no .id) on failure rather than throwing, so an unguarded
+result or a try/catch wrapped around one of these calls looks identical to
+success on screen regardless of what actually happened in Airtable.
+Requires no worker changes.
+  1. saveBidSubmission()'s two atDelete loops (clearing old Bid Line Items/
+     Bid Unit Detail rows before an edited bid's fresh atCreate loops
+     re-populate them) never checked their results. Folded into the same
+     lineItemFailCount/unitDetailFailCount counters the existing v51j
+     atCreate fix already used, so one honest toast now covers both the
+     cleanup and the recreate steps of an edited bid.
+  2. Both Change Order write paths (the modal save function's editId
+     branch, and _applyUpdateCOStatus() used by Approve/Reject/status
+     changes) wrapped their atUpdate call in try/catch with the result
+     itself never checked — a dead catch block, since atUpdate never
+     throws. Both now check the real result and roll back the local edit
+     with an error toast on failure instead of reporting false success.
+  3. deleteBillingEntry() and deleteRetainageRelease() removed the entry
+     from local state and showed a success toast unconditionally, with the
+     atDelete result discarded. Both now restore the removed entry and
+     show an error toast if the delete didn't actually go through.
+  4. saveRetainageRelease()'s edit branch discarded its atUpdate result the
+     same way; now rolls the local edit back on failure, matching the
+     create branch's existing v51j handling.
+  5. saveBillingModal() had two separate gaps: the Project Budget write
+     (atUpdate on Properties) only logged its result to console with zero
+     user-facing signal on failure, and the edit-mode Billing Log write
+     discarded its result the same way the delete functions did. Both now
+     roll back their local state and show an error toast on failure; the
+     budget-only save path (no YTD entered) no longer shows a false
+     "Project budget updated" success toast when the budget write itself
+     just failed.
+
+pulse_v52f. Changes from v52e, this round. New permanent feature per
+Misty's explicit request, design confirmed with her step by step
+(toggle-only-when-Manual-Override-is-on, immediate no-confirmation revert,
+Completion-date-locks-Planned/Actual-stay-open) before any code was
+written. Requires 3 new fields on the Milestones table in Airtable —
+already added by Misty before this build started:
+  - Manually Completed (checkbox)
+  - Manually Completed By (single line text)
+  - Manually Completed On (date)
+Requires no worker changes.
+  1. deriveMilestoneStatus() now takes two new optional trailing params,
+     manuallyCompleted and manuallyCompletedOn. When manuallyCompleted is
+     true, the function returns 'Complete' unconditionally, before any of
+     the existing calendar/phase-derived branches run — a genuine override
+     that wins regardless of what the real Planned/Actual/Completion dates
+     say. recalculateAllMilestoneStatuses() (which runs on every
+     Milestones-tab render) passes these through on its one call site, so
+     the override survives the same auto-recalc pass that originally
+     caused the v52a Casa Marina bug.
+  2. renderMilestones() — the toggle control only renders inside the
+     isCalendar branch, which is already forced true whenever
+     p.milestoneManualOverride is on (existing v44e behavior) — so the new
+     toggle is a fast-path shortcut available only within that existing
+     mode, never an independent mechanism, per Misty's confirmed design.
+     When m.manuallyCompleted is true: the Completion date input is
+     replaced with a disabled, grayed field pinned to
+     manuallyCompletedOn (Planned Start/Actual Start remain fully
+     editable, unaffected); an amber strip reads "Marked complete today
+     (date) by (name)" with the toggle checked. When off: a neutral
+     "Mark complete today" toggle with an info tooltip.
+  3. New handler toggleMilestoneManualCompletion(), mirroring the existing
+     toggleMilestoneManualOverride()'s optimistic-update-then-rollback-on-
+     failure pattern. Turning the toggle on writes Manually Completed=true,
+     Manually Completed By=the logged-in user's display name (window.
+     _userName, same convention used for Change Order/Retainage logging
+     elsewhere in this file), Manually Completed On=today, and Status=
+     Complete, in one atUpdate call. Turning it off clears all three
+     fields and re-derives Status via deriveMilestoneStatus() using the
+     milestone's real underlying dates — immediately, no confirmation
+     dialog, per Misty's explicit answer: the whole point is letting a PM
+     fast-track a milestone now and freely go back to enter the real
+     historical date later with zero friction. A failed write rolls the
+     toggle and status back and shows an error toast, matching the
+     rollback pattern already used by the property-wide override toggle.
+     Scope/Property status rollup runs afterward via the existing
+     deriveAndWriteScopeStatus(), same as any other milestone status
+     change.
+Note — the remaining 4 silent-failure-audit rounds queued behind v52e
+have been renumbered to make room for this feature build: what was
+v52f/g/h/i (Billing/Retainage/Change Orders/Bid, Phase Tasks/Unit Groups,
+Meetings/Site Visits/Attendees/Client Comments, Properties/Capital Plan/
+VDA Project/Field Updates) are now v52g/h/i/j respectively. No code
+changed as part of this renumbering, only the version label each round
+will ship under.
+
+pulse_v52e. Changes from v52d, this round. First of 5 planned rounds
+(v52e-v52i) closing out the atUpdate/atDelete silent-failure audit —
+same bug class already fixed for every atCreate call site (v51j) and for
+confirmDeleteProperty specifically (v52a): both atUpdate() and atDelete()
+resolve to null on ANY failure rather than throwing, so a bare
+`await atUpdate(...)` with no result check (or a try/catch wrapped around
+one, which can never actually catch a write failure since neither
+function throws) always looks identical to success on screen regardless
+of what actually happened in Airtable. This round covers Unit Inventory/
+Scopes linkage specifically:
+  1. linkUnitToScope()/unlinkUnitFromScope() (the two shared low-level
+     helpers used by nearly every unit-scope linking flow in the app) now
+     return true/false instead of nothing, so every caller can detect and
+     report a failed write instead of assuming success. All 7 call sites
+     updated to check the result: backfillUnassignedUnits (background,
+     console.error summary), the Manage Unit Inventory "add units" flow
+     (folded into its existing unitAddFailCount), autoDeriveScopeForUnit's
+     manual move/assign flow (now shows an error toast instead of a false
+     "Moved to..." success), saveScopeEditModal (new saveFailCount tracks
+     the main scope field write plus every per-unit link/unlink),
+     npCreateUnitsFromCounts's New Property unit-creation flow (folded
+     into its existing _scopeLinkFailCount).
+  2. uimConfirmDelete() (bulk unit delete in Manage Unit Inventory) now
+     tracks per-unit delete failures — a failed unit no longer
+     disappears from the local list while silently surviving in Airtable,
+     and the closing toast reflects partial failure honestly.
+  3. Manage Unit Inventory's inline field editors (uimSaveTextField,
+     uimSaveNumberField, uimSaveSelectField, uimSaveManualStatus) now all
+     check their write's result. The number/select editors previously
+     flashed green (uimFieldSaved) unconditionally, before the write even
+     resolved; they now wait for the real result and flash green or red
+     accordingly via a new uimFieldFailed() helper, which also toasts an
+     error. The text field editor had no save-confirmation feedback of any
+     kind before; it now toasts on failure.
+  4. reclaimUnitsFromOtherPhases() (used when a phase's unit list changes,
+     to strip stale references from other phases) now returns a fail
+     count instead of silently discarding write failures — its callers
+     (saveNewPhase/saveEditPhase) are picked up in a later round (now
+     renumbered v52h, see below) to actually surface this.
+  5. confirmDemoteScope()'s unit-relink and source-Scope/Milestones-delete
+     steps were happening entirely outside that function's own
+     demoteWriteFailCount tracking, despite the counter existing right
+     there for the Unit Groups/Phase Tasks writes just above — a failed
+     relink or delete during a Demote Project action was invisible and
+     the closing toast always claimed success regardless. Now folded into
+     the same counter and honest toast the function already had.
+Requires no worker changes.
+
 pulse_v52d. Changes from v52c, this round. Requires worker_v44c.mjs
 deployed alongside this file — the "Other" category detail depends on
 worker-side changes, the chart color fix is client-only but shipping
@@ -1991,6 +2221,19 @@ async function loadAllData() {
       // should still surface as recent activity for a few days, which its
       // own Completion Date alone can't signal.
       lastModified: r.fields['Last Modified Time']||'',
+      // v52f — Manual Completion Override, per-milestone. Only surfaces in
+      // the UI when the property's Milestone Manual Override is also on
+      // (see renderMilestones) — this is a fast-path shortcut within that
+      // existing mode, not an independent mechanism. When true,
+      // deriveMilestoneStatus returns Complete unconditionally, using
+      // manuallyCompletedOn as the effective completion date, regardless
+      // of what the real Planned/Actual/Completion dates say. Turning it
+      // off reverts status to normal derivation immediately with no
+      // confirmation needed, by design, so a PM can freely fast-track a
+      // milestone now and backfill the real historical date later.
+      manuallyCompleted: r.fields['Manually Completed']===true,
+      manuallyCompletedBy: r.fields['Manually Completed By']||'',
+      manuallyCompletedOn: r.fields['Manually Completed On']||'',
     })); // newest first
     // Scopes — v28a. Property field is an Airtable Link (array of record
     // IDs); resolve to property NAME here using the just-fetched `props`
@@ -3341,7 +3584,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52i</div>
     </div>
   </nav>
 
@@ -5683,12 +5926,21 @@ async function backfillUnassignedUnits(propName){
   if(!propObj)return;
   const unassigned=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName&&!u.scopeId);
   if(unassigned.length===0)return;
+  // v52e fix — linkUnitToScope()'s result was never checked. This is a
+  // silent background reconciliation (no direct user action triggers it),
+  // so a console.error summary rather than a toast matches how similar
+  // background fixups elsewhere in this file surface failures.
+  let failCount=0;
   for(const u of unassigned){
     const yearKey=scopeYearKeyFor(u);
     let scope=findScopeForYearKey(propName,yearKey);
     if(!scope)scope=await createScopeForYearKey(propName,propObj.id,yearKey);
-    if(scope)await linkUnitToScope(u,scope);
+    if(scope){
+      const ok=await linkUnitToScope(u,scope);
+      if(!ok)failCount++;
+    }
   }
+  if(failCount>0)console.error(`backfillUnassignedUnits: ${failCount} of ${unassigned.length} unit(s) failed to link to a scope for ${propName}`);
 }
 window.backfillUnassignedUnits=backfillUnassignedUnits;
 
@@ -5897,7 +6149,15 @@ async function uimApplyTotalUnits(propName){
         const newUnit={id:newId,name:`Unit ${nextNum}`,property:propName,scopeId:'',deviceLocation:'',unitType:'',priority:null,status:'',capexYear:'',vdaRecYear:'',elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,clientBudget:0};
         window.UNIT_INVENTORY.push(newUnit);
         if(!tbdScope&&propObj)tbdScope=await createScopeForYearKey(propName,propObj.id,'TBD');
-        if(tbdScope)await linkUnitToScope(newUnit,tbdScope);
+        // v52e fix — linkUnitToScope()'s result was never checked, so a
+        // unit whose create succeeded but whose scope-link failed still
+        // counted as a full success below. Now folded into the same
+        // unitAddFailCount the create failures already use, so the
+        // closing toast is accurate either way.
+        if(tbdScope){
+          const linkOk=await linkUnitToScope(newUnit,tbdScope);
+          if(!linkOk)unitAddFailCount++;
+        }
       }else{
         unitAddFailCount++;
       }
@@ -5951,17 +6211,35 @@ function uimCancelDeleteMode(propName){
 }
 window.uimCancelDeleteMode=uimCancelDeleteMode;
 
+// v52e fix — atDelete's result was never checked, so the local array was
+// filtered (removing the unit from the UI) unconditionally regardless of
+// whether the Airtable delete actually succeeded. On a failed delete the
+// unit would silently reappear on the next reload while the toast had
+// already told the user it was gone. Now tracks per-unit failures and
+// only removes a unit from the local array once its delete is confirmed;
+// a failed unit stays visible and the closing toast honestly reflects
+// partial failure instead of always claiming full success.
 async function uimConfirmDelete(propName){
   if(uimPendingDeleteIds.length===0){showToast('No units selected','error');return;}
   showToast(`Deleting ${uimPendingDeleteIds.length} unit(s)...`,'info');
+  let failCount=0;
   for(const id of uimPendingDeleteIds){
-    await atDelete('Unit Inventory List',id);
-    window.UNIT_INVENTORY=(window.UNIT_INVENTORY||[]).filter(u=>u.id!==id);
+    const result=await atDelete('Unit Inventory List',id);
+    if(result){
+      window.UNIT_INVENTORY=(window.UNIT_INVENTORY||[]).filter(u=>u.id!==id);
+    }else{
+      failCount++;
+      console.error('uimConfirmDelete: failed to delete unit',id);
+    }
   }
   uimDeleteMode=false;
   uimPendingDeleteIds=[];
   document.getElementById('uim-delete-banner').innerHTML='';
-  showToast('Units deleted','success');
+  if(failCount>0){
+    showToast(`${failCount} unit(s) could not be deleted. Check your connection and try again.`,'error');
+  }else{
+    showToast('Units deleted','success');
+  }
   renderUimTotalUnitsControl(propName);
   renderUimTable(propName);
 }
@@ -5972,11 +6250,29 @@ function uimFieldSaved(inputEl){
   inputEl.style.background='var(--green-pale)';
   setTimeout(()=>{inputEl.style.background='';},600);
 }
+// v52e fix — every Manage Unit Inventory inline field save below called
+// atUpdate without checking its result, so uimFieldSaved's green flash
+// (or, for the fields with no visible input element at all, nothing)
+// fired unconditionally regardless of whether the write actually reached
+// Airtable. Added this red-flash counterpart plus a toast, so a failed
+// inline save is visible instead of looking identical to a successful one.
+function uimFieldFailed(inputEl,fieldLabel){
+  if(inputEl){
+    inputEl.style.transition='background .3s';
+    inputEl.style.background='var(--red-pale)';
+    setTimeout(()=>{inputEl.style.background='';},1200);
+  }
+  showToast(`Could not save ${fieldLabel||'field'}. Check your connection and try again.`,'error');
+}
 
 async function uimSaveTextField(id,airtableField,localField,value){
   const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
   if(u)u[localField]=value;
-  await atUpdate('Unit Inventory List',id,{[airtableField]:value});
+  // v52e fix — result was never checked at all (this field never even had
+  // a save-confirmation flash to begin with, unlike its sibling number/
+  // select field savers). Now reports a failure via a toast.
+  const _res=await atUpdate('Unit Inventory List',id,{[airtableField]:value});
+  if(!_res)showToast(`Could not save ${airtableField}. Check your connection and try again.`,'error');
   // v34k — Client Capex Planning Year is the trigger for Scope
   // auto-derivation (Design Spec Section 4a, Option C — event-driven, not
   // page-load, not a separate "Generate Scopes" button). Runs only when
@@ -6182,16 +6478,43 @@ async function linkUnitToScope(unit,scope,oldScope){
     unit.status=derivedStatus;
     statusFields={'Status':derivedStatus};
   }
+  // v52e fix — neither write's result was checked, so a failed Airtable
+  // write here left the in-memory unit/scope objects (already mutated
+  // above, before either await) out of sync with what's actually saved,
+  // with zero signal to any caller. This is a shared low-level helper
+  // called from several places (bulk linking, split-into-scopes, demote
+  // flows, etc.), so rather than showing a toast directly here (which
+  // could fire many times in a bulk loop), it now returns true/false so
+  // each caller can decide how to surface a failure — count it, show one
+  // summary toast, etc. — matching the pattern already used for
+  // atCreate-based bulk operations elsewhere in this file.
+  let ok=true;
   if(!demoMode){
-    await atUpdate('Scopes',scope.id,{'Linked Units':scope.linkedUnitIds,...countFields});
-    await atUpdate('Unit Inventory List',unit.id,{'Scopes':[scope.id],...statusFields});
+    const r1=await atUpdate('Scopes',scope.id,{'Linked Units':scope.linkedUnitIds,...countFields});
+    const r2=await atUpdate('Unit Inventory List',unit.id,{'Scopes':[scope.id],...statusFields});
+    if(!r1||!r2){
+      ok=false;
+      console.error('linkUnitToScope: write failed for unit',unit.id,'scope',scope.id,{scopeWriteOk:!!r1,unitWriteOk:!!r2});
+    }
   }
+  return ok;
 }
 
+// v52e fix — result was never checked. Now returns true/false, same
+// pattern as its sibling linkUnitToScope() just above, so callers can
+// surface a failure instead of assuming the unlink always saved.
 async function unlinkUnitFromScope(unit,scope){
   scope.linkedUnitIds=(scope.linkedUnitIds||[]).filter(id=>id!==unit.id);
   const countFields=recomputeScopeTypeCounts(scope);
-  if(!demoMode)await atUpdate('Scopes',scope.id,{'Linked Units':scope.linkedUnitIds,...countFields});
+  let ok=true;
+  if(!demoMode){
+    const r=await atUpdate('Scopes',scope.id,{'Linked Units':scope.linkedUnitIds,...countFields});
+    if(!r){
+      ok=false;
+      console.error('unlinkUnitFromScope: write failed for unit',unit.id,'scope',scope.id);
+    }
+  }
+  return ok;
 }
 
 async function autoDeriveScopeForUnit(unitId){
@@ -6230,9 +6553,17 @@ async function autoDeriveScopeForUnit(unitId){
       showToast('Could not create the target scope in Airtable. Unit move cancelled, try again.','error');
       return;
     }
-    await unlinkUnitFromScope(unit,oldScope);
-    await linkUnitToScope(unit,targetScope,oldScope);
-    showToast(`Moved to ${targetScope.name}`,'success');
+    // v52e fix — neither call's result was checked, so a failed unlink or
+    // link here still announced "Moved to [Scope]" even though the unit's
+    // actual Airtable linkage may not match what's shown. Now checked and
+    // reported honestly, matching the fake-scope guard just above.
+    const unlinkOk=await unlinkUnitFromScope(unit,oldScope);
+    const linkOk=await linkUnitToScope(unit,targetScope,oldScope);
+    if(!unlinkOk||!linkOk){
+      showToast(`Move to ${targetScope.name} may not have fully saved. Check your connection and verify in the Units tab.`,'error');
+    }else{
+      showToast(`Moved to ${targetScope.name}`,'success');
+    }
   }else{
     // First assignment — no prior scope to warn about leaving.
     if(!targetScope)targetScope=await createScopeForYearKey(unit.property,prop.id,yearKey);
@@ -6241,8 +6572,13 @@ async function autoDeriveScopeForUnit(unitId){
       showToast('Could not create the target scope in Airtable. Assignment cancelled, try again.','error');
       return;
     }
-    await linkUnitToScope(unit,targetScope);
-    showToast(`Assigned to ${targetScope.name}`,'success');
+    // v52e fix — result was never checked.
+    const linkOk=await linkUnitToScope(unit,targetScope);
+    if(!linkOk){
+      showToast(`Assignment to ${targetScope.name} may not have fully saved. Check your connection and verify in the Units tab.`,'error');
+    }else{
+      showToast(`Assigned to ${targetScope.name}`,'success');
+    }
   }
   if(currentProp){renderPropertyView(currentProp);renderUnitsTab(currentProp);renderEditPropertyUnitStats(currentProp);}
 }
@@ -6258,16 +6594,30 @@ async function uimSaveNumberField(id,airtableField,localField,value,inputEl){
     const totalCell=document.getElementById('uim-total-'+id);
     if(totalCell)totalCell.textContent=u.totalWorkEst?fmtCurrencyFull(u.totalWorkEst):'$0';
   }
-  if(inputEl)uimFieldSaved(inputEl);
-  await atUpdate('Unit Inventory List',id,{[airtableField]:num});
+  // v52e fix — the green "saved" flash fired before the write even
+  // started (unconditionally), so it never actually reflected success.
+  // Now waits for the real result and flashes green/red accordingly —
+  // these are cost estimate fields, worth getting right.
+  const _res=await atUpdate('Unit Inventory List',id,{[airtableField]:num});
+  if(inputEl){
+    if(_res)uimFieldSaved(inputEl);
+    else uimFieldFailed(inputEl,airtableField);
+  }
 }
 window.uimSaveNumberField=uimSaveNumberField;
 
 async function uimSaveSelectField(id,airtableField,localField,value,selectEl){
   const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
   if(u)u[localField]=localField==='priority'?(value?parseInt(value):null):value;
-  if(selectEl)uimFieldSaved(selectEl);
-  await atUpdate('Unit Inventory List',id,{[airtableField]:localField==='priority'?(value?parseInt(value):null):value});
+  // v52e fix — same issue as uimSaveNumberField above: the flash fired
+  // before the write result was known. Status in particular drives
+  // downstream derivation logic elsewhere in the app, worth surfacing a
+  // real failure rather than flashing green regardless.
+  const _res=await atUpdate('Unit Inventory List',id,{[airtableField]:localField==='priority'?(value?parseInt(value):null):value});
+  if(selectEl){
+    if(_res)uimFieldSaved(selectEl);
+    else uimFieldFailed(selectEl,airtableField);
+  }
   // Unit Type feeds the property hero's Elev/Esc/Lift/Other pills directly
   // (Design Spec Section 1b) — refresh the underlying property view so that
   // stays in sync without requiring the modal to close first.
@@ -6286,14 +6636,20 @@ window.uimSaveSelectField=uimSaveSelectField;
 async function uimSaveManualStatus(id,value){
   const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
   if(!u)return;
+  // v52e fix — neither branch's write result was checked. Status drives
+  // downstream derivation logic across the app (unit health, phase
+  // rollups, etc.), so a failure here is surfaced with a toast — there's
+  // no single input element on this control to flash red against.
+  let _res;
   if(value===''){
     const derived=computeDerivedUnitStatus(u);
     u.status=derived;
-    await atUpdate('Unit Inventory List',id,{'Status':derived});
+    _res=await atUpdate('Unit Inventory List',id,{'Status':derived});
   }else{
     u.status=value;
-    await atUpdate('Unit Inventory List',id,{'Status':value});
+    _res=await atUpdate('Unit Inventory List',id,{'Status':value});
   }
+  if(!_res)showToast('Could not save Status. Check your connection and try again.','error');
   renderUimTable(u.property);
   if(currentProp){renderPropertyView(currentProp);renderUnitsTab(currentProp);renderEditPropertyUnitStats(currentProp);}
 }
@@ -6654,13 +7010,20 @@ function derivePhaseRollupStatus(propName,taskType,scopeId){
 // overrideOn defaults to a live lookup by propName so every existing call
 // site (recalculateAllMilestoneStatuses, etc.) picks up the fix with no
 // changes needed at the call site itself.
-function deriveMilestoneStatus(propName,milestoneNumber,plannedDate,actualDate,completionDate,scopeId,overrideOn){
+function deriveMilestoneStatus(propName,milestoneNumber,plannedDate,actualDate,completionDate,scopeId,overrideOn,manuallyCompleted,manuallyCompletedOn){
   const rule=MILESTONE_DERIVATION[milestoneNumber];
   if(overrideOn===undefined){
     const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
     const prop=port.find(x=>x.n===propName);
     overrideOn=!!prop?.milestoneManualOverride;
   }
+  // v52f — Manual Completion Override wins outright, regardless of rule
+  // type or the real date fields. Only meaningful when overrideOn is also
+  // true (renderMilestones only shows the toggle in that state, and
+  // updateMilestoneField clears manuallyCompleted whenever Manual Override
+  // itself gets switched off) but checked independently here too so status
+  // stays correct even if called from elsewhere without that guarantee.
+  if(manuallyCompleted)return 'Complete';
   if(!rule||rule.type==='calendar'||overrideOn)return deriveCalendarStatus(plannedDate,actualDate,completionDate);
   switch(rule.type){
     case 'phase-task': return derivePhaseTaskStatus(propName,rule.phase,rule.taskOrder,scopeId);
@@ -6772,7 +7135,7 @@ async function recalculateAllMilestoneStatuses(propName){
   let anyChanged=false;
   const changedScopeIds=new Set();
   for(const m of ms){
-    const newStatus=deriveMilestoneStatus(propName,m.milestoneNumber,m.plannedDate,m.actualDate,m.completionDate,m.scopeId);
+    const newStatus=deriveMilestoneStatus(propName,m.milestoneNumber,m.plannedDate,m.actualDate,m.completionDate,m.scopeId,undefined,m.manuallyCompleted,m.manuallyCompletedOn);
     if(newStatus!==m.status){
       m.status=newStatus;
       anyChanged=true;
@@ -7990,9 +8353,18 @@ async function confirmDemoteScope(){
     nextPhaseOrder++;
     // Relink each unit to the target Scope in Airtable and in memory —
     // same relink mechanics saveScopeEditModal already uses.
+    // v52e fix — this write's result was never checked, and wasn't folded
+    // into demoteWriteFailCount despite that counter existing right here
+    // for the Unit Groups/Phase Tasks writes above. A unit could keep
+    // showing under its old (now-deleted) Scope in Airtable while the UI
+    // showed it demoted, with the closing toast still claiming success.
     for(const u of grp){
       if(!demoMode&&u.id&&u.id.startsWith('rec')){
-        await atUpdate('Unit Inventory List',u.id,{'Scopes':[target.id]});
+        const relinkResult=await atUpdate('Unit Inventory List',u.id,{'Scopes':[target.id]});
+        if(!relinkResult){
+          demoteWriteFailCount++;
+          console.error('confirmDemoteScope: unit relink failed for',u.id);
+        }
       }
       u.scopeId=target.id;
     }
@@ -8002,12 +8374,28 @@ async function confirmDemoteScope(){
   // itself, same cleanup saveSplitIntoScopes already performs when a
   // Scope block is removed via merge-back — no orphaned Milestones left
   // pointing at a scopeId that no longer exists.
+  // v52e fix — none of these three deletes were checked or folded into
+  // demoteWriteFailCount, despite this being the step that actually
+  // removes the source Scope. A failed Milestones or Scopes delete here
+  // left orphaned/duplicate records in Airtable while the local state
+  // (filtered unconditionally below regardless of outcome) and the
+  // closing toast both acted as if the source project was fully gone.
   if(!demoMode&&s.id){
     const orphanedMs=(window.MILESTONES||[]).filter(m=>m.scopeId===s.id);
     for(const m of orphanedMs){
-      if(m.id)await atDelete('Milestones',m.id);
+      if(m.id){
+        const msDeleteResult=await atDelete('Milestones',m.id);
+        if(!msDeleteResult){
+          demoteWriteFailCount++;
+          console.error('confirmDemoteScope: failed to delete orphaned milestone',m.id);
+        }
+      }
     }
-    await atDelete('Scopes',s.id);
+    const scopeDeleteResult=await atDelete('Scopes',s.id);
+    if(!scopeDeleteResult){
+      demoteWriteFailCount++;
+      console.error('confirmDemoteScope: failed to delete source scope',s.id);
+    }
   }
   window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.scopeId!==s.id);
   window.SCOPES=(window.SCOPES||[]).filter(x=>x.id!==s.id);
@@ -8098,7 +8486,17 @@ async function saveScopeEditModal(scopeId){
 
   overlay.remove();
   showToast('Saving scope...','info');
-  if(!demoMode&&s.id)await atUpdate('Scopes',s.id,scopeFields);
+  // v52e fix — none of the writes below (main scope fields, per-unit
+  // link/unlink) were checked, so this always closed with an unconditional
+  // "Scope updated" success toast regardless of what actually saved —
+  // including contract/financial fields (rates, markups, retainage,
+  // contract award value) and unit-scope linkage. Now tracks failures
+  // across all of it and reports honestly.
+  let saveFailCount=0;
+  if(!demoMode&&s.id){
+    const mainResult=await atUpdate('Scopes',s.id,scopeFields);
+    if(!mainResult)saveFailCount++;
+  }
 
   // Reconcile unit checklist against this scope only. A unit checked here
   // that belonged to a different scope on this property gets moved; a
@@ -8111,20 +8509,26 @@ async function saveScopeEditModal(scopeId){
     if(!u)continue;
     const wasInThisScope=u.scopeId===s.id;
     if(box.checked&&!wasInThisScope){
-      await linkUnitToScope(u,s);
+      const linkOk=await linkUnitToScope(u,s);
+      if(!linkOk)saveFailCount++;
     } else if(!box.checked&&wasInThisScope){
       s.linkedUnitIds=(s.linkedUnitIds||[]).filter(id=>id!==u.id);
       u.scopeId='';
       const countFields=recomputeScopeTypeCounts(s);
       if(!demoMode){
-        await atUpdate('Scopes',s.id,{'Linked Units':s.linkedUnitIds,...countFields});
-        await atUpdate('Unit Inventory List',u.id,{'Scopes':[]});
+        const r1=await atUpdate('Scopes',s.id,{'Linked Units':s.linkedUnitIds,...countFields});
+        const r2=await atUpdate('Unit Inventory List',u.id,{'Scopes':[]});
+        if(!r1||!r2)saveFailCount++;
       }
     }
   }
 
   if(p)renderScopeCards(p);
-  showToast('Scope updated','success');
+  if(saveFailCount>0){
+    showToast('Some scope changes may not have saved. Check your connection and verify before continuing.','error');
+  }else{
+    showToast('Scope updated','success');
+  }
 }
 window.saveScopeEditModal=saveScopeEditModal;
 
@@ -8320,8 +8724,24 @@ function renderMilestones(p){
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Completion</div>
-            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.completionDate||''}"
-              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
+            ${m.manuallyCompleted?
+            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real Completion date">`:
+            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.completionDate||''}"
+              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">`}
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">&nbsp;</div>
+            ${m.manuallyCompleted?`
+            <label style="display:flex;align-items:center;gap:6px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:6px;padding:4px 8px;cursor:pointer;white-space:nowrap">
+              <input type="checkbox" checked onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="cursor:pointer">
+              <i class="ti ti-clock" style="font-size:12px;color:#854F0B"></i>
+              <span style="font-size:10px;color:#854F0B;font-weight:600">Marked complete today (${m.manuallyCompletedOn?new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}) by ${escHtml(m.manuallyCompletedBy||'')}</span>
+            </label>`:`
+            <label style="display:flex;align-items:center;gap:6px;border:1px solid var(--gray-pale);border-radius:6px;padding:4px 8px;cursor:pointer;white-space:nowrap">
+              <input type="checkbox" onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="cursor:pointer">
+              <span style="font-size:10px;color:var(--gray-mid);font-weight:500">Mark complete today</span>
+              <i class="ti ti-info-circle" style="font-size:12px;color:var(--gray-light)" title="Marks this milestone Complete as of today, independent of the date fields. Turn off any time to revert to normal status and enter real dates."></i>
+            </label>`}
           </div>`:canEdit?`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
@@ -8381,6 +8801,60 @@ async function toggleMilestoneManualOverride(propName,newVal){
       alert('Could not save the Milestone Manual Override change. Please try again.');
     }
   }
+}
+
+// v52f — Manual Completion Override toggle handler. Permanent feature,
+// per-milestone, only ever rendered when the property's Milestone Manual
+// Override is also on (see renderMilestones — the toggle control lives
+// inside the isCalendar branch, which p.milestoneManualOverride forces).
+// Same rollback-on-failure pattern as toggleMilestoneManualOverride above:
+// optimistic local update + re-render, then a real Airtable write; on
+// failure the local state is rolled back and re-rendered so the visible
+// state always matches what's actually saved, never a phantom "on" that
+// didn't persist.
+// Turning ON: writes Manually Completed=true, Manually Completed By=the
+// logged-in user's display name, Manually Completed On=today (local date,
+// same convention used everywhere else in this file — see continuity
+// brief on the earlier UTC/local off-by-one fix). deriveMilestoneStatus
+// then reports Complete unconditionally per Misty's confirmed design.
+// Turning OFF: clears all three fields. Per Misty's explicit answer this
+// reverts status to normal derivation immediately, no confirmation dialog
+// — the whole point is letting a PM fast-track now and freely go back to
+// enter the real historical date later with zero friction.
+async function toggleMilestoneManualCompletion(msId,propName,newVal,idx,circleId){
+  const ms=(window.MILESTONES||[]).find(m=>m.id===msId);
+  if(!ms)return;
+  const prior={manuallyCompleted:ms.manuallyCompleted,manuallyCompletedBy:ms.manuallyCompletedBy,manuallyCompletedOn:ms.manuallyCompletedOn,status:ms.status};
+  const today=new Date().toISOString().split('T')[0];
+  const fields=newVal?
+    {'Manually Completed':true,'Manually Completed By':window._userName||'PM User','Manually Completed On':today,'Status':'Complete'}:
+    {'Manually Completed':false,'Manually Completed By':'','Manually Completed On':null,'Status':deriveMilestoneStatus(propName,ms.milestoneNumber,ms.plannedDate,ms.actualDate,ms.completionDate,ms.scopeId)};
+  // Optimistic local update + re-render so the toggle feels immediate.
+  ms.manuallyCompleted=newVal;
+  ms.manuallyCompletedBy=fields['Manually Completed By'];
+  ms.manuallyCompletedOn=newVal?today:'';
+  ms.status=fields['Status'];
+  if(currentProp&&currentProp.n===propName){
+    const p=(window.PORTFOLIO||[]).find(x=>x.n===propName);
+    if(p)renderMilestones(p);
+  }
+  if(demoMode||!msId)return;
+  const result=await atUpdate('Milestones',msId,fields);
+  if(!result){
+    console.error('Failed to save Manually Completed toggle for milestone',msId,'— reverting');
+    ms.manuallyCompleted=prior.manuallyCompleted;
+    ms.manuallyCompletedBy=prior.manuallyCompletedBy;
+    ms.manuallyCompletedOn=prior.manuallyCompletedOn;
+    ms.status=prior.status;
+    if(currentProp&&currentProp.n===propName){
+      const p=(window.PORTFOLIO||[]).find(x=>x.n===propName);
+      if(p)renderMilestones(p);
+    }
+    showToast('Could not save the Manually Completed change. Please try again.','error');
+    return;
+  }
+  // Roll up Scope/Property status same as any other milestone status change.
+  if(ms.scopeId)await deriveAndWriteScopeStatus(ms.scopeId);
 }
 
 // v39g — fixed a real race-condition bug: editing a date field fires an
@@ -8873,8 +9347,16 @@ async function saveMeetingDraft(){
   };
   let atId=existingDraftId;
   if(existingDraftId){
-    // Update existing draft
-    await atUpdate('Meetings',existingDraftId,fields);
+    // v52i — update existing draft, same silent-loss pattern as the
+    // create branch below (fixed in v51j): the atUpdate result was
+    // discarded, so a failed save to an existing draft still updated
+    // local state and showed success. Now aborts here instead, leaving
+    // the panel open so nothing typed is lost.
+    const updRes=await atUpdate('Meetings',existingDraftId,fields);
+    if(!updRes){
+      showToast('Could not save draft to Airtable. Check your connection and try again.','error');
+      return;
+    }
     const m=meetings.find(x=>x.id===existingDraftId);
     if(m){Object.assign(m,{property:propName,date:meetingDate,type:meetingType,format:meetingFormat,elevco,location,attVDA,attElev,attClient,agenda,notes,published:false});}
   } else {
@@ -9212,13 +9694,25 @@ async function archiveMeetingToDocuments(m){
 async function closeAction(id){
   const a=actionItems.find(x=>x.id===id);
   if(!a)return;
+  const priorStatus=a.status,priorClosedDate=a.closedDate;
   a.status='Closed';
   a.closedDate=new Date().toISOString().split('T')[0];
+  // v52i — this checked the result and logged it, but only to console;
+  // the local status/closedDate stayed "Closed" regardless, and the
+  // closing toast further down only ever reflected the separate Documents
+  // archive write's outcome, never this one. A genuinely failed close
+  // still showed "Action closed" success. Now rolls the item back and
+  // aborts before the archive/render steps run.
   if(a.id&&!demoMode&&a.id.startsWith('rec')){
-    try{
-      const r=await atUpdate('Action Items',a.id,{'Status':'Closed','Closed Date':a.closedDate});
-      if(!r||r.error){console.error('closeAction Airtable error:',r);}
-    }catch(e){console.error('closeAction Airtable write failed:',e);}
+    const r=await atUpdate('Action Items',a.id,{'Status':'Closed','Closed Date':a.closedDate});
+    if(!r){
+      a.status=priorStatus;a.closedDate=priorClosedDate;
+      if(currentProp)renderPropMeetings(currentProp);
+      renderAllMeetings();
+      refreshDashActions();
+      showToast('Could not close this action item. Please try again.','error');
+      return;
+    }
   }
   // Archive to Documents → Closed Actions
   if(!demoMode){
@@ -11008,16 +11502,28 @@ async function saveBidSubmissionForm(asDraft){
     submissionId=created.id;
   }
 
+  // v52g — the two atDelete loops below (clearing old Bid Line Items/Bid
+  // Unit Detail rows before the fresh atCreate loops re-populate them) were
+  // never checking their results. A failed delete here doesn't just lose
+  // data silently, it leaves stale rows behind that the new atCreate rows
+  // get added alongside, so a re-saved bid could end up with duplicate or
+  // orphaned line items/unit detail rows with zero visible sign anything
+  // went wrong. Folded into the same lineItemFailCount/unitDetailFailCount
+  // counters the v51j atCreate fix already introduced just below, so one
+  // honest toast now covers both the cleanup and the recreate steps.
+  let lineItemFailCount=0,unitDetailFailCount=0;
   if(editingId){
     const [existingLineItems,existingUnitDetail]=await Promise.all([
       atGet('Bid Line Items'),
       atGet('Bid Unit Detail'),
     ]);
     for(const old of (existingLineItems||[]).filter(r=>(r.fields['Bid Submission']||[]).includes(editingId))){
-      await atDelete('Bid Line Items',old.id);
+      const delRes=await atDelete('Bid Line Items',old.id);
+      if(!delRes)lineItemFailCount++;
     }
     for(const old of (existingUnitDetail||[]).filter(r=>(r.fields['Bid Submission']||[]).includes(editingId))){
-      await atDelete('Bid Unit Detail',old.id);
+      const delRes=await atDelete('Bid Unit Detail',old.id);
+      if(!delRes)unitDetailFailCount++;
     }
   }
   // v51j — neither loop below checked the atCreate result, so a bid could
@@ -11025,12 +11531,10 @@ async function saveBidSubmissionForm(asDraft){
   // detail rows silently failed to write, an incomplete bid nobody could
   // see was incomplete. Now counts failures and reports them instead of an
   // unconditional success toast.
-  let lineItemFailCount=0;
   for(const item of bidFormLineItems){
     const liRes=await atCreate('Bid Line Items',{...item,'Bid Submission':[submissionId]});
     if(!liRes?.records?.[0]?.id)lineItemFailCount++;
   }
-  let unitDetailFailCount=0;
   for(const u of bidFormUnitDetail){
     if(u.unitPrice==null&&u.outOfServiceWeeks==null)continue; // skip units the PM left entirely blank
     const unitFields={'Bid Submission':[submissionId],'Unit Name':u.unitName};
@@ -11248,13 +11752,21 @@ async function saveCO(){
     if(otHours!=null&&!isNaN(otHours))fields['OT Hours']=otHours;
     if(materialCost!=null&&!isNaN(materialCost))fields['Material Cost']=materialCost;
     if(opClaimed!=null&&!isNaN(opClaimed))fields['O&P Claimed']=opClaimed;
+    // v52g — atUpdate/atDelete/atCreate all resolve to null (or, for
+    // atCreate, an object with no .id) on failure rather than throwing, so
+    // wrapping them in try/catch alone never actually catches a write
+    // failure. The code fell straight through to the unconditional
+    // success toast below regardless of what Airtable actually did. Now
+    // checks the real result before reporting success.
     try{
       if(editId){
-        await atUpdate('Change Order Savings Log',editId,fields);
+        const updRes=await atUpdate('Change Order Savings Log',editId,fields);
+        if(!updRes){showToast('Could not save changes to this change order. Please try again.','error');return;}
         const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
         if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject});
       }else{
         const rec=await atCreate('Change Order Savings Log',fields);
+        if(!rec?.id){showToast('Could not save this change order. Please try again.','error');return;}
         const newCO={id:rec.id,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject};
         if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
         window.CO_SAVINGS.push(newCO);
@@ -11360,11 +11872,14 @@ async function _applyUpdateCOStatus(coId,newStatus,note){
   co.status=newStatus;
   if(note)co.clientNote=note;
   if(!demoMode&&!coId.startsWith('co_')){
-    try{
-      const fields={'Status':newStatus};
-      if(note)fields['Notes']=(co.notes?co.notes+'\n\nClient note: ':'')+note;
-      await atUpdate('Change Order Savings Log',coId,fields);
-    }catch(e){co.status=oldStatus;showToast('Error updating status','error');return;}
+    // v52g — same dead try/catch pattern as the save function above:
+    // atUpdate resolves to null on failure instead of throwing, so this
+    // catch block could never actually fire on a real write failure. Now
+    // checks the result directly.
+    const fields={'Status':newStatus};
+    if(note)fields['Notes']=(co.notes?co.notes+'\n\nClient note: ':'')+note;
+    const updRes=await atUpdate('Change Order Savings Log',coId,fields);
+    if(!updRes){co.status=oldStatus;showToast('Error updating status','error');return;}
   }
   if(newStatus==='Approved')autoCreateCODocument(co);
   showToast(`Change order ${newStatus.toLowerCase()}`,'success');
@@ -12671,8 +13186,24 @@ async function saveBillingEntry(){
 
 async function deleteBillingEntry(id,propName){
   if(!confirm('Remove this billing entry?'))return;
+  // v52g — was removing from local state and showing a success toast
+  // unconditionally, with the atDelete result discarded. A failed delete
+  // left the entry gone on screen but still sitting in Airtable, silently.
+  // Now only removes locally and confirms success once the delete is
+  // actually confirmed; on failure the entry is put back and an error
+  // toast shown instead.
+  const removed=(window.BILLING_LOG||[]).find(b=>b.id===id);
   window.BILLING_LOG=(window.BILLING_LOG||[]).filter(b=>b.id!==id);
-  if(!demoMode)await atDelete('Billing Log',id);
+  if(!demoMode){
+    const delRes=await atDelete('Billing Log',id);
+    if(!delRes){
+      if(removed)window.BILLING_LOG=(window.BILLING_LOG||[]).concat([removed]);
+      renderBudgetTab(currentProp);
+      renderPropertyView(currentProp);
+      showToast('Could not remove this billing entry. Please try again.','error');
+      return;
+    }
+  }
   renderBudgetTab(currentProp);
   renderPropertyView(currentProp);
   showToast('Billing entry removed','success');
@@ -12720,8 +13251,21 @@ async function saveRetainageRelease(){
   if(editingId){
     const existing=(window.RETAINAGE_RELEASES||[]).find(r=>r.id===editingId);
     if(existing){
+      // v52g — the atUpdate result was discarded here; the local edit and
+      // the "updated" toast fired regardless of whether the write actually
+      // reached Airtable. Now rolls the local edit back and shows an error
+      // on failure, matching the create branch's existing v51j handling.
+      const priorVals={amountReleased:existing.amountReleased,releaseDate:existing.releaseDate,notes:existing.notes};
       existing.amountReleased=amount;existing.releaseDate=date;existing.notes=notes;
-      if(!demoMode)await atUpdate('Retainage Releases',editingId,{'Amount Released':amount,'Release Date':date,'Notes':notes||''});
+      if(!demoMode){
+        const updRes=await atUpdate('Retainage Releases',editingId,{'Amount Released':amount,'Release Date':date,'Notes':notes||''});
+        if(!updRes){
+          Object.assign(existing,priorVals);
+          renderBudgetTab(currentProp);
+          showToast('Could not save changes to this retainage release. Please try again.','error');
+          return;
+        }
+      }
       showToast('Retainage release updated','success');
     }
   }else{
@@ -12767,8 +13311,19 @@ function editRetainageRelease(id,propName){
 
 async function deleteRetainageRelease(id,propName){
   if(!confirm('Remove this retainage release entry?'))return;
+  // v52g — same pattern as deleteBillingEntry above: local removal and
+  // success toast fired unconditionally with the atDelete result discarded.
+  const removed=(window.RETAINAGE_RELEASES||[]).find(r=>r.id===id);
   window.RETAINAGE_RELEASES=(window.RETAINAGE_RELEASES||[]).filter(r=>r.id!==id);
-  if(!demoMode)await atDelete('Retainage Releases',id);
+  if(!demoMode){
+    const delRes=await atDelete('Retainage Releases',id);
+    if(!delRes){
+      if(removed)window.RETAINAGE_RELEASES=(window.RETAINAGE_RELEASES||[]).concat([removed]);
+      renderBudgetTab(currentProp);
+      showToast('Could not remove this retainage release. Please try again.','error');
+      return;
+    }
+  }
   renderBudgetTab(currentProp);
   showToast('Retainage release removed','success');
 }
@@ -12875,17 +13430,30 @@ window.renderScopeUnitsPicker=renderScopeUnitsPicker;
 // Phase count, and pushes both changes to Airtable — same "move, not
 // duplicate" behavior already used when moving a unit between Scopes
 // (splitScopeToggleUnit/saveSplitIntoScopes).
+// v52e fix — the atUpdate result was never checked, so a phase that
+// failed to have its stale unit reference cleaned up in Airtable still
+// looked cleaned up locally (in-memory linkedUnitIds/units/unitNames were
+// already mutated above, before the write). Now returns the number of
+// phases that failed to save, so callers (saveNewPhase/saveEditPhase) can
+// fold this into their own existing fail-count/toast — this function has
+// no UI of its own to show a toast from directly.
 async function reclaimUnitsFromOtherPhases(propName,linkedUnitIds,excludePhaseId){
   const otherPhases=(window.UNIT_GROUPS||[]).filter(g=>g.property===propName&&g.id!==excludePhaseId&&(g.linkedUnitIds||[]).some(uid=>linkedUnitIds.includes(uid)));
+  let failCount=0;
   for(const g of otherPhases){
     const newLinked=(g.linkedUnitIds||[]).filter(uid=>!linkedUnitIds.includes(uid));
     g.linkedUnitIds=newLinked;
     g.units=newLinked.length;
     g.unitNames=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>newLinked.includes(u.id))).map(u=>u.name).filter(Boolean).join(', ');
     if(!demoMode&&g.id&&g.id.startsWith('rec')){
-      await atUpdate('Unit Groups',g.id,{'Linked Units':newLinked,'Units in Phase':newLinked.length});
+      const result=await atUpdate('Unit Groups',g.id,{'Linked Units':newLinked,'Units in Phase':newLinked.length});
+      if(!result){
+        failCount++;
+        console.error('reclaimUnitsFromOtherPhases: failed to update phase',g.id);
+      }
     }
   }
+  return failCount;
 }
 window.reclaimUnitsFromOtherPhases=reclaimUnitsFromOtherPhases;
 
@@ -13103,7 +13671,12 @@ async function saveNewPhase(){
   // v50c — strip any of these units out of whatever OTHER phase on this
   // property currently claims them, so a move via the picker doesn't
   // leave a stale reference behind (see reclaimUnitsFromOtherPhases).
-  await reclaimUnitsFromOtherPhases(currentProp.n,linkedUnitIds,newPhaseId);
+  // v52h — reclaimUnitsFromOtherPhases() has returned a fail count since
+  // v52e; this was the other call site v52e's header comment flagged as
+  // still needing to consume it. Folded into phaseTaskFailCount below,
+  // declared here instead of at its old spot so it can start accumulating
+  // immediately.
+  let phaseTaskFailCount=await reclaimUnitsFromOtherPhases(currentProp.n,linkedUnitIds,newPhaseId)||0;
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).concat([newPhase]);
   // v51f — recompute this Scope's own effective Planned Start/Target
   // Completion (and Actual Start/Actual Completion) now that a new dated
@@ -13121,7 +13694,6 @@ async function saveNewPhase(){
   // invisible, the local PHASE_STEPS entry was pushed regardless, and
   // nothing downstream ever knew a task failed to reach Airtable. Now
   // awaited and checked, with a fail count folded into the final toast.
-  let phaseTaskFailCount=0;
   for(let i=0;i<selectedMs.length;i++){
     const taskName=selectedMs[i];
     const localId='pts-'+Date.now()+'-'+i;
@@ -13269,11 +13841,20 @@ async function saveEditPhase(){
   if(!name){showToast('Phase name required','warn');return;}
   if(!confirmPhaseTypeMismatch(pickedUnits,productType))return;
   const oldPhaseName=ph.phase;
+  // v52h — this whole function silently discarded write-failure signals at
+  // five separate points: the unchecked-task atDelete loop, the rename
+  // atUpdate loop, the new-task atCreate loop, reclaimUnitsFromOtherPhases'
+  // return value, and the main Unit Groups atUpdate itself. All of the
+  // Phase Tasks calls were also true fire-and-forget (no await at all), so
+  // even a thrown network error wouldn't have been caught. One fail count
+  // now tracks all of it, folded into the closing toast, matching the
+  // pattern saveNewPhase() already uses.
+  let editPhaseFailCount=0;
   // Mutate in place by index to ensure UNIT_GROUPS array is updated
   // Remove unchecked tasks from PHASE_STEPS locally
   const allTasksForPhase=(window.PHASE_STEPS||[]).filter(s=>s.property===ph.property&&s.phaseName===ph.phase);
   const tasksToRemove=allTasksForPhase.filter(s=>!selectedSteps.includes(s.taskName)&&!s.actualStart&&!s.completionDate);
-  tasksToRemove.forEach(s=>{
+  for(const s of tasksToRemove){
     const idx2=window.PHASE_STEPS.indexOf(s);
     if(idx2>=0)window.PHASE_STEPS.splice(idx2,1);
     // v51h, the local splice above only ever removed the task from this
@@ -13282,9 +13863,10 @@ async function saveEditPhase(){
     // back from Airtable since it was still there. atDelete() already
     // exists and is used elsewhere; this call was simply missing here.
     if(!demoMode&&s.id&&s.id.startsWith('rec')){
-      atDelete('Phase Tasks',s.id);
+      const delRes=await atDelete('Phase Tasks',s.id);
+      if(!delRes)editPhaseFailCount++;
     }
-  });
+  }
   // Propagate rename to surviving Phase Tasks records — without this, editing a
   // phase's name orphans its task list (PHASE_STEPS lookups match on phaseName string)
   if(name!==oldPhaseName){
@@ -13292,7 +13874,8 @@ async function saveEditPhase(){
     for(const task of survivingTasks){
       task.phaseName=name;
       if(!demoMode&&task.id&&task.id.startsWith('rec')){
-        atUpdate('Phase Tasks',task.id,{'Phase Name':name});
+        const updRes=await atUpdate('Phase Tasks',task.id,{'Phase Name':name});
+        if(!updRes)editPhaseFailCount++;
       }
     }
   }
@@ -13313,7 +13896,8 @@ async function saveEditPhase(){
   if(newTaskNames.length>0){
     if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
     const existingCount=(window.PHASE_STEPS||[]).filter(s=>s.property===ph.property&&s.phaseName===name).length;
-    newTaskNames.forEach((taskName,i)=>{
+    for(let i=0;i<newTaskNames.length;i++){
+      const taskName=newTaskNames[i];
       const localId='pts-'+Date.now()+'-'+i;
       const taskOrder=existingCount+i+1;
       window.PHASE_STEPS.push({
@@ -13338,28 +13922,35 @@ async function saveEditPhase(){
           'Status':'Not Started',
         };
         if(ph.scopeId)taskFields['Linked Scope']=[ph.scopeId];
-        atCreate('Phase Tasks',taskFields);
+        const taskRes=await atCreate('Phase Tasks',taskFields);
+        if(!taskRes?.records?.[0]?.id)editPhaseFailCount++;
       }
-    });
+    }
   }
   // v50c — strip any of these units out of whatever OTHER phase on this
   // property currently claims them, same reasoning as saveNewPhase. Must
   // run before the atUpdate below so a unit moved INTO this phase from
   // another one doesn't briefly exist in both records' Linked Units at
   // once if either write fails partway through.
-  await reclaimUnitsFromOtherPhases(ph.property,linkedUnitIds,id);
+  // v52h — reclaimUnitsFromOtherPhases() has returned a fail count since
+  // v52e; this call site is the one v52e's header comment flagged as still
+  // needing to consume it. Now folded into the same counter as everything
+  // else in this function.
+  const reclaimFailCount=await reclaimUnitsFromOtherPhases(ph.property,linkedUnitIds,id);
+  editPhaseFailCount+=reclaimFailCount||0;
   window.UNIT_GROUPS[idx]={...ph,phase:name,units,unitNames,linkedUnitIds,productType,
     plannedStart,plannedCompletion:plannedEnd,
     actualStart,actualCompletion:actualEnd,
     notes,phaseTasks:selectedSteps};
   if(!demoMode){
-    await atUpdate('Unit Groups',id,{
+    const mainRes=await atUpdate('Unit Groups',id,{
       'Phase Name':name,'Units in Phase':units,'Linked Units':linkedUnitIds,
       'Product Type':productType,'Phase Tasks':selectedSteps.join(', '),
       'Planned Start':plannedStart||null,'Planned Completion':plannedEnd||null,
       'Actual Start':actualStart||null,'Actual Completion':actualEnd||null,
       'Notes':notes||'',
     });
+    if(!mainRes)editPhaseFailCount++;
   }
   // v51f — recompute this Scope's own effective Planned Start/Target
   // Completion (and Actual Start/Actual Completion) now that this phase's
@@ -13370,6 +13961,8 @@ async function saveEditPhase(){
   renderPropertyView(currentProp);
   if(demoMode){
     showToast('Phase updated — Demo mode: changes reset on logout','info');
+  } else if(editPhaseFailCount>0){
+    showToast(`Phase updated, but ${editPhaseFailCount} change${editPhaseFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
   } else {
     showToast('Phase updated','success');
   }
@@ -13402,6 +13995,12 @@ async function reorderPhase(id,propName,dir){
   propPhases[swapIdx].phaseOrder=tmp;
   // Renumber phase names (Phase 1, Phase 2...) keeping descriptions
   propPhases.sort((a,b)=>a.phaseOrder-b.phaseOrder);
+  // v52h — both atUpdate calls below were true fire-and-forget (no await,
+  // no result check), so a reorder that renames every phase after the swap
+  // point could silently fail to save some or all of those renames to
+  // Airtable while the local state and success toast both claimed it
+  // worked. Now awaited and counted, with an honest toast at the end.
+  let reorderFailCount=0;
   for(const ph of propPhases){
     const oldPhaseName=ph.phase;
     const i=propPhases.indexOf(ph);
@@ -13410,7 +14009,8 @@ async function reorderPhase(id,propName,dir){
     ph.phase=newPhaseName;
     ph.phaseOrder=i+1;
     if(!demoMode&&ph.id.startsWith('rec')){
-      atUpdate('Unit Groups',ph.id,{'Phase Name':newPhaseName,'Phase Order':ph.phaseOrder});
+      const updRes=await atUpdate('Unit Groups',ph.id,{'Phase Name':newPhaseName,'Phase Order':ph.phaseOrder});
+      if(!updRes)reorderFailCount++;
     }
     // Propagate rename to matching Phase Tasks records — without this, reordering
     // a phase orphans its task list (PHASE_STEPS lookups match on phaseName string)
@@ -13419,13 +14019,18 @@ async function reorderPhase(id,propName,dir){
       for(const task of matchingTasks){
         task.phaseName=newPhaseName;
         if(!demoMode&&task.id&&task.id.startsWith('rec')){
-          atUpdate('Phase Tasks',task.id,{'Phase Name':newPhaseName});
+          const taskUpdRes=await atUpdate('Phase Tasks',task.id,{'Phase Name':newPhaseName});
+          if(!taskUpdRes)reorderFailCount++;
         }
       }
     }
   }
   if(currentProp)renderPhasesTab(currentProp);
-  showToast('Phase order updated','success');
+  if(reorderFailCount>0){
+    showToast(`Phase order changed, but ${reorderFailCount} update${reorderFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
+  }else{
+    showToast('Phase order updated','success');
+  }
 }
 
 async function deletePhase(id,propName){
@@ -13448,6 +14053,12 @@ async function deletePhase(id,propName){
   // it, matching the same real-Airtable-delete pattern already used for
   // unchecked tasks in saveEditPhase().
   const phaseNameForCleanup=deletedPhase?.phase||'';
+  // v52h — neither delete loop below checked its result. A failed Phase
+  // Tasks or Unit Groups delete left the record alive in Airtable while
+  // disappearing from the UI, the exact orphaned-record pattern the v51i
+  // comment above already describes for a different root cause. Now
+  // counted and folded into an honest closing toast.
+  let deletePhaseFailCount=0;
   if(phaseNameForCleanup){
     // Scoped by scopeId too, not just property+phaseName, so deleting one
     // Scope's "Phase 1" can't also sweep up a different Scope's own
@@ -13458,17 +14069,27 @@ async function deletePhase(id,propName){
     window.PHASE_STEPS=(window.PHASE_STEPS||[]).filter(s=>!matchesThisPhase(s));
     if(!demoMode){
       for(const task of orphanedTasks){
-        if(task.id&&task.id.startsWith('rec'))await atDelete('Phase Tasks',task.id);
+        if(task.id&&task.id.startsWith('rec')){
+          const delRes=await atDelete('Phase Tasks',task.id);
+          if(!delRes)deletePhaseFailCount++;
+        }
       }
     }
   }
   window.UNIT_GROUPS=(window.UNIT_GROUPS||[]).filter(u=>u.id!==id);
-  if(!demoMode)await atDelete('Unit Groups',id);
+  if(!demoMode){
+    const delRes=await atDelete('Unit Groups',id);
+    if(!delRes)deletePhaseFailCount++;
+  }
   await deriveAndWritePropertyStatus(propName);
   if(scopeIdForDerivation)await deriveAndWriteScopeDates(scopeIdForDerivation);
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
-  showToast('Phase deleted','success');
+  if(deletePhaseFailCount>0){
+    showToast(`Phase removed from view, but ${deletePhaseFailCount} record${deletePhaseFailCount>1?'s':''} failed to delete in Airtable. Refresh to check for leftover data.`,'error');
+  }else{
+    showToast('Phase deleted','success');
+  }
 }
 
 // v51i, one-time cleanup utility for the three orphaned phase groups found
@@ -13503,12 +14124,25 @@ window.cleanupOrphanedPhaseTasks=cleanupOrphanedPhaseTasks;
 async function updatePhaseStatus(id,newStatus,propName){
   const phase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
   if(!phase)return;
+  // v52h — was updating local state and showing success unconditionally
+  // with the atUpdate result discarded. Now rolls the local status (and
+  // any auto-set Actual Start/Completion date) back on a failed write.
+  const priorVals={status:phase.status,actualStart:phase.actualStart,actualCompletion:phase.actualCompletion};
   phase.status=newStatus;
   const today=new Date().toISOString().split('T')[0];
   const fields={'Status':newStatus};
   if(newStatus==='In Progress'&&!phase.actualStart){phase.actualStart=today;fields['Actual Start']=today;}
   if(newStatus==='Complete'&&!phase.actualCompletion){phase.actualCompletion=today;fields['Actual Completion']=today;}
-  if(!demoMode)await atUpdate('Unit Groups',id,fields);
+  if(!demoMode){
+    const updRes=await atUpdate('Unit Groups',id,fields);
+    if(!updRes){
+      Object.assign(phase,priorVals);
+      renderPhasesTab(currentProp);
+      renderPropertyView(currentProp);
+      showToast('Could not update phase status. Please try again.','error');
+      return;
+    }
+  }
   await deriveAndWritePropertyStatus(propName);
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
@@ -13577,12 +14211,21 @@ async function saveBillingModal(){
   // Allow budget update without a billing entry
   if(budget===null&&ytd===null){showToast('Please enter a Project Budget or Billed YTD amount','warn');return;}
   if(ytd!==null&&!date){showToast('Please enter an entry date for the billing entry','warn');return;}
-  // Update project budget if a value was entered (including 0)
+  // v52g — Project Budget write result was only console.log'd, no
+  // user-facing signal at all if it failed; local currentProp.budget stayed
+  // updated regardless, so a failed budget save was invisible in the UI.
+  // Now rolls the local value back and shows an error toast on failure.
+  let budgetSaveFailed=false;
   if(budget!==null&&budget!==currentProp.budget){
+    const priorBudget=currentProp.budget;
     currentProp.budget=budget;
     if(!demoMode){
       const budRes=await atUpdate('Properties',currentProp.id,{'Project Budget':budget});
-      console.log('Budget update result:',budRes);
+      if(!budRes){
+        currentProp.budget=priorBudget;
+        budgetSaveFailed=true;
+        showToast('Could not save the Project Budget change. Please try again.','error');
+      }
     }
   }
   // Only log a billing entry if YTD was provided
@@ -13591,11 +14234,23 @@ async function saveBillingModal(){
       // Edit mode — update existing entry
       const existing=(window.BILLING_LOG||[]).find(b=>b.id===editingId);
       if(existing){
+        // v52g — atUpdate's result was discarded here; the local edit and
+        // "updated" toast fired unconditionally regardless of whether the
+        // write reached Airtable. Now rolls the local edit back on failure.
+        const priorVals={billedYTD:existing.billedYTD,entryDate:existing.entryDate,invoiceMonth:existing.invoiceMonth,notes:existing.notes};
         existing.billedYTD=ytd;existing.entryDate=date;existing.invoiceMonth=invoiceMonth;existing.notes=notes;
         if(!demoMode){
-          await atUpdate('Billing Log',editingId,{
+          const updRes=await atUpdate('Billing Log',editingId,{
             'Billed YTD':ytd,'Entry Date':date,'Invoice Month':invoiceMonth||'','Notes':notes||'',
           });
+          if(!updRes){
+            Object.assign(existing,priorVals);
+            showToast('Could not save changes to this billing entry. Please try again.','error');
+            closeBillingModal();
+            renderPropertyView(currentProp);
+            switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));
+            return;
+          }
         }
         showToast('Billing entry updated','success');
       }
@@ -13625,7 +14280,10 @@ async function saveBillingModal(){
       window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
       showToast('Billing entry saved','success');
     }
-  } else {
+  } else if(!budgetSaveFailed){
+    // v52g — only show this success toast if the budget write above (the
+    // only write that happens on this branch) actually succeeded; the
+    // failure toast was already shown at the point of failure otherwise.
     showToast('Project budget updated','success');
   }
   closeBillingModal();
@@ -14870,7 +15528,11 @@ async function npCreateUnitsFromCounts(propName,propId){
       // browser tab. Skip linking (unit itself was already created
       // successfully above) and count it as a scope-link failure instead.
       if(tbdScope&&!(tbdScope.id||'').startsWith('demo_sc_')){
-        await linkUnitToScope(newUnit,tbdScope);
+        // v52e fix — linkUnitToScope()'s own result was still never
+        // checked on this branch (only the fake-scope case above was
+        // guarded). Now folded into the same _scopeLinkFailCount.
+        const linkOk=await linkUnitToScope(newUnit,tbdScope);
+        if(!linkOk)npCreateUnitsFromCounts._scopeLinkFailCount=(npCreateUnitsFromCounts._scopeLinkFailCount||0)+1;
       }else if(tbdScope){
         npCreateUnitsFromCounts._scopeLinkFailCount=(npCreateUnitsFromCounts._scopeLinkFailCount||0)+1;
       }
@@ -15089,9 +15751,19 @@ async function saveSetUpProjects(){
     };
     let scopeId=r.scopeId;
     if(scopeId){
-      if(!demoMode)await atUpdate('Scopes',scopeId,fields);
-      const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
-      if(sc){sc.name=r.name;sc.year=r.year;sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.clientProjectNum=r.clientProjectNum||sc.clientProjectNum||'';}
+      // v52h — the edit-mode atUpdate's result was discarded, so a failed
+      // write to an existing project still updated local state and counted
+      // as a success in the closing toast. Folded into the same
+      // scopeSaveFailCount the v51j create-path fix above already uses.
+      let scopeUpdateOk=true;
+      if(!demoMode){
+        const updRes=await atUpdate('Scopes',scopeId,fields);
+        if(!updRes){scopeUpdateOk=false;scopeSaveFailCount++;}
+      }
+      if(scopeUpdateOk){
+        const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+        if(sc){sc.name=r.name;sc.year=r.year;sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.clientProjectNum=r.clientProjectNum||sc.clientProjectNum||'';}
+      }
     } else {
       const createFields={...fields,'Property':[prop.id],'Status':'Capital Plan'};
       let newId='demo_sc_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
@@ -15116,6 +15788,13 @@ async function saveSetUpProjects(){
   }
 
   // Unit-linking reconciliation — same pattern as saveSplitIntoScopes().
+  // v52h — both atUpdate calls in this reconciliation pass discarded their
+  // results; a failed write here left a unit showing one scope assignment
+  // on screen while Airtable still had the old (or no) linkage, with zero
+  // indication anything went wrong. Now counted separately from the
+  // project-save failures above, since this is a distinct phase of the
+  // wizard, and both are combined into one honest closing toast.
+  let linkFailCount=0;
   const blockIdToScopeId={};
   rows.forEach(r=>{blockIdToScopeId[r.blockDomId]=r.scopeId;});
   const propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===prop.n);
@@ -15131,7 +15810,10 @@ async function saveSetUpProjects(){
     if(sc){
       sc.linkedUnitIds=scopeIdToUnitIds[r.scopeId]||[];
       const countFields=recomputeScopeTypeCounts(sc);
-      if(!demoMode)await atUpdate('Scopes',r.scopeId,{'Linked Units':sc.linkedUnitIds,...countFields});
+      if(!demoMode){
+        const updRes=await atUpdate('Scopes',r.scopeId,{'Linked Units':sc.linkedUnitIds,...countFields});
+        if(!updRes)linkFailCount++;
+      }
     }
   }
   for(const u of propUnits){
@@ -15145,7 +15827,10 @@ async function saveSetUpProjects(){
         u.status=derivedStatus;
         fields['Status']=derivedStatus;
       }
-      if(!demoMode)await atUpdate('Unit Inventory List',u.id,fields);
+      if(!demoMode){
+        const updRes=await atUpdate('Unit Inventory List',u.id,fields);
+        if(!updRes)linkFailCount++;
+      }
     }
   }
 
@@ -15155,6 +15840,8 @@ async function saveSetUpProjects(){
   renderCapitalPlan();
   if(scopeSaveFailCount>0){
     showToast(`${rows.length-scopeSaveFailCount} of ${rows.length} projects saved, ${scopeSaveFailCount} failed. Check your connection and try again.`,'error');
+  }else if(linkFailCount>0){
+    showToast(`Projects saved, but ${linkFailCount} unit link${linkFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
   }else{
     showToast('Projects saved','success');
   }
@@ -16566,9 +17253,15 @@ async function confirmBulkUnitImport(){
       const groupKey=c.property+'|||'+c.projectName+'|||'+c.unitGroupName;
       const group=c.isNewGroup?newGroupCache.get(groupKey):(window.UNIT_GROUPS||[]).filter(u=>u.property===c.property).find(u=>(u.phase||'')===c.unitGroupName&&(scope?u.scopeId===scope.id:true));
       if(group){
+        // v52h — this write's result was discarded; a failed link left a
+        // brand-new unit sitting in Airtable with no Unit Group linkage,
+        // invisible in the Unit Phases tab, with nothing in the closing
+        // toast to say so. Now folded into the same failCount every other
+        // write in this function already uses.
         group.linkedUnitIds=(group.linkedUnitIds||[]).concat([newId]);
         if(!demoMode&&group.id&&!group.id.startsWith('demo_')){
-          await atUpdate('Unit Groups',group.id,{'Linked Units':group.linkedUnitIds});
+          const updRes=await atUpdate('Unit Groups',group.id,{'Linked Units':group.linkedUnitIds});
+          if(!updRes)failCount++;
         }
       }
     }
@@ -17208,6 +17901,15 @@ async function saveSplitIntoScopes(){
   const keptIds=new Set(rows.map(r=>r.scopeId).filter(Boolean));
   const removed=existingScopes.filter(s=>!keptIds.has(s.id));
 
+  // v51j (comment retained) / v52h — the two delete calls below never
+  // checked their results either. A failed Milestones or Scopes delete
+  // here left the record alive in Airtable while it disappeared from the
+  // UI, same silent-orphan risk the v35i fix above was written to prevent
+  // in the first place, just via a different failure mode. Folded into the
+  // same scopeCreateFailCount counter the v51j create-path fix below uses,
+  // declared here instead of its old spot so it can start accumulating
+  // immediately.
+  let scopeCreateFailCount=0;
   // v35i — deleting a Scope block here (e.g. merging it back into another
   // scope) previously only deleted the Scope record itself, leaving any
   // Milestone rows still linked to that scopeId behind as orphans — the
@@ -17219,10 +17921,14 @@ async function saveSplitIntoScopes(){
     if(!demoMode&&s.id){
       const orphanedMs=(window.MILESTONES||[]).filter(m=>m.scopeId===s.id);
       for(const m of orphanedMs){
-        if(m.id) await atDelete('Milestones',m.id);
+        if(m.id){
+          const delRes=await atDelete('Milestones',m.id);
+          if(!delRes)scopeCreateFailCount++;
+        }
       }
       window.MILESTONES=(window.MILESTONES||[]).filter(m=>m.scopeId!==s.id);
-      await atDelete('Scopes',s.id);
+      const delRes=await atDelete('Scopes',s.id);
+      if(!delRes)scopeCreateFailCount++;
     }
   }
   window.SCOPES=(window.SCOPES||[]).filter(s=>s.property!==prop.n||keptIds.has(s.id));
@@ -17233,7 +17939,6 @@ async function saveSplitIntoScopes(){
   // creation, all of it) as if the scope existed in Airtable, then the
   // final toast unconditionally claimed all rows saved. Now counts
   // failures so the toast can be honest.
-  let scopeCreateFailCount=0;
   for(const r of rows){
     const fields={
       'Scope Name':r.name,
@@ -17260,15 +17965,24 @@ async function saveSplitIntoScopes(){
     }
     let scopeId=r.scopeId;
     if(scopeId){
-      if(!demoMode) await atUpdate('Scopes',scopeId,fields);
-      const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
-      if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.clientProjectNum=r.clientProjectNum||sc.clientProjectNum||'';sc.isTbd=sc.isTbd||r.name==='TBD Scope';
-        sc.plannedStart=r.plannedStart||sc.plannedStart||'';sc.targetCompletion=r.targetCompletion||sc.targetCompletion||'';
-        sc.ec=r.ec||sc.ec||'';sc.contractAwardValue=r.contractAwardValue!=null?r.contractAwardValue:sc.contractAwardValue;
-        sc.coRateST=r.coRateST!=null?r.coRateST:sc.coRateST;sc.coRateOT=r.coRateOT!=null?r.coRateOT:sc.coRateOT;
-        sc.coMaterialMarkup=r.coMaterialMarkup!=null?r.coMaterialMarkup:sc.coMaterialMarkup;
-        sc.coOPMarkup=r.coOPMarkup!=null?r.coOPMarkup:sc.coOPMarkup;
-        sc.retainagePct=r.retainagePct!=null?r.retainagePct:sc.retainagePct;
+      // v52h — same gap as saveSetUpProjects' edit branch: the atUpdate
+      // result was discarded, so a failed write to an existing scope still
+      // updated local state and counted as a clean save.
+      let scopeUpdateOk=true;
+      if(!demoMode){
+        const updRes=await atUpdate('Scopes',scopeId,fields);
+        if(!updRes){scopeUpdateOk=false;scopeCreateFailCount++;}
+      }
+      if(scopeUpdateOk){
+        const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);
+        if(sc){sc.name=r.name;sc.year=r.year;sc.plannedBudget=r.plannedBudget;sc.priority=scopePriority(r.priority);sc.budgetStatus=r.budgetStatus||'TBD';sc.v=r.consultant||sc.v||'';sc.vdaNum=r.vdaNum||sc.vdaNum||'';sc.clientProjectNum=r.clientProjectNum||sc.clientProjectNum||'';sc.isTbd=sc.isTbd||r.name==='TBD Scope';
+          sc.plannedStart=r.plannedStart||sc.plannedStart||'';sc.targetCompletion=r.targetCompletion||sc.targetCompletion||'';
+          sc.ec=r.ec||sc.ec||'';sc.contractAwardValue=r.contractAwardValue!=null?r.contractAwardValue:sc.contractAwardValue;
+          sc.coRateST=r.coRateST!=null?r.coRateST:sc.coRateST;sc.coRateOT=r.coRateOT!=null?r.coRateOT:sc.coRateOT;
+          sc.coMaterialMarkup=r.coMaterialMarkup!=null?r.coMaterialMarkup:sc.coMaterialMarkup;
+          sc.coOPMarkup=r.coOPMarkup!=null?r.coOPMarkup:sc.coOPMarkup;
+          sc.retainagePct=r.retainagePct!=null?r.retainagePct:sc.retainagePct;
+        }
       }
     } else {
       const createFields={...fields,'Property':[prop.id],'Status':'Capital Plan'};
@@ -17330,8 +18044,12 @@ async function saveSplitIntoScopes(){
         }
         window.MILESTONES=(window.MILESTONES||[]).concat([{id:newM1Id,property:prop.n,scopeId,milestoneNumber:1,milestoneName:'Modernization Survey',plannedDate:r.m1date,status:'Not Started',actualDate:'',completionDate:'',variance:null,notes:''}]);
       } else if(existingM1.plannedDate!==r.m1date){
+        const priorM1Date=existingM1.plannedDate;
         existingM1.plannedDate=r.m1date;
-        if(!demoMode&&existingM1.id) await atUpdate('Milestones',existingM1.id,{'Planned Date':r.m1date});
+        if(!demoMode&&existingM1.id){
+          const updRes=await atUpdate('Milestones',existingM1.id,{'Planned Date':r.m1date});
+          if(!updRes){existingM1.plannedDate=priorM1Date;scopeCreateFailCount++;}
+        }
       }
       await autoPopulateMilestones(prop.n,scopeId);
       // Ensure the scope's in-memory status is advanced past 'Capital Plan'
@@ -17348,7 +18066,10 @@ async function saveSplitIntoScopes(){
         // v30d: explicitly write graduated status to Airtable so it persists across login.
         // deriveAndWriteScopeStatus skips the write when newStatus matches scope.status,
         // which would leave Airtable still showing 'Capital Plan'.
-        if(!demoMode&&scToGraduate.id) await atUpdate('Scopes',scToGraduate.id,{'Status':'Planned'});
+        if(!demoMode&&scToGraduate.id){
+          const updRes=await atUpdate('Scopes',scToGraduate.id,{'Status':'Planned'});
+          if(!updRes)scopeCreateFailCount++;
+        }
       }
       await deriveAndWriteScopeStatus(scopeId);
       anyGraduated=true;
@@ -17371,12 +18092,19 @@ async function saveSplitIntoScopes(){
     const assignedScopeId=assignedBlockId?blockIdToScopeId[assignedBlockId]:null;
     if(assignedScopeId&&scopeIdToUnitIds[assignedScopeId])scopeIdToUnitIds[assignedScopeId].push(u.id);
   });
+  // v52h — both reconciliation-loop atUpdate calls below discarded their
+  // results, same gap as saveSetUpProjects' equivalent pass. Folded into
+  // scopeCreateFailCount so the closing toast reflects every write in this
+  // function honestly, not just the initial per-scope save.
   for(const r of rows){
     const sc=(window.SCOPES||[]).find(s=>s.id===r.scopeId);
     if(sc){
       sc.linkedUnitIds=scopeIdToUnitIds[r.scopeId]||[];
       const countFields=recomputeScopeTypeCounts(sc);
-      if(!demoMode)await atUpdate('Scopes',r.scopeId,{'Linked Units':sc.linkedUnitIds,...countFields});
+      if(!demoMode){
+        const updRes=await atUpdate('Scopes',r.scopeId,{'Linked Units':sc.linkedUnitIds,...countFields});
+        if(!updRes)scopeCreateFailCount++;
+      }
     }
   }
   // v34l — this manual reconciliation writes Linked Scope directly rather
@@ -17397,14 +18125,22 @@ async function saveSplitIntoScopes(){
         u.status=derivedStatus;
         fields['Status']=derivedStatus;
       }
-      if(!demoMode)await atUpdate('Unit Inventory List',u.id,fields);
+      if(!demoMode){
+        const updRes=await atUpdate('Unit Inventory List',u.id,fields);
+        if(!updRes)scopeCreateFailCount++;
+      }
     }
   }
 
   // Original property-level rough budget estimate is reconciled (cleared)
   // once split into real Scopes, rather than left sitting alongside the
   // new Scope-level budgets as a duplicate, confusing number (brief 1L).
-  if(!demoMode&&prop.id) await atUpdate('Properties',prop.id,{'Project Budget':null});
+  // v52h — this write's result was also discarded; a failed clear left the
+  // stale property-level budget number sitting there with no signal.
+  if(!demoMode&&prop.id){
+    const updRes=await atUpdate('Properties',prop.id,{'Project Budget':null});
+    if(!updRes)scopeCreateFailCount++;
+  }
   prop.budget=0;
 
   renderCapitalPlan();
@@ -19161,10 +19897,22 @@ async function executeCancelCalEvent(type,id){
   const record=isVisit?siteVisits.find(v=>v.id===id):meetings.find(m=>m.id===id);
   if(!record)return;
   document.getElementById('cal-cancel-overlay')?.remove();
+  // v52i — dead try/catch: atUpdate resolves to null on failure rather
+  // than throwing, so this catch block could never actually fire on a
+  // real write failure. The local status flipped to Cancelled and the
+  // closing toast fired unconditionally regardless of whether the
+  // Airtable write (or the cancellation emails below) had anything real
+  // to work from. Now checks the result and aborts before sending
+  // cancellation notices to a status that never actually saved.
+  const priorStatus=record.status;
   record.status='Cancelled';
   if(!demoMode&&record.atId){
-    try{await atUpdate(isVisit?'Site Visits':'Meetings',record.atId,{'Status':'Cancelled'});}
-    catch(e){console.error('Cancel status update error:',e);}
+    const updRes=await atUpdate(isVisit?'Site Visits':'Meetings',record.atId,{'Status':'Cancelled'});
+    if(!updRes){
+      record.status=priorStatus;
+      showToast(`Could not cancel this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
+      return;
+    }
   }
   const attendees=(record.attendees||[]).filter(a=>a.email);
   let sentCount=0;
@@ -19235,20 +19983,33 @@ async function executeRescheduleCalEvent(type,id){
   if(!newDate){showToast('Please choose a new date','warn');return;}
   document.getElementById('cal-reschedule-overlay')?.remove();
   const oldDate=record.date;
+  const oldTime=record.time;
+  const oldStatus=record.status;
   record.date=newDate;
   record.time=newTime;
   if(record.status==='Cancelled')record.status='Scheduled';
+  // v52i — same dead try/catch pattern as executeCancelCalEvent: atUpdate
+  // never throws, so neither catch block below could ever fire on a real
+  // write failure. The main date/time write now aborts the whole
+  // reschedule on failure (rolling the local date/time/status back)
+  // rather than continuing on to reset every attendee's RSVP and send
+  // fresh invites against a date that was never actually saved.
   if(!demoMode&&record.atId){
     const dateField=isVisit?'Visit Date':'Meeting Date';
-    try{await atUpdate(isVisit?'Site Visits':'Meetings',record.atId,{[dateField]:newDate,'Status':'Scheduled'});}
-    catch(e){console.error('Reschedule date update error:',e);}
+    const updRes=await atUpdate(isVisit?'Site Visits':'Meetings',record.atId,{[dateField]:newDate,'Status':'Scheduled'});
+    if(!updRes){
+      record.date=oldDate;record.time=oldTime;record.status=oldStatus;
+      showToast(`Could not reschedule this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
+      return;
+    }
   }
   const attendees=(record.attendees||[]).filter(a=>a.email);
   const attendeeRecordIds=[];
+  let rsvpResetFailCount=0;
   for(const a of attendees){
     if(!demoMode){
-      try{await atUpdate('Meeting Attendees',a.id,{'RSVP Status':'Pending'});}
-      catch(e){console.error('RSVP reset error:',e);}
+      const rsvpRes=await atUpdate('Meeting Attendees',a.id,{'RSVP Status':'Pending'});
+      if(!rsvpRes){rsvpResetFailCount++;continue;}
     }
     a.rsvpStatus='Pending';
     attendeeRecordIds.push(a.id);
@@ -19263,7 +20024,11 @@ async function executeRescheduleCalEvent(type,id){
     }catch(e){console.error('send-meeting-invites (reschedule) failed:',e);}
   }
   if(demoMode){showToast(`${isVisit?'Site visit':'Meeting'} rescheduled (demo mode)`,'success');}
-  else showToast(`${isVisit?'Site visit':'Meeting'} rescheduled from ${fmtShortDate(oldDate)} to ${fmtShortDate(newDate)}${attendeeRecordIds.length>0?` — ${attendeeRecordIds.length} attendee${attendeeRecordIds.length!==1?'s':''} re-invited`:''}`,'success');
+  else if(rsvpResetFailCount>0){
+    showToast(`${isVisit?'Site visit':'Meeting'} rescheduled, but ${rsvpResetFailCount} attendee${rsvpResetFailCount>1?'s':''} failed to reset and were not re-invited. Check your connection.`,'error');
+  }else{
+    showToast(`${isVisit?'Site visit':'Meeting'} rescheduled from ${fmtShortDate(oldDate)} to ${fmtShortDate(newDate)}${attendeeRecordIds.length>0?` — ${attendeeRecordIds.length} attendee${attendeeRecordIds.length!==1?'s':''} re-invited`:''}`,'success');
+  }
   if(currentProp&&currentProp.n===record.property)renderPropertyView(currentProp);
   renderAllSiteVisits();
   renderCalendar();
@@ -19419,11 +20184,18 @@ async function syncCaleditAttendees(eventTable,eventRecordId,priorAttendees,curr
   const refreshed=[];
   for(const row of currentRows){
     if(row.attId){
-      try{
-        await atUpdate('Meeting Attendees',row.attId,{'Name':row.name,'Email':row.email,'Role':row.role});
+      // v52i — same dead try/catch as the delete loop below: atUpdate
+      // resolves to null on failure rather than throwing, so this catch
+      // could never actually fire. A failed attendee update still got
+      // pushed into refreshed[] as if it succeeded. Now checks the real
+      // result before treating it as synced.
+      const updRes=await atUpdate('Meeting Attendees',row.attId,{'Name':row.name,'Email':row.email,'Role':row.role});
+      if(updRes){
         const prior=(priorAttendees||[]).find(a=>a.id===row.attId);
         refreshed.push({id:row.attId,name:row.name,email:row.email,role:row.role,rsvpStatus:prior?.rsvpStatus||'Pending'});
-      }catch(e){console.error('Attendee update error:',e);syncCaleditAttendees.failCount++;}
+      }else{
+        syncCaleditAttendees.failCount++;
+      }
     } else if(row.name||row.email){
       try{
         const linkField=eventTable==='Meetings'?'Meeting':'Site Visit';
@@ -19439,8 +20211,15 @@ async function syncCaleditAttendees(eventTable,eventRecordId,priorAttendees,curr
       }catch(e){console.error('Attendee create error:',e);syncCaleditAttendees.failCount++;}
     }
   }
+  // v52i — dead try/catch: atDelete resolves to null on failure rather
+  // than throwing, so this never actually caught a failed delete. A
+  // removed attendee that failed to delete stayed in Airtable while
+  // dropping out of refreshed[] regardless, an orphaned record with no
+  // signal to the caller. Now folded into the same failCount the
+  // update/create branches above already use.
   for(const removedId of removedIds){
-    try{await atDelete('Meeting Attendees',removedId);}catch(e){console.error('Attendee delete error:',e);}
+    const delRes=await atDelete('Meeting Attendees',removedId);
+    if(!delRes)syncCaleditAttendees.failCount++;
   }
   return refreshed;
 }
@@ -19453,33 +20232,45 @@ async function saveEditCalEvent(type,id){
   record.time=document.getElementById('caledit-time')?.value||record.time;
   record.tz=document.getElementById('caledit-tz')?.value||record.tz;
   const attendeeRows=getCaleditAttendees();
+  // v52i — both branches' main-record atUpdate calls below were dead
+  // try/catch (atUpdate resolves to null on failure rather than throwing),
+  // so a failed save to the event itself was invisible: local state
+  // updated regardless, attendee sync ran anyway against a record that
+  // never actually saved its new date/details, and the closing toast only
+  // ever reflected the attendee sync outcome. Now aborts before the
+  // attendee sync if the main write fails.
+  let mainSaveFailed=false;
   if(isVisit){
     record.consultant=document.getElementById('caledit-consultant')?.value||record.consultant;
     record.purpose=document.getElementById('caledit-purpose')?.value||record.purpose;
     if(!demoMode&&record.atId){
-      try{await atUpdate('Site Visits',record.atId,{'Property Name':propertyNameToLink(record.property),'Visit Date':record.date,'Consultant':record.consultant,'Purpose':record.purpose});}
-      catch(e){console.error('Site visit update error:',e);}
+      const updRes=await atUpdate('Site Visits',record.atId,{'Property Name':propertyNameToLink(record.property),'Visit Date':record.date,'Consultant':record.consultant,'Purpose':record.purpose});
+      if(!updRes)mainSaveFailed=true;
     }
-    record.attendees=await syncCaleditAttendees('Site Visits',record.atId,record.attendees,attendeeRows);
+    if(!mainSaveFailed)record.attendees=await syncCaleditAttendees('Site Visits',record.atId,record.attendees,attendeeRows);
   } else {
     record.type=document.getElementById('caledit-type')?.value||record.type;
     const topics=[...document.querySelectorAll('#caledit-agenda-list input')].map(i=>i.value.trim()).filter(Boolean);
     record.agenda=topics.join('\n')||record.agenda;
     if(!demoMode&&record.atId){
-      try{await atUpdate('Meetings',record.atId,{
+      const updRes=await atUpdate('Meetings',record.atId,{
         'Property Name':propertyNameToLink(record.property),
         'Meeting Date':record.date,
         'Meeting Type':record.type,
         'Agenda':record.agenda,
-      });}
-      catch(e){console.error('Meeting update error:',e);}
+      });
+      if(!updRes)mainSaveFailed=true;
     }
-    record.attendees=await syncCaleditAttendees('Meetings',record.atId,record.attendees,attendeeRows);
+    if(!mainSaveFailed)record.attendees=await syncCaleditAttendees('Meetings',record.atId,record.attendees,attendeeRows);
   }
   document.getElementById('cal-edit-overlay')?.remove();
   if(currentProp&&currentProp.n===record.property)renderPropertyView(currentProp);
   renderAllSiteVisits();
   renderCalendar();
+  if(mainSaveFailed){
+    showToast(`Could not save changes to this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
+    return;
+  }
   // v51j — see syncCaleditAttendees: don't let "updated" claim full success
   // if one or more attendee syncs actually failed.
   const _attFailCount=syncCaleditAttendees.failCount||0;
@@ -19508,28 +20299,40 @@ function confirmDeleteCalEvent(type,id){
 }
 async function deleteCalEvent(type,id){
   const isVisit=type==='visit';
+  // v52i — both branches used dead try/catch (atDelete resolves to null on
+  // failure rather than throwing), so a failed delete still removed the
+  // event from local state and showed "deleted" success, while the record
+  // stayed alive in Airtable, invisible until the next refresh brought it
+  // back with no explanation.
+  let deleteFailed=false;
   if(isVisit){
     const idx=siteVisits.findIndex(v=>v.id===id);
     if(idx===-1)return;
     const record=siteVisits[idx];
     if(!demoMode&&record.atId){
-      try{await atDelete('Site Visits',record.atId);}catch(e){console.error('Site visit delete error:',e);}
+      const delRes=await atDelete('Site Visits',record.atId);
+      if(!delRes)deleteFailed=true;
     }
-    siteVisits.splice(idx,1);
+    if(!deleteFailed)siteVisits.splice(idx,1);
   } else {
     const idx=meetings.findIndex(m=>m.id===id);
     if(idx===-1)return;
     const record=meetings[idx];
     if(!demoMode&&record.atId){
-      try{await atDelete('Meetings',record.atId);}catch(e){console.error('Meeting delete error:',e);}
+      const delRes=await atDelete('Meetings',record.atId);
+      if(!delRes)deleteFailed=true;
     }
-    meetings.splice(idx,1);
+    if(!deleteFailed)meetings.splice(idx,1);
   }
   document.getElementById('cal-delete-overlay')?.remove();
   if(currentProp)renderPropertyView(currentProp);
   renderAllSiteVisits();
   renderCalendar();
-  showToast(`${isVisit?'Site visit':'Meeting'} deleted`,'success');
+  if(deleteFailed){
+    showToast(`Could not delete this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
+  }else{
+    showToast(`${isVisit?'Site visit':'Meeting'} deleted`,'success');
+  }
 }
 
 function renderAnalytics(){
@@ -24513,8 +25316,26 @@ async function addReply(threadId){
 
 async function resolveFlag(threadId){
   const thread=(window.CLIENT_COMMENTS||[]).filter(c=>c.threadId===threadId);
+  // v52i — every write in this loop was unguarded (no result check at
+  // all), so a thread could show "Resolved" locally and in the success
+  // toast even if some or all of its records failed to update in
+  // Airtable, silently reverting back to Open/unresolved on the client's
+  // side or on the next refresh with zero indication anything went wrong.
+  const priorStatuses=thread.map(c=>c.status);
   thread.forEach(c=>c.status='Resolved');
-  if(!demoMode){for(const c of thread){await atUpdate('Client Comments',c.id,{'Status':'Resolved'});}}
+  let resolveFailCount=0;
+  if(!demoMode){
+    for(const c of thread){
+      const updRes=await atUpdate('Client Comments',c.id,{'Status':'Resolved'});
+      if(!updRes)resolveFailCount++;
+    }
+  }
+  if(resolveFailCount>0){
+    thread.forEach((c,i)=>{c.status=priorStatuses[i];});
+    renderCommentsView();
+    showToast('Could not mark this flag as resolved. Please try again.','error');
+    return;
+  }
   renderCommentsView();
   showToast('Flag marked as resolved','success');
 }
