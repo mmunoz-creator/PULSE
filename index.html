@@ -1,4 +1,123 @@
 <!--
+pulse_v52c. Changes from v52b, this round:
+  1. Property page's Meeting Log card now also shows the real invited
+     attendee list (name and role, e.g. "Jeff Sena (VDA), Mike Loeffler
+     (Elevator Co.)") pulled from the actual Meeting Attendees records
+     created when a meeting is scheduled. Previously the card only showed
+     the older attVDA/attElev/attClient free-text summary fields, which
+     stay blank unless someone fills them in after the fact — so a
+     scheduled meeting with real individually-invited people showed no
+     attendee info at all until minutes were logged. Both lines can now
+     appear together; nothing else on the card changed.
+  2. Portfolio View's columns reordered per Misty's direct spec: Property,
+     State, Type, Property Status, Units, Current Project, Current Phase,
+     Health, Elev. Company, Project End, Budget, Consultant, Priority.
+     Column widths rebalanced to fit. Multi-word headers (Property Status,
+     Current Project, Current Phase, Elev. Company, Project End) now wrap
+     onto two lines via an explicit line break rather than relying on
+     narrow columns to force an awkward wrap, so adjacent headers no
+     longer visually run into each other. The Priority column's click-to-
+     sort still works unchanged, just relocated to the end and its header
+     re-render updated to match the new two-line format. The Print/PDF
+     button reuses this same on-screen table, so the printed layout picks
+     up the same reorder automatically — no separate table to update.
+Requires no worker changes.
+
+pulse_v52b. Changes from v52a, this round:
+  1. Fixed a real, reproducible session-restore race found live on Casa
+     Marina: on browser refresh while a multi-Scope property was open,
+     window.PORTFOLIO could restore instantly from a sessionStorage cache,
+     but window.SCOPES has no such cache and only gets populated once
+     loadAllData() actually resolves. openProperty() was being called
+     before that resolution, so it picked currentScope against a still-
+     empty window.SCOPES and silently landed on null. With no scope
+     selected, the Milestones tab rendered fully unscoped: every real
+     Milestone record for the property, across every Scope (plus any
+     orphaned records with no Linked Scope), flattened into one list
+     sorted only by milestone number — the mechanism behind "milestones
+     repeating" and "dates not persisting" reports, since an edit could
+     land on the wrong duplicate row while the screen looked unchanged.
+     Fixed by deferring the property-restore step, for live (Park) data
+     only, until loadAllData() has actually resolved and window.SCOPES is
+     real; the interim state shows Dashboard instead of a half-scoped
+     property. Handled the two failure edges too (Airtable unreachable on
+     restore, load promise rejects) so the deferred restore can't silently
+     strand someone with nothing open.
+  2. Fixed a false "Mixed" positive on the Add/Edit Unit Phase modal's
+     auto-derived Product Type: two units that were both genuinely
+     Escalators (same Unit Type, the label actually shown next to each
+     checkbox) could trip "Mixed — check units of one equipment type only"
+     because their separate Equipment Type field differed or was blank on
+     one of them. Equipment Type's real subtypes (MRL/Geared/Gearless/
+     Hydraulic) only meaningfully distinguish anything for Elevators; for
+     an Escalator or Wheelchair Lift it's redundant with Unit Type and
+     easy to leave inconsistently filled in. derivePhaseProductType() now
+     checks the coarse Unit Type first — if every checked unit shares one
+     Unit Type and it isn't Elevator, that settles it, Equipment Type is
+     irrelevant. Only an all-Elevator selection still falls through to the
+     original per-Equipment-Type distinction. A genuine cross-Unit-Type
+     mix (e.g. an Elevator checked alongside an Escalator) still correctly
+     reports Mixed.
+  3. The build version label under Sign out (previously IT Admin-only) is
+     now visible to every role, per Misty's direct request. Same quiet,
+     low-contrast footer text, no other change.
+Requires no worker changes (worker_v44b.mjs from v52a still applies,
+unchanged this round).
+
+pulse_v52a. Changes from v51l, this round:
+  1. Security fixes from the full security audit: escHtml() applied at
+     roughly 20 confirmed XSS gap sites that were rendering user/Airtable-
+     sourced text directly into innerHTML with no escaping, including
+     MARLI Insights question/answer text, Operations Center queue notes
+     and Change Order property/description, the Gantt chart row property
+     label, Unit Phases chip tooltips, Site Visits cards, Client Comments
+     property/flag type, PM Updates scope label, Documents notes, several
+     Dashboard "_sub" fields, Meeting agenda topics, the client flag email
+     message, and the Weekly Report Feedback textarea (standardized to
+     escHtml(), replacing an ad hoc partial escape). Also added escFormula()
+     in worker_v44b.mjs and applied it to the scopeId-based RECORD_ID()
+     filter formula, closing an Airtable formula-injection gap. Deploying
+     worker_v44b.mjs alongside this file is required for that specific fix
+     to take effect; every other change this round is client-side only.
+  2. Hardened confirmDeleteProperty()'s cascade delete (Milestones, Billing
+     Log, Unit Groups, Phase Tasks, Documents, Client Comments, Change
+     Order Savings Log, Scopes, Action Items, Meetings, Site Visits, Field
+     Updates, Bid Rounds, Bid Submissions) with a failedSteps tracking
+     array. Previously every step silently swallowed failures into a
+     console.warn only, and the closing toast always claimed full success
+     regardless of what actually happened. Now shows an honest error toast
+     naming which step(s) failed if any did; unchanged deletion order,
+     logic, and confirmation dialog.
+  3. workerFetch() now auto-reloads the page on session expiry (401) after
+     a short toast, instead of leaving the user stuck on a half-broken
+     session until they notice and manually refresh. Guarded so multiple
+     in-flight requests hitting 401 at once only trigger one reload.
+  4. autoCreateVdaProjectsFromScopes() (background job off
+     loadVdaProjectData()) now tracks failed atCreate calls and shows a
+     console.error summary plus a toast if any VDA Project agreement
+     failed to auto-create, instead of silently creating nothing with no
+     visible sign it happened.
+  5. Fixed a milestone status bug found live: for a property with
+     Milestone Manual Override on, typing a Completion date into a
+     phase-linked milestone (M5-M12, e.g. Submittal Drawing Review or
+     First Phase Start) saved the date correctly but the status badge
+     stayed stale (e.g. still "At Risk"). Root cause: recalculateAll
+     MilestoneStatuses(), which runs automatically every time the
+     Milestones tab renders, calls deriveMilestoneStatus() to re-derive
+     every milestone's status — but that dispatcher had no awareness of
+     the override flag, so it silently reverted any manually-dated
+     phase-linked milestone back to its Phase-Task-derived status (usually
+     Not Started) on the very next render, undoing what had just been
+     saved. deriveMilestoneStatus() now checks the same Milestone Manual
+     Override flag renderMilestones() already uses for display, so a
+     manually-dated M5-M12 is treated as calendar-driven consistently
+     everywhere, not just at render time. No changes to
+     MILESTONE_DERIVATION, the render logic, or any other milestone type.
+  6. Confirmed, no code change needed: the Meetings "Recurrence" field
+     write in saveScheduledMeeting() was already correct — the field
+     simply didn't exist yet in Airtable. Misty added it directly.
+Requires worker_v44b.mjs deployed alongside this file (see item 1).
+
 pulse_v51l. Changes from v51k, this round:
   1. Reworked how a Scope's Planned Start / Target Completion / Actual
      Start / Actual Completion are derived, per Misty's direct call.
@@ -3190,7 +3309,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v51l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52c</div>
     </div>
   </nav>
 
@@ -3386,8 +3505,15 @@ from unitEffectiveValue() onto each checkbox). -->
               driven by getCurrentProjectForProperty) right after Elev.
               Company, renamed Status header to "Property Status" (cosmetic
               only, p.st itself is unchanged), widths trimmed proportionally
-              to make room. -->
-              <thead><tr><th style="width:16%">Property</th><th style="width:5%">State</th><th style="width:6%">Type</th><th id="portfolio-priority-th" style="width:6%;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority <i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th><th style="width:9%">Elev. Company</th><th style="width:10%">Current Project</th><th style="width:8%">Current Phase</th><th style="width:4%">Units</th><th style="width:7%">Property Status</th><th style="width:8%">Health</th><th style="width:9%">Project End</th><th style="width:10%">VDA Consultant</th><th>Budget</th></tr></thead>
+              to make room. v52c — reordered per Misty's direct spec to:
+              Property, State, Type, Property Status, Units, Current Project,
+              Current Phase, Health, Elev. Company, Project End, Budget,
+              Consultant, Priority. Multi-word headers now wrap onto two
+              lines via an explicit <br> (not just narrow columns forcing an
+              awkward wrap), so adjacent headers never visually run into
+              each other regardless of table width. renderPortfolioRow()'s
+              <td> order below was updated to match exactly. -->
+              <thead><tr><th style="width:15%">Property</th><th style="width:5%">State</th><th style="width:6%">Type</th><th style="width:8%">Property<br>Status</th><th style="width:5%">Units</th><th style="width:11%">Current<br>Project</th><th style="width:9%">Current<br>Phase</th><th style="width:8%">Health</th><th style="width:9%">Elev.<br>Company</th><th style="width:8%">Project<br>End</th><th style="width:8%">Budget</th><th style="width:9%">Consultant</th><th id="portfolio-priority-th" style="width:6%;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority<br><i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th></tr></thead>
               <tbody id="portfolio-tbody"></tbody>
             </table>
           </div>
@@ -4916,9 +5042,40 @@ async function _finishLogin(){
       // resolved yet) unless the sessionStorage portfolio cache below
       // populated it first. Guard so a missing/renamed property can't throw
       // and strand the user on a blank screen — falls through to Dashboard.
-      try{
-        if(typeof openProperty==='function'){openProperty(lastView.propName);_restoredToView=true;}
-      }catch(e){console.error('Session restore: openProperty failed, falling back to Dashboard:',e);}
+      // v52b fix — a real, reproducible bug, not just a defensive guard:
+      // window.PORTFOLIO can restore instantly from the pulse_portfolio
+      // sessionStorage cache (see below), but window.SCOPES has no such
+      // cache and only ever gets populated by loadAllData(), which doesn't
+      // resolve until later in this same function. openProperty() reads
+      // window.SCOPES directly to pick currentScope (the property's
+      // furthest-along Scope) — if it runs before loadAllData() resolves,
+      // window.SCOPES is still empty, so currentScope silently gets set to
+      // null, and the Milestones tab then renders fully unscoped: every
+      // real Milestone record for the property across every Scope (plus
+      // any orphaned records with no Linked Scope) flattened into one
+      // list, sorted only by milestone number — confirmed live on Casa
+      // Marina, and the mechanism behind "milestones repeating" and "dates
+      // not persisting" reports (an edit can land on the wrong duplicate
+      // row while the screen looks unchanged). For client==='park' (live
+      // Airtable data), defer the actual openProperty() call until
+      // loadAllData() resolves and window.SCOPES is real — see the
+      // matching v52b block further down in this function. Demo mode has
+      // no such race (no Airtable round trip) so it still opens
+      // immediately here, unchanged.
+      if(client==='park'){
+        window._pendingRestoreProperty=lastView.propName;
+        // Land on Dashboard as the visible interim state (data is already
+        // loading via loadAllData() below) rather than leaving whatever
+        // screen happened to be underneath the login overlay. Once
+        // loadAllData() resolves, the matching v52b block re-navigates to
+        // the actual property with real Scope data.
+        try{gotoView('dashboard',null);setFirstNavActive('dashboard');}catch(e){}
+        _restoredToView=true;
+      }else{
+        try{
+          if(typeof openProperty==='function'){openProperty(lastView.propName);_restoredToView=true;}
+        }catch(e){console.error('Session restore: openProperty failed, falling back to Dashboard:',e);}
+      }
     } else if(lastView&&lastView.viewId&&lastView.viewId!=='dashboard'){
       try{
         gotoView(lastView.viewId,null);
@@ -4963,6 +5120,20 @@ async function _finishLogin(){
       if(AT_CONNECTED) {
         // Cache portfolio for next login
         try{sessionStorage.setItem('pulse_portfolio',JSON.stringify(window.PORTFOLIO));}catch(e){}
+        // v52b — the deferred half of the session-restore fix above. Now
+        // that loadAllData() has actually resolved, window.SCOPES (and
+        // window.MILESTONES, window.UNIT_GROUPS, etc.) are real, so it's
+        // finally safe to open the property the user was viewing before
+        // refresh. Runs before populatePortfolio()/renderDashboard() below
+        // so the property view replaces the interim Dashboard with no
+        // visible flash back to a half-loaded property screen.
+        if(window._pendingRestoreProperty){
+          const _restoreProp=window._pendingRestoreProperty;
+          window._pendingRestoreProperty=null;
+          try{
+            if(typeof openProperty==='function')openProperty(_restoreProp);
+          }catch(e){console.error('Session restore: deferred openProperty failed, staying on Dashboard:',e);}
+        }
         populatePortfolio();populateMilestonesTable();
         renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();populatePanelPropertyList();updatePMUpdatesBadge();
         // Bug fix (v22b): populateSubmitDropdown() previously only ran once,
@@ -5015,6 +5186,15 @@ async function _finishLogin(){
         }).catch(e=>console.error('Property/Scope status reconciliation failed:',e));
         if(!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
         showToast('Live data connected ✓','success');
+      } else if(window._pendingRestoreProperty){
+        // v52b — AT_CONNECTED came back false (load resolved but the
+        // connection itself isn't up). window.SCOPES still isn't
+        // trustworthy here, so don't call openProperty() into the same
+        // race this fix exists to prevent. Stay on the Dashboard already
+        // shown instead of silently stranding the user with nothing open.
+        console.error('Session restore: could not reopen property, Airtable not connected');
+        window._pendingRestoreProperty=null;
+        showToast('Could not reconnect — showing Dashboard instead','warn');
       }
     }).catch(e => {
       if(_mySeq !== _loginSeq) {
@@ -5023,6 +5203,11 @@ async function _finishLogin(){
       }
       console.error('Background load failed:', e);
       showToast('Using cached data — check connection','warn');
+      // v52b — same stranding risk as the AT_CONNECTED-false case above,
+      // via the failure path instead. Clear it so a later successful
+      // load (if any) doesn't unexpectedly jump the user into a property
+      // they've since navigated away from.
+      if(window._pendingRestoreProperty)window._pendingRestoreProperty=null;
     });
   }
   }catch(err){
@@ -5132,8 +5317,11 @@ function setupPortal(){
   document.getElementById('sb-username').textContent=c.name;
   document.getElementById('sb-userrole').textContent=c.roleLabel;
   document.getElementById('comments-h1').textContent=c.commTitle;
+  // v52b — build version label widened from IT Admin-only to all roles,
+  // per Misty's direct request. Still the same quiet, low-contrast footer
+  // text under Sign out, just no longer gated on role.
   const _buildEl=document.getElementById('sb-internal-build');
-  if(_buildEl)_buildEl.style.display=role==='admin'?'block':'none';
+  if(_buildEl)_buildEl.style.display='block';
   const canEdit=role==='pm'||role==='admin';
   ['prop-budget-btn','prop-meeting-btn','prop-visit-btn','prop-billing-inline-btn','prop-retainage-inline-btn','prop-visit-inline-btn'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=canEdit?'':'none';});
   const eb=document.getElementById('prop-edit-btn');if(eb)eb.style.display=canEdit?'':'none';
@@ -6420,11 +6608,29 @@ function derivePhaseRollupStatus(propName,taskType,scopeId){
 // this, a property with 2+ Scopes would compute phase-linked milestone
 // status from ALL of the property's phases mixed together regardless of
 // which Scope the milestone itself belongs to.
-function deriveMilestoneStatus(propName,milestoneNumber,plannedDate,actualDate,completionDate,scopeId){
+// v52a fix — added the overrideOn param. When a property has Milestone
+// Manual Override on, renderMilestones() already treats every milestone as
+// calendar-type for display/editing (see isCalendar there), but this
+// dispatcher didn't know about that flag, so phase-linked milestones
+// (M5-M12) that a PM dated by hand under the override kept getting
+// silently reverted back to their Phase-Task-derived status (usually Not
+// Started/At Risk) the next time recalculateAllMilestoneStatuses() ran on
+// render — the completion date saved fine, but the status badge never
+// reflected it. Now this dispatcher honors the same override rule as the
+// render-time isCalendar check, so a manually-dated M5/M6/etc. is treated
+// as calendar-driven consistently everywhere, not just at render time.
+// overrideOn defaults to a live lookup by propName so every existing call
+// site (recalculateAllMilestoneStatuses, etc.) picks up the fix with no
+// changes needed at the call site itself.
+function deriveMilestoneStatus(propName,milestoneNumber,plannedDate,actualDate,completionDate,scopeId,overrideOn){
   const rule=MILESTONE_DERIVATION[milestoneNumber];
-  if(!rule)return deriveCalendarStatus(plannedDate,actualDate,completionDate);
+  if(overrideOn===undefined){
+    const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+    const prop=port.find(x=>x.n===propName);
+    overrideOn=!!prop?.milestoneManualOverride;
+  }
+  if(!rule||rule.type==='calendar'||overrideOn)return deriveCalendarStatus(plannedDate,actualDate,completionDate);
   switch(rule.type){
-    case 'calendar': return deriveCalendarStatus(plannedDate,actualDate,completionDate);
     case 'phase-task': return derivePhaseTaskStatus(propName,rule.phase,rule.taskOrder,scopeId);
     case 'phase-pct': return derivePhasePctStatus(propName,rule.pct,scopeId);
     case 'phase-last': return derivePhaseLastStatus(propName,scopeId);
@@ -8166,7 +8372,16 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
   window._msFieldReqToken[msId]=myToken;
   const fields={[fieldName]:value};
   // Re-derive status whenever a date field changes (calendar-driven milestones only;
-  // phase-linked milestones don't expose these inputs in the UI at all)
+  // phase-linked milestones don't expose these inputs in the UI at all — except
+  // under Milestone Manual Override, where they do, and this correctly writes
+  // a calendar-derived Status either way). This part already worked correctly.
+  // The real v52a bug was downstream: recalculateAllMilestoneStatuses(), which
+  // runs automatically on every Milestones-tab render, called
+  // deriveMilestoneStatus() with no awareness of the override flag, so it
+  // silently reverted any manually-dated phase-linked milestone (M5-M12) back
+  // to its Phase-Task-derived status on the very next render — undoing what
+  // this function had just correctly saved. Fixed at the source in
+  // deriveMilestoneStatus() itself, so every caller is covered.
   let priorStatus=null,milestoneNumber=null;
   if(fieldName==='Planned Date'||fieldName==='Actual Date'||fieldName==='Completion Date'){
     const ms=(window.MILESTONES||[]).find(m=>m.id===msId);
@@ -8880,6 +9095,7 @@ function renderPropMeetings(p){
         </div>
       </div>
       ${m.attVDA||m.attElev||m.attClient?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6">${m.attVDA?`Team: ${escHtml(m.attVDA)} `:''}${m.attElev?`· Elev: ${escHtml(m.attElev)} `:''}${m.attClient?`· Client: ${escHtml(m.attClient)}`:''}</div>`:''}
+      ${(m.attendees||[]).length?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6"><strong style="color:var(--navy)">Invited:</strong> ${m.attendees.map(a=>`${escHtml(a.name||a.email||'Unnamed')}${a.role?` (${escHtml(a.role)})`:''}`).join(', ')}</div>`:''}
       ${m.agenda?(()=>{
         const topics=m.agenda.split('\n').filter(Boolean);
         if(m.status==='Scheduled'&&topics.length){
@@ -12667,7 +12883,7 @@ function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhase
     const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
     const claim=!checked&&claimedElsewhere[u.id]?`<span style="color:var(--amber);font-size:10px" title="Already in ${claimedElsewhere[u.id]}"><i class="ti ti-alert-triangle"></i> in ${claimedElsewhere[u.id]}</span>`:'';
     return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
-      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${escHtml(u.equipmentType||'')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
+      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${escHtml(u.equipmentType||'')}" data-coarse-unit-type="${escHtml(u.unitType||'')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
       <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
       ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
       ${claim}
@@ -12682,19 +12898,42 @@ function getCheckedPhaseUnitIds(){
 }
 window.getCheckedPhaseUnitIds=getCheckedPhaseUnitIds;
 
+// v52b fix \u2014 false "Mixed" positive found live: two units that were both
+// genuinely Escalators (same Unit Type, shown as the checkbox row's own
+// label) tripped Mixed because their Equipment Type values differed (one
+// set, one blank \u2014 Equipment Type's real subtypes, MRL/Geared/Gearless/
+// Hydraulic, only actually distinguish anything for Elevators; for an
+// Escalator or Wheelchair Lift it's redundant with Unit Type and easy to
+// leave inconsistently filled in since there's no real choice to make).
+// This checked coarse Unit Type first: if every checked unit shares one
+// Unit Type and it isn't Elevator, that's the answer, done, Equipment
+// Type is irrelevant. Only when Unit Type is uniformly Elevator does
+// Equipment Type's finer distinction actually matter, so that's the only
+// case that still falls through to the original per-Equipment-Type check.
+// A genuine cross-Unit-Type mix (an Elevator checked alongside an
+// Escalator) still correctly reports Mixed either way.
 function derivePhaseProductType(checked,hiddenId,displayId){
   const hiddenEl=document.getElementById(hiddenId);
   const displayEl=document.getElementById(displayId);
-  const types=[...new Set(checked.map(c=>c.dataset.unitType).filter(Boolean))];
+  const coarseTypes=[...new Set(checked.map(c=>c.dataset.coarseUnitType).filter(Boolean))];
   let value='';
   let label='\u2014';
   let mixed=false;
-  if(types.length===1){
-    value=types[0];
-    label=types[0];
-  } else if(types.length>1){
+  if(coarseTypes.length>1){
     mixed=true;
-    label='Mixed \u2014 check units of one equipment type only';
+    label='Mixed \u2014 check units of one unit type only';
+  } else if(coarseTypes.length===1&&coarseTypes[0]!=='Elevator'){
+    value=coarseTypes[0];
+    label=coarseTypes[0];
+  } else {
+    const types=[...new Set(checked.map(c=>c.dataset.unitType).filter(Boolean))];
+    if(types.length===1){
+      value=types[0];
+      label=types[0];
+    } else if(types.length>1){
+      mixed=true;
+      label='Mixed \u2014 check units of one equipment type only';
+    }
   }
   if(hiddenEl)hiddenEl.value=value;
   if(displayEl){
@@ -22097,20 +22336,24 @@ function renderPortfolioRow(p){
   const curPhase=curProj?getMilestoneCategoryForScope(curProj):null;
   const curPhaseCell=curPhase?`<span class="badge" style="background:${PORTFOLIO_PHASE_COLORS[curPhase]};color:#fff">${escHtml(curPhase)}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
   const healthCell=curProj?renderScopeHealthBadge(deriveScopeHealth(curProj)):`<span class="badge b-health-notstarted">Not Started</span>`;
+  // v52c — cell order reordered to match the new header order exactly:
+  // Property, State, Type, Property Status, Units, Current Project,
+  // Current Phase, Health, Elev. Company, Project End, Budget, Consultant,
+  // Priority. No cell content/logic changed, purely reordered.
   return `<tr data-status="${p.st}" data-type="${escHtml(p.type)}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
       <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${escHtml(p.n)}</td>
       <td><span class="geo">${p.s||'—'}</span></td>
       <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
-      <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
-      <td style="font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
+      <td>${renderStatusBadge(p.st)}</td>
+      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
       <td>${curProjCell}</td>
       <td>${curPhaseCell}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
-      <td>${renderStatusBadge(p.st)}</td>
       <td>${healthCell}</td>
+      <td style="font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
       <td style="font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
+      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
+      <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
     </tr>`;
 }
 function populatePortfolio(){
@@ -22843,7 +23086,10 @@ function sortPortfolioByPriority(th){
     tbody.innerHTML+=renderPortfolioRow(p);
   });
   // Update header icon
-  if(th)th.innerHTML=`Priority <i class="ti ti-arrow-${_portfolioSortDir===1?'up':'down'}" style="font-size:10px"></i>`;
+  // v52c — matches the two-line header format (Priority<br><i>) now used
+  // across every Portfolio View header, not just this one's prior
+  // single-line text.
+  if(th)th.innerHTML=`Priority<br><i class="ti ti-arrow-${_portfolioSortDir===1?'up':'down'}" style="font-size:10px"></i>`;
 }
 function previewFieldUpdateCard(subId){
   const s=submissions.find(x=>x.id===subId);
