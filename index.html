@@ -1167,6 +1167,10 @@ const WORKER_URL = 'https://pulse-api.misty-munoz.workers.dev';
 // Every Worker call goes through workerFetch(), which attaches it as a
 // Bearer header. The Worker refuses (almost) everything without it.
 window._sessionToken=window._sessionToken||null;
+// v52a — guards against multiple concurrent in-flight requests each
+// triggering their own toast + reload when a session expires; only the
+// first 401 acts, every later one this page load is a no-op.
+let _sessionExpiredReloading=false;
 async function workerFetch(input,opts={}){
   const o={...opts};
   o.headers={...(o.headers||{})};
@@ -1178,7 +1182,13 @@ async function workerFetch(input,opts={}){
     // session that 401s on every call.
     window._sessionToken=null;
     try{sessionStorage.removeItem('pulse_session');}catch(e){}
-    if(typeof showToast==='function')showToast('Session expired. Refresh and sign in again.','warn');
+    if(!_sessionExpiredReloading){
+      _sessionExpiredReloading=true;
+      if(typeof showToast==='function')showToast('Session expired, signing you out...','warn');
+      // v52a — auto-reload instead of leaving the user stuck on a
+      // half-broken session; short delay so the toast is readable first.
+      setTimeout(()=>{window.location.reload();},1800);
+    }
   }
   return r;
 }
@@ -2210,6 +2220,17 @@ async function autoCreateVdaProjectsFromScopes(){
   const numbersToCreate=Object.keys(byNumber);
   if(numbersToCreate.length===0)return;
   console.log(`Auto-creating ${numbersToCreate.length} VDA Project agreement(s) from Scopes data not yet configured: ${numbersToCreate.join(', ')}`);
+  // v52a — fail-count tracking, same pattern as saveSetUpProjects's
+  // scopeSaveFailCount. This background job used to swallow every
+  // atCreate failure into a single console.error per number with zero
+  // aggregate visibility; a run of 401s (session expired mid-load, etc.)
+  // could silently create zero VDA Projects with nothing on screen ever
+  // indicating it happened. Runs unattended off loadVdaProjectData(), so
+  // both a console.error summary and a toast are used, toast because
+  // money/schedule data (linked properties/units) is what silently fails
+  // to get configured here.
+  let vdaCreateFailCount=0;
+  const vdaCreateFailedNumbers=[];
   for(const num of numbersToCreate){
     const matches=byNumber[num];
     const propNames=[...new Set(matches.map(s=>s.property).filter(Boolean))];
@@ -2226,6 +2247,8 @@ async function autoCreateVdaProjectsFromScopes(){
     });
     if(!createRes||!createRes.records||!createRes.records[0]){
       console.error(`Auto-create failed for VDA Project Number "${num}" — see atCreate error just above.`);
+      vdaCreateFailCount++;
+      vdaCreateFailedNumbers.push(num);
       continue;
     }
     const newId=createRes.records[0].id;
@@ -2233,6 +2256,10 @@ async function autoCreateVdaProjectsFromScopes(){
       id:newId,number:num,status:'Active',linkedPropertyIds,linkedUnitIds,linkedProjectIds:[],scope:'',price:0,createdTime:new Date().toISOString(),
     }]);
     existingNumbers.add(num.toLowerCase());
+  }
+  if(vdaCreateFailCount>0){
+    console.error(`autoCreateVdaProjectsFromScopes: ${vdaCreateFailCount} of ${numbersToCreate.length} VDA Project agreement(s) failed to auto-create: ${vdaCreateFailedNumbers.join(', ')}`);
+    if(typeof showToast==='function')showToast(`${vdaCreateFailCount} VDA Project agreement(s) failed to auto-create. Check console or contact IT.`,'error');
   }
 }
 window.autoCreateVdaProjectsFromScopes=autoCreateVdaProjectsFromScopes;
@@ -5466,7 +5493,7 @@ async function renderUnitsTab(p){
     // No else — after backfill, every unit has one of the 4 real values.
   });
 
-  const unitChip=(u,color)=>`<span style="font-size:12px;background:${color==='ok'?'var(--green-pale)':color==='dormant'?'var(--gray-pale)':'var(--blue-xpale)'};color:${color==='ok'?'var(--green)':color==='dormant'?'var(--gray-mid)':'var(--blue-dark)'};padding:5px 8px;border-radius:6px;text-align:center;display:inline-block" title="${[u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · ')}">${escHtml(u.name||'(unnamed)')}</span>`;
+  const unitChip=(u,color)=>`<span style="font-size:12px;background:${color==='ok'?'var(--green-pale)':color==='dormant'?'var(--gray-pale)':'var(--blue-xpale)'};color:${color==='ok'?'var(--green)':color==='dormant'?'var(--gray-mid)':'var(--blue-dark)'};padding:5px 8px;border-radius:6px;text-align:center;display:inline-block" title="${escHtml([u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · '))}">${escHtml(u.name||'(unnamed)')}</span>`;
 
   const section=(key,label,list,color,emptyMsg)=>{
     const isOpen=unitsTabOpen[key];
@@ -8856,7 +8883,7 @@ function renderPropMeetings(p){
       ${m.agenda?(()=>{
         const topics=m.agenda.split('\n').filter(Boolean);
         if(m.status==='Scheduled'&&topics.length){
-          return `<div style="font-size:11px;color:var(--gray-mid);margin-top:6px"><strong style="color:var(--navy)">Agenda</strong><ul style="margin:4px 0 0 14px;padding:0">${topics.map(t=>`<li>${t}</li>`).join('')}</ul></div>`;
+          return `<div style="font-size:11px;color:var(--gray-mid);margin-top:6px"><strong style="color:var(--navy)">Agenda</strong><ul style="margin:4px 0 0 14px;padding:0">${topics.map(t=>`<li>${escHtml(t)}</li>`).join('')}</ul></div>`;
         }
         return `<div style="font-size:11px;color:var(--gray-mid);margin-top:4px"><strong>Agenda:</strong> ${escHtml(m.agenda)}</div>`;
       })():''}
@@ -19691,19 +19718,19 @@ function renderDashboard(){
     ;(submissions||[]).filter(s=>s.reviewStatus==='approved').forEach(s=>{
       const d=new Date(s.submittedAt||s.week||0);
       feedItems.push({_date:d,_type:'Field Update',_icon:'ti-file-check',_color:'var(--green)',
-        _title:`${escHtml(s.property)} — Field Update`,_sub:`Week of ${fmtWeek(s.week)} · ${s.consultant||'—'}`,_prop:s.property});
+        _title:`${escHtml(s.property)} — Field Update`,_sub:`Week of ${fmtWeek(s.week)} · ${escHtml(s.consultant||'—')}`,_prop:s.property});
     });
     // Meetings (logged)
     ;(meetings||[]).filter(m=>m.status!=='Scheduled').forEach(m=>{
       const d=new Date(m.date||0);
       feedItems.push({_date:d,_type:'Meeting',_icon:'ti-notes',_color:'var(--blue-dark)',
-        _title:`${escHtml(m.property)} — ${escHtml(m.type||'Meeting')}`,_sub:`${fmtWeek(m.date)}${m.elevco?' · '+m.elevco:''}`,_prop:m.property});
+        _title:`${escHtml(m.property)} — ${escHtml(m.type||'Meeting')}`,_sub:`${fmtWeek(m.date)}${m.elevco?' · '+escHtml(m.elevco):''}`,_prop:m.property});
     });
     // Site visits
     ;(siteVisits||[]).forEach(v=>{
       const d=new Date(v.date||0);
       feedItems.push({_date:d,_type:'Site Visit',_icon:'ti-building',_color:'var(--teal)',
-        _title:`${v.property} — Site Visit`,_sub:`${fmtWeek(v.date)}${v.consultant?' · '+v.consultant:''}`,_prop:v.property});
+        _title:`${escHtml(v.property)} — Site Visit`,_sub:`${fmtWeek(v.date)}${v.consultant?' · '+escHtml(v.consultant):''}`,_prop:v.property});
     });
     // Action items closed
     ;(actionItems||[]).filter(a=>a.status==='Closed'||a.status==='closed').forEach(a=>{
@@ -20463,7 +20490,7 @@ async function renderWeeklyReportFeedback(){
       </div>
       <div style="font-size:13px;line-height:1.55;color:var(--gray-dark);white-space:pre-wrap;margin-bottom:10px">${(r.summaryText||'No summary recorded.').replace(/</g,'&lt;')}</div>
       <div id="wrf-notes-${r.id}" style="${isDown?'':'display:none'}">
-        <textarea class="form-input" id="wrf-notes-input-${r.id}" placeholder="What was wrong with this summary? (optional, but helpful for tuning future reports)" style="font-size:12px;min-height:56px;width:100%" oninput="wrfNoteEdited('${r.id}')">${(r.notes||'').replace(/</g,'&lt;')}</textarea>
+        <textarea class="form-input" id="wrf-notes-input-${r.id}" placeholder="What was wrong with this summary? (optional, but helpful for tuning future reports)" style="font-size:12px;min-height:56px;width:100%" oninput="wrfNoteEdited('${r.id}')">${escHtml(r.notes||'')}</textarea>
         <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:6px">
           <!-- v51h, Save and Edit are two distinct, always-visible controls
           rather than one swapping in for the other. The "Saved" tag is now
@@ -20650,11 +20677,11 @@ function showMarliFlagDetail(flagId){
     <div style="overflow-y:auto;flex:1;padding:20px">
       <div style="margin-bottom:16px">
         <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;margin-bottom:6px">Question</div>
-        <div style="font-size:13px;color:var(--navy);background:var(--gray-xpale);border-radius:8px;padding:10px 12px">${f.question}</div>
+        <div style="font-size:13px;color:var(--navy);background:var(--gray-xpale);border-radius:8px;padding:10px 12px">${escHtml(f.question)}</div>
       </div>
       <div style="margin-bottom:16px">
         <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;margin-bottom:6px">MARLI's response</div>
-        <div style="font-size:13px;color:var(--navy);background:var(--gray-xpale);border-radius:8px;padding:10px 12px;white-space:pre-wrap">${f.answer}</div>
+        <div style="font-size:13px;color:var(--navy);background:var(--gray-xpale);border-radius:8px;padding:10px 12px;white-space:pre-wrap">${escHtml(f.answer)}</div>
       </div>
       <div>
         <div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;margin-bottom:6px">Portfolio snapshot given this turn</div>
@@ -20722,7 +20749,7 @@ function visitCardHtml(v, isPast){
   </div>`;
   return `<div class="site-visit-card" style="background:${bgColor};opacity:${isPast?'0.85':'1'}">
     <div class="site-visit-date" style="background:${dateBoxBg}"><div class="site-visit-day" style="color:white">${day}</div><div class="site-visit-month" style="color:rgba(255,255,255,.85)">${mon}</div></div>
-    <div style="flex:1"><div style="font-size:13px;font-weight:500;color:${titleColor}">${v.property}</div><div style="font-size:11px;color:#9CA3AF;margin-top:2px">${v.consultant} · ${v.purpose}</div></div>
+    <div style="flex:1"><div style="font-size:13px;font-weight:500;color:${titleColor}">${escHtml(v.property)}</div><div style="font-size:11px;color:#9CA3AF;margin-top:2px">${escHtml(v.consultant)} · ${escHtml(v.purpose)}</div></div>
     ${editBtns}
   </div>`;
 }
@@ -21626,7 +21653,7 @@ function docItemHtml(d){
     <div class="doc-item-icon" style="background:${st.bg}"><i class="ti ${st.icon}" style="font-size:18px;color:${st.color}"></i></div>
     <div style="flex:1;min-width:0">
       <div class="doc-name">${escHtml(d.name)}</div>
-      <div class="doc-meta">${d.type} · ${d.uploaded}${d.uploadedBy?' · '+d.uploadedBy:''}${d.notes?' · '+d.notes:''}</div>
+      <div class="doc-meta">${escHtml(d.type)} · ${d.uploaded}${d.uploadedBy?' · '+escHtml(d.uploadedBy):''}${d.notes?' · '+escHtml(d.notes):''}</div>
     </div>
     ${role!=='client'?`<span class="badge ${vc}" style="flex-shrink:0">${d.visibility}</span>`:''}
     ${canPreview?`<button class="btn btn-icon" style="flex-shrink:0" onclick="previewDoc('${d.id}')" title="Preview"><i class="ti ti-eye"></i></button>`:''}
@@ -22244,7 +22271,7 @@ function renderEditPropertyUnitStats(p){
   const complete=units.filter(u=>u.status==='Complete');
   const dormant=units.filter(u=>u.status==='Dormant');
 
-  const chip=u=>`<span title="${[u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · ')}" style="font-size:12px;background:var(--blue-xpale);color:var(--blue-dark);padding:5px 8px;border-radius:6px;display:inline-block;cursor:default">${escHtml(u.name||'(unnamed)')}</span>`;
+  const chip=u=>`<span title="${escHtml([u.deviceLocation,u.unitType,u.capexYear?('CapEx '+u.capexYear):''].filter(Boolean).join(' · '))}" style="font-size:12px;background:var(--blue-xpale);color:var(--blue-dark);padding:5px 8px;border-radius:6px;display:inline-block;cursor:default">${escHtml(u.name||'(unnamed)')}</span>`;
 
   const card=(key,label,list,color)=>{
     const isOpen=epUnitStatsOpen[key];
@@ -22396,6 +22423,13 @@ async function confirmDeleteProperty(){
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===name);
   console.log('[deleteProperty] starting delete for:',name,'propId:',prop?.id);
 
+  // v52a — failedSteps tracks which cascade steps had at least one record
+  // that failed to delete, so the closing toast can honestly reflect what
+  // happened instead of unconditionally claiming full success. atDelete
+  // returns null on any failure (bad response, thrown error, or missing
+  // id — see its own definition), so a null result is the failure signal
+  // used below, same as a caught exception.
+  const failedSteps=[];
   if(!demoMode){
     showToast(`Deleting ${name} and all associated records...`,'info');
     // v30e: soft-delete property record — set Status='Removed' and Date Removed
@@ -22405,7 +22439,7 @@ async function confirmDeleteProperty(){
         await atUpdate('Properties',prop.id,{'Status':'Removed','Date Removed':todayIso});
         console.log('[deleteProperty] Properties record soft-deleted OK:',prop.id);
       }
-      catch(e){console.warn('Property soft-delete failed',e);console.log('[deleteProperty] Properties soft-delete FAILED — see warning above');}
+      catch(e){console.warn('Property soft-delete failed',e);console.log('[deleteProperty] Properties soft-delete FAILED — see warning above');failedSteps.push('Property record');}
     }
     // Cascade delete all related Airtable records
     const cascadeTargets=[
@@ -22425,10 +22459,15 @@ async function confirmDeleteProperty(){
     for(const {arr,table,field} of cascadeTargets){
       const toDelete=arr.filter(r=>r[field]===name&&r.id&&r.id.startsWith('rec'));
       console.log(`[deleteProperty] ${table}: ${toDelete.length} record(s) to delete`);
+      let tableFailed=false;
       for(const r of toDelete){
-        try{await atDelete(table,r.id);}
-        catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);console.log(`[deleteProperty] ${table} record ${r.id} delete FAILED`);}
+        try{
+          const result=await atDelete(table,r.id);
+          if(!result)tableFailed=true;
+        }
+        catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);console.log(`[deleteProperty] ${table} record ${r.id} delete FAILED`);tableFailed=true;}
       }
+      if(tableFailed)failedSteps.push(table);
     }
     // Cascade delete Bid Rounds + Bid Submissions (not in global arrays — fetch fresh by property ID)
     if(prop?.id){
@@ -22441,18 +22480,28 @@ async function confirmDeleteProperty(){
           const allBidSubs=await atGet('Bid Submissions');
           const subsToDelete=allBidSubs.filter(r=>(r.fields['Bid Round']||[]).some(rid=>bidRoundIds.has(rid)));
           console.log(`[deleteProperty] Bid Submissions: ${subsToDelete.length} record(s) to delete`);
+          let subsFailed=false;
           for(const r of subsToDelete){
-            try{await atDelete('Bid Submissions',r.id);}
-            catch(e){console.warn(`Failed to delete Bid Submissions record ${r.id}`,e);}
+            try{
+              const result=await atDelete('Bid Submissions',r.id);
+              if(!result)subsFailed=true;
+            }
+            catch(e){console.warn(`Failed to delete Bid Submissions record ${r.id}`,e);subsFailed=true;}
           }
+          if(subsFailed)failedSteps.push('Bid Submissions');
         }
         // Then delete the rounds themselves
+        let roundsFailed=false;
         for(const r of allBidRounds){
-          try{await atDelete('Bid Rounds',r.id);}
-          catch(e){console.warn(`Failed to delete Bid Rounds record ${r.id}`,e);}
+          try{
+            const result=await atDelete('Bid Rounds',r.id);
+            if(!result)roundsFailed=true;
+          }
+          catch(e){console.warn(`Failed to delete Bid Rounds record ${r.id}`,e);roundsFailed=true;}
         }
+        if(roundsFailed)failedSteps.push('Bid Rounds');
       }
-      catch(e){console.warn('[deleteProperty] Bid Rounds/Submissions cascade failed',e);}
+      catch(e){console.warn('[deleteProperty] Bid Rounds/Submissions cascade failed',e);failedSteps.push('Bid Rounds/Bid Submissions');}
     }
     console.log('[deleteProperty] cascade delete sequence complete');
   }
@@ -22476,7 +22525,11 @@ async function confirmDeleteProperty(){
   BID_SUBMISSIONS_CACHE=BID_SUBMISSIONS_CACHE.filter(s=>s.property!==name);
   console.log('[deleteProperty] in-memory cleanup done. PORTFOLIO now has',window.PORTFOLIO.length,'properties. Still present?',window.PORTFOLIO.some(p=>p.n===name));
   if(currentProp?.n===name){currentProp=null;gotoView('portfolio');}
-  showToast(`${name} and all associated records deleted`,'success');
+  if(failedSteps.length>0){
+    showToast(`${name} deleted, but some related records may remain: ${failedSteps.join(', ')}. Contact IT if this needs cleanup.`,'error');
+  }else{
+    showToast(`${name} and all associated records deleted`,'success');
+  }
   populatePortfolio();
   console.log('[deleteProperty] populatePortfolio() called — check portfolio table now');
   updateClientCommentsBadge();
@@ -22863,7 +22916,7 @@ function refreshQueue(){
         </div>
       </div>
       <div class="queue-item-meta">Submitted by ${s.consultant} · ${s.submittedAt} · Units: ${escHtml(s.units)} · Phase: ${escHtml(s.phase)}</div>
-      <div class="queue-item-body">${(s.notes||'').slice(0,120)}${(s.notes||'').length>120?'...':''}</div>
+      <div class="queue-item-body">${escHtml((s.notes||'').slice(0,120))}${(s.notes||'').length>120?'...':''}</div>
       <div class="queue-actions">
         <button class="btn btn-success" onclick="approveSubmission('${s.id}')"><i class="ti ti-check"></i>Approve</button>
         <button class="btn btn-warn" onclick="kickSubmission('${s.id}')"><i class="ti ti-arrow-back-up"></i>Return with note</button>
@@ -22871,14 +22924,14 @@ function refreshQueue(){
     </div>`).join('');
     const coItems=pendingCOs.map(co=>`<div class="queue-item" style="border-left:3px solid var(--amber)">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-        <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--amber);text-transform:uppercase;display:block;margin-bottom:2px">Change Order</span><i class="ti ti-file-invoice" style="font-size:12px;margin-right:4px"></i>${co.property}</div>
+        <div class="queue-item-title"><span style="font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--amber);text-transform:uppercase;display:block;margin-bottom:2px">Change Order</span><i class="ti ti-file-invoice" style="font-size:12px;margin-right:4px"></i>${escHtml(co.property)}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="co-status-pending">Pending</span>
           <button class="btn btn-icon" onclick="openProperty('${co.property.replace(/'/g,"\\'")}');setTimeout(()=>switchPropTab('changeorders',document.querySelector('.tab-btn[onclick*=\"changeorders\"]')),300)" title="View Change Order"><i class="ti ti-eye" style="font-size:14px;color:var(--gray-mid)"></i></button>
         </div>
       </div>
       <div class="queue-item-meta">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date||'—'}</div>
-      <div class="queue-item-body">${(co.description||'').slice(0,120)}${(co.description||'').length>120?'...':''}</div>
+      <div class="queue-item-body">${escHtml((co.description||'').slice(0,120))}${(co.description||'').length>120?'...':''}</div>
       <div style="display:flex;gap:8px;padding-top:8px;font-size:11px">
         <span style="color:var(--gray-mid)">Original: <strong>${fmtCurrency(co.originalAmount)}</strong></span>
         <span style="color:var(--gray-mid)">Negotiated: <strong style="color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</strong></span>
@@ -24064,7 +24117,7 @@ async function submitFlag(){
               <p><strong>Property:</strong> ${prop}<br>
               <strong>Concern Type:</strong> ${type}<br>
               <strong>Visibility:</strong> ${visibility}<br>
-              <strong>Message:</strong> ${msg}</p>
+              <strong>Message:</strong> ${escHtml(msg)}</p>
               <p>Please log in to PULSE to review and respond. If you are a consultant, please connect with your Project Manager to coordinate a response — only the PM can resolve flags in PULSE.</p>
               <p style="font-size:11px;color:#888">This notification was sent from noreply@elevatorpulse.com via PULSE Portal — Park Hotels & Resorts Modernization Program.</p>`
           })
@@ -24277,7 +24330,7 @@ function renderPMUpdates(){
   }
   feed.innerHTML=visible.map(u=>{
     const scope=(window.SCOPES||[]).find(s=>s.id===u.scopeId);
-    const scopeLabel=scope?scope.name||'Project':'';
+    const scopeLabel=escHtml(scope?scope.name||'Project':'');
     const dateLabel=(u.status==='Published'&&u.published)?u.published:u.created;
     const dateFmt=dateLabel?new Date(dateLabel+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
     const statusBadge=u.status==='Published'
@@ -24993,7 +25046,7 @@ function renderCommentsView(expandedThreads){
   const openFlags=threadList.filter(t=>t[0]?.status==='Open');
   const alertEl=document.getElementById('comments-flags-alert');
   if(alertEl){
-    if(openFlags.length>0){alertEl.style.display='flex';document.getElementById('comments-flags-text').innerHTML=`<strong>${openFlags.length} open flag${openFlags.length>1?'s':''}</strong> — ${openFlags.map(t=>`${t[0].property} (${t[0].flagType})`).join(' · ')}`;
+    if(openFlags.length>0){alertEl.style.display='flex';document.getElementById('comments-flags-text').innerHTML=`<strong>${openFlags.length} open flag${openFlags.length>1?'s':''}</strong> — ${openFlags.map(t=>`${escHtml(t[0].property)} (${escHtml(t[0].flagType)})`).join(' · ')}`;
     }else{alertEl.style.display='none';}
   }
   const container=document.getElementById('comments-threads-container');if(!container)return;
@@ -25020,7 +25073,7 @@ function renderCommentsView(expandedThreads){
       <div class="card-header" style="cursor:pointer" onclick="toggleThreadBody('${collapseId}','${threadId}-chev')">
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
           <i class="ti ti-chevron-down" id="${threadId}-chev" style="font-size:13px;color:var(--gray-mid);transition:transform .2s;transform:${chevronRotate};flex-shrink:0"></i>
-          <div><div class="card-title">${flag.property}</div><div class="card-sub">${flag.flagType} concern · ${new Date(flag.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div>
+          <div><div class="card-title">${escHtml(flag.property)}</div><div class="card-sub">${escHtml(flag.flagType)} concern · ${new Date(flag.created).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div>
         </div>
         <div style="display:flex;align-items:center;gap:8px" onclick="event.stopPropagation()">
           ${otherReadLabel}
@@ -26405,7 +26458,7 @@ function renderGantt() {
       const projDatesLine=(pStart||pEnd)?`<div style="font-size:9px;color:var(--gray-mid);font-weight:400;margin-top:1px">${ganttFmtDate(pStart)||'—'} → ${ganttFmtDate(pEnd)||'—'}</div>`:'';
       html += `<div class="gantt-row gantt-prop-header">
         <div class="gantt-row-label" onclick="openProperty('${row.prop.n.replace(/'/g, "\\'")}')" style="height:auto;line-height:1.3;padding-top:5px;padding-bottom:5px">
-          <i class="ti ti-building" style="font-size:11px;margin-right:4px;color:var(--blue-dark)"></i>${row.prop.n}${projDatesLine}
+          <i class="ti ti-building" style="font-size:11px;margin-right:4px;color:var(--blue-dark)"></i>${escHtml(row.prop.n)}${projDatesLine}
         </div>
         <div class="gantt-bars" style="width:${totalW}px">
           ${todayX !== null && todayX >= 0 && todayX <= totalW ? `<div class="gantt-today-line" style="left:${todayX}px"></div>` : ''}
@@ -26443,7 +26496,7 @@ function renderGantt() {
 
       html += `<div class="gantt-row">
         <div class="gantt-row-label" onclick="openProperty('${row.prop.n.replace(/'/g, "\\'")}')" style="height:auto;line-height:1.3;padding-top:5px;padding-bottom:5px">
-          ${row.prop.n}${projDatesLine}
+          ${escHtml(row.prop.n)}${projDatesLine}
         </div>
         <div class="gantt-bars" style="width:${totalW}px;position:relative">
           ${months.map((_, i) => `<div class="gantt-grid-line" style="left:${i * GANTT_MONTH_W}px"></div>`).join('')}
@@ -26539,11 +26592,11 @@ function renderOpsCenter(){
   });
   (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)).forEach(m=>{
     const d=new Date(m.date+'T12:00:00');
-    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${escHtml(m.property||'—')} · ${m.date}${m.attClient?' · '+m.attClient:''}`,_prop:m.property||'',_priority:'',_scopeId:m.scopeId||''});
+    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${escHtml(m.property||'—')} · ${m.date}${m.attClient?' · '+escHtml(m.attClient):''}`,_prop:m.property||'',_priority:'',_scopeId:m.scopeId||''});
   });
   (siteVisits||[]).filter(v=>v.date&&propFilter(v.property)).forEach(v=>{
     const d=new Date(v.date+'T12:00:00');
-    if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${v.property||'—'} · ${v.date}${v.consultant?' · '+v.consultant:''}`,_prop:v.property||'',_priority:''});
+    if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${escHtml(v.property||'—')} · ${v.date}${v.consultant?' · '+escHtml(v.consultant):''}`,_prop:v.property||'',_priority:''});
   });
 
   const overdue=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today).map(a=>({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''})).sort((a,b)=>a._date-b._date);
