@@ -1,4 +1,43 @@
 <!--
+pulse_v52l. Changes from v52k, this round. Four fixes/enhancements
+reported live by Misty on Hilton Denver City Center and elsewhere.
+Requires no worker changes.
+  1. Activity Feed's Action Closed entries showed only the owner name,
+     with no date at all, unlike every other feed category (Field Update,
+     Meeting, Site Visit, Milestone completions all show a formatted
+     date in _sub). Now shows fmtWeek(a.closedDate) matching the same
+     convention. Also switched the feed's sort date from a.due (the
+     item's original due date) to a.closedDate (set by closeAction() at
+     the moment the item is actually closed), matching the "date the
+     event actually happened" convention every other category uses.
+  2. Portfolio Heat Map showed 0% on a property (Hilton Denver City
+     Center) whose Milestones tab showed 86% complete for the same
+     property. Root cause: the heatmap computed % from Phase Tasks
+     completion (window.PHASE_STEPS), a different and more granular
+     metric than property-wide milestone completion, so a property that
+     had fast-tracked milestones via Manual Override but hadn't started
+     real Phase Tasks yet would show 0% on the heatmap while showing a
+     real percentage everywhere else. Per Misty's explicit direction,
+     the heatmap now shows aggregate completion of M6 (First Phase
+     Start) through M13 (Owner Acceptance), the "construction specific
+     milestones," counting a milestone as complete whether it came from
+     real Unit Phase derivation or the Manual Completion Override
+     toggle. New getConstructionMsComplete()/getConstructionMsExpectedTotal()
+     helpers, same property-wide all-scopes aggregation pattern
+     getMsComplete()/getMsExpectedTotal() already use, replace the old
+     Phase-Tasks-based calculation in dashHeatData.
+  3. The Mark Complete Today toggle (manual milestone completion
+     override, added v52f) didn't match the approved mockup. It was
+     crammed into the same flex-wrap row as three date inputs, and its
+     amber styling only appeared when toggled on, gray/neutral when off.
+     Moved to its own full-width row below the date row, rebuilt as a
+     slider using the same visual pattern as the existing property-wide
+     Manual Override banner, and per Misty's explicit direction the
+     amber background/border now appears in both on and off states to
+     draw attention to it either way.
+  4. Milestone Notes field was too narrow (100-160px) to comfortably
+     enter longer notes. Widened to 220-420px with flex:1.
+
 pulse_v52k. Changes from v52j, this round. Single targeted bug fix,
 reported live by Misty on Hilton Denver City Center. Requires no worker
 changes.
@@ -3649,7 +3688,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52l</div>
     </div>
   </nav>
 
@@ -7290,6 +7329,30 @@ function getMsExpectedTotal(propName){
   return MILESTONES_DEF.length*(scopeCount>0?scopeCount:1);
 }
 
+// v52l — Construction-specific milestone aggregate (M6-M13), used by the
+// Portfolio Heat Map. Per Misty's explicit direction: the heatmap
+// previously showed % of Phase Tasks complete (window.PHASE_STEPS), a
+// different and much more granular metric than the property-wide
+// milestone % shown on the Overview/Milestones tabs — a property that had
+// fast-tracked milestones via Manual Override but hadn't started real
+// Phase Tasks yet would show 0% on the heatmap while showing a real
+// percentage everywhere else, confusing rather than informative (reported
+// live on Hilton Denver City Center). M6 (First Phase Start) through M13
+// (Owner Acceptance) is Misty's own specified range for "construction
+// specific milestones" — counts whichever milestones are actually marked
+// Complete regardless of whether that came from real Unit Phase
+// derivation or the Manual Completion Override toggle, since both are
+// legitimate ways a milestone reaches Complete status. Same property-wide,
+// all-scopes aggregation getMsComplete/getMsExpectedTotal already use.
+function getConstructionMsComplete(propName){
+  const ms=getMilestonesForProp(propName).filter(m=>m.milestoneNumber>=6&&m.milestoneNumber<=13);
+  return ms.filter(m=>m.status==='Complete').length;
+}
+function getConstructionMsExpectedTotal(propName){
+  const scopeCount=(window.SCOPES||[]).filter(s=>s.property===propName).length;
+  return 8*(scopeCount>0?scopeCount:1); // M6-M13 inclusive = 8 milestones
+}
+
 // SCHEDULE RISK ENGINE
 // Returns risk assessment for a property based on today vs planned dates
 function calcScheduleRisk(propName){
@@ -8793,20 +8856,6 @@ function renderMilestones(p){
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real Completion date">`:
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.completionDate||''}"
               onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">`}
-          </div>
-          <div>
-            <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">&nbsp;</div>
-            ${m.manuallyCompleted?`
-            <label style="display:flex;align-items:center;gap:6px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:6px;padding:4px 8px;cursor:pointer;white-space:nowrap">
-              <input type="checkbox" checked onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="cursor:pointer">
-              <i class="ti ti-clock" style="font-size:12px;color:#854F0B"></i>
-              <span style="font-size:10px;color:#854F0B;font-weight:600">Marked complete today (${m.manuallyCompletedOn?new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}) by ${escHtml(m.manuallyCompletedBy||'')}</span>
-            </label>`:`
-            <label style="display:flex;align-items:center;gap:6px;border:1px solid var(--gray-pale);border-radius:6px;padding:4px 8px;cursor:pointer;white-space:nowrap">
-              <input type="checkbox" onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="cursor:pointer">
-              <span style="font-size:10px;color:var(--gray-mid);font-weight:500">Mark complete today</span>
-              <i class="ti ti-info-circle" style="font-size:12px;color:var(--gray-light)" title="Marks this milestone Complete as of today, independent of the date fields. Turn off any time to revert to normal status and enter real dates."></i>
-            </label>`}
           </div>`:canEdit?`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
@@ -8822,12 +8871,26 @@ function renderMilestones(p){
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${derivedDates.completionDate||''}" disabled title="Derived from Phase Tasks — view in Unit Phases tab">
           </div>`:''}
           ${canEdit?`
-          <div style="min-width:100px;max-width:160px">
+          <div style="min-width:220px;max-width:420px;flex:1">
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Notes</div>
             <input type="text" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:100%" value="${escHtml(m.notes||'')}" placeholder="Notes..."
               onblur="updateMilestoneField('${m.id}','Notes',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>`:''}
-        </div>`:
+        </div>
+        ${canEdit&&isCalendar?`
+        <div style="margin-top:8px;display:flex;align-items:center;gap:10px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:8px;padding:8px 12px">
+          <label style="position:relative;display:inline-block;width:38px;height:22px;flex-shrink:0;cursor:pointer">
+            <input type="checkbox" ${m.manuallyCompleted?'checked':''} onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="opacity:0;width:0;height:0;position:absolute">
+            <span style="position:absolute;inset:0;background:${m.manuallyCompleted?'#EF9F27':'#CBD5E1'};border-radius:22px;transition:background .15s"></span>
+            <span style="position:absolute;top:3px;${m.manuallyCompleted?'right':'left'}:3px;width:16px;height:16px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
+          </label>
+          <div style="flex:1;min-width:0">
+            ${m.manuallyCompleted?`
+            <div style="font-size:12px;font-weight:600;color:#854F0B"><i class="ti ti-clock" style="font-size:12px;margin-right:4px"></i>Marked complete today (${m.manuallyCompletedOn?new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}) by ${escHtml(m.manuallyCompletedBy||'')}</div>`:`
+            <div style="font-size:12px;font-weight:600;color:#854F0B">Mark complete today</div>
+            <div style="font-size:10px;color:#9A6B1E;margin-top:1px">Marks this milestone Complete as of today, independent of the date fields. Turn off any time to revert to normal status and enter real dates.</div>`}
+          </div>
+        </div>`:''}`:
         `<div style="display:flex;align-items:center;gap:8px;margin-top:2px">${statusBadge}<span style="font-size:11px;color:var(--gray-mid)">${m.plannedDate?'Planned: '+m.plannedDate:''}${m.actualDate?' · Actual: '+m.actualDate:''}</span></div>`}
       </div>
     </div>`;
@@ -20606,12 +20669,18 @@ function renderDashboard(){
   }).join('');
   // Heat map data for dashboard
   const dashHeatCols=Math.min(active.length,6)||1;
+  // v52l — pct now comes from getConstructionMsComplete/ExpectedTotal
+  // (M6-M13 aggregate milestone completion, real Unit Phase derivation OR
+  // Manual Completion Override, either counts), not Phase Tasks. Per
+  // Misty's explicit direction: the Phase Tasks metric is a different,
+  // more granular layer that could show 0% here while the Milestones tab
+  // showed real progress for the same property, confusing rather than
+  // informative — reported live on Hilton Denver City Center's 2026
+  // Project (86% on Milestones, 0% on this heatmap).
   const dashHeatData=active.map(p=>{
     const risk=calcScheduleRisk(p.n);
     const propStatus=derivePropertyStatusFromPhases(p.n);
-    const propSteps=(window.PHASE_STEPS||[]).filter(s=>s.property===p.n&&s.checked!==false);
-    const stepsComplete=propSteps.filter(s=>s.status==='Complete').length;
-    const pct=propSteps.length>0?Math.round(stepsComplete/propSteps.length*100):Math.round(getMsComplete(p.n)/getMsExpectedTotal(p.n)*100);
+    const pct=Math.round(getConstructionMsComplete(p.n)/getConstructionMsExpectedTotal(p.n)*100);
     const riskLevel=propStatus==='At Risk'?'High':propStatus==='Complete'?'None':risk.daysLate>0?'Medium':'Low';
     return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,riskLevel,propStatus,daysLate:risk.daysLate,overdueCount:risk.overdueCount};
   });
@@ -20927,10 +20996,17 @@ function renderDashboard(){
         _title:`${escHtml(v.property)} — Site Visit`,_sub:`${fmtWeek(v.date)}${v.consultant?' · '+escHtml(v.consultant):''}`,_prop:v.property});
     });
     // Action items closed
+    // v52l — every other category in this feed sets _sub to include the
+    // event's own formatted date (Field Update, Meeting, Site Visit all
+    // do); this one only ever showed the owner name, with no date at all.
+    // Also switched the sort date from a.due (the original due date, not
+    // when it was actually closed) to a.closedDate (set by closeAction()
+    // at the moment the item is closed), matching the same "date the
+    // event actually happened" convention every other feed category uses.
     ;(actionItems||[]).filter(a=>a.status==='Closed'||a.status==='closed').forEach(a=>{
-      const d=new Date(a.due||0);
+      const d=new Date(a.closedDate||a.due||0);
       feedItems.push({_date:d,_type:'Action Closed',_icon:'ti-circle-check',_color:'var(--green)',
-        _title:`${escHtml(a.property||'—')} — Action Closed: ${escHtml(a.title||a.description||'Action Item')}`,_sub:`${escHtml(a.owner||'—')}`,_prop:a.property||''});
+        _title:`${escHtml(a.property||'—')} — Action Closed: ${escHtml(a.title||a.description||'Action Item')}`,_sub:`${fmtWeek(a.closedDate)}${a.owner?' · '+escHtml(a.owner):''}`,_prop:a.property||''});
     });
     // v37g — Milestone completions. Uses each Milestone's own real
     // actualDate/completionDate (already tracked, no new field needed) —
