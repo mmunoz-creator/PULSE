@@ -4406,7 +4406,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55h</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55i</div>
     </div>
   </nav>
 
@@ -8215,6 +8215,73 @@ function calcScheduleRisk(propName){
   }
 
   // Risk level — driven by construction steps
+  let riskLevel='On Track';
+  if(atRiskCount>0||daysLate>60)riskLevel='High';
+  else if(overdueCount>0||daysLate>0)riskLevel='Medium';
+  else if(aheadCount>0&&overdueCount===0&&atRiskCount===0)riskLevel='Ahead';
+
+  return {daysLate,overdueCount,atRiskCount,aheadCount,riskLevel,projectedEnd};
+}
+
+// v55i — Scope-scoped sibling of calcScheduleRisk() above, for the
+// per-Scope heat map rebuild (see dashHeatData's own comment). The
+// property-wide version pools every Scope's Phase Steps/Unit Groups
+// together, which is exactly the blending problem the heat map rebuild is
+// fixing — a property with one on-schedule Scope and one at-risk Scope
+// needs its risk assessed independently per Scope, not smeared into one
+// property-wide number. Same logic, just filtered to one scopeId instead
+// of every Scope on the property; On Hold is still excluded (though a
+// Scope calling this should already be status==='In Progress' by the
+// time it gets here, so this is a defensive no-op in practice, not a
+// live path).
+function calcScopeScheduleRisk(propName,scopeId){
+  const today=new Date();today.setHours(0,0,0,0);
+  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName&&u.scopeId===scopeId);
+  let daysLate=0;
+  let overdueCount=0;
+  let atRiskCount=0;
+  let aheadCount=0;
+  let projectedEnd=null;
+
+  const steps=(window.PHASE_STEPS||[]).filter(s=>s.property===propName&&s.scopeId===scopeId&&s.checked!==false);
+  steps.forEach(s=>{
+    if(s.status==='Complete')return;
+    if(s.status==='At Risk')atRiskCount++;
+    if(s.plannedEnd){
+      const planned=new Date(s.plannedEnd);
+      if(planned<today&&s.status!=='Complete'){
+        const delta=Math.round((today-planned)/(1000*60*60*24));
+        daysLate=Math.max(daysLate,delta);
+        overdueCount++;
+      }
+    }
+    if(s.status==='In Progress'&&s.actualStart&&s.plannedStart){
+      if(new Date(s.actualStart)<new Date(s.plannedStart))aheadCount++;
+    }
+  });
+
+  if(steps.length===0){
+    phases.forEach(ph=>{
+      if(ph.status==='Complete')return;
+      if(ph.plannedCompletion){
+        const planned=new Date(ph.plannedCompletion);
+        if(planned<today){
+          const delta=Math.round((today-planned)/(1000*60*60*24));
+          daysLate=Math.max(daysLate,delta);
+          overdueCount++;
+        }
+        if(!projectedEnd||planned>projectedEnd)projectedEnd=planned;
+      }
+    });
+  } else {
+    phases.forEach(ph=>{
+      if(ph.plannedCompletion){
+        const d=new Date(ph.plannedCompletion);
+        if(!projectedEnd||d>projectedEnd)projectedEnd=d;
+      }
+    });
+  }
+
   let riskLevel='On Track';
   if(atRiskCount>0||daysLate>60)riskLevel='High';
   else if(overdueCount>0||daysLate>0)riskLevel='Medium';
@@ -22441,28 +22508,57 @@ function renderDashboard(){
   }).join('');
   // Heat map data for dashboard
   const dashHeatCols=Math.min(active.length,6)||1;
-  // v52l — pct now comes from getConstructionMsComplete/ExpectedTotal
-  // (M6-M13 aggregate milestone completion, real Unit Phase derivation OR
-  // Manual Completion Override, either counts), not Phase Tasks. Per
-  // Misty's explicit direction: the Phase Tasks metric is a different,
-  // more granular layer that could show 0% here while the Milestones tab
-  // showed real progress for the same property, confusing rather than
-  // informative — reported live on Hilton Denver City Center's 2026
-  // Project (86% on Milestones, 0% on this heatmap).
-  const dashHeatData=active.map(p=>{
-    const risk=calcScheduleRisk(p.n);
-    const propStatus=derivePropertyStatusFromPhases(p.n);
-    const pct=Math.round(getConstructionMsComplete(p.n)/getConstructionMsExpectedTotal(p.n)*100);
-    const riskLevel=propStatus==='At Risk'?'High':propStatus==='Complete'?'None':risk.daysLate>0?'Medium':'Low';
-    // v55g — project counter, per direct instruction (e.g. "Hilton Denver
-    // City Center (2) On Track at 29%"). scopeCount is the same number
-    // getConstructionMsExpectedTotal already divides by internally (one
-    // property tile's % is an average across every Scope/project on that
-    // property), surfaced here so the tile can show how many projects
-    // that average actually represents.
-    const scopeCount=(window.SCOPES||[]).filter(s=>s.property===p.n).length||1;
-    return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,riskLevel,propStatus,daysLate:risk.daysLate,overdueCount:risk.overdueCount,scopeCount};
+  // v55i — full rebuild around per-Scope classification, per direct
+  // instruction after a real reported bug: Hilton Denver City Center has
+  // 3 Scopes (2 In Progress, 1 Planned/not-started), and the old
+  // property-wide getConstructionMsExpectedTotal divided by ALL 3 Scopes'
+  // worth of milestones (8*3=24) even though the not-yet-started Scope
+  // structurally could never contribute — silently dragging the whole
+  // property's percentage down and hiding the fact that one of its two
+  // real projects was actually in Pre-Construction, not Construction.
+  // Confirmed with Misty the correct model: every Scope's own percentage
+  // is always x/14 (all milestones, not a separate M6-M13 sub-scale), a
+  // Scope's home card is decided purely by whether M5 (Submittal Drawing
+  // Review) has reached Complete (not yet = Pre-Construction card, once
+  // it has = Construction card), and a property with Scopes in different
+  // stages appears on BOTH cards, each showing only the real aggregate of
+  // the Scopes actually in that stage. Only Scopes with their own
+  // status==='In Progress' are included — mirrors the property-level
+  // `active` filter this replaced, just correctly moved one level down so
+  // a Planned/Capital Plan/On Hold/Complete Scope on an otherwise-active
+  // property doesn't get pulled onto either heat map (those already have
+  // their own homes: Capital Plan, the On Hold state, the Complete
+  // toggle).
+  const activeScopes=(window.SCOPES||[]).filter(s=>s.status==='In Progress');
+  const dashScopeData=activeScopes.map(s=>{
+    const ms=getMilestonesForProp(s.property,s.id);
+    const complete=ms.filter(m=>m.status==='Complete').length;
+    const m5=ms.find(m=>m.milestoneNumber===5);
+    const category=(m5&&m5.status==='Complete')?'construction':'precon';
+    const risk=calcScopeScheduleRisk(s.property,s.id);
+    const isRisk=risk.atRiskCount>0||risk.daysLate>0;
+    return {property:s.property,scopeId:s.id,scopeName:s.name||'',complete,expected:MILESTONES_DEF.length,category,daysLate:risk.daysLate,isRisk};
   });
+  // Group by property within each category — this is what lets one
+  // property legitimately appear on both cards at once, each showing only
+  // the aggregate of ITS Scopes that belong there.
+  function groupScopesToTiles(category){
+    const byProp={};
+    dashScopeData.filter(d=>d.category===category).forEach(d=>{
+      (byProp[d.property]=byProp[d.property]||[]).push(d);
+    });
+    return Object.keys(byProp).map(propName=>{
+      const scopes=byProp[propName];
+      const sumComplete=scopes.reduce((a,d)=>a+d.complete,0);
+      const sumExpected=scopes.reduce((a,d)=>a+d.expected,0);
+      const pct=sumExpected>0?Math.round(sumComplete/sumExpected*100):0;
+      const maxDaysLate=scopes.reduce((a,d)=>Math.max(a,d.daysLate),0);
+      const anyRisk=scopes.some(d=>d.isRisk);
+      return {name:propName,shortName:propName.length>20?propName.slice(0,18)+'…':propName,pct,daysLate:maxDaysLate,isRisk:anyRisk,scopeCount:scopes.length};
+    });
+  }
+  const dashHeatData=groupScopesToTiles('construction');
+  const dashPreConHeatData=groupScopesToTiles('precon');
   // v36c — Complete properties never appeared on the heat map at all
   // (dashHeatData is built from `active`, i.e. p.st==='In Progress'
   // only), which is why The Reach Key West — genuinely Complete —
@@ -22567,7 +22663,7 @@ function renderDashboard(){
     })()}
     <div class="card custom-report-subsection" id="dashboard-heatmap-card" style="margin-bottom:16px">
       <div class="card-header">
-        <div><div class="card-title">Construction Heat Map</div><div class="card-sub">Lead-Time Progress by Property, M6-M13</div></div>
+        <div><div class="card-title">Construction Heat Map</div><div class="card-sub">Lead-Time Progress by Property, M5-M14</div></div>
         <div style="display:flex;gap:14px;align-items:center">
           <div style="display:flex;gap:10px;align-items:center">
             <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--blue-dark);margin-right:3px"></span>On Track</span>
@@ -22586,19 +22682,17 @@ function renderDashboard(){
            activeTiles split below) and reappears on the Pre-Construction
            Heat Map card instead. This line exists so that move doesn't
            read as data silently vanishing. -->
-      <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">Properties appear here once construction milestone progress (M6-M13) begins. Properties still in Pre-Construction are tracked below.</div>
       <div id="dash-heat-grid" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
-      ${dashHeatData.filter(d=>d.pct>0).length===0&&(!dashHeatShowComplete||completeProps.length===0)?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No properties with construction progress yet</div>':''}
+      ${dashHeatData.length===0&&(!dashHeatShowComplete||completeProps.length===0)?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No properties with construction progress yet</div>':''}
     </div>
     <div class="card custom-report-subsection" id="dashboard-precon-heatmap-card" style="margin-bottom:16px">
       <div class="card-header">
-        <div><div class="card-title">Pre-Construction Heat Map</div><div class="card-sub">Properties Not Yet Started, M1-M4</div></div>
+        <div><div class="card-title">Pre-Construction Heat Map</div><div class="card-sub">Properties with Projects in M1-M4 Stage</div></div>
       </div>
       <!-- v55g — handoff caption, mirrored from the Construction card
            above so the relationship reads in either direction. -->
-      <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">Properties move up to the Construction Heat Map once their first M6-M13 construction milestone completes.</div>
       <div id="dash-precon-heat-grid" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
-      ${dashHeatData.filter(d=>d.pct===0).length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No properties currently in Pre-Construction</div>':''}
+      ${dashPreConHeatData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No properties currently in Pre-Construction</div>':''}
     </div>
     <div id="dash-attention-section" class="custom-report-subsection" style="margin-bottom:16px"></div>
     <div id="dash-action-horizon" class="custom-report-subsection" style="margin-bottom:16px"></div>
@@ -22612,31 +22706,21 @@ function renderDashboard(){
   // only), so both were dead legend entries. Complete properties now
   // render as their own green tile set, toggled by dashHeatShowComplete
   // (default ON) rather than being silently absent.
-  // v55g — project counter badge, per direct instruction (e.g. "Hilton
+  // v55i — project counter badge, per direct instruction (e.g. "Hilton
   // Denver City Center (2) On Track at 29%"). Shared between the
   // Construction and Pre-Construction tile renderers below so both heat
-  // maps show it identically; d.scopeCount is always at least 1 (see
-  // dashHeatData's own construction above).
+  // maps show it identically; d.scopeCount is always at least 1 for any
+  // tile that exists at all (groupScopesToTiles only creates a tile when
+  // there's at least one Scope behind it).
   const heatTileCounter=d=>d.scopeCount>1?`<span style="color:var(--gray-mid);font-weight:500"> (${d.scopeCount})</span>`:'';
   const dashGrid=document.getElementById('dash-heat-grid');
   if(dashGrid){
-    // v55g — properties with zero M6-M13 construction milestones complete
-    // now live on their own Pre-Construction Heat Map card below instead
-    // of showing a gray "NOT STARTED" tile here (see preConTiles).
-    // d.pct only ever equals exactly 0 when getConstructionMsComplete
-    // returns 0 (M6-M13 is at most 8 milestones per Scope, so any real
-    // completion rounds to a visible nonzero percentage), so filtering on
-    // pct>0 is the same not-started/started boundary the old gray-tile
-    // logic already used, just routed to a different card now instead of
-    // a different color.
-    const activeTiles=dashHeatData.filter(d=>d.pct>0).map(d=>{
-      // v51d — propStatus (manually-tracked phase/milestone status) and
-      // daysLate (computed directly from planned-completion dates vs.
-      // today) could disagree, showing a blue "ON TRACK" tile with red
-      // "Xd overdue" text underneath it — e.g. Hilton Boston Logan
-      // Airport. daysLate is a hard fact computed from real dates, so it
-      // now also drives the At Risk badge, not just the overdue caption.
-      const isRisk=d.propStatus==='At Risk'||d.daysLate>0;
+    // v55i — dashHeatData is now pre-filtered to only Scopes whose M5 has
+    // completed (see groupScopesToTiles('construction') above), so every
+    // tile here genuinely belongs on this card no pct-based filtering
+    // needed anymore.
+    const activeTiles=dashHeatData.map(d=>{
+      const isRisk=d.isRisk;
       const borderColor=isRisk?'var(--red)':'var(--blue-dark)';
       const bgColor=isRisk?'var(--red-pale)':'#eff6ff';
       const lblColor=isRisk?'var(--red)':'var(--blue-dark)';
@@ -22672,26 +22756,37 @@ function renderDashboard(){
     }).join(''):'';
     dashGrid.innerHTML=activeTiles+completeTiles;
   }
-  // v55g — Pre-Construction Heat Map. Same dashHeatData source, the
-  // complementary pct===0 slice that the Construction grid above now
-  // excludes. Neutral gray styling (was the old "NOT STARTED" tile color
-  // on the combined map) since nothing here can legitimately be behind
-  // schedule on work that hasn't started yet — no risk/at-risk state to
-  // show, just the property name, counter, and a 0% bar for visual
-  // consistency with the Construction card's tile shape.
+  // v55i — Pre-Construction Heat Map, now sourced from dashPreConHeatData
+  // (the Scopes whose M5 hasn't completed yet, grouped by property the
+  // same way as the Construction card). Per direct instruction: this
+  // card now shows each property's REAL M1-M14 aggregate percentage
+  // (e.g. all 4 of M1-M4 complete = 4/14 = 29%), not a static "0%"
+  // placeholder a Scope sits here with whatever real progress it has
+  // made on M1-M4 until M5 completes and it graduates to the Construction
+  // card above. Risk styling included too (a Pre-Construction Scope can
+  // still be behind schedule on its own M1-M4 planned dates), matching
+  // the Construction card's on-track/at-risk treatment rather than the
+  // old flat "NOT STARTED" gray-only look.
   const dashPreConGrid=document.getElementById('dash-precon-heat-grid');
   if(dashPreConGrid){
-    const preConTiles=dashHeatData.filter(d=>d.pct===0).map(d=>{
-      return `<div style="border:1.5px solid var(--gray-mid);border-radius:8px;padding:10px 12px;background:var(--gray-pale);cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${d.name.replace(/'/g,"\\'")}')">
+    const preConTiles=dashPreConHeatData.map(d=>{
+      const isRisk=d.isRisk;
+      const borderColor=isRisk?'var(--red)':'var(--gray-mid)';
+      const bgColor=isRisk?'var(--red-pale)':'var(--gray-pale)';
+      const lblColor=isRisk?'var(--red)':'var(--gray-mid)';
+      const lbl=isRisk?'AT RISK':'NOT STARTED';
+      const overdueText=d.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:'';
+      return `<div style="border:1.5px solid ${borderColor};border-radius:8px;padding:10px 12px;background:${bgColor};cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${d.name.replace(/'/g,"\\'")}')">
         <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(d.name)}${heatTileCounter(d)}</div>
         <div style="margin-top:auto">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:10px;font-weight:700;color:var(--gray-mid);letter-spacing:.04em">NOT STARTED</span>
-          <span style="font-size:10px;color:var(--gray-mid);font-family:'Plus Jakarta Sans',sans-serif">0%</span>
+          <span style="font-size:10px;font-weight:700;color:${lblColor};letter-spacing:.04em">${lbl}</span>
+          <span style="font-size:10px;color:var(--gray-mid);font-family:'Plus Jakarta Sans',sans-serif">${d.pct}%</span>
         </div>
         <div style="margin-top:6px;height:4px;background:var(--gray-xpale);border-radius:2px">
-          <div style="height:100%;width:0%;background:var(--gray-mid);border-radius:2px"></div>
+          <div style="height:100%;width:${d.pct}%;background:${lblColor};border-radius:2px;transition:width .4s"></div>
         </div>
+        ${overdueText}
         </div>
       </div>`;
     }).join('');
