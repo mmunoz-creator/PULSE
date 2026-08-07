@@ -1,4 +1,56 @@
 <!--
+pulse_v52p. Changes from v52o, this round. Reported live by Misty on
+Hilton Denver City Center, plus one approved mockup and one prior
+follow-up item. Requires worker_v44d.mjs deployed alongside this file
+(see item 3).
+  1. Mark Complete Today toggle. Per Misty's approved mockup: the amber
+     box now hugs its own content (inline-flex, width:fit-content) instead
+     of stretching the full row width, and the off-state label reads "MARK
+     COMPLETE TODAY - independent of the date fields, turns off any time
+     to revert" all on one line, ending right after the text, replacing the
+     prior title+separate-subtext layout.
+  2. Elevator Company Performance's bars were a fixed pixel width computed
+     against a hardcoded 240px budget — once contractor count grew past
+     what that budget actually fit, bars kept adding total row width
+     rather than the container ever getting wider, overflowing the card.
+     Bars (and their labels) now use flex:1 with a 70px max-width cap, so
+     they always divide the real available pane width evenly and shrink
+     automatically as more contractors are added, with tighter gaps at
+     higher counts.
+  3. MARLI Unit Phase suggestions were silently and permanently
+     suppressing units that actually had no real phase coverage on their
+     own project. Root cause (Worker-side, worker_v44d.mjs): the
+     "already covered" check for a unit only verified matching equipment
+     type against ANY Unit Group on the property, never checking that the
+     covering Unit Group belonged to the unit's own Scope. A phase on a
+     completely different project on the same property could silently
+     exclude a unit from suggestions on its real project forever. The same
+     bug existed client-side in the unit picker's "already in Phase X"
+     warning (renderPhaseUnitsPicker), which likewise only checked
+     property, not Scope. Confirmed live: Hilton Denver City Center's "4
+     Escalators" Scope (0 real phases) had Esc 1/Esc 2 excluded from MARLI
+     suggestions and flagged "in Phase 1" in the picker, despite no Phase 1
+     existing anywhere under that Scope — both units were linked to a Unit
+     Group on a different project. Both checks now require the covering/
+     claiming Unit Group's own Scope to match the unit's Scope.
+  4. Milestones silent-failure fix. updateMilestone() — the write path
+     behind every Planned/Actual/Completion date and Notes edit on the
+     Milestones tab — never checked whether its atUpdate() call actually
+     succeeded (atUpdate resolves to null rather than throwing on failure,
+     same pattern the v52e-v52j audit fixed everywhere else; Milestones
+     itself was never included in that audit despite the identical gap
+     applying). A failed write still updated the local in-memory cache
+     unconditionally, so a typed date kept showing with no error of any
+     kind and only reverted to blank on the next refresh or reopen.
+     Confirmed directly in Airtable: Hilton Denver City Center's "4
+     Escalators" Scope had zero saved dates across all 14 milestones
+     despite Misty entering them. updateMilestone() now returns whether
+     the write succeeded and only updates local state on success;
+     updateMilestoneField() (the caller with UI context) now checks that
+     result and shows an honest error toast on failure instead of silently
+     proceeding to update the status circle/badge/pill as if the edit had
+     really landed.
+
 pulse_v52o. Changes from v52n, this round. Reported live by Misty on
 Casa Marina Key West. Requires no worker changes.
   1. Mark Complete Today toggle sizing. The full-width amber slider row
@@ -3809,7 +3861,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52o</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52p</div>
     </div>
   </nav>
 
@@ -7606,7 +7658,25 @@ async function autoPopulateMilestones(propName,scopeId){
   }
 }
 
+// v52p — atUpdate resolves to null on any write failure rather than
+// throwing (network hiccup, bad record ID, permissions, etc. — the same
+// pattern every other table's silent-failure audit round v52e-v52j fixed).
+// This function's result was never checked here — Milestones was never
+// actually included in that audit despite the same class of bug applying
+// to it. A failed write here still updated the local cache unconditionally
+// (fields['Planned Date'] etc.), so the date field kept showing what was
+// typed with no error of any kind, and only reverted to blank on the next
+// refresh/reopen — exactly the "dates not saving and sticking" report
+// confirmed live against Airtable on Hilton Denver City Center's 4
+// Escalators scope, where zero of its dates had actually reached the base.
+// Now returns true/false so updateMilestoneField (the caller with the UI
+// context to show a toast) can report honestly, and — per the same
+// "don't update local state ahead of a write that didn't happen" principle
+// every other audited table now follows — only updates the local cache
+// when the write actually succeeded, so a failed save doesn't leave the
+// input showing a date that was never really saved.
 async function updateMilestone(msId,fields,propName){
+  let writeOk=true;
   if(msId&&!demoMode){
     const cleanFields={};
     Object.entries(fields).forEach(([k,v])=>{
@@ -7618,7 +7688,9 @@ async function updateMilestone(msId,fields,propName){
     });
     const result=await atUpdate('Milestones',msId,cleanFields);
     console.log('Milestone update:',msId,'fields:',Object.keys(cleanFields).join(','),'result:',result?.id||JSON.stringify(result)?.slice(0,80));
+    if(!result)writeOk=false;
   }
+  if(!writeOk)return false;
   // Update local cache
   const ms=(window.MILESTONES||[]).find(m=>m.id===msId);
   if(ms){
@@ -7649,6 +7721,7 @@ async function updateMilestone(msId,fields,propName){
      (fields['Planned Date']!==undefined||fields['Actual Date']!==undefined||fields['Status']!==undefined)){
     await deriveAndWriteScopeDates(ms.scopeId);
   }
+  return true;
 }
 
 // v28b — Scope-aware status derivation (continuity brief 1E, "Status
@@ -8999,23 +9072,21 @@ function renderMilestones(p){
           </div>`:''}
         </div>
         ${canEdit&&isCalendar?`
-        <!-- v52o — shrunk to match the density of the rest of the milestone
-             row (reported as "way too large" against the compact date/notes
-             fields above it). Slider 38x22->28x16, padding 8px 12px->5px 9px,
-             title text 12px->11px, helper subtext 10px->9px and only shown
-             in the off state to save vertical space (the on-state timestamp
-             line already says everything needed). Same amber-in-both-states
-             slider look approved for v52l, just smaller. -->
-        <div style="margin-top:6px;display:flex;align-items:center;gap:8px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:6px;padding:5px 9px">
+        <!-- v52p — per Misty's approved mockup: box now hugs its content
+             (inline-flex + width:fit-content) instead of stretching the
+             full row width, and the off-state label is now all caps
+             "MARK COMPLETE TODAY" with the full helper text inline, ending
+             right after it — no more separate/truncated subtext line. -->
+        <div style="margin-top:6px;display:inline-flex;align-items:center;gap:8px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:6px;padding:5px 9px;width:fit-content;max-width:100%">
           <label style="position:relative;display:inline-block;width:28px;height:16px;flex-shrink:0;cursor:pointer">
             <input type="checkbox" ${m.manuallyCompleted?'checked':''} onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="opacity:0;width:0;height:0;position:absolute">
             <span style="position:absolute;inset:0;background:${m.manuallyCompleted?'#EF9F27':'#CBD5E1'};border-radius:16px;transition:background .15s"></span>
             <span style="position:absolute;top:2px;${m.manuallyCompleted?'right':'left'}:2px;width:12px;height:12px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
           </label>
-          <div style="flex:1;min-width:0">
+          <div style="min-width:0">
             ${m.manuallyCompleted?`
-            <div style="font-size:11px;font-weight:600;color:#854F0B"><i class="ti ti-clock" style="font-size:11px;margin-right:3px"></i>Marked complete today (${m.manuallyCompletedOn?new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}) by ${escHtml(m.manuallyCompletedBy||'')}</div>`:`
-            <div style="font-size:11px;font-weight:600;color:#854F0B">Mark complete today<span style="font-weight:400;color:#9A6B1E"> — independent of the date fields, turn off any time to revert</span></div>`}
+            <div style="font-size:11px;font-weight:600;color:#854F0B;white-space:nowrap"><i class="ti ti-clock" style="font-size:11px;margin-right:3px"></i>Marked complete today (${m.manuallyCompletedOn?new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}) by ${escHtml(m.manuallyCompletedBy||'')}</div>`:`
+            <div style="font-size:11px;font-weight:600;color:#854F0B;white-space:nowrap">MARK COMPLETE TODAY <span style="font-weight:400;color:#9A6B1E">- independent of the date fields, turns off any time to revert</span></div>`}
           </div>
         </div>`:''}`:
         `<div style="display:flex;align-items:center;gap:8px;margin-top:2px">${statusBadge}<span style="font-size:11px;color:var(--gray-mid)">${m.plannedDate?'Planned: '+m.plannedDate:''}${m.actualDate?' · Actual: '+m.actualDate:''}</span></div>`}
@@ -9153,12 +9224,21 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
     const completionDate=fieldName==='Completion Date'?value:(ms?.completionDate||'');
     fields['Status']=deriveCalendarStatus(plannedDate,actualDate,completionDate);
   }
-  await updateMilestone(msId,fields,propName);
+  const msSaveOk=await updateMilestone(msId,fields,propName);
   // If a newer edit to this same milestone was issued while this write was
   // in flight, this call is stale — don't let it clobber the DOM with an
   // outdated status. The newer call's own patch (or a future one) is the
   // one that should win.
   if(window._msFieldReqToken[msId]!==myToken)return;
+  // v52p — updateMilestone() now reports whether its Airtable write
+  // actually succeeded. On failure, stop here rather than continuing on to
+  // update the circle/badge/pill and progress counters as if the edit had
+  // really landed — those would all be reflecting a save that didn't
+  // happen, the same silent-failure shape this fixes at the source.
+  if(!msSaveOk){
+    showToast('Could not save milestone change. Check your connection and try again.','error');
+    return;
+  }
   // M4 — Contract Award: auto-create a real Action Item the moment this
   // milestone newly transitions to Complete (not on re-saves of an already-
   // complete milestone). Silent, no PM confirmation needed (confirmed design
@@ -13748,10 +13828,24 @@ function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhase
   // Units already claimed by a different phase on this project — still
   // shown (never hidden, so nothing silently disappears), but flagged so
   // it's obvious before double-assigning.
+  // v52p — this only ever checked g.property===currentProp?.n, with no
+  // Scope check at all, so a Unit Group belonging to a COMPLETELY
+  // DIFFERENT Scope/project on the same property (e.g. the 2026 Project's
+  // own Phase 1) could flag a unit as "already in Phase 1" on THIS Scope's
+  // picker (e.g. 4 Escalators), even though that Phase 1 has nothing to do
+  // with this project and this Scope's own Unit Phases tab shows zero
+  // phases defined. Reported live: Esc 1/Esc 2 on Hilton Denver City
+  // Center's "4 Escalators" Scope both showed "in Phase 1" here despite no
+  // Phase 1 existing anywhere under that Scope. Now only counts a Unit
+  // Group as claiming a unit if that Unit Group's own scopeId matches this
+  // unit's scopeId (falls back to property-wide matching only when either
+  // scopeId is unavailable, so this degrades safely rather than under- or
+  // over-matching on older data missing a scopeId).
   const claimedElsewhere={};
   (window.UNIT_GROUPS||[]).forEach(g=>{
     if(g.property!==currentProp?.n)return;
     if(excludePhaseId&&g.id===excludePhaseId)return;
+    if(scopeId&&g.scopeId&&g.scopeId!==scopeId)return;
     (g.linkedUnitIds||[]).forEach(uid=>{claimedElsewhere[uid]=g.phase||'another phase';});
   });
   container.innerHTML=units.map(u=>{
@@ -19158,8 +19252,15 @@ function renderCharts(){
     const maxTotal=Math.max(...elevCoData.map(d=>d.total));
     const chartH=160;
     const n=elevCoData.length;
-    const totalGap=20;
-    const barW=Math.max(44,Math.min(70,Math.floor(((240-(n-1)*totalGap)/n))));
+    // v52p — bars were a fixed px width computed against a hardcoded 240px
+    // budget, so once contractor count grew past what that budget actually
+    // fit, bars just kept adding total row width rather than the container
+    // ever getting wider, overflowing the card. Now flex:1 so every bar
+    // takes an equal share of the real available width, shrinking
+    // automatically as more contractors are added; max-width caps how wide
+    // a bar gets with only 1-2 contractors so it doesn't stretch huge.
+    const totalGap=n>8?4:n>5?8:12;
+    const barMaxW=70;
     const statusColors={complete:'var(--green)',onTrack:'var(--blue-dark)',atRisk:'var(--red)',notStarted:'var(--gray-light)'};
     const statusLabels={complete:'Complete',onTrack:'On Track',atRisk:'At Risk',notStarted:'Not Started'};
     // Y-axis ticks
@@ -19186,7 +19287,7 @@ function renderCharts(){
                 return `<div style="width:100%;height:${h}px;background:${statusColors[k]};opacity:${isTBD?0.5:0.85};display:flex;align-items:center;justify-content:center;z-index:1" title="${statusLabels[k]}: ${d[k]}"></div>`;
               }).reverse().join('');
               const ecName=d.name;
-              return `<div style="display:flex;flex-direction:column;align-items:center;width:${barW}px;flex-shrink:0;position:relative;z-index:1;cursor:pointer" onclick="showBarDrilldown('ec','${ecName.replace(/'/g,"\'")}')" title="Click to see properties">
+              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1 1 0;min-width:0;max-width:${barMaxW}px;position:relative;z-index:1;cursor:pointer" onclick="showBarDrilldown('ec','${ecName.replace(/'/g,"\'")}')" title="Click to see properties">
                 <div style="font-size:11px;font-weight:700;color:var(--navy);margin-bottom:4px">${d.total}</div>
                 <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;border-radius:4px 4px 0 0;overflow:hidden;border-bottom:2px solid var(--border)">${segments}</div>
               </div>`;
@@ -19194,7 +19295,7 @@ function renderCharts(){
           </div>
           <!-- X labels -->
           <div style="display:flex;gap:${totalGap}px;padding:4px 4px 0;margin-left:0">
-            ${elevCoData.map(d=>`<div style="width:${barW}px;flex-shrink:0;text-align:center;font-size:${n>4?'8':'10'}px;color:${d.name==='TBD'?'var(--gray-mid)':'var(--navy)'};font-weight:${d.name==='TBD'?400:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(d.name)}">${escHtml(d.name)}</div>`).join('')}
+            ${elevCoData.map(d=>`<div style="flex:1 1 0;min-width:0;max-width:${barMaxW}px;text-align:center;font-size:${n>4?'8':'10'}px;color:${d.name==='TBD'?'var(--gray-mid)':'var(--navy)'};font-weight:${d.name==='TBD'?400:500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(d.name)}">${escHtml(d.name)}</div>`).join('')}
           </div>
         </div>
       </div>
