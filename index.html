@@ -1,4 +1,23 @@
 <!--
+pulse_v53c. Changes from v53b, this round. Reported live by Misty on the
+Dashboard's Portfolio Heat Map. Requires no worker changes.
+  1. Heat Map "NOT STARTED" tile state. Properties still in Pre-
+     Construction (zero M6-M13 construction milestones complete, hasn't
+     reached First Phase Start yet) showed a blue "ON TRACK" tile at 0%,
+     reading as a contradiction at a glance even though it's technically
+     correct — nothing can be behind schedule on work that hasn't started.
+     These properties now get a neutral gray "NOT STARTED" tile instead,
+     matching the gray already used for Pre-Construction elsewhere in the
+     app. Falls back to the normal On Track/At Risk logic the moment even
+     one construction milestone completes. The "Xd overdue" caption is
+     also suppressed on Not Started tiles for the same reason — a property
+     that hasn't started can't meaningfully be overdue on this metric
+     either. Legend updated with a fourth entry to match; this is a
+     distinct, live state from the "Not Started" legend entry removed in
+     v36c, which referred to a different thing (p.st==='Not Started'
+     properties that never reach this array at all, not active properties
+     with zero construction milestones complete).
+
 pulse_v53b. Changes from v53a, this round. Fixes a gap surfaced by
 v53a's own Mark Complete Today toggle-gating fix, plus new Meeting Overdue/
 Cancelled visibility Misty asked for after reviewing v53a live. Requires no
@@ -3964,7 +3983,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53c</div>
     </div>
   </nav>
 
@@ -21366,6 +21385,15 @@ function renderDashboard(){
           <div style="display:flex;gap:10px;align-items:center">
             <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--blue-dark);margin-right:3px"></span>On Track</span>
             <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--red);margin-right:3px"></span>At Risk</span>
+            <!-- v53c — new fourth legend entry for the new Not Started
+                 tile state (see activeTiles above). Distinct from v36c's
+                 removed "Not Started" entry, which referred to
+                 p.st==='Not Started' properties that never reach this
+                 array at all — this one is a real, live state for
+                 properties already in the active array (p.st==='In
+                 Progress') that simply haven't completed any M6-M13
+                 construction milestone yet. -->
+            <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--gray-mid);margin-right:3px"></span>Not Started</span>
             <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--green);margin-right:3px"></span>Complete</span>
           </div>
           ${completeProps.length>0?`<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--gray-mid);cursor:pointer;user-select:none">
@@ -21399,11 +21427,25 @@ function renderDashboard(){
       // Airport. daysLate is a hard fact computed from real dates, so it
       // now also drives the At Risk badge, not just the overdue caption.
       const isRisk=d.propStatus==='At Risk'||d.daysLate>0;
-      const borderColor=isRisk?'var(--red)':'var(--blue-dark)';
-      const bgColor=isRisk?'var(--red-pale)':'#eff6ff';
-      const lblColor=isRisk?'var(--red)':'var(--blue-dark)';
-      const lbl=isRisk?'AT RISK':'ON TRACK';
-      const overdueText=d.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:'';
+      // v53c — reported live: a property still in Pre-Construction (zero
+      // M6-M13 construction milestones complete, hasn't reached First
+      // Phase Start yet) showed a blue "ON TRACK" tile at 0%, reading as a
+      // contradiction/bug at a glance even though it's technically correct
+      // (nothing can be behind schedule on work that hasn't started).
+      // d.pct only ever equals exactly 0 when getConstructionMsComplete
+      // returns 0 (M6-M13 is at most 8 milestones, so any real completion
+      // rounds to a visible nonzero percentage), so this doesn't need its
+      // own separate milestone-count check. Not-started properties now get
+      // a neutral gray "NOT STARTED" tile instead of On Track's blue,
+      // matching the gray used for Pre-Construction elsewhere in the app
+      // (b-noncore). Falls back to the normal On Track/At Risk logic the
+      // moment even one construction milestone completes.
+      const notStarted=d.pct===0;
+      const borderColor=notStarted?'var(--gray-mid)':isRisk?'var(--red)':'var(--blue-dark)';
+      const bgColor=notStarted?'var(--gray-pale)':isRisk?'var(--red-pale)':'#eff6ff';
+      const lblColor=notStarted?'var(--gray-mid)':isRisk?'var(--red)':'var(--blue-dark)';
+      const lbl=notStarted?'NOT STARTED':isRisk?'AT RISK':'ON TRACK';
+      const overdueText=!notStarted&&d.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:'';
       return `<div style="border:1.5px solid ${borderColor};border-radius:8px;padding:10px 12px;background:${bgColor};cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${d.name.replace(/'/g,"\\'")}')">
         <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(d.name)}</div>
         <div style="margin-top:auto">
