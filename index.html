@@ -4406,7 +4406,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55k</div>
     </div>
   </nav>
 
@@ -28550,11 +28550,26 @@ function markTabEditActive(tab){
 function isTabEditActive(tab){
   return Date.now()<(_tabEditActiveUntil[tab]||0);
 }
+// v55k — reported live: pollClientComments()/pollProjectUpdates() (the
+// Comments & Flags / Project Updates live-refresh feeds, ~42g) were never
+// covered by this guard at all — they run on a separate poll loop
+// (_livePollView, driven by startLivePolling(), not _propPollTab) that
+// this listener didn't check. Confirmed as a real, reachable gap: a PM
+// editing a PM Update while a poll lands mid-save can have their just-
+// written text silently revert to the pre-edit version, because
+// _saveEditedPMUpdateCore() captures its record reference from
+// window.PM_UPDATES before awaiting the write, and a poll swapping that
+// array out from under the await detaches the reference the save then
+// mutates — same underlying bug class as the original Milestones finding,
+// just reachable through a poll loop the first fix didn't touch. Both
+// poll loops now share this same listener/guard.
 document.addEventListener('input',()=>{
   if(_propPollTab==='phases'||_propPollTab==='changeorders'||_propPollTab==='budget')markTabEditActive(_propPollTab);
+  if(_livePollView==='comments'||_livePollView==='clientprojectupdates')markTabEditActive(_livePollView);
 });
 document.addEventListener('change',()=>{
   if(_propPollTab==='phases'||_propPollTab==='changeorders'||_propPollTab==='budget')markTabEditActive(_propPollTab);
+  if(_livePollView==='comments'||_livePollView==='clientprojectupdates')markTabEditActive(_livePollView);
 });
 
 let _propPollTab=null;
@@ -28767,6 +28782,8 @@ async function pollBudget(){
 async function pollClientComments(){
   try{
     const recs=await atGet('Client Comments');
+    // v55k — skip applying while a reply/status edit is active on this view.
+    if(isTabEditActive('comments'))return;
     window.CLIENT_COMMENTS=recs.map(r=>({
       id:r.id,
       property:resolvePropertyLink(r.fields['Property Name']),
@@ -28792,6 +28809,11 @@ async function pollClientComments(){
 async function pollProjectUpdates(){
   try{
     const [pmRecs,fieldRecs]=await Promise.all([atGet('PM Updates'),atGet('Field Updates')]);
+    // v55k — skip applying while a PM Update edit is active; fixes the real
+    // stale-reference clobber in _saveEditedPMUpdateCore (captures its
+    // record from window.PM_UPDATES before its own await, so a poll
+    // reassigning that array mid-write orphaned the mutation).
+    if(isTabEditActive('clientprojectupdates'))return;
     window.PM_UPDATES=pmRecs.map(r=>({
       id:r.id,
       property:resolvePropertyLink(r.fields['Property Name']),
