@@ -1,4 +1,164 @@
 <!--
+pulse_v54f. Changes from v54e, this round. Targets the "not accurate"
+half of the trust-crisis report directly: most of PULSE's data
+(Milestones, Unit Groups, Phase Tasks, Change Order Savings Log, Billing
+Log, Retainage Releases) loads once at login and is never refetched, so
+a second user editing the same property leaves other open tabs silently
+showing stale data with no indicator. Requires no worker changes.
+  1. Property-tab live polling, extending the existing 45s poll pattern
+     (startLivePolling/stopLivePolling, previously only covering Comments
+     & Flags and Project Updates) to four property-detail tabs:
+     Milestones, Phases, Change Orders, and Budget. A separate
+     startPropTabPolling/stopPropTabPolling pair runs alongside the
+     existing one (kept independent rather than merged, since the two
+     poll targets can never legitimately overlap and merging them risked
+     one system's stop call silently killing the other's timer). Each
+     poller (pollMilestones, pollPhases, pollChangeOrders, pollBudget)
+     refetches its table(s), remaps into the exact shape loadAllData()
+     produces, reassigns the window.* global, and re-renders only if
+     that tab is still the active one. Known gap: a poll landing while a
+     user has an edit modal open on the same tab can replace the
+     underlying array out from under a background list/table render; it
+     won't corrupt the in-progress save itself (save functions read the
+     live DOM, not the array) but is worth watching for.
+  2. Bids and Units tabs were evaluated and deliberately excluded:
+     renderBidsTab() already refetches Bid Rounds/Bid Submissions fresh
+     on every render, and the Units tab is unreachable dead code (its
+     button was removed from the UI back in v43a).
+  3. pollBudget() refreshes Billing Log and Retainage Releases (the two
+     things a PM actually types into from that tab) but deliberately does
+     not refresh Scopes — Scopes' mapping in loadAllData() needs a fresh
+     Properties fetch for name resolution plus its own linkedUnitIds
+     handling, complex enough that duplicating it risked drifting out of
+     sync with loadAllData's version. Budget's Scope-derived numbers
+     (contract award value, ST/OT rates, retainage %) still only refresh
+     on a full page reload for now.
+  4. normalizeLookupIds() promoted from a const closure local to
+     loadAllData() to a shared top-level function, so pollPhases() can
+     reuse the exact same Linked Units resolution logic instead of
+     duplicating it (and risking it drifting out of sync).
+  5. Poll cleanup wired into every property-exit path: switchPropTab
+     (start on tab entry, stop on leaving one of the 4 covered tabs),
+     goBack (previously bypassed gotoView's cleanup entirely), gotoView
+     (top-level nav away from the property view), and doLogout (which
+     previously stopped neither poll system and never reset currentProp
+     — a poller running at logout would otherwise keep firing every 45s
+     against a revoked session token).
+  6. Change Order Savings Log field mapping in loadAllData() was missing
+     ST Hours, OT Hours, Material Cost, and O&P Claimed — four fields the
+     Change Orders tab actively displays and edits. A PM's saved values
+     for these fields were invisible on every fresh load, only appearing
+     if that record was created/edited in the current session (since
+     saveCO()'s own local refresh already mapped them correctly, just
+     nowhere else). Found while building pollChangeOrders() and fixed
+     here rather than left for the poller to inherit.
+
+<!--
+pulse_v54e. Changes from v54c, this round. Completes the double-submit
+guard sweep started in v54c — every save function in the app now has
+re-entrancy protection. Same trust-audit batch targeting "not accurate /
+not working / lost time" reports. Requires no worker changes.
+  1. Double-submit guards added to the remaining save functions not yet
+     covered: saveNewBidRound, saveBidSubmissionForm (Save Draft/Finish &
+     Submit share one flag), saveEditCalEvent, saveScheduledMeeting,
+     showVisitForm (the actual writer behind saveGlobalVisit — its
+     trigger overlay is removed synchronously before any write, same
+     already-safe shape as saveScopeEditModal/saveSplitIntoScopes from
+     v54c, guarded as defense-in-depth), saveWeeklyReportFeedbackNotes
+     (keyed per feedback record id, since multiple rows can each show
+     their own Save button at once — a single flag would have incorrectly
+     blocked saving row B while row A's save was in flight),
+     confirmDeleteProperty (same already-safe overlay-removal shape,
+     guarded anyway since this is the most destructive single action in
+     the app), saveEditProperty, submitUpdate (the weekly Field Update
+     form, both the resubmit and new-submission branches), submitFlag
+     (the client-facing flag channel), pmuCreate (Save Draft/Publish share
+     one flag) and _saveEditedPMUpdateCore (Save Changes/Publish share one
+     flag) for PM Updates, saveConfigureVdaProject, submitAddAmendment,
+     and saveEditVdaProject.
+
+pulse_v54c. Changes from v54d, this round. (Filename/version numbering:
+v54a/b/d shipped first as smaller independent fixes; this is the fourth
+build in that batch, labeled v54c per the original task numbering.) Same
+trust-audit batch targeting "not accurate / not working / lost time"
+reports. Requires no worker changes.
+  1. Double-submit guards added to the highest-traffic PM/consultant save
+     forms, following the _savingX flag + button-disable pattern already
+     established for saveNewPhase/saveEditPhase (v53a). None of these had
+     any re-entrancy protection before — a fast double-click could create
+     duplicate Airtable records with no warning. Guarded this round:
+     saveActionItem, saveMeeting/saveMeetingDraft (share one flag — same
+     panel, same draft record), saveCO, saveStepDates, saveScopeEditModal,
+     saveBillingEntry, saveRetainageRelease, saveBillingModal,
+     saveCapitalPlanEntry, saveReforecastChanges, saveSetUpProjects, and
+     saveSplitIntoScopes. Two of these (saveScopeEditModal,
+     saveSplitIntoScopes) remove their own modal/overlay synchronously
+     before any write runs, so their Save button is already gone from the
+     DOM before a second click is physically possible — guarded anyway as
+     defense-in-depth, not because the button itself was re-clickable.
+     Remaining save functions (bids, calendar events, scheduled meetings,
+     site visits, property edit, VDA project forms, PM updates, weekly
+     report feedback) are scoped for a follow-up build.
+
+pulse_v54d. Changes from v54b, this round. Same trust-audit batch. (v54c
+covers the double-submit guard sweep and lands as its own round, shipped
+after this one.) Requires no worker changes. NOTE: this changelog entry
+was written up in the v54c handoff after being missed at v54d's own
+delivery time — the internal build label was correctly bumped to v54d
+when it shipped, but this history entry wasn't prepended until now.
+  1. Change Order Negotiated Amount validation. saveCO() guarded Original
+     CO Amount (blocks save if blank) but Negotiated Amount had no
+     validation at all — a blank field silently became 0 via
+     parseFloat(...)||0. Since savings=orig-neg, a blank Negotiated
+     Amount silently reported the FULL CO amount as captured savings, no
+     warning, directly inflating the Savings Captured KPI in the CO
+     summary bar. Fixed by checking the raw input string for blank before
+     parsing (an explicit 0 is a legitimate value — a CO negotiated down
+     to no added cost — so only a genuinely empty field is blocked, not a
+     zero). Also fixed editCO()'s modal prefill, which used
+     co.negotiatedAmount||'' and would have prefilled an existing $0
+     record as blank, indistinguishable from never-entered — that would
+     have made the new guard incorrectly block re-saving a legitimate
+     $0-negotiated Change Order.
+
+pulse_v54b. Changes from v54a, this round. Same trust-audit batch.
+Requires no worker changes for this fix, but see note below. NOTE: this
+changelog entry was also missed at delivery time — internal build label
+was correctly bumped, this history entry is being backfilled now.
+  1. Change Order edit permission scoped to assigned property.
+     renderChangeOrdersTab's canEdit was role==='pm'||role==='admin'||
+     role==='consultant' with no property scoping at all, so any
+     consultant saw Edit/Approve/Reject/Notify Client controls on Change
+     Orders for every property in the portfolio, not just the one(s)
+     they're assigned to. The sibling Bids feature (canEditBids()) already
+     scopes consultants correctly via p.v===currentConsultantName; Change
+     Orders now matches that convention. This is a client-side UI fix
+     only — editCO()/updateCOStatus() themselves have no role or scope
+     check, so this closes the button-visibility path but is not itself a
+     security boundary against a direct API call. Flagged separately:
+     whether the Worker should also gain a server-side scoping check for
+     Change Order writes, matching how meaningful the underlying dollar
+     values are. Not built here pending that decision.
+
+pulse_v54a. Changes from v53f, this round. First of a batch of fixes
+targeting user reports that PULSE is "not accurate" / "not working" /
+"causing lost time" — a broader trust audit beyond the prior silent-write
+and XSS passes. Requires no worker changes. NOTE: this changelog entry
+was also missed at delivery time — backfilled now alongside v54b/v54d.
+  1. Action item overdue timezone bug. Every comparison of an action
+     item's Due date against "today" parsed the bare YYYY-MM-DD due date
+     as new Date(a.due), which JavaScript treats as UTC midnight, then
+     compared it against a LOCAL-midnight "today". In every US timezone,
+     this made an action due TODAY read as overdue starting the previous
+     evening — a full calendar day early. Affected the Dashboard's
+     Overdue Actions tile, the per-property Meetings & Actions tab badge,
+     the Operations Center overdue list and 30/60/90-day horizon buckets,
+     and the unread-notification count. Meetings and Site Visits nearby
+     already anchored correctly with new Date(x.date+'T12:00:00'); all
+     five affected action-item comparisons now match that same pattern.
+     Verified the fix directly: an action due today no longer evaluates
+     as overdue in any US timezone.
+
 pulse_v53f. Changes from v53e, this round. Reported live by Misty: toasts
 fire in the bottom-right corner where the fixed Help button also lives,
 and the Help button (higher z-index) partially covers the toast text.
@@ -2389,6 +2549,25 @@ async function atDelete(table, id) {
 // cost every login an extra full Properties fetch.
 
 // Load all live data
+// v54f — promoted out of loadAllData()'s local scope so the new
+// property-tab poll functions (pollPhases, pollBudget's Scopes refetch,
+// etc.) can resolve Linked Units the same way loadAllData() does, instead
+// of duplicating this logic in each poller (or worse, pollers silently
+// resolving lookups differently than the initial load and producing
+// inconsistent linkedUnitIds depending on whether a property's data came
+// from login or a later poll).
+function normalizeLookupIds(val){
+  if(!val)return [];
+  const arr=Array.isArray(val)?val:[val];
+  const ids=[];
+  arr.forEach(item=>{
+    if(!item)return;
+    if(Array.isArray(item)){ids.push(...normalizeLookupIds(item));}
+    else if(typeof item==='object')ids.push(item.id||'');
+    else ids.push(item);
+  });
+  return [...new Set(ids.filter(Boolean))];
+}
 async function loadAllData() {
   // Loading in background - no overlay
   try {
@@ -2819,18 +2998,9 @@ async function loadAllData() {
     // strings, {id,name} objects, or nested arrays depending on how the
     // lookup resolves, so normalize defensively into a flat list of
     // Scope record IDs rather than assuming one shape.
-    const normalizeLookupIds=val=>{
-      if(!val)return [];
-      const arr=Array.isArray(val)?val:[val];
-      const ids=[];
-      arr.forEach(item=>{
-        if(!item)return;
-        if(Array.isArray(item)){ids.push(...normalizeLookupIds(item));}
-        else if(typeof item==='object')ids.push(item.id||'');
-        else ids.push(item);
-      });
-      return [...new Set(ids.filter(Boolean))];
-    };
+    // v54f — normalizeLookupIds() moved to a shared top-level function
+    // (see just above loadAllData) so pollPhases/pollBudget can reuse the
+    // exact same lookup-resolution logic instead of duplicating it.
     // v34k — Scope Unit-Assignment Rework. Resolve each Scope's real
     // Linked Units (multi-link to Unit Inventory List) now that
     // normalizeLookupIds is defined. Placed here (not immediately after
@@ -2953,6 +3123,19 @@ async function loadAllData() {
       }:null,
     })).sort((a,b)=>new Date(b.created)-new Date(a.created));
     // Change Order Savings Log
+    // v54f — this mapping never read ST Hours/OT Hours/Material Cost/
+    // O&P Claimed from Airtable, four fields the Change Orders tab
+    // actively displays (renderChangeOrdersTab's Line Items card) and
+    // editCO() actively prefills into the edit form. A CO's saved values
+    // for these fields were invisible on every fresh load — they only
+    // appeared if that specific record got created or edited during the
+    // current session, since saveCO()'s own local refresh (a few hundred
+    // lines below) already mapped these fields correctly, just nowhere
+    // else. A PM entering ST/OT hours or material costs would see them
+    // vanish on the next login/reload despite being safely saved. Found
+    // while building the property-tab live-refresh pollers (this same
+    // build) — fixed here rather than left for the poller to inherit and
+    // perpetuate.
     window.CO_SAVINGS = coSavings.map(r=>({
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
@@ -2969,6 +3152,10 @@ async function loadAllData() {
       // v38d — documentation/traceability only, no rollup math depends on these.
       linkedUnitIds: r.fields['Linked Units']||[],
       appliesToWholeProject: !!r.fields['Applies to Whole Project'],
+      stHours: r.fields['ST Hours']!=null?Number(r.fields['ST Hours']):null,
+      otHours: r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
+      materialCost: r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
+      opClaimed: r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
     })).sort((a,b)=>new Date(b.date)-new Date(a.date));
     // v47a — VDA Project billing-tracking feature. Loaded fire-and-forget,
     // same pattern as backfillAllUnassignedUnits() below, so a slow VDA
@@ -3472,8 +3659,8 @@ window.PROPERTIES_SEED = [
     </div>
   </div>
   <div class="panel-footer">
-    <button class="btn btn-primary" onclick="saveMeeting()"><i class="ti ti-check"></i>Finish &amp; save</button>
-    <button class="btn" style="background:var(--purple-pale);color:var(--purple);border-color:#c5c2f0" onclick="saveMeetingDraft()"><i class="ti ti-device-floppy"></i>Save draft</button>
+    <button class="btn btn-primary" id="save-meeting-btn" onclick="saveMeeting()"><i class="ti ti-check"></i>Finish &amp; save</button>
+    <button class="btn" id="save-meeting-draft-btn" style="background:var(--purple-pale);color:var(--purple);border-color:#c5c2f0" onclick="saveMeetingDraft()"><i class="ti ti-device-floppy"></i>Save draft</button>
     <button class="btn btn-delete" id="delete-draft-btn" onclick="deleteDraft()" style="display:none"><i class="ti ti-trash"></i>Delete draft</button>
     <button class="btn" onclick="closePanel()">Cancel</button>
   </div>
@@ -3597,7 +3784,7 @@ window.PROPERTIES_SEED = [
   </div>
   <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
     <button class="btn btn-edit" onclick="closeCOModal()">Cancel</button>
-    <button class="btn btn-primary" onclick="saveCO()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+    <button class="btn btn-primary" id="save-co-btn" onclick="saveCO()"><i class="ti ti-check"></i>Finish &amp; Save</button>
   </div>
 </div>
 
@@ -3629,7 +3816,7 @@ window.PROPERTIES_SEED = [
   </div>
   <input type="hidden" id="bm-editing-id" value="">
   <div style="display:flex;gap:8px;margin-top:4px;justify-content:flex-end">
-    <button class="btn btn-primary" onclick="saveBillingModal()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+    <button class="btn btn-primary" id="save-billing-modal-btn" onclick="saveBillingModal()"><i class="ti ti-check"></i>Finish &amp; Save</button>
     <button class="btn" onclick="closeBillingModal()">Cancel</button>
   </div>
 </div>
@@ -3687,7 +3874,7 @@ window.PROPERTIES_SEED = [
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Comments / Status Notes</label><textarea class="form-textarea" id="ep-notes" placeholder="Any notes about this property..." rows="3"></textarea></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:16px">
-      <button class="btn btn-primary" onclick="saveEditProperty()"><i class="ti ti-check"></i>Save Changes</button>
+      <button class="btn btn-primary" id="save-edit-property-btn" onclick="saveEditProperty()"><i class="ti ti-check"></i>Save Changes</button>
       <button class="btn" onclick="closeEditPropertyPanel()">Cancel</button>
     </div>
   </div>
@@ -3723,7 +3910,7 @@ mechanism as Edit Property above (translateX panel + dimmed overlay). -->
       <div id="cvp-tasklines"></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:20px">
-      <button class="btn btn-primary" onclick="saveConfigureVdaProject()"><i class="ti ti-check"></i>Save</button>
+      <button class="btn btn-primary" id="save-configure-vda-btn" onclick="saveConfigureVdaProject()"><i class="ti ti-check"></i>Save</button>
       <button class="btn" onclick="closeConfigureVdaPanel()">Cancel</button>
     </div>
   </div>
@@ -3777,7 +3964,7 @@ entry with the reason and the resulting Project Value change. -->
         </div>
         <div id="evp-amend-error" style="display:none;color:var(--red);font-size:12px;margin-bottom:8px"></div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-primary" onclick="submitAddAmendment()"><i class="ti ti-check"></i>Submit Amendment</button>
+          <button class="btn btn-primary" id="submit-add-amendment-btn" onclick="submitAddAmendment()"><i class="ti ti-check"></i>Submit Amendment</button>
           <button class="btn" onclick="toggleAddAmendmentForm(false)">Cancel</button>
         </div>
       </div>
@@ -3801,7 +3988,7 @@ entry with the reason and the resulting Project Value change. -->
     </div>
 
     <div style="display:flex;gap:8px;margin-top:20px">
-      <button class="btn btn-primary" onclick="saveEditVdaProject()"><i class="ti ti-check"></i>Save Changes</button>
+      <button class="btn btn-primary" id="save-edit-vda-btn" onclick="saveEditVdaProject()"><i class="ti ti-check"></i>Save Changes</button>
       <button class="btn" onclick="closeEditVdaPanel()">Cancel</button>
     </div>
   </div>
@@ -3889,7 +4076,7 @@ other four, never its own typed value. -->
   <div style="padding:12px 24px 24px;display:flex;flex-direction:column;gap:8px">
     <div><button type="button" class="btn btn-success" onclick="npContinueToProject()">Continue To Project<i class="ti ti-arrow-right" style="margin-left:4px"></i></button></div>
     <div style="display:flex;gap:8px">
-      <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="saveCapitalPlanEntry()"><i class="ti ti-check"></i>Save Changes</button>
+      <button class="btn btn-primary" id="save-capital-plan-btn" style="flex:1;justify-content:center" onclick="saveCapitalPlanEntry()"><i class="ti ti-check"></i>Save Changes</button>
       <button class="btn" style="flex:1;justify-content:center" onclick="closeNewPropertyPanel()">Cancel</button>
     </div>
   </div>
@@ -3923,7 +4110,7 @@ from unitEffectiveValue() onto each checkbox). -->
     <div id="sup-unassigned-note" style="font-size:11px;color:var(--gray-mid);margin-bottom:16px"></div>
   </div>
   <div style="padding:12px 24px 24px;display:flex;gap:8px">
-    <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="saveSetUpProjects()"><i class="ti ti-check"></i>Save Projects</button>
+    <button class="btn btn-primary" id="save-setup-projects-btn" style="flex:1;justify-content:center" onclick="saveSetUpProjects()"><i class="ti ti-check"></i>Save Projects</button>
     <button class="btn" style="flex:1;justify-content:center" onclick="closeSetUpProjects()"><i class="ti ti-arrow-left" style="margin-right:4px"></i>Back</button>
   </div>
 </div>
@@ -4084,7 +4271,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v54f</div>
     </div>
   </nav>
 
@@ -4355,7 +4542,7 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
               <div class="form-group"><label class="form-label">Notes (optional)</label><input class="form-input" type="text" id="billing-notes-input" placeholder="e.g. Invoice #003, billing cycle 3"></div>
               <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
-                <button class="btn btn-primary" onclick="saveBillingEntry()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+                <button class="btn btn-primary" id="save-billing-entry-btn" onclick="saveBillingEntry()"><i class="ti ti-check"></i>Finish &amp; Save</button>
                 <button class="btn" onclick="document.getElementById('billing-entry-form').style.display='none'">Cancel</button>
               </div>
             </div>
@@ -4376,7 +4563,7 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
               <div class="form-group"><label class="form-label">Notes (optional)</label><input class="form-input" type="text" id="retainage-release-notes-input" placeholder="e.g. 50% release at halfway point"></div>
               <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
-                <button class="btn btn-primary" onclick="saveRetainageRelease()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+                <button class="btn btn-primary" id="save-retainage-release-btn" onclick="saveRetainageRelease()"><i class="ti ti-check"></i>Finish &amp; Save</button>
                 <button class="btn" onclick="document.getElementById('retainage-release-form').style.display='none'">Cancel</button>
               </div>
             </div>
@@ -5070,7 +5257,7 @@ from unitEffectiveValue() onto each checkbox). -->
             <div class="form-group"><label class="form-label">Concern type</label><select class="form-select" id="flag-type"><option>Schedule</option><option>Scope</option><option>Budget</option><option>Safety</option><option>Quality</option><option>General</option></select></div>
             <div class="form-group"><label class="form-label">Send to</label><select class="form-select" id="flag-visibility"><option value="PM Only">PM Only</option><option value="VDA Team">VDA Team (includes consultants)</option></select></div>
             <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="flag-message" placeholder="Describe your concern..."></textarea></div>
-            <div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="submitFlag()"><i class="ti ti-send"></i>Submit flag</button><button class="btn" onclick="document.getElementById('new-flag-form').style.display='none'">Cancel</button></div>
+            <div style="display:flex;gap:8px"><button class="btn btn-primary" id="submit-flag-btn" onclick="submitFlag()"><i class="ti ti-send"></i>Submit flag</button><button class="btn" onclick="document.getElementById('new-flag-form').style.display='none'">Cancel</button></div>
           </div>
         </div>
       </div>
@@ -5279,8 +5466,8 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
             </div>
             <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn" onclick="saveDraftPMUpdate()"><i class="ti ti-device-floppy"></i>Save Draft</button>
-              <button class="btn btn-primary" onclick="publishNewPMUpdate()"><i class="ti ti-send"></i>Publish to Client</button>
+              <button class="btn" id="pmu-save-draft-btn" onclick="saveDraftPMUpdate()"><i class="ti ti-device-floppy"></i>Save Draft</button>
+              <button class="btn btn-primary" id="pmu-publish-btn" onclick="publishNewPMUpdate()"><i class="ti ti-send"></i>Publish to Client</button>
             </div>
           </div>
           <div class="card">
@@ -5354,8 +5541,8 @@ from unitEffectiveValue() onto each checkbox). -->
         </div>
         <div style="display:flex;gap:8px;margin-top:16px">
           <button class="btn" onclick="closeEditPMUpdateModal()">Cancel</button>
-          <button class="btn" onclick="saveEditedPMUpdate()"><i class="ti ti-device-floppy"></i>Save Changes</button>
-          <button class="btn btn-primary" onclick="publishEditedPMUpdate()"><i class="ti ti-send"></i>Publish to Client</button>
+          <button class="btn" id="pmue-save-btn" onclick="saveEditedPMUpdate()"><i class="ti ti-device-floppy"></i>Save Changes</button>
+          <button class="btn btn-primary" id="pmue-publish-btn" onclick="publishEditedPMUpdate()"><i class="ti ti-send"></i>Publish to Client</button>
         </div>
       </div>
 
@@ -5993,6 +6180,18 @@ async function _finishLogin(){
 }
 
 function doLogout(){
+  // v54f — neither the view-level poller (Comments & Flags/Project
+  // Updates) nor the new property-tab poller (Milestones/Phases/Change
+  // Orders/Budget) were ever stopped on logout. A poller running at the
+  // moment of logout would keep firing every 45s against the just-
+  // revoked session token (401s rather than a real leak, since the token
+  // is invalidated server-side just below, but still wasteful and messy
+  // to have running against a signed-out session). currentProp is also
+  // reset here — nothing else did that on logout either, and the
+  // property-tab poller checks it before every fetch.
+  stopLivePolling();
+  stopPropTabPolling();
+  currentProp=null;
   // v31r: invalidate any loadAllData() still in flight from this session —
   // otherwise it can resolve after the login screen is back and silently
   // repopulate state for a session that no longer exists.
@@ -6171,6 +6370,13 @@ function gotoView(viewId,btn){
   // (re)started below only if we're navigating into that specific view, so
   // there's never more than one live interval per feed at a time.
   stopLivePolling();
+  // v54f — same reasoning, for the property-tab poller (Milestones/
+  // Phases/Change Orders/Budget). gotoView() always means leaving
+  // property-detail context (see window._inPropertyView=false above), so
+  // any property-tab poll running when a top-level nav click fires needs
+  // to stop here too, not just when switchPropTab() changes tabs within
+  // the property view.
+  stopPropTabPolling();
   // v37i — Analytics has its own internal sub-panels (Budget Outlook,
   // Reforecast) that live on top of analytics-main-view rather than as
   // separate top-level views. Leaving Analytics for any other tab used to
@@ -6363,6 +6569,12 @@ function openProperty(name){
   switchPropTab('overview',overviewBtn);renderPropertyView(prop);
 }
 function goBack(){
+  // v54f — goBack() is a standalone navigation path, not routed through
+  // gotoView() (which already calls stopLivePolling() on every
+  // navigation), so a property-tab poller running when Back is pressed
+  // would otherwise keep firing every 45s against a property no longer
+  // on screen until something else happened to stop it.
+  stopPropTabPolling();
   document.getElementById('view-property').classList.add('hidden');
   const t=document.getElementById('view-'+prevView);if(t)t.classList.remove('hidden');
 }
@@ -7229,6 +7441,17 @@ function switchPropTab(tab,btn){
   if(tab==='changeorders'&&currentProp)renderChangeOrdersTab(currentProp);
   if(tab==='bids'&&currentProp)renderBidsTab(currentProp);
   if(tab==='units'&&currentProp)renderUnitsTab(currentProp);
+  // v54f — start/stop live polling for whichever tab is now active.
+  // Only 4 of the property-detail tabs have the stale-data problem this
+  // targets (Milestones, Phases, Change Orders, Budget); Bids already
+  // refetches live on its own and Units is unreachable dead code, so
+  // switching to either of those (or any other tab) just stops polling
+  // rather than starting a new one.
+  if(currentProp&&(tab==='milestones'||tab==='phases'||tab==='changeorders'||tab==='budget')){
+    startPropTabPolling(tab);
+  }else{
+    stopPropTabPolling();
+  }
   // v31j: update global help button target to match active tab
   const activeTopic = PROP_TAB_HELP_MAP[tab]||'property-overview';
   window._currentPropHelpTopic = activeTopic;
@@ -7413,8 +7636,17 @@ function renderPropertyView(p){
   // Upcoming/Past date split, no way to mark one cancelled), so adding a
   // real Overdue state there needs an Airtable field decision first.
   // Flagged as a known follow-up, not built here.
+  // v54a — every overdue-action comparison in the app parsed a.due (a bare
+  // YYYY-MM-DD string) as new Date(a.due), which JS treats as UTC midnight,
+  // then compared it against a local-midnight "today". In any timezone west
+  // of UTC (all US timezones), that made an action due TODAY read as
+  // overdue starting the evening before — a full calendar day early, every
+  // day, on the Dashboard tile, this tab badge, the Ops Center overdue
+  // list, and the unread-notification count. Meetings/Site Visits nearby
+  // already anchored correctly with new Date(x.date+'T12:00:00'); every
+  // a.due comparison in the file now matches that same pattern.
   const todayForBadge=new Date();todayForBadge.setHours(0,0,0,0);
-  const overdueActionsForProp=openAIs.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<todayForBadge).length;
+  const overdueActionsForProp=openAIs.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<todayForBadge).length;
   const overdueMeetingsForProp=(meetings||[]).filter(m=>m.property===p.n&&m.status==='Scheduled'&&m.date&&new Date(m.date+'T12:00:00')<todayForBadge).length;
   const fieldopsOverdueCount=overdueActionsForProp+overdueMeetingsForProp;
   const fieldopsTabBadge=document.getElementById('prop-fieldops-tab-badge');
@@ -9057,7 +9289,18 @@ window.confirmDemoteScope=confirmDemoteScope;
 // convention already established in saveSplitIntoScopes/linkUnitToScope
 // (Dormant/Complete are protected manual overrides, never silently
 // re-derived).
+// v54c — unlike the other save functions in this batch, this one's
+// button can't be double-clicked in the first place: the overlay
+// containing it gets removed synchronously (see overlay.remove() below)
+// before any await, so the button is gone from the DOM before control
+// yields back to the browser. Guard added anyway as defense-in-depth
+// against any other code path invoking this while one call is still
+// mid-flight (e.g. a second scope's edit modal open at the same time
+// somehow reusing this scopeId), not because the button itself is
+// re-clickable.
+let _savingScopeEditModal=false;
 async function saveScopeEditModal(scopeId){
+  if(_savingScopeEditModal)return;
   const overlay=document.getElementById('scope-edit-overlay');
   if(!overlay)return;
   const s=(window.SCOPES||[]).find(x=>x.id===scopeId);
@@ -9125,6 +9368,7 @@ async function saveScopeEditModal(scopeId){
   // checkbox states before removing the overlay is the actual fix.
   const boxes=[...document.querySelectorAll('.se-unit-check')];
 
+  _savingScopeEditModal=true;
   overlay.remove();
   showToast('Saving scope...','info');
   // v52e fix — none of the writes below (main scope fields, per-unit
@@ -9170,6 +9414,7 @@ async function saveScopeEditModal(scopeId){
   }else{
     showToast('Scope updated','success');
   }
+  _savingScopeEditModal=false;
 }
 window.saveScopeEditModal=saveScopeEditModal;
 
@@ -9822,7 +10067,7 @@ function openActionItemModal(propName){
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
       <button class="btn" onclick="document.getElementById('action-item-overlay').remove()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveActionItem()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+      <button class="btn btn-primary" id="save-action-item-btn" onclick="saveActionItem()"><i class="ti ti-check"></i>Finish &amp; Save</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
@@ -9920,7 +10165,9 @@ async function notifyActionItemOwner(ownerName,description,propName,due,priority
     console.error('Action Item notify — email send failed:',e);
   }
 }
+let _savingActionItem=false;
 async function saveActionItem(){
+  if(_savingActionItem)return;
   const propEl=document.getElementById('ai-property');
   const property=propEl?.value||'';
   const description=document.getElementById('ai-description')?.value.trim()||'';
@@ -9932,6 +10179,14 @@ async function saveActionItem(){
   const aiScopeId=document.getElementById('ai-scope')?.value||'';
   const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Status':'Open'};
   if(aiScopeId)fields['Linked Scope']=[aiScopeId];
+  // v54c — this form had no double-submit guard; a fast double-click on
+  // "Finish & Save" could create two identical Action Items in Airtable.
+  // Guard only needs to cover from here down (the validation above is a
+  // pure read, nothing is at risk from clicking again after a validation
+  // toast), matching the convention saveNewPhase/saveEditPhase established.
+  _savingActionItem=true;
+  const saveBtn=document.getElementById('save-action-item-btn');
+  if(saveBtn)saveBtn.disabled=true;
   const res=demoMode?null:await atCreate('Action Items',fields);
   if(res?.error){console.error('saveActionItem Airtable error:',res);}
   // v51j — this form used to push a fabricated local action item and show
@@ -9940,6 +10195,8 @@ async function saveActionItem(){
   // aborts here so the form stays open and nothing fake gets added.
   if(!demoMode&&!res?.records?.[0]?.id){
     showToast('Could not save action item to Airtable. Check your connection and try again.','error');
+    _savingActionItem=false;
+    if(saveBtn)saveBtn.disabled=false;
     return;
   }
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
@@ -9966,6 +10223,8 @@ async function saveActionItem(){
     if(miniVal)miniVal.textContent=openAIs.length;
   }
   showToast('Action item added','success');
+  _savingActionItem=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 
 function openMeetingPanelGlobal(){
@@ -10025,7 +10284,15 @@ async function openDraft(meetingId){
   document.getElementById('delete-draft-btn').style.display='';
 }
 
+let _savingMeetingPanel=false;
 async function saveMeetingDraft(){
+  // v54c — saveMeeting() and saveMeetingDraft() share this same panel/
+  // form and can both write to the same draft record, so they share one
+  // guard flag rather than each getting its own — otherwise a user could
+  // fire both buttons in quick succession and race two writes against the
+  // same record. Guard only needs to cover the actual write, not this
+  // pure-read validation above it.
+  if(_savingMeetingPanel)return;
   const propName=document.getElementById('m-property').value;
   if(!propName){alert('Please select a property first.');return;}
   const existingDraftId=document.getElementById('editing-draft-id').value;
@@ -10053,6 +10320,11 @@ async function saveMeetingDraft(){
     'Visibility':'Draft',
     'Logged By':'PM User',
   };
+  _savingMeetingPanel=true;
+  const saveBtn=document.getElementById('save-meeting-btn');
+  const draftBtn=document.getElementById('save-meeting-draft-btn');
+  if(saveBtn)saveBtn.disabled=true;
+  if(draftBtn)draftBtn.disabled=true;
   let atId=existingDraftId;
   if(existingDraftId){
     // v52i — update existing draft, same silent-loss pattern as the
@@ -10063,6 +10335,9 @@ async function saveMeetingDraft(){
     const updRes=await atUpdate('Meetings',existingDraftId,fields);
     if(!updRes){
       showToast('Could not save draft to Airtable. Check your connection and try again.','error');
+      _savingMeetingPanel=false;
+      if(saveBtn)saveBtn.disabled=false;
+      if(draftBtn)draftBtn.disabled=false;
       return;
     }
     const m=meetings.find(x=>x.id===existingDraftId);
@@ -10076,6 +10351,9 @@ async function saveMeetingDraft(){
     // panel open so nothing typed is lost.
     if(!atId){
       showToast('Could not save draft to Airtable. Check your connection and try again.','error');
+      _savingMeetingPanel=false;
+      if(saveBtn)saveBtn.disabled=false;
+      if(draftBtn)draftBtn.disabled=false;
       return;
     }
     const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
@@ -10106,6 +10384,9 @@ async function saveMeetingDraft(){
   renderAllMeetings();
   if(currentProp&&currentProp.n===propName)renderPropMeetings(currentProp);
   showToast('Draft saved — pick it up anytime from the Meeting log','success');
+  _savingMeetingPanel=false;
+  if(saveBtn)saveBtn.disabled=false;
+  if(draftBtn)draftBtn.disabled=false;
 }
 function closePanel(clearDraft=true){
   document.getElementById('panel-overlay').classList.remove('open');
@@ -10156,6 +10437,9 @@ function addActionRow(){
 }
 
 async function saveMeeting(){
+  // v54c — shares _savingMeetingPanel with saveMeetingDraft() (see its
+  // comment above); both write to the same panel/record.
+  if(_savingMeetingPanel)return;
   const propName=document.getElementById('m-property').value;
   if(!propName){alert('Please select a property.');return;}
   const notes=document.getElementById('m-notes').value.trim();
@@ -10190,6 +10474,11 @@ async function saveMeeting(){
     'Status':'Logged',
   };
   if(mScopeId)fields['Linked Scope']=[mScopeId];
+  _savingMeetingPanel=true;
+  const saveBtn=document.getElementById('save-meeting-btn');
+  const draftBtn=document.getElementById('save-meeting-draft-btn');
+  if(saveBtn)saveBtn.disabled=true;
+  if(draftBtn)draftBtn.disabled=true;
   let atId=existingDraftId||null;
   if(existingDraftId){
     // v53e — update existing draft, same silent-loss pattern the create
@@ -10202,6 +10491,9 @@ async function saveMeeting(){
     const updRes=await atUpdate('Meetings',existingDraftId,fields);
     if(!updRes){
       showToast('Could not save meeting to Airtable. Check your connection and try again.','error');
+      _savingMeetingPanel=false;
+      if(saveBtn)saveBtn.disabled=false;
+      if(draftBtn)draftBtn.disabled=false;
       return;
     }
     atId=existingDraftId;
@@ -10221,6 +10513,9 @@ async function saveMeeting(){
     // before any of that happens, and the modal/notes stay intact.
     if(!atId){
       showToast('Could not save meeting to Airtable. Check your connection and try again.','error');
+      _savingMeetingPanel=false;
+      if(saveBtn)saveBtn.disabled=false;
+      if(draftBtn)draftBtn.disabled=false;
       return;
     }
     const meeting={
@@ -10295,6 +10590,9 @@ async function saveMeeting(){
   if(!atId)showToast('Meeting saved locally — Airtable write failed','warn');
   else if(meetingActionFailCount>0)showToast(`Meeting logged, but ${meetingActionFailCount} action item${meetingActionFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');
   else showToast('Meeting logged'+(published?' and published to client portal.':' — internal only.'),'success');
+  _savingMeetingPanel=false;
+  if(saveBtn)saveBtn.disabled=false;
+  if(draftBtn)draftBtn.disabled=false;
 }
 
 function renderPropMeetings(p){
@@ -10859,7 +11157,17 @@ function coMatchesScope(co,scopeId){
 function renderChangeOrdersTab(p){
   renderScopeTabs('co-scope-tabs',p.n);
   const scopeId=currentScope?.id;
-  const canEdit=role==='pm'||role==='admin'||role==='consultant';
+  // v54b — was role==='pm'||role==='admin'||role==='consultant' with no
+  // property scoping, so ANY consultant could see Edit/Approve/Reject/
+  // Notify Client controls on Change Orders for EVERY property in the
+  // portfolio, not just the one(s) they're assigned to. The sibling Bids
+  // feature (canEditBids(), just below) already scopes consultants
+  // correctly via p.v===currentConsultantName; Change Orders now matches
+  // that same convention. Client-side only — see canEditBids() comment
+  // and the note flagged to Misty about whether the Worker also needs a
+  // server-side scoping check, since this UI gate is not itself a
+  // security boundary against a direct API call.
+  const canEdit=role==='pm'||role==='admin'||(role==='consultant'&&(p?.v||'')===(currentConsultantName||''));
   const coAddBtn=document.getElementById('co-add-btn');
   if(coAddBtn)coAddBtn.style.display=canEdit?'inline-flex':'none';
   if(coAddBtn&&canEdit){
@@ -11198,12 +11506,14 @@ function openNewBidRoundModal(){
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
       <button class="btn" onclick="document.getElementById('new-bid-round-overlay').remove()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveNewBidRound()"><i class="ti ti-check"></i>Create Round</button>
+      <button class="btn btn-primary" id="save-new-bid-round-btn" onclick="saveNewBidRound()"><i class="ti ti-check"></i>Create Round</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
 }
+let _savingNewBidRound=false;
 async function saveNewBidRound(){
+  if(_savingNewBidRound)return;
   const name=(document.getElementById('newround-name')?.value||'').trim();
   const unitList=(document.getElementById('newround-unitlist')?.value||'').trim();
   if(!name){showToast('Round Name is required','error');return;}
@@ -11231,9 +11541,16 @@ async function saveNewBidRound(){
   if(currentScope?.id)fields['Linked Scope']=[currentScope.id];
   if(unitList)fields['Unit List']=unitList;
 
+  // v54e — this form had no double-submit guard; a fast double-click could
+  // create two identical Bid Round records.
+  _savingNewBidRound=true;
+  const saveBtn=document.getElementById('save-new-bid-round-btn');
+  if(saveBtn)saveBtn.disabled=true;
   const res=await atCreate('Bid Rounds',fields);
   if(!res||!res.records||!res.records.length){
     showToast('Could not create bid round','error');
+    _savingNewBidRound=false;
+    if(saveBtn)saveBtn.disabled=false;
     return;
   }
   const newId=res.records[0].id;
@@ -11241,6 +11558,8 @@ async function saveNewBidRound(){
   expandedBidRoundIds.add(newId);
   showToast(`"${name}" round created`,'success');
   await renderBidsTab(currentProp);
+  _savingNewBidRound=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 // ── LEVELING VIEW TABLE ───────────────────────────────────────────────
 
@@ -11769,8 +12088,8 @@ function openBidSubmissionForm(existingId,viewOnly,roundIdParam){
       <button id="bsf-close-btn" class="btn btn-primary" onclick="document.getElementById('bid-submission-overlay').remove()">Close</button>
       `:`
       <button class="btn" onclick="document.getElementById('bid-submission-overlay').remove()">Cancel</button>
-      <button class="btn btn-edit" onclick="saveBidSubmissionForm(true)"><i class="ti ti-device-floppy"></i>Save Draft</button>
-      <button class="btn btn-primary" onclick="saveBidSubmissionForm(false)"><i class="ti ti-check"></i>Finish &amp; Submit</button>
+      <button class="btn btn-edit" id="bsf-save-draft-btn" onclick="saveBidSubmissionForm(true)"><i class="ti ti-device-floppy"></i>Save Draft</button>
+      <button class="btn btn-primary" id="bsf-save-submit-btn" onclick="saveBidSubmissionForm(false)"><i class="ti ti-check"></i>Finish &amp; Submit</button>
       `}
     </div>
   </div>`;
@@ -12123,7 +12442,12 @@ function collectLineItemsFromForm(){
   return items;
 }
 
+let _savingBidSubmission=false;
 async function saveBidSubmissionForm(asDraft){
+  // v54e — Save Draft and Finish & Submit share this same form/record, so
+  // they share one guard flag, matching the saveMeeting/saveMeetingDraft
+  // convention from v54c.
+  if(_savingBidSubmission)return;
   const roundId=document.getElementById('bsf-round-id')?.value||'';
   if(!currentProp||!roundId)return;
   const supplierName=(document.getElementById('bsf-supplier-name')?.value||'').trim();
@@ -12189,6 +12513,17 @@ async function saveBidSubmissionForm(asDraft){
 
   let submissionId=editingId;
 
+  // v54e — this form had no double-submit guard; a fast double-click on
+  // either button could create duplicate Bid Submissions and duplicate
+  // Bid Line Items/Bid Unit Detail rows. Guard set here, after all
+  // pure-read field collection above, covering both the demo and live
+  // write paths below.
+  _savingBidSubmission=true;
+  const draftBtn=document.getElementById('bsf-save-draft-btn');
+  const submitBtn=document.getElementById('bsf-save-submit-btn');
+  if(draftBtn)draftBtn.disabled=true;
+  if(submitBtn)submitBtn.disabled=true;
+
   if(demoMode){
     if(editingId){
       const existing=(window.BID_SUBMISSIONS_DEMO||[]).find(s=>s.id===editingId);
@@ -12201,6 +12536,9 @@ async function saveBidSubmissionForm(asDraft){
       );
       if(status==='Submitted'&&dup){
         showToast(`${supplierName} already has a submitted bid for this round. Edit the existing submission instead.`,'error');
+        _savingBidSubmission=false;
+        if(draftBtn)draftBtn.disabled=false;
+        if(submitBtn)submitBtn.disabled=false;
         return;
       }
       submissionId='dbs-'+Date.now();
@@ -12213,20 +12551,35 @@ async function saveBidSubmissionForm(asDraft){
     document.getElementById('bid-submission-overlay')?.remove();
     showToast(asDraft?'Draft saved (demo)':'Bid submitted (demo)','success');
     await renderBidsTab(currentProp);
+    _savingBidSubmission=false;
+    if(draftBtn)draftBtn.disabled=false;
+    if(submitBtn)submitBtn.disabled=false;
     return;
   }
 
   if(editingId){
     const res=await atUpdate('Bid Submissions',editingId,fields);
-    if(!res){showToast('Could not save changes','error');return;}
+    if(!res){
+      showToast('Could not save changes','error');
+      _savingBidSubmission=false;
+      if(draftBtn)draftBtn.disabled=false;
+      if(submitBtn)submitBtn.disabled=false;
+      return;
+    }
   } else {
     const created=await createBidSubmission(fields);
     if(created.duplicate){
       showToast(created.message||'A submission for this supplier already exists in this round','error');
+      _savingBidSubmission=false;
+      if(draftBtn)draftBtn.disabled=false;
+      if(submitBtn)submitBtn.disabled=false;
       return;
     }
     if(!created.ok){
       showToast('Could not create submission','error');
+      _savingBidSubmission=false;
+      if(draftBtn)draftBtn.disabled=false;
+      if(submitBtn)submitBtn.disabled=false;
       return;
     }
     submissionId=created.id;
@@ -12284,6 +12637,9 @@ async function saveBidSubmissionForm(asDraft){
     showToast(asDraft?'Draft saved':'Bid submitted','success');
   }
   await renderBidsTab(currentProp);
+  _savingBidSubmission=false;
+  if(draftBtn)draftBtn.disabled=false;
+  if(submitBtn)submitBtn.disabled=false;
 }
 
 
@@ -12406,7 +12762,12 @@ function editCO(coId){
   document.getElementById('co-edit-id').value=coId;
   document.getElementById('co-desc').value=co.description||'';
   document.getElementById('co-original').value=co.originalAmount||'';
-  document.getElementById('co-negotiated').value=co.negotiatedAmount||'';
+  // v54d — was co.negotiatedAmount||'', which prefilled a legitimately
+  // stored 0 as an empty string, indistinguishable from "never entered".
+  // That would have made the new blank-check below incorrectly block
+  // re-saving an existing $0-negotiated CO. Now only falls back to '' when
+  // the value is actually null/undefined.
+  document.getElementById('co-negotiated').value=(co.negotiatedAmount!=null?co.negotiatedAmount:'');
   document.getElementById('co-status').value=co.status||'Pending';
   document.getElementById('co-date').value=co.date||'';
   document.getElementById('co-notes').value=co.notes||'';
@@ -12426,10 +12787,21 @@ function editCO(coId){
   updateCOSavingsPreview();
 }
 
+let _savingCO=false;
 async function saveCO(){
+  if(_savingCO)return;
   const desc=document.getElementById('co-desc').value.trim();
   const orig=parseFloat(document.getElementById('co-original').value)||0;
-  const neg=parseFloat(document.getElementById('co-negotiated').value)||0;
+  // v54d — neg used to fall straight to ||0 with no distinction between
+  // "left blank" and "entered 0", same as orig below now guards against.
+  // Since savings=orig-neg, a blank Negotiated Amount silently reported
+  // the FULL CO amount as captured savings with no warning — inflating
+  // the Savings Captured KPI shown in the CO summary bar on every blank
+  // entry. An explicit 0 is a legitimate value (CO negotiated down to no
+  // added cost), so this only blocks a genuinely empty field, checked
+  // against the raw input string before parsing, not the parsed number.
+  const negRaw=document.getElementById('co-negotiated').value;
+  const neg=parseFloat(negRaw)||0;
   const status=document.getElementById('co-status').value;
   const date=document.getElementById('co-date').value;
   const notes=document.getElementById('co-notes').value.trim();
@@ -12449,10 +12821,16 @@ async function saveCO(){
   const linkedUnitIds=appliesToWholeProject?[]:Object.keys(coUnitAssign);
   if(!desc){showToast('Please enter a change order description','warn');return;}
   if(!orig){showToast('Please enter the original CO amount','warn');return;}
+  if(negRaw.trim()===''){showToast('Please enter the negotiated amount (enter 0 if there is no negotiated cost)','warn');return;}
   const savings=orig-neg;
   const propName=currentProp?.n||'';
   const scopeId=currentScope?.id||'';
   const loggedBy=window._userName||'PM User';
+  // v54c — this form had no double-submit guard; a fast double-click on
+  // "Finish & Save" could create two identical Change Order records.
+  _savingCO=true;
+  const saveBtn=document.getElementById('save-co-btn');
+  if(saveBtn)saveBtn.disabled=true;
   if(demoMode){
     if(editId){
       const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
@@ -12491,12 +12869,12 @@ async function saveCO(){
     try{
       if(editId){
         const updRes=await atUpdate('Change Order Savings Log',editId,fields);
-        if(!updRes){showToast('Could not save changes to this change order. Please try again.','error');return;}
+        if(!updRes){showToast('Could not save changes to this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
         const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
         if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject});
       }else{
         const rec=await atCreate('Change Order Savings Log',fields);
-        if(!rec?.id){showToast('Could not save this change order. Please try again.','error');return;}
+        if(!rec?.id){showToast('Could not save this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
         const newCO={id:rec.id,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject};
         if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
         window.CO_SAVINGS.push(newCO);
@@ -12521,12 +12899,14 @@ async function saveCO(){
           appliesToWholeProject:!!r.fields['Applies to Whole Project'],
         })).sort((a,b)=>new Date(b.date)-new Date(a.date));
       }
-    }catch(e){showToast('Error saving change order','error');return;}
+    }catch(e){showToast('Error saving change order','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
   }
   closeCOModal();
   if(currentProp)renderChangeOrdersTab(currentProp);
   refreshPendingReview();
   renderDashboard();
+  _savingCO=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 
 // v38k — Approve from the Pending Review queue now stays on the queue
@@ -13837,7 +14217,7 @@ function openStepDatesForm(phaseId){
       ${rows}
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px">
-      <button class="btn btn-primary" onclick="saveStepDates('${phaseId}')"><i class="ti ti-check"></i>Finish &amp; Save</button>
+      <button class="btn btn-primary" id="step-dates-save-btn" onclick="saveStepDates('${phaseId}')"><i class="ti ti-check"></i>Finish &amp; Save</button>
       <button class="btn" onclick="document.getElementById('step-dates-overlay').remove()">Cancel</button>
     </div>
   </div>`;
@@ -13857,7 +14237,9 @@ async function checkMilestoneTriggers(propName){
   await recalculateAllMilestoneStatuses(propName);
 }
 
+let _savingStepDates=false;
 async function saveStepDates(phaseId){
+  if(_savingStepDates)return;
   const ph=(window.UNIT_GROUPS||[]).find(u=>u.id===phaseId);
   if(!ph){showToast('Phase not found','warn');return;}
   const propName=ph.property||ph.n||currentProp?.n||'';
@@ -13885,6 +14267,14 @@ async function saveStepDates(phaseId){
       if(!proceed)return;
     }
   }
+  // v54c — this form had no double-submit guard; a fast double-click on
+  // "Finish & Save" could re-run this whole per-row write loop twice,
+  // duplicating every new Phase Task row. Guard set here, after the
+  // pure-read validation/confirm() above (nothing written yet if the user
+  // cancels there), covering the entire write loop below.
+  _savingStepDates=true;
+  const saveBtn=document.getElementById('step-dates-save-btn');
+  if(saveBtn)saveBtn.disabled=true;
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
   let stepSaveFailCount=0;
   for(const row of rows){
@@ -13940,6 +14330,8 @@ async function saveStepDates(phaseId){
   }else{
     showToast('Tasks saved','success');
   }
+  _savingStepDates=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 function togglePhaseCard(cardId){
   const card=document.getElementById(cardId);if(!card)return;
@@ -13958,7 +14350,9 @@ function openBillingLogForm(){
   form.scrollIntoView({behavior:'smooth'});
 }
 
+let _savingBillingEntry=false;
 async function saveBillingEntry(){
+  if(_savingBillingEntry)return;
   if(!currentProp)return;
   initCurrencyInput('billing-ytd-input');
   const ytd=getCurrencyValue('billing-ytd-input');
@@ -13975,6 +14369,11 @@ async function saveBillingEntry(){
     'Logged By':loggedBy,
   };
   if(scopeId)fields['Linked Scope']=[scopeId];
+  // v54c — this form had no double-submit guard; a fast double-click could
+  // create two identical Billing Log entries.
+  _savingBillingEntry=true;
+  const saveBtn=document.getElementById('save-billing-entry-btn');
+  if(saveBtn)saveBtn.disabled=true;
   const res=await atCreate('Billing Log',fields);
   // v51j — this used to fabricate a local bl- id and show "Billing entry
   // saved" even if the Airtable write failed, so a failed billing entry
@@ -13982,6 +14381,8 @@ async function saveBillingEntry(){
   // leaves the form open so the entered amount isn't lost.
   if(!res?.records?.[0]?.id){
     showToast('Could not save billing entry to Airtable. Check your connection and try again.','error');
+    _savingBillingEntry=false;
+    if(saveBtn)saveBtn.disabled=false;
     return;
   }
   const newEntry={id:res.records[0].id,property:currentProp.n,scopeId,billedYTD:ytd,entryDate:date,notes,loggedBy};
@@ -13992,6 +14393,8 @@ async function saveBillingEntry(){
   renderBudgetTab(currentProp);
   renderPropertyView(currentProp); // refresh overview mini grid
   showToast('Billing entry saved','success');
+  _savingBillingEntry=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 
 async function deleteBillingEntry(id,propName){
@@ -14049,7 +14452,9 @@ function openRetainageReleaseForm(){
   form.scrollIntoView({behavior:'smooth'});
 }
 
+let _savingRetainageRelease=false;
 async function saveRetainageRelease(){
+  if(_savingRetainageRelease)return;
   if(!currentProp)return;
   initCurrencyInput('retainage-release-amount-input');
   const amount=getCurrencyValue('retainage-release-amount-input');
@@ -14058,6 +14463,12 @@ async function saveRetainageRelease(){
   if(!amount||!date){showToast('Please enter an amount released and date','warn');return;}
   const loggedBy=window._userName||'PM User';
   const editingId=document.getElementById('retainage-release-form').dataset.editingId||'';
+  // v54c — this form had no double-submit guard; a fast double-click could
+  // create two identical Retainage Release entries (or double-apply an
+  // edit). Covers both the edit and create branches below.
+  _savingRetainageRelease=true;
+  const saveBtn=document.getElementById('save-retainage-release-btn');
+  if(saveBtn)saveBtn.disabled=true;
   if(editingId){
     const existing=(window.RETAINAGE_RELEASES||[]).find(r=>r.id===editingId);
     if(existing){
@@ -14073,6 +14484,8 @@ async function saveRetainageRelease(){
           Object.assign(existing,priorVals);
           renderBudgetTab(currentProp);
           showToast('Could not save changes to this retainage release. Please try again.','error');
+          _savingRetainageRelease=false;
+          if(saveBtn)saveBtn.disabled=false;
           return;
         }
       }
@@ -14095,6 +14508,8 @@ async function saveRetainageRelease(){
     // as one that did. Now aborts with a real error instead.
     if(!demoMode&&!res?.records?.[0]?.id){
       showToast('Could not save retainage release to Airtable. Check your connection and try again.','error');
+      _savingRetainageRelease=false;
+      if(saveBtn)saveBtn.disabled=false;
       return;
     }
     const newEntry={id:res?.records?.[0]?.id||'rr-'+Date.now(),property:currentProp.n,scopeId,amountReleased:amount,releaseDate:date,notes,loggedBy};
@@ -14104,6 +14519,8 @@ async function saveRetainageRelease(){
   document.getElementById('retainage-release-form').style.display='none';
   document.getElementById('retainage-release-form').dataset.editingId='';
   renderBudgetTab(currentProp);
+  _savingRetainageRelease=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 
 function editRetainageRelease(id,propName){
@@ -15134,7 +15551,9 @@ function closeBillingModal(){
   document.getElementById('billing-modal-overlay').style.display='none';
   document.getElementById('billing-modal').style.display='none';
 }
+let _savingBillingModal=false;
 async function saveBillingModal(){
+  if(_savingBillingModal)return;
   if(!currentProp)return;
   const editingId=document.getElementById('bm-editing-id').value;
   const budgetRaw=String(getCurrencyValue('bm-budget')||'');
@@ -15147,6 +15566,12 @@ async function saveBillingModal(){
   // Allow budget update without a billing entry
   if(budget===null&&ytd===null){showToast('Please enter a Project Budget or Billed YTD amount','warn');return;}
   if(ytd!==null&&!date){showToast('Please enter an entry date for the billing entry','warn');return;}
+  // v54c — this form had no double-submit guard, and can fire up to two
+  // writes per call (Project Budget + a Billing Log entry). Guard set here
+  // after validation, before either write begins.
+  _savingBillingModal=true;
+  const saveBtn=document.getElementById('save-billing-modal-btn');
+  if(saveBtn)saveBtn.disabled=true;
   // v52g — Project Budget write result was only console.log'd, no
   // user-facing signal at all if it failed; local currentProp.budget stayed
   // updated regardless, so a failed budget save was invisible in the UI.
@@ -15185,6 +15610,8 @@ async function saveBillingModal(){
             closeBillingModal();
             renderPropertyView(currentProp);
             switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));
+            _savingBillingModal=false;
+            if(saveBtn)saveBtn.disabled=false;
             return;
           }
         }
@@ -15209,6 +15636,8 @@ async function saveBillingModal(){
         // write failed. Now aborts here instead of continuing on a fake id.
         if(!res?.records?.[0]?.id){
           showToast('Could not save billing entry to Airtable. Check your connection and try again.','error');
+          _savingBillingModal=false;
+          if(saveBtn)saveBtn.disabled=false;
           return;
         }
         newEntry.id=res.records[0].id;
@@ -15225,6 +15654,8 @@ async function saveBillingModal(){
   closeBillingModal();
   renderPropertyView(currentProp);
   switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));
+  _savingBillingModal=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 
 // ── CHART FILTERS ─────────────────────────────────────────────────────
@@ -16652,7 +17083,9 @@ window.renderAllSupUnitLists=renderAllSupUnitLists;
 // panel stay at Capital Plan status until graduated later the normal way
 // (Split Into Projects or the project card), same as any other
 // freshly-split project with no survey date entered yet.
+let _savingSetUpProjects=false;
 async function saveSetUpProjects(){
+  if(_savingSetUpProjects)return;
   const blocks=[...document.querySelectorAll('.sup-block')];
   if(blocks.length===0){showToast('Add at least one project','warn');return;}
   const rows=blocks.map(b=>({
@@ -16669,6 +17102,14 @@ async function saveSetUpProjects(){
   showToast('Saving projects...','info');
   const prop=(window.PORTFOLIO||[]).find(p=>p.id===supPropId||p.n===supPropName);
   if(!prop){showToast('Property not found','error');return;}
+  // v54c — this form had no double-submit guard; a fast double-click could
+  // re-run the whole per-project write loop below twice, duplicating every
+  // new Scope/project. Only one exit path exists past this point (the
+  // function always runs through to the closing toast, counting failures
+  // rather than aborting), so one guard-set + one reset covers it.
+  _savingSetUpProjects=true;
+  const saveBtn=document.getElementById('save-setup-projects-btn');
+  if(saveBtn)saveBtn.disabled=true;
 
   // v51j — a failed Scopes create used to fall back to a fabricated
   // demo_sc_ id and get pushed into window.SCOPES exactly like a real
@@ -16781,6 +17222,8 @@ async function saveSetUpProjects(){
   }else{
     showToast('Projects saved','success');
   }
+  _savingSetUpProjects=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 window.saveSetUpProjects=saveSetUpProjects;
 
@@ -17035,9 +17478,19 @@ function rfUpdateSummary(){
   summaryEl.textContent=`${changedIds.length} scope${changedIds.length===1?'':'s'} changed · moves ${fmtBudget(movedBudget)} in estimated budget`;
   saveBtn.disabled=false;
 }
+let _savingReforecastChanges=false;
 async function saveReforecastChanges(){
+  // v54c — this form had no double-submit guard; a fast double-click could
+  // re-run the write loop below twice against the same pending changes.
+  // rf-save-btn already has a disabled attribute, but it's driven by
+  // rfUpdateSummary() (disabled whenever there are no pending changes),
+  // not a save-in-flight state — this guard covers that separately.
+  if(_savingReforecastChanges)return;
   const changedIds=Object.keys(rfPendingChanges);
   if(changedIds.length===0)return;
+  _savingReforecastChanges=true;
+  const saveBtn=document.getElementById('rf-save-btn');
+  if(saveBtn)saveBtn.disabled=true;
   showToast('Saving reforecast changes...','info');
   let failCount=0;
   for(const scopeId of changedIds){
@@ -17057,6 +17510,10 @@ async function saveReforecastChanges(){
   if(typeof renderDashboard==='function')renderDashboard();
   if(failCount>0)showToast(`${failCount} change(s) failed to save — check connection and retry`,'warn');
   else showToast('Reforecast changes saved','success');
+  _savingReforecastChanges=false;
+  // Not re-enabling saveBtn here — rfPendingChanges is now empty, so
+  // rfUpdateSummary()'s normal disabled-when-no-changes state is already
+  // the correct end state; renderReforecastView() above calls it.
 }
 function discardReforecastChanges(){
   rfPendingChanges={};
@@ -18353,7 +18810,9 @@ async function confirmDeleteCapitalScope(scopeId, scopeName, propName){
   renderCharts();
 }
 
+let _savingCapitalPlanEntry=false;
 async function saveCapitalPlanEntry(skipClose){
+  if(_savingCapitalPlanEntry)return;
   // v45q — REWRITE. Reads from the new #new-prop-panel field IDs (np-*)
   // skipClose (added for Continue To Project / Create Unit Inventory):
   // when true, the panel is left open and the function returns the saved
@@ -18408,6 +18867,16 @@ async function saveCapitalPlanEntry(skipClose){
   // statuses (deriveAndWritePropertyStatus) and is never written directly
   // from this form — it always stays/starts at "Capital Plan" here.
   const newStatus='Capital Plan';
+  // v54c — this form had no double-submit guard; a fast double-click, or
+  // npCreateUnitInventory()/npContinueToProject() both calling this via
+  // their skipClose=true chain, could create two Properties (or two
+  // default Scopes) records. Both call sites already do
+  // if(!propObj)return; after calling this, so returning early here on a
+  // blocked duplicate call is already handled safely — no new failure
+  // mode introduced.
+  _savingCapitalPlanEntry=true;
+  const saveBtn=document.getElementById('save-capital-plan-btn');
+  if(saveBtn)saveBtn.disabled=true;
 
   const fields={
     'Property Name':name,
@@ -18498,6 +18967,8 @@ async function saveCapitalPlanEntry(skipClose){
       // table with a success toast. Now aborts here.
       if(!atId){
         showToast('Could not save property to Airtable. Check your connection and try again.','error');
+        _savingCapitalPlanEntry=false;
+        if(saveBtn)saveBtn.disabled=false;
         return;
       }
       // v28a — auto-create default Scope (continuity brief 1L). Every new
@@ -18580,6 +19051,8 @@ async function saveCapitalPlanEntry(skipClose){
   }else{
     showToast(editId?`${name} updated`:`${name} added to capital plan`,'success');
   }
+  _savingCapitalPlanEntry=false;
+  if(saveBtn)saveBtn.disabled=false;
   if(skipClose){
     document.getElementById('np-edit-id').value=propObj.id;
     return propObj;
@@ -18826,7 +19299,15 @@ function updateSplitScopesReconcile(){
     : `<div style="font-size:12px;color:var(--amber);display:flex;align-items:center;gap:6px"><i class="ti ti-alert-triangle"></i>Projects total ${fmtCurrency(sum)} vs. baseline ${fmtCurrency(baseline)} (${diff>0?'+':''}${fmtCurrency(diff)}) — you can still save</div>`;
 }
 
+// v54c — like saveScopeEditModal, this form's overlay (and its Save
+// button) is removed synchronously right after validation, before any
+// await — so the button is physically gone from the DOM before a second
+// click is possible. Guard added as defense-in-depth against any other
+// code path re-invoking this while one call is mid-flight, not because
+// the button itself is re-clickable.
+let _savingSplitIntoScopes=false;
 async function saveSplitIntoScopes(){
+  if(_savingSplitIntoScopes)return;
   const overlay=document.getElementById('split-scopes-overlay');
   if(!overlay)return;
   const propId=overlay.dataset.propId;
@@ -18869,6 +19350,7 @@ async function saveSplitIntoScopes(){
   });
   if(rows.some(r=>!r.name)){showToast('Each scope needs a name','warn');return;}
 
+  _savingSplitIntoScopes=true;
   overlay.remove();
   showToast('Saving scopes...','info');
 
@@ -19128,6 +19610,7 @@ async function saveSplitIntoScopes(){
   }else{
     showToast(`${rows.length} scope${rows.length===1?'':'s'} saved for ${prop.n}`,'success');
   }
+  _savingSplitIntoScopes=false;
 }
 
 
@@ -21095,7 +21578,7 @@ function showEditCalEvent(type,id){
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
       <button class="btn" onclick="document.getElementById('cal-edit-overlay').remove()">Cancel</button>
-      <button class="btn btn-add" onclick="saveEditCalEvent('${type}','${id}')"><i class="ti ti-check"></i>Finish & Save</button>
+      <button class="btn btn-add" id="caledit-save-btn" onclick="saveEditCalEvent('${type}','${id}')"><i class="ti ti-check"></i>Finish & Save</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
@@ -21219,10 +21702,19 @@ async function syncCaleditAttendees(eventTable,eventRecordId,priorAttendees,curr
   }
   return refreshed;
 }
+let _savingEditCalEvent=false;
 async function saveEditCalEvent(type,id){
+  if(_savingEditCalEvent)return;
   const isVisit=type==='visit';
   const record=isVisit?siteVisits.find(v=>v.id===id):meetings.find(m=>m.id===id);
   if(!record)return;
+  // v54e — this form had no double-submit guard, and mutates record.*
+  // directly on the shared local meetings/siteVisits array before any
+  // write runs, so a fast double-click could race two writes against the
+  // same record with local state already changed by both.
+  _savingEditCalEvent=true;
+  const saveBtn=document.getElementById('caledit-save-btn');
+  if(saveBtn)saveBtn.disabled=true;
   record.property=document.getElementById('caledit-property')?.value||record.property;
   record.date=document.getElementById('caledit-date')?.value||record.date;
   record.time=document.getElementById('caledit-time')?.value||record.time;
@@ -21265,6 +21757,7 @@ async function saveEditCalEvent(type,id){
   renderCalendar();
   if(mainSaveFailed){
     showToast(`Could not save changes to this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
+    _savingEditCalEvent=false;
     return;
   }
   // v51j — see syncCaleditAttendees: don't let "updated" claim full success
@@ -21275,6 +21768,7 @@ async function saveEditCalEvent(type,id){
   }else{
     showToast(`${isVisit?'Site visit':'Meeting'} updated`,'success');
   }
+  _savingEditCalEvent=false;
 }
 function confirmDeleteCalEvent(type,id){
   const isVisit=type==='visit';
@@ -21704,8 +22198,8 @@ function renderDashboard(){
   const d30=new Date(today2);d30.setDate(d30.getDate()+30);
   const allActions2=actionItems||(window.ACTION_ITEMS||[]);
   const openActions2=allActions2.filter(a=>a.status==='Open'||a.status==='open');
-  const overdueActions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today2);
-  const due30Actions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)>=today2&&new Date(a.due)<=d30);
+  const overdueActions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today2);
+  const due30Actions=openActions2.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')>=today2&&new Date(a.due+'T12:00:00')<=d30);
   const pendingReviewCount=submissions.filter(s=>s.reviewStatus==='pending').length+((window.CO_SAVINGS||[]).filter(c=>c.status==='Pending').length);
   // v44c — this tile had NO date filter at all (unlike Operations Center's
   // own version, which at least tried a login-time filter that turned out
@@ -22723,9 +23217,19 @@ async function voteWeeklyReportFeedback(feedbackRecordId,vote){
 }
 window.voteWeeklyReportFeedback=voteWeeklyReportFeedback;
 
+// v54e — the button here carries a per-record id
+// (wrf-save-btn-${r.id}), since multiple feedback rows can each show
+// their own Save button at once, so the guard needs to be keyed per
+// feedbackRecordId rather than a single module-level flag — a single flag
+// would incorrectly block saving row B while row A's save was in flight.
+const _savingWeeklyReportFeedback={};
 async function saveWeeklyReportFeedbackNotes(feedbackRecordId){
+  if(_savingWeeklyReportFeedback[feedbackRecordId])return;
   const input=document.getElementById(`wrf-notes-input-${feedbackRecordId}`);
   if(!input)return;
+  _savingWeeklyReportFeedback[feedbackRecordId]=true;
+  const saveBtn=document.getElementById(`wrf-save-btn-${feedbackRecordId}`);
+  if(saveBtn)saveBtn.disabled=true;
   try{
     const response=await workerFetch(`${WORKER_URL}/weekly-report-feedback`,{
       method:'POST',
@@ -22747,6 +23251,9 @@ async function saveWeeklyReportFeedbackNotes(feedbackRecordId){
     wrfShowSavedState(feedbackRecordId);
   }catch(e){
     showToast('Could not save your note — please try again','warn');
+  }finally{
+    _savingWeeklyReportFeedback[feedbackRecordId]=false;
+    if(saveBtn)saveBtn.disabled=false;
   }
 }
 window.saveWeeklyReportFeedbackNotes=saveWeeklyReportFeedbackNotes;
@@ -23207,7 +23714,7 @@ function openScheduleMeetingModal(prefillPropName){
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
       <button class="btn" onclick="document.getElementById('schedule-mtg-overlay').remove()">Cancel</button>
-      <button class="btn btn-add" onclick="saveScheduledMeeting()"><i class="ti ti-send"></i>Schedule and Send</button>
+      <button class="btn btn-add" id="save-scheduled-meeting-btn" onclick="saveScheduledMeeting()"><i class="ti ti-send"></i>Schedule and Send</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
@@ -23380,7 +23887,9 @@ function formatSmtgRecurrenceForAirtable(cfg){
   else str+='; no end date';
   return str;
 }
+let _savingScheduledMeeting=false;
 async function saveScheduledMeeting(){
+  if(_savingScheduledMeeting)return;
   const propName=document.getElementById('smtg-property')?.value;
   const date=document.getElementById('smtg-date')?.value;
   const time=document.getElementById('smtg-time')?.value||'10:00';
@@ -23407,6 +23916,13 @@ async function saveScheduledMeeting(){
   // notification email, regardless of who was actually logged in.
   const consultantName=(role==='consultant'?currentConsultantName:window._userName)||'PM User';
   const smtgScopeId=document.getElementById('smtg-scope')?.value||'';
+  // v54e — this form had no double-submit guard; "Schedule and Send"
+  // fires both a Meeting create and one Meeting Attendees create per
+  // invitee plus an invite-email send — a fast double-click could
+  // duplicate all of that and send duplicate invite emails.
+  _savingScheduledMeeting=true;
+  const scheduleBtn=document.getElementById('save-scheduled-meeting-btn');
+  if(scheduleBtn)scheduleBtn.disabled=true;
   // v45h — 'VDA Attendees'/'Elevator Company Attendees'/'Client Attendees'
   // plain-text fields retired in favor of linked rows in the new Meeting
   // Attendees table (one row per person, with Role/Name/Email/RSVP
@@ -23438,6 +23954,8 @@ async function saveScheduledMeeting(){
     // and leaves the modal open so nothing is lost or falsely confirmed.
     if(!atId){
       showToast('Could not save meeting to Airtable. Check your connection and try again.','error');
+      _savingScheduledMeeting=false;
+      if(scheduleBtn)scheduleBtn.disabled=false;
       return;
     }
     // Write each attendee as its own Meeting Attendees record, linked
@@ -23489,6 +24007,7 @@ async function saveScheduledMeeting(){
   // needs a UI decision (which attendees failed, retry affordance) rather
   // than a one-line guard like the rest of this pass.
   showToast(attendees.length?'Meeting scheduled and invites sent':'Meeting scheduled','success');
+  _savingScheduledMeeting=false;
 }
 function buildIcsContent(summary,description,location,dateStr,timeStr,tzName,durationMinutes){
   // Convert local time to UTC for ICS
@@ -23664,13 +24183,22 @@ async function saveGlobalVisit(){
   document.getElementById('visit-prop-overlay')?.remove();
   await showVisitForm(propName,date,consultant,purpose,time,tz,notify1,notify2,notifyClient,attendees);
 }
+// v54e — saveGlobalVisit() (the only caller) removes its own overlay
+// synchronously before calling this, so its Save button is already gone
+// from the DOM before a second click is possible — same shape as
+// saveScopeEditModal/saveSplitIntoScopes (v54c). This is the function
+// that actually writes, so the guard lives here as defense-in-depth
+// against any other path invoking it while one call is mid-flight.
+let _savingVisitForm=false;
 async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpose,prefillTime,prefillTz,notify1,notify2,notifyClient,attendees){
+  if(_savingVisitForm)return;
   const date=prefillDate;if(!date)return;
   const consultant=prefillConsultant;if(!consultant)return;
   const purpose=prefillPurpose;if(!purpose)return;
   const time=prefillTime||'09:00';
   const tz=prefillTz||'America/New_York';
   attendees=attendees||[];
+  _savingVisitForm=true;
   const newVisit={id:'v'+Date.now(),property:propName,date,time,tz,consultant,purpose,attendees};
   // Write to Airtable
   let attendeeSyncFailCount=0;
@@ -23694,6 +24222,7 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
       if(!res?.records?.[0]?.id){
         console.error('showVisitForm: Site Visits write failed',res);
         showToast('Could not save site visit to Airtable. Check your connection and try adding it again.','error');
+        _savingVisitForm=false;
         return;
       }
       newVisit.id=res.records[0].id;
@@ -23730,6 +24259,7 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
     }catch(e){
       console.error('Site visit Airtable error:',e);
       showToast('Could not save site visit to Airtable. Check your connection and try adding it again.','error');
+      _savingVisitForm=false;
       return;
     }
   }
@@ -23750,6 +24280,7 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
   if(notify1||notify2||notifyClient){
     await sendSiteVisitNotifications({propName,date,time,tz,consultant,purpose,notify1:notify1||'',notify2:notify2||'',notifyClient:notifyClient||''});
   }
+  _savingVisitForm=false;
 }
 async function sendSiteVisitNotifications({propName,date,time,tz,consultant,purpose,notify1,notify2,notifyClient}){
   const notifyNames=[notify1,notify2,notifyClient].filter(Boolean);
@@ -24615,10 +25146,20 @@ async function deleteProperty(){
   </div>`;
   document.body.appendChild(overlay);
 }
+// v54e — like saveScopeEditModal/saveSplitIntoScopes (v54c), this
+// overlay (and its Delete button) is removed synchronously right after
+// validation, before any await, so a second click is already physically
+// impossible. Guarded anyway as defense-in-depth — this cascade deletes
+// across 12+ tables and is the single most destructive action in the
+// app, worth the extra protection even though the button itself can't
+// be re-clicked.
+let _deletingProperty=false;
 async function confirmDeleteProperty(){
+  if(_deletingProperty)return;
   const name=document.getElementById('delete-prop-select')?.value;
   if(!name)return;
   document.getElementById('delete-prop-overlay')?.remove();
+  _deletingProperty=true;
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===name);
   console.log('[deleteProperty] starting delete for:',name,'propId:',prop?.id);
 
@@ -24745,6 +25286,7 @@ async function confirmDeleteProperty(){
   console.log('[deleteProperty] populatePortfolio() called — check portfolio table now');
   updateClientCommentsBadge();
   updateQueueBadge();
+  _deletingProperty=false;
 }
 
 function closeEditPropertyPanel(){
@@ -24756,7 +25298,9 @@ function closeEditPropertyPanel(){
   },300);
 }
 
+let _savingEditProperty=false;
 async function saveEditProperty(){
+  if(_savingEditProperty)return;
   const p=currentProp;if(!p)return;
   const name=document.getElementById('ep-name').value.trim();
   if(!name){showToast('Property name is required','warn');return;}
@@ -24813,6 +25357,11 @@ async function saveEditProperty(){
     delete propFields['Unit Count'];
   }
 
+  // v54e — this form had no double-submit guard; a fast double-click
+  // could re-run this write twice against the same Properties record.
+  _savingEditProperty=true;
+  const saveBtn=document.getElementById('save-edit-property-btn');
+  if(saveBtn)saveBtn.disabled=true;
   // Update local property object
   p.n=name;p.addr=propFields['Address'];p.s=propFields['State'];
   if(propFields['Asset Type'])p.type=propFields['Asset Type'];
@@ -24847,6 +25396,8 @@ async function saveEditProperty(){
   closeEditPropertyPanel();
   renderPropertyView(p);
   populatePortfolio();
+  _savingEditProperty=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 // v28b — saveNewProperty / "Add Property" retired. Capital Plan entry
 // (openCapitalPlanEntry/saveCapitalPlanEntry) is now the sole property
@@ -25917,7 +26468,7 @@ function updateOpsCenterBadge(){
   const today=new Date();today.setHours(0,0,0,0);
   let count=0;
   allActions.filter(a=>(a.status==='Open'||a.status==='open')&&propFilter(a.property)).forEach(a=>{
-    if(a.due&&a.due!=='TBD'&&new Date(a.due)<today){
+    if(a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today){
       const created=a.createdTime?new Date(a.createdTime).getTime():0;
       if(created>lastSeen)count++;
     }
@@ -26168,7 +26719,9 @@ function toggleFUWholeProject(){
 }
 window.toggleFUWholeProject=toggleFUWholeProject;
 
+let _savingSubmitUpdate=false;
 async function submitUpdate(){
+  if(_savingSubmitUpdate)return;
   const property=document.getElementById('f-property').value;if(!property){alert('Please select a property.');return;}
   // v42q — Project (Scope) is now required. The old typed "Unit(s)
   // updated" field is gone entirely, and the unit picker below is scoped
@@ -26248,6 +26801,13 @@ async function submitUpdate(){
   // rather than risk an invalid write; only set explicitly to false when a
   // draft action is newly being created on this submission.
   if(draftAction)fields['Draft Action Published']=false;
+  // v54e — this form (both the edit/resubmit and new-submission branches)
+  // had no double-submit guard; a fast double-click could resubmit twice
+  // or create two identical Field Updates records. submit-btn-primary
+  // already exists as a button id (used elsewhere), reused here.
+  _savingSubmitUpdate=true;
+  const submitBtn=document.getElementById('submit-btn-primary');
+  if(submitBtn)submitBtn.disabled=true;
   if(editingId){
     // Edit/resubmit — update the original record in place rather than
     // creating a duplicate. Property and Report Week are locked in the UI
@@ -26266,6 +26826,8 @@ async function submitUpdate(){
       const resubmitRes=await atUpdate('Field Updates',existing.atId,fields);
       if(!resubmitRes){
         showToast('Could not resubmit this update. Please try again.','error');
+        _savingSubmitUpdate=false;
+        if(submitBtn)submitBtn.disabled=false;
         return;
       }
     }
@@ -26277,6 +26839,8 @@ async function submitUpdate(){
     resetSubmitForm();
     showToast('Update resubmitted','success');
     gotoView('my-updates',null);
+    _savingSubmitUpdate=false;
+    if(submitBtn)submitBtn.disabled=false;
     return;
   }
   // Write to Airtable first
@@ -26303,6 +26867,8 @@ async function submitUpdate(){
     showToast('Could not submit update to Airtable. Check your connection and try again.','error');
   }
   resetSubmitForm();
+  _savingSubmitUpdate=false;
+  if(submitBtn)submitBtn.disabled=false;
 }
 function refreshMyUpdates(){
   const c=document.getElementById('my-updates-container');if(!c)return;
@@ -26356,7 +26922,9 @@ function openNewFlag(){
   form.scrollIntoView({behavior:'smooth'});
 }
 
+let _savingFlag=false;
 async function submitFlag(){
+  if(_savingFlag)return;
   const prop=document.getElementById('flag-property').value;
   const type=document.getElementById('flag-type').value;
   const msg=document.getElementById('flag-message').value.trim();
@@ -26367,6 +26935,11 @@ async function submitFlag(){
   const threadId=generateThreadId(prop);
   const clientLabel=demoMode?'Demo Retail — Capital Projects':'Park Hotels — Capital Projects';
   const record={id:'cc-'+Date.now(),property:prop,threadId,authorRole:'client',authorName:clientLabel,message:msg,flagType:type,status:'Open',visibility,created:dateStr};
+  // v54e — this form had no double-submit guard; a fast double-click
+  // could raise the same flag twice as separate Client Comments threads.
+  _savingFlag=true;
+  const submitFlagBtn=document.getElementById('submit-flag-btn');
+  if(submitFlagBtn)submitFlagBtn.disabled=true;
   if(!demoMode){
     const res=await atCreate('Client Comments',{'Property Name':propertyNameToLink(prop),'Thread ID':threadId,'Author Role':'client','Author Name':clientLabel,'Message':msg,'Flag Type':type,'Status':'Open','Visibility':visibility,'Created':dateStr});
     // v51j — a failed Client Comments write used to fall back to a
@@ -26377,6 +26950,8 @@ async function submitFlag(){
     // form so the typed message isn't lost.
     if(!res?.records?.[0]?.id){
       showToast('Could not submit flag to Airtable. Check your connection and try again.','error');
+      _savingFlag=false;
+      if(submitFlagBtn)submitFlagBtn.disabled=false;
       return;
     }
     record.id=res.records[0].id;
@@ -26387,6 +26962,8 @@ async function submitFlag(){
   renderCommentsView();
   updateClientCommentsBadge();
   showToast('Flag submitted — PM has been notified','success');
+  _savingFlag=false;
+  if(submitFlagBtn)submitFlagBtn.disabled=false;
   // Send email notification to PM/VDA team
   if(!demoMode){
     try{
@@ -26799,7 +27376,12 @@ async function archivePMUpdateToDocuments(u){
 // explicit design decision). Saving as a Draft does not create the action;
 // nothing has been confirmed/published yet, so there's nothing to act on
 // yet either — the action item is only created at the moment of publish.
+let _savingPmuCreate=false;
 async function pmuCreate(status){
+  // v54e — saveDraftPMUpdate() and publishNewPMUpdate() are both thin
+  // wrappers calling this same function against the same form, so they
+  // share one guard flag, same convention as saveMeeting/saveMeetingDraft.
+  if(_savingPmuCreate)return;
   const propName=document.getElementById('pmu-property')?.value;
   const scopeId=document.getElementById('pmu-scope')?.value||'';
   const text=document.getElementById('pmu-text')?.value.trim();
@@ -26858,8 +27440,21 @@ async function pmuCreate(status){
     fields['Draft Action Priority']=draftAction.priority;
     fields['Draft Action Due']=draftAction.due||null;
   }
+  // v54e — this form had no double-submit guard; a fast double-click on
+  // either button could create two identical PM Updates records.
+  _savingPmuCreate=true;
+  const draftBtn=document.getElementById('pmu-save-draft-btn');
+  const publishBtn=document.getElementById('pmu-publish-btn');
+  if(draftBtn)draftBtn.disabled=true;
+  if(publishBtn)publishBtn.disabled=true;
   const res=await atCreate('PM Updates',fields);
-  if(!res){showToast('Error saving update','error');return;}
+  if(!res){
+    showToast('Error saving update','error');
+    _savingPmuCreate=false;
+    if(draftBtn)draftBtn.disabled=false;
+    if(publishBtn)publishBtn.disabled=false;
+    return;
+  }
   const newId=res.records?.[0]?.id||res.id;
   window.PM_UPDATES=window.PM_UPDATES||[];
   const newUpdate={
@@ -26907,6 +27502,9 @@ async function pmuCreate(status){
     showToast(status==='Published'?(hasDraftAction?'Update published, action item created':'Update published'):'Draft saved','success');
   }
   renderPMUpdates();
+  _savingPmuCreate=false;
+  if(draftBtn)draftBtn.disabled=false;
+  if(publishBtn)publishBtn.disabled=false;
 }
 function saveDraftPMUpdate(){pmuCreate('Draft');}
 function publishNewPMUpdate(){pmuCreate('Published');}
@@ -27055,7 +27653,12 @@ window.togglePmueWholeProject=togglePmueWholeProject;
 // keeps window.PM_UPDATES in sync so the feed reflects the edit without
 // a full reload. publishStatus is 'Draft' to just save, or 'Published' to
 // save AND publish in the same action.
+let _savingEditedPMUpdate=false;
 async function _saveEditedPMUpdateCore(publishStatus){
+  // v54e — saveEditedPMUpdate() and publishEditedPMUpdate() both call this
+  // shared core against the same form/record, so they share one guard
+  // flag, same convention as pmuCreate above.
+  if(_savingEditedPMUpdate)return false;
   const id=document.getElementById('pmue-id').value;
   const u=(window.PM_UPDATES||[]).find(x=>x.id===id);
   if(!u)return false;
@@ -27128,8 +27731,21 @@ async function _saveEditedPMUpdateCore(publishStatus){
     fields['Status']='Published';
     fields['Published Date']=todayStr;
   }
+  // v54e — this form had no double-submit guard; a fast double-click on
+  // either button could re-run this write twice against the same record.
+  _savingEditedPMUpdate=true;
+  const pmueSaveBtn=document.getElementById('pmue-save-btn');
+  const pmuePublishBtn=document.getElementById('pmue-publish-btn');
+  if(pmueSaveBtn)pmueSaveBtn.disabled=true;
+  if(pmuePublishBtn)pmuePublishBtn.disabled=true;
   const res=await atUpdate('PM Updates',id,fields);
-  if(!res){showToast('Error saving update','error');return false;}
+  if(!res){
+    showToast('Error saving update','error');
+    _savingEditedPMUpdate=false;
+    if(pmueSaveBtn)pmueSaveBtn.disabled=false;
+    if(pmuePublishBtn)pmuePublishBtn.disabled=false;
+    return false;
+  }
   u.property=propName;u.scopeId=scopeId;u.text=text;
   u.units=units;u.phase=phase;u.progressStatus=progressStatus;
   u.commentType=commentType;u.appliesToWholeProject=appliesToWholeProject;
@@ -27166,6 +27782,9 @@ async function _saveEditedPMUpdateCore(publishStatus){
       }
     }
   }
+  _savingEditedPMUpdate=false;
+  if(pmueSaveBtn)pmueSaveBtn.disabled=false;
+  if(pmuePublishBtn)pmuePublishBtn.disabled=false;
   return true;
 }
 async function saveEditedPMUpdate(){
@@ -27233,6 +27852,211 @@ function stopLivePolling(){
   if(_livePollTimer){clearInterval(_livePollTimer);_livePollTimer=null;}
   _livePollView=null;
 }
+
+// v54f — PROPERTY-TAB LIVE POLLING. Separate from startLivePolling/
+// stopLivePolling above by design, even though the two systems can never
+// legitimately run at once (you're either in a top-level view like
+// 'comments', or inside the 'property' view looking at one of its tabs).
+// Reusing the same timer/state pair risked a subtle bug where one
+// system's stop call could silently kill the other's still-needed timer;
+// two fully independent pairs make each one easier to reason about on
+// its own.
+//
+// Fixes the core "not accurate" / stale-data trust problem this build
+// targets: most of PULSE's data (Milestones, Unit Groups, Phase Tasks,
+// Change Order Savings Log, Billing Log, Retainage Releases, Scopes)
+// loads exactly once at login via loadAllData() into window.* globals
+// and is never refetched automatically — a second user/tab editing the
+// same property leaves the first tab silently showing outdated data
+// until a manual reload, with nothing on screen indicating staleness.
+// Bids and Units don't need a poller here: renderBidsTab() already
+// refetches Bid Rounds/Bid Submissions fresh on every render (tab-open
+// and after every save), and the Units tab's button was removed from the
+// UI in a past build (v43a) — renderUnitsTab() is unreachable dead code.
+//
+// Scoped to whichever property-detail tab is actually active, not the
+// whole property view, so at most one property-tab poll runs at a time,
+// matching the single-timer discipline of the view-level system above.
+const PROP_POLL_INTERVAL_MS=45000;
+let _propPollTimer=null;
+let _propPollTab=null;
+function startPropTabPolling(tab){
+  stopPropTabPolling();
+  if(demoMode)return;
+  if(!currentProp)return;
+  _propPollTab=tab;
+  _propPollTimer=setInterval(()=>{
+    // Guard against a stray tick firing after the user already switched
+    // tabs or left the property (setInterval doesn't know about SPA
+    // navigation) — mirrors startLivePolling's same guard above.
+    if(_propPollTab!==tab||!currentProp)return;
+    if(tab==='milestones')pollMilestones();
+    if(tab==='phases')pollPhases();
+    if(tab==='changeorders')pollChangeOrders();
+    if(tab==='budget')pollBudget();
+  },PROP_POLL_INTERVAL_MS);
+}
+function stopPropTabPolling(){
+  if(_propPollTimer){clearInterval(_propPollTimer);_propPollTimer=null;}
+  _propPollTab=null;
+}
+
+// Each poller below follows the same contract loadAllData() and the
+// existing pollClientComments()/pollProjectUpdates() already use: refetch
+// the table(s), remap into the exact same shape the initial load
+// produces (so nothing downstream needs to know whether this data came
+// from login or a later poll), reassign the window.* global, then
+// re-render only if the poll is still relevant (the property/tab wasn't
+// left mid-fetch since this last tick).
+//
+// Known gap, not fixed here: a poll response landing while the user has
+// an unsaved edit open in a modal on this same tab (e.g. editing a
+// Milestone while a background pollMilestones() tick lands) can replace
+// window.MILESTONES under them. It won't corrupt their in-progress save
+// (each save function reads the live DOM form fields, not the array, at
+// submit time) but a re-render mid-edit could visually reset an open
+// list/table behind an open modal. Low risk given the 45s interval and
+// short save windows, but flagged for Misty rather than silently
+// asserting this is fully handled.
+
+async function pollMilestones(){
+  if(!currentProp||_propPollTab!=='milestones')return;
+  try{
+    const recs=await atGet('Milestones');
+    window.MILESTONES=(recs||[]).map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property Name']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      milestoneNumber: parseInt(r.fields['Milestone Number'])||0,
+      milestoneName: r.fields['Milestone Name']||'',
+      status: r.fields['Status']||'Not Started',
+      plannedDate: r.fields['Planned Date']||'',
+      actualDate: r.fields['Actual Date']||'',
+      completionDate: r.fields['Completion Date']||'',
+      variance: r.fields['Variance']||null,
+      notes: r.fields['Notes']||'',
+      lastModified: r.fields['Last Modified Time']||'',
+      manuallyCompleted: r.fields['Manually Completed']===true,
+      manuallyCompletedBy: r.fields['Manually Completed By']||'',
+      manuallyCompletedOn: r.fields['Manually Completed On']||'',
+    }));
+    if(currentProp&&_propPollTab==='milestones'&&document.getElementById('prop-tab-milestones')?.classList.contains('active')){
+      renderMilestones(currentProp);
+    }
+  }catch(e){console.error('Milestones poll failed:',e);}
+}
+
+async function pollChangeOrders(){
+  if(!currentProp||_propPollTab!=='changeorders')return;
+  try{
+    const recs=await atGet('Change Order Savings Log');
+    window.CO_SAVINGS=(recs||[]).map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property Name']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      description: r.fields['Change Order Description']||'',
+      originalAmount: parseFloat(r.fields['Original CO Amount'])||0,
+      negotiatedAmount: parseFloat(r.fields['Negotiated Amount'])||0,
+      savings: parseFloat(r.fields['Savings Captured'])||0,
+      status: r.fields['Status']||'Pending',
+      ec: r.fields['Elevator Company']||'',
+      loggedBy: r.fields['Logged By']||'',
+      date: r.fields['Date']||'',
+      notes: r.fields['Notes']||'',
+      linkedUnitIds: r.fields['Linked Units']||[],
+      appliesToWholeProject: !!r.fields['Applies to Whole Project'],
+      stHours: r.fields['ST Hours']!=null?Number(r.fields['ST Hours']):null,
+      otHours: r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
+      materialCost: r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
+      opClaimed: r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
+    })).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    if(currentProp&&_propPollTab==='changeorders'&&document.getElementById('prop-tab-changeorders')?.classList.contains('active')){
+      renderChangeOrdersTab(currentProp);
+    }
+  }catch(e){console.error('Change Orders poll failed:',e);}
+}
+
+async function pollPhases(){
+  if(!currentProp||_propPollTab!=='phases')return;
+  try{
+    const [unitGroups,phaseSteps]=await Promise.all([atGet('Unit Groups'),atGet('Phase Tasks')]);
+    window.UNIT_GROUPS=(unitGroups||[]).map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property Name']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      phase: r.fields['Phase Name']||'',
+      phaseOrder: parseInt(r.fields['Phase Order'])||0,
+      units: parseInt(r.fields['Units in Phase'])||0,
+      status: r.fields['Status']||'Not Started',
+      plannedStart: r.fields['Planned Start']||'',
+      actualStart: r.fields['Actual Start']||'',
+      plannedCompletion: r.fields['Planned Completion']||'',
+      actualCompletion: r.fields['Actual Completion']||'',
+      notes: r.fields['Notes']||'',
+      productType: r.fields['Product Type']||'',
+      unitNames: r.fields['Unit Names']||'',
+      linkedUnitIds: normalizeLookupIds(r.fields['Linked Units']),
+      phaseTasks: r.fields['Phase Tasks']?r.fields['Phase Tasks'].split(',').map(s=>s.trim()).filter(Boolean):[],
+    }));
+    window.PHASE_STEPS=(phaseSteps||[]).map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property Name']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      phaseName: r.fields['Phase Name']||'',
+      taskName: r.fields['Task Name']||'',
+      taskOrder: parseInt(r.fields['Task Order'])||0,
+      plannedStart: r.fields['Planned Start']||'',
+      plannedEnd: r.fields['Planned End']||'',
+      actualStart: r.fields['Actual Start']||'',
+      completionDate: r.fields['Completion Date']||'',
+      status: r.fields['Status']||'Not Started',
+      notes: r.fields['Notes']||'',
+    })).sort((a,b)=>a.taskOrder-b.taskOrder);
+    if(currentProp&&_propPollTab==='phases'&&document.getElementById('prop-tab-phases')?.classList.contains('active')){
+      renderPhasesTab(currentProp);
+    }
+  }catch(e){console.error('Phases poll failed:',e);}
+}
+
+async function pollBudget(){
+  if(!currentProp||_propPollTab!=='budget')return;
+  try{
+    const [billingLog,retainageReleases]=await Promise.all([atGet('Billing Log'),atGet('Retainage Releases')]);
+    window.BILLING_LOG=(billingLog||[]).map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property Name']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      billedYTD: r.fields['Billed YTD']||r.fields['$ Amount']||0,
+      entryDate: r.fields['Entry Date']||r.fields['Billing date']||'',
+      invoiceMonth: r.fields['Invoice Month']||'',
+      notes: r.fields['Notes']||'',
+      loggedBy: r.fields['Logged By']||'',
+    })).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+    window.RETAINAGE_RELEASES=(retainageReleases||[]).map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property Name']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      releaseDate: r.fields['Release Date']||'',
+      amountReleased: r.fields['Amount Released']!=null?Number(r.fields['Amount Released']):0,
+      notes: r.fields['Notes']||'',
+      loggedBy: r.fields['Logged By']||'',
+    })).sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate));
+    // v54f — Budget also reads window.SCOPES (via currentScope) for
+    // contract/budget fields, but Scopes' own mapping needs the fresh
+    // Properties fetch propIdToName relies on (see loadAllData) plus
+    // re-resolving every Scope's linkedUnitIds — substantial enough that
+    // duplicating it here risked drifting out of sync with loadAllData's
+    // version. Deferred: Budget's Scope-derived numbers (contract award,
+    // rates, retainage %) still refresh on next full reload, same as
+    // before this build; Billing Log and Retainage Releases (the two
+    // budget inputs users actually add data to from this tab) are now
+    // live.
+    if(currentProp&&_propPollTab==='budget'&&document.getElementById('prop-tab-budget')?.classList.contains('active')){
+      renderBudgetTab(currentProp);
+    }
+  }catch(e){console.error('Budget poll failed:',e);}
+}
+
 async function pollClientComments(){
   try{
     const recs=await atGet('Client Comments');
@@ -28895,7 +29719,7 @@ function renderOpsCenter(){
   // Build combined horizon items: actions + scheduled meetings + site visits
   const horizonItems=[];
   openActions.forEach(a=>{
-    if(a.due&&a.due!=='TBD') horizonItems.push({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''});
+    if(a.due&&a.due!=='TBD') horizonItems.push({_type:'action',_date:new Date(a.due+'T12:00:00'),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''});
   });
   (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)).forEach(m=>{
     const d=new Date(m.date+'T12:00:00');
@@ -28906,7 +29730,7 @@ function renderOpsCenter(){
     if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${escHtml(v.property||'—')} · ${v.date}${v.consultant?' · '+escHtml(v.consultant):''}`,_prop:v.property||'',_priority:''});
   });
 
-  const overdueActionItems=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today).map(a=>({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''}));
+  const overdueActionItems=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today).map(a=>({_type:'action',_date:new Date(a.due+'T12:00:00'),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''}));
   // v53b — meetings whose date passed with status still Scheduled (no
   // minutes logged, not cancelled) were previously excluded from Operations
   // Center entirely — the horizonItems build above only includes a meeting
@@ -29528,7 +30352,9 @@ function closeConfigureVdaPanel(){
 window.openConfigureVdaPanel=openConfigureVdaPanel;
 window.closeConfigureVdaPanel=closeConfigureVdaPanel;
 
+let _savingConfigureVdaProject=false;
 async function saveConfigureVdaProject(){
+  if(_savingConfigureVdaProject)return;
   const numberRaw=(document.getElementById('cvp-number').value||'').trim();
   const nickname=(document.getElementById('cvp-nickname').value||'').trim();
   const errEl=document.getElementById('cvp-error');
@@ -29553,6 +30379,13 @@ async function saveConfigureVdaProject(){
   const linkedUnitIds=[...st.units];
   const taskLineRows=readVdaTaskLineRows('cvp-tasklines');
 
+  // v54e — this form had no double-submit guard; a fast double-click
+  // could create two identical VDA Project agreements (with duplicated
+  // Task Lines). Guard set here, after the pure-read duplicate-number
+  // check above (nothing written yet if that check blocks the save).
+  _savingConfigureVdaProject=true;
+  const saveBtn=document.getElementById('save-configure-vda-btn');
+  if(saveBtn)saveBtn.disabled=true;
   showToast('Saving VDA Project...','info');
   // v49j — Current Price is no longer written here. Project Value is
   // always the live sum of this agreement's Task Lines (vdaProjectValue()),
@@ -29566,6 +30399,8 @@ async function saveConfigureVdaProject(){
   });
   if(!createRes||!createRes.records||!createRes.records[0]){
     showToast('Failed to save VDA Project — check connection and retry','error');
+    _savingConfigureVdaProject=false;
+    if(saveBtn)saveBtn.disabled=false;
     return;
   }
   const newId=createRes.records[0].id;
@@ -29604,6 +30439,8 @@ async function saveConfigureVdaProject(){
   }else{
     showToast('VDA Project saved','success');
   }
+  _savingConfigureVdaProject=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 window.saveConfigureVdaProject=saveConfigureVdaProject;
 
@@ -29735,7 +30572,9 @@ function toggleAddAmendmentForm(show){
 }
 window.toggleAddAmendmentForm=toggleAddAmendmentForm;
 
+let _savingAddAmendment=false;
 async function submitAddAmendment(){
+  if(_savingAddAmendment)return;
   if(!_evpCurrentId)return;
   const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
   if(!p)return;
@@ -29757,6 +30596,12 @@ async function submitAddAmendment(){
   const todayIso=new Date().toISOString().split('T')[0];
   const priorPrice=vdaProjectValue(_evpCurrentId);
 
+  // v54e — this form had no double-submit guard; a fast double-click
+  // could duplicate the new Task Lines and file two Amendment History
+  // entries. Guard set here, after the pure-read validation above.
+  _savingAddAmendment=true;
+  const submitBtn=document.getElementById('submit-add-amendment-btn');
+  if(submitBtn)submitBtn.disabled=true;
   showToast('Saving amendment...','info');
   const newTaskLines=[];
   for(const row of newTaskLineRows){
@@ -29776,6 +30621,8 @@ async function submitAddAmendment(){
   }
   if(newTaskLines.length===0){
     showToast('Failed to save new task lines — check connection and retry','error');
+    _savingAddAmendment=false;
+    if(submitBtn)submitBtn.disabled=false;
     return;
   }
   window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat(newTaskLines);
@@ -29806,10 +30653,14 @@ async function submitAddAmendment(){
   toggleAddAmendmentForm(false);
   renderVdaProjects();
   showToast('Amendment saved','success');
+  _savingAddAmendment=false;
+  if(submitBtn)submitBtn.disabled=false;
 }
 window.submitAddAmendment=submitAddAmendment;
 
+let _savingEditVdaProject=false;
 async function saveEditVdaProject(){
+  if(_savingEditVdaProject)return;
   if(!_evpCurrentId)return;
   const p=(window.VDA_PROJECTS||[]).find(x=>x.id===_evpCurrentId);
   if(!p)return;
@@ -29819,6 +30670,14 @@ async function saveEditVdaProject(){
   const linkedPropertyIds=[...st.properties];
   const linkedUnitIds=[...st.units];
 
+  // v54e — this form had no double-submit guard; a fast double-click
+  // could re-run the whole write sequence twice (main update, task line
+  // deletes/updates/creates). Only one exit path exists past this point
+  // (always runs through to the closing toast, counting failures rather
+  // than aborting), so one guard-set + one reset covers it.
+  _savingEditVdaProject=true;
+  const saveBtn=document.getElementById('save-edit-vda-btn');
+  if(saveBtn)saveBtn.disabled=true;
   showToast('Saving changes...','info');
   // v52j — the main VDA Project atUpdate result was discarded entirely;
   // local state (p.status/nickname/linked IDs) updated unconditionally
@@ -29911,6 +30770,8 @@ async function saveEditVdaProject(){
   }else{
     showToast('VDA Project updated','success');
   }
+  _savingEditVdaProject=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 window.saveEditVdaProject=saveEditVdaProject;
 
