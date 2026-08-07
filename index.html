@@ -4406,7 +4406,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55g</div>
     </div>
   </nav>
 
@@ -9243,6 +9243,11 @@ async function confirmDemoteScope(){
   const plannedEnd=document.getElementById('demote-planned-end')?.value||'';
   const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===scopeId);
   if(units.length===0){showToast('This project has no units to demote','warn');return;}
+  // v55e — end-before-start guardrail, per direct instruction. Checked
+  // here, before the overlay removes itself below, same as the units
+  // check just above -- this function can't recover mid-flight once the
+  // overlay is gone.
+  if(!validateDateOrder(plannedStart,plannedEnd,'Planned Start','Planned Completion'))return;
   overlay.remove();
   showToast('Demoting project...','info');
 
@@ -9469,6 +9474,8 @@ async function saveScopeEditModal(scopeId){
   // v50b — Planned Start / Target Completion.
   const plannedStart=document.getElementById('se-planned-start')?.value||'';
   const targetCompletion=document.getElementById('se-target-completion')?.value||'';
+  // v55e — end-before-start guardrail, per direct instruction.
+  if(!validateDateOrder(plannedStart,targetCompletion,'Planned Start','Target Completion'))return;
 
   const scopeFields={
     'Scope Name':scopeName,
@@ -9769,30 +9776,30 @@ function renderMilestones(p){
             ${m.manuallyCompleted?
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real date">`:
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.completionDate||''}"
-              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">`}
+              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}',this)">`}
           </div>`:`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.plannedDate||''}"
-              onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
+              onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}',this)">
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Actual Start</div>
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.actualDate||''}"
-              onchange="updateMilestoneField('${m.id}','Actual Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
+              onchange="updateMilestoneField('${m.id}','Actual Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}',this)">
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Completion</div>
             ${m.manuallyCompleted?
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real Completion date">`:
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.completionDate||''}"
-              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">`}
+              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}',this)">`}
           </div>`
           ):canEdit?`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.plannedDate||''}"
-              onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
+              onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}',this)">
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Actual Start</div>
@@ -10043,10 +10050,27 @@ async function toggleMilestoneManualCompletion(msId,propName,newVal,idx,circleId
 // issued for that milestone by the time its await resolves — a call that
 // got superseded by a newer edit simply skips its own now-stale patch.
 if(!window._msFieldReqToken)window._msFieldReqToken={};
-async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
+async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId,inputEl){
   if(window._msRendering)return; // guard against onchange firing during render
   const myToken=(window._msFieldReqToken[msId]||0)+1;
   window._msFieldReqToken[msId]=myToken;
+  // v55g — reported live: a milestone with several date fields entered one
+  // at a time (e.g. Planned Start, then Actual Start, then Completion,
+  // each its own onchange/save under Manual Override) could end up stuck
+  // showing Not Started even though every date field was correctly filled
+  // in and each individual save succeeded. Root cause: pollMilestones()
+  // (the v54f live-refresh poll, ~45s interval) fully replaces
+  // window.MILESTONES from a fresh Airtable read with no awareness of an
+  // edit in progress — if a poll's read lands in the gap between two of
+  // these sequential field saves, it can refetch a Status value that
+  // predates the most recent write and clobber the correct one right back
+  // out from under the PM, with no visible error. This was flagged as a
+  // known, unfixed gap when live-refresh shipped; now confirmed as a real
+  // reproduction. markMilestoneEditActive() marks this property as
+  // "actively being edited" for a short window; pollMilestones() checks
+  // it and skips applying its response (but still fetches, so it's not
+  // stale once editing settles) while active.
+  markMilestoneEditActive(propName);
   const fields={[fieldName]:value};
   // Re-derive status whenever a date field changes (calendar-driven milestones only;
   // phase-linked milestones don't expose these inputs in the UI at all — except
@@ -10067,6 +10091,22 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
     const plannedDate=fieldName==='Planned Date'?value:(ms?.plannedDate||'');
     const actualDate=fieldName==='Actual Date'?value:(ms?.actualDate||'');
     const completionDate=fieldName==='Completion Date'?value:(ms?.completionDate||'');
+    // v55e — block a save that would put this milestone's dates out of
+    // order (Planned Start after Actual Start, or either Start after
+    // Completion). Checked here, before any write, so a blocked edit is a
+    // pure no-op: nothing has been sent to Airtable and nothing in local
+    // state has changed yet. On failure the input is reverted to its last-
+    // saved value, since onchange has already applied the typed value to
+    // the DOM by the time this function runs.
+    const lastSaved=fieldName==='Planned Date'?(ms?.plannedDate||''):
+      fieldName==='Actual Date'?(ms?.actualDate||''):(ms?.completionDate||'');
+    const orderOk=validateDateOrder(plannedDate,actualDate,'Planned Start','Actual Start')&&
+      validateDateOrder(actualDate,completionDate,'Actual Start','Completion')&&
+      validateDateOrder(plannedDate,completionDate,'Planned Start','Completion');
+    if(!orderOk){
+      if(inputEl)inputEl.value=lastSaved;
+      return;
+    }
     fields['Status']=deriveCalendarStatus(plannedDate,actualDate,completionDate);
   }
   const msSaveOk=await updateMilestone(msId,fields,propName);
@@ -14500,6 +14540,25 @@ async function saveStepDates(phaseId){
       if(!proceed)return;
     }
   }
+  // v55e — end-before-start guardrail, per direct instruction. Distinct
+  // from the phase-vs-tasks warning just above (that one is a soft,
+  // pre-existing confirm()-based nudge comparing tasks against the
+  // phase's own Planned Completion; this is the new hard rule that a
+  // single row's own Plan Start/End or Act. Start/Complete pair can never
+  // be backwards). Checked per row -- this table can have many rows, each
+  // with its own independent pair -- and blocks the whole save if any one
+  // row fails, before any write in the loop below runs.
+  for(const row of rows){
+    const checked=row.querySelector('.step-apply-check')?.checked!==false;
+    if(!checked)continue;
+    const rowLabel=row.dataset.stepName||row.dataset.taskName||'a task';
+    const pStart=row.querySelector('.step-planned-start')?.value||'';
+    const pEnd=row.querySelector('.step-planned-end')?.value||'';
+    const aStart=row.querySelector('.step-actual-start')?.value||'';
+    const aEnd=row.querySelector('.step-actual-end')?.value||'';
+    if(!validateDateOrder(pStart,pEnd,`${rowLabel} Plan Start`,`${rowLabel} Plan End`))return;
+    if(!validateDateOrder(aStart,aEnd,`${rowLabel} Act. Start`,`${rowLabel} Complete`))return;
+  }
   // v54c — this form had no double-submit guard; a fast double-click on
   // "Finish & Save" could re-run this whole per-row write loop twice,
   // duplicating every new Phase Task row. Guard set here, after the
@@ -14917,6 +14976,69 @@ async function reclaimUnitsFromOtherPhases(propName,linkedUnitIds,excludePhaseId
 }
 window.reclaimUnitsFromOtherPhases=reclaimUnitsFromOtherPhases;
 
+// v55f — unit-picker conflict detection. Given the units currently checked
+// in the Add/Edit Phase picker, returns the subset already claimed by a
+// DIFFERENT phase on this same property/project, so the caller can warn
+// before Finish & Save silently moves them (reclaimUnitsFromOtherPhases
+// already does the actual move safely — this only decides whether to ask
+// first). Mirrors renderPhaseUnitsPicker's own claimedElsewhere logic
+// exactly (same v52p Scope-matching fix: only counts a Unit Group as
+// claiming a unit if that Unit Group's own scopeId matches this Scope's
+// id, falling back to property-wide matching only when a scopeId is
+// unavailable on either side), so a unit flagged here is the same unit
+// the picker itself already showed the amber "in [phase]" warning for.
+function getUnitPhaseConflicts(propName,linkedUnitIds,excludePhaseId,scopeId){
+  const claimedBy={};
+  (window.UNIT_GROUPS||[]).forEach(g=>{
+    if(g.property!==propName)return;
+    if(excludePhaseId&&g.id===excludePhaseId)return;
+    if(scopeId&&g.scopeId&&g.scopeId!==scopeId)return;
+    (g.linkedUnitIds||[]).forEach(uid=>{
+      if((linkedUnitIds||[]).includes(uid))claimedBy[uid]=g.phase||'another phase';
+    });
+  });
+  const units=(window.UNIT_INVENTORY||[]).filter(u=>Object.prototype.hasOwnProperty.call(claimedBy,u.id));
+  return units.map(u=>({id:u.id,name:u.name||'(unnamed)',phase:claimedBy[u.id]}));
+}
+window.getUnitPhaseConflicts=getUnitPhaseConflicts;
+
+// v55f — blocking confirmation modal shown when Finish & Save is clicked
+// with one or more units still claimed by another phase, per direct
+// instruction. This is a confirm-or-cancel gate, not a hard block (unlike
+// validateDateOrder) — pulling a unit from another phase is sometimes the
+// correct move, it just shouldn't happen silently. onConfirm runs the
+// real save (whatever was passed in) only if the PM explicitly continues;
+// Cancel leaves the form exactly as it was, no state changed either way.
+function showUnitConflictModal(conflicts,onConfirm){
+  const existing=document.getElementById('unit-conflict-overlay');
+  if(existing)existing.remove();
+  const byPhase={};
+  conflicts.forEach(c=>{(byPhase[c.phase]=byPhase[c.phase]||[]).push(c.name);});
+  const rows=Object.keys(byPhase).map(phase=>`<div style="margin-bottom:6px"><span style="font-weight:600;color:var(--navy)">${escHtml(byPhase[phase].join(', '))}</span><span style="color:var(--gray-mid)"> from ${escHtml(phase)}</span></div>`).join('');
+  const overlay=document.createElement('div');
+  overlay.id='unit-conflict-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:440px;box-shadow:var(--shadow-md);margin:auto">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border)">
+      <div style="font-size:15px;font-weight:700;color:var(--navy)"><i class="ti ti-alert-triangle" style="font-size:14px;margin-right:6px;color:#b45309"></i>Units Already In Another Phase</div>
+    </div>
+    <div style="padding:20px 22px">
+      <div style="background:#fff7ed;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#b45309">
+        ${rows}
+      </div>
+      <div style="font-size:12px;color:var(--gray-mid)">Continuing will move ${conflicts.length===1?'this unit':'these units'} into this phase and remove ${conflicts.length===1?'it':'them'} from the phase listed above. Do you wish to continue?</div>
+    </div>
+    <div style="padding:12px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('unit-conflict-overlay').remove()">Cancel</button>
+      <button class="btn btn-primary" id="unit-conflict-continue-btn"><i class="ti ti-check"></i>Continue</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const continueBtn=document.getElementById('unit-conflict-continue-btn');
+  if(continueBtn)continueBtn.onclick=()=>{overlay.remove();onConfirm();};
+}
+window.showUnitConflictModal=showUnitConflictModal;
+
 function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhaseId){
   const container=document.getElementById(containerId);
   if(!container)return;
@@ -15102,22 +15224,42 @@ async function saveNewPhase(){
   if(!phaseNum){showToast('Phase number missing','warn');return;}
   if(!units){showToast('Please check at least one unit for this phase','warn');return;}
   if(!productType){showToast('Checked units span more than one equipment type. A phase must contain only one product type.','warn');return;}
+  // v55e — end-before-start guardrail, per direct instruction.
+  if(!validateDateOrder(plannedStart,plannedEnd,'Planned Start','Planned Completion'))return;
   // Product type guardrail — now a real per-unit check against each picked
   // unit's actual Unit Type field, replacing the old regex guess against
   // free-typed unit names (which could only pattern-match on naming
   // conventions like "PE1"/"ESC1" and would miss anything that didn't
   // follow them).
   if(!confirmPhaseTypeMismatch(pickedUnits,productType))return;
-  // v53a — every validation check above this point is a pure read (no
-  // writes happen if one fails, so nothing is at risk from clicking again
-  // after a validation toast). The guard only needs to cover what follows,
-  // where the actual Unit Groups + Phase Tasks writes happen.
+  // v55f — unit-picker conflict warning, per direct instruction. A pure
+  // read like every check above, so still safe before the double-submit
+  // guard engages below. scopeId is read here (moved up from further
+  // down, where it was previously first computed) purely so this check
+  // can be scope-aware, matching renderPhaseUnitsPicker's own logic
+  // exactly. If conflicts exist, hand off to the confirm modal and stop
+  // this call here — _doSaveNewPhase (the real save) only runs if the PM
+  // explicitly continues, or immediately below if there was nothing to
+  // warn about.
+  const scopeId=currentScope?.id;
+  const conflicts=getUnitPhaseConflicts(currentProp.n,linkedUnitIds,null,scopeId);
+  if(conflicts.length>0){
+    showUnitConflictModal(conflicts,()=>_doSaveNewPhase(linkedUnitIds,pickedUnits,unitNames,units,plannedStart,plannedEnd,productType,name,phaseNum,scopeId));
+    return;
+  }
+  await _doSaveNewPhase(linkedUnitIds,pickedUnits,unitNames,units,plannedStart,plannedEnd,productType,name,phaseNum,scopeId);
+}
+async function _doSaveNewPhase(linkedUnitIds,pickedUnits,unitNames,units,plannedStart,plannedEnd,productType,name,phaseNum,scopeId){
+  // v53a — every validation check above this point (in saveNewPhase) is a
+  // pure read (no writes happen if one fails, so nothing is at risk from
+  // clicking again after a validation toast). The guard only needs to
+  // cover what follows, where the actual Unit Groups + Phase Tasks writes
+  // happen.
   _savingNewPhase=true;
   const saveBtn=document.getElementById('save-new-phase-btn');
   if(saveBtn)saveBtn.disabled=true;
   // Collect selected tasks
   const selectedMs=[...document.querySelectorAll('.phase-ms-check:checked')].map(c=>c.value);
-  const scopeId=currentScope?.id;
   // v29e Bug 11 fix: set phaseOrder on creation so phases sort correctly.
   // Without this, phaseOrder is undefined/0 on all new phases, making sort
   // order indeterminate and causing Phase 2 to appear above Phase 1.
@@ -15357,6 +15499,25 @@ async function saveEditPhase(){
   const selectedSteps=[...document.querySelectorAll('.edit-phase-step-check:checked')].map(c=>c.value);
   if(!name){showToast('Phase name required','warn');return;}
   if(!confirmPhaseTypeMismatch(pickedUnits,productType))return;
+  // v55e — end-before-start guardrail, per direct instruction. Two
+  // independent pairs on this form -- Planned and Actual -- both checked.
+  if(!validateDateOrder(plannedStart,plannedEnd,'Planned Start','Planned Completion'))return;
+  if(!validateDateOrder(actualStart,actualEnd,'Actual Start','Actual Completion'))return;
+  // v55f — unit-picker conflict warning, per direct instruction. Excludes
+  // this phase's own id (id) from the conflict scan, since this phase
+  // already legitimately claims whatever units it had before this edit —
+  // only a unit newly checked here that ANOTHER phase still claims should
+  // warn. Uses ph.scopeId (the phase's own project) rather than
+  // currentScope, since Edit Phase can in principle be reached without
+  // currentScope being the phase's own project depending on nav state.
+  const editConflicts=getUnitPhaseConflicts(currentProp.n,linkedUnitIds,id,ph.scopeId);
+  if(editConflicts.length>0){
+    showUnitConflictModal(editConflicts,()=>_doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNames,units,productType,plannedStart,plannedEnd,actualStart,actualEnd,notes,selectedSteps));
+    return;
+  }
+  await _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNames,units,productType,plannedStart,plannedEnd,actualStart,actualEnd,notes,selectedSteps);
+}
+async function _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNames,units,productType,plannedStart,plannedEnd,actualStart,actualEnd,notes,selectedSteps){
   _savingEditPhase=true;
   const editSaveBtn=document.getElementById('save-edit-phase-btn');
   if(editSaveBtn)editSaveBtn.disabled=true;
@@ -19611,6 +19772,17 @@ async function saveSplitIntoScopes(){
       priority:b.querySelector('.split-sc-priority')?.value||'4: Standard',
       budgetStatus:b.querySelector('.split-sc-budgetstatus')?.value||'TBD',
       m1date:b.querySelector('.split-sc-m1date')?.value||'',
+      // v55e — these two fields render and are editable in the block
+      // markup (see addSplitScopeBlock, split-sc-planned-start/
+      // split-sc-target-completion) but were never actually read here --
+      // whatever a PM typed into them was silently discarded on save,
+      // always falling back to the scope's prior value (or blank for a
+      // new one). Found while wiring the new end-before-start guardrail
+      // into this function (there was nothing to validate without this
+      // fix), confirmed as a genuine pre-existing gap and fixed here per
+      // direct instruction rather than left for a later round.
+      plannedStart:b.querySelector('.split-sc-planned-start')?.value||'',
+      targetCompletion:b.querySelector('.split-sc-target-completion')?.value||'',
       consultant:b.querySelector('.split-sc-consultant')?.value.trim()||'',
       vdaNum:b.querySelector('.split-sc-vdanum')?.value.trim()||'',
       // v37a — Client Project #, same field pattern as VDA Project # above.
@@ -19629,6 +19801,12 @@ async function saveSplitIntoScopes(){
     };
   });
   if(rows.some(r=>!r.name)){showToast('Each scope needs a name','warn');return;}
+  // v55e — end-before-start guardrail, per direct instruction. Checked
+  // per block/row, not just once, since this wizard can have multiple
+  // project blocks open on screen at the same time.
+  for(const r of rows){
+    if(!validateDateOrder(r.plannedStart,r.targetCompletion,'Planned Start','Target Completion'))return;
+  }
 
   _savingSplitIntoScopes=true;
   overlay.remove();
@@ -22276,7 +22454,14 @@ function renderDashboard(){
     const propStatus=derivePropertyStatusFromPhases(p.n);
     const pct=Math.round(getConstructionMsComplete(p.n)/getConstructionMsExpectedTotal(p.n)*100);
     const riskLevel=propStatus==='At Risk'?'High':propStatus==='Complete'?'None':risk.daysLate>0?'Medium':'Low';
-    return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,riskLevel,propStatus,daysLate:risk.daysLate,overdueCount:risk.overdueCount};
+    // v55g — project counter, per direct instruction (e.g. "Hilton Denver
+    // City Center (2) On Track at 29%"). scopeCount is the same number
+    // getConstructionMsExpectedTotal already divides by internally (one
+    // property tile's % is an average across every Scope/project on that
+    // property), surfaced here so the tile can show how many projects
+    // that average actually represents.
+    const scopeCount=(window.SCOPES||[]).filter(s=>s.property===p.n).length||1;
+    return {name:p.n,shortName:p.n.length>20?p.n.slice(0,18)+'…':p.n,schedule:p.r,pct,riskLevel,propStatus,daysLate:risk.daysLate,overdueCount:risk.overdueCount,scopeCount};
   });
   // v36c — Complete properties never appeared on the heat map at all
   // (dashHeatData is built from `active`, i.e. p.st==='In Progress'
@@ -22382,20 +22567,11 @@ function renderDashboard(){
     })()}
     <div class="card custom-report-subsection" id="dashboard-heatmap-card" style="margin-bottom:16px">
       <div class="card-header">
-        <div><div class="card-title">Portfolio Heat Map</div><div class="card-sub">Construction Health by Property</div></div>
+        <div><div class="card-title">Construction Heat Map</div><div class="card-sub">Lead-Time Progress by Property, M6-M13</div></div>
         <div style="display:flex;gap:14px;align-items:center">
           <div style="display:flex;gap:10px;align-items:center">
             <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--blue-dark);margin-right:3px"></span>On Track</span>
             <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--red);margin-right:3px"></span>At Risk</span>
-            <!-- v53c — new fourth legend entry for the new Not Started
-                 tile state (see activeTiles above). Distinct from v36c's
-                 removed "Not Started" entry, which referred to
-                 p.st==='Not Started' properties that never reach this
-                 array at all — this one is a real, live state for
-                 properties already in the active array (p.st==='In
-                 Progress') that simply haven't completed any M6-M13
-                 construction milestone yet. -->
-            <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--gray-mid);margin-right:3px"></span>Not Started</span>
             <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--green);margin-right:3px"></span>Complete</span>
           </div>
           ${completeProps.length>0?`<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--gray-mid);cursor:pointer;user-select:none">
@@ -22404,8 +22580,25 @@ function renderDashboard(){
           </label>`:''}
         </div>
       </div>
+      <!-- v55g — handoff caption, per direct instruction: a property
+           tile disappears from this card the moment it has zero M6-M13
+           construction milestones complete (see the preConTiles/
+           activeTiles split below) and reappears on the Pre-Construction
+           Heat Map card instead. This line exists so that move doesn't
+           read as data silently vanishing. -->
+      <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">Properties appear here once construction milestone progress (M6-M13) begins. Properties still in Pre-Construction are tracked below.</div>
       <div id="dash-heat-grid" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
-      ${active.length===0&&(!dashHeatShowComplete||completeProps.length===0)?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No active properties in progress</div>':''}
+      ${dashHeatData.filter(d=>d.pct>0).length===0&&(!dashHeatShowComplete||completeProps.length===0)?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No properties with construction progress yet</div>':''}
+    </div>
+    <div class="card custom-report-subsection" id="dashboard-precon-heatmap-card" style="margin-bottom:16px">
+      <div class="card-header">
+        <div><div class="card-title">Pre-Construction Heat Map</div><div class="card-sub">Properties Not Yet Started, M1-M4</div></div>
+      </div>
+      <!-- v55g — handoff caption, mirrored from the Construction card
+           above so the relationship reads in either direction. -->
+      <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">Properties move up to the Construction Heat Map once their first M6-M13 construction milestone completes.</div>
+      <div id="dash-precon-heat-grid" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
+      ${dashHeatData.filter(d=>d.pct===0).length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:20px">No properties currently in Pre-Construction</div>':''}
     </div>
     <div id="dash-attention-section" class="custom-report-subsection" style="margin-bottom:16px"></div>
     <div id="dash-action-horizon" class="custom-report-subsection" style="margin-bottom:16px"></div>
@@ -22419,9 +22612,24 @@ function renderDashboard(){
   // only), so both were dead legend entries. Complete properties now
   // render as their own green tile set, toggled by dashHeatShowComplete
   // (default ON) rather than being silently absent.
+  // v55g — project counter badge, per direct instruction (e.g. "Hilton
+  // Denver City Center (2) On Track at 29%"). Shared between the
+  // Construction and Pre-Construction tile renderers below so both heat
+  // maps show it identically; d.scopeCount is always at least 1 (see
+  // dashHeatData's own construction above).
+  const heatTileCounter=d=>d.scopeCount>1?`<span style="color:var(--gray-mid);font-weight:500"> (${d.scopeCount})</span>`:'';
   const dashGrid=document.getElementById('dash-heat-grid');
   if(dashGrid){
-    const activeTiles=dashHeatData.map(d=>{
+    // v55g — properties with zero M6-M13 construction milestones complete
+    // now live on their own Pre-Construction Heat Map card below instead
+    // of showing a gray "NOT STARTED" tile here (see preConTiles).
+    // d.pct only ever equals exactly 0 when getConstructionMsComplete
+    // returns 0 (M6-M13 is at most 8 milestones per Scope, so any real
+    // completion rounds to a visible nonzero percentage), so filtering on
+    // pct>0 is the same not-started/started boundary the old gray-tile
+    // logic already used, just routed to a different card now instead of
+    // a different color.
+    const activeTiles=dashHeatData.filter(d=>d.pct>0).map(d=>{
       // v51d — propStatus (manually-tracked phase/milestone status) and
       // daysLate (computed directly from planned-completion dates vs.
       // today) could disagree, showing a blue "ON TRACK" tile with red
@@ -22429,27 +22637,13 @@ function renderDashboard(){
       // Airport. daysLate is a hard fact computed from real dates, so it
       // now also drives the At Risk badge, not just the overdue caption.
       const isRisk=d.propStatus==='At Risk'||d.daysLate>0;
-      // v53c — reported live: a property still in Pre-Construction (zero
-      // M6-M13 construction milestones complete, hasn't reached First
-      // Phase Start yet) showed a blue "ON TRACK" tile at 0%, reading as a
-      // contradiction/bug at a glance even though it's technically correct
-      // (nothing can be behind schedule on work that hasn't started).
-      // d.pct only ever equals exactly 0 when getConstructionMsComplete
-      // returns 0 (M6-M13 is at most 8 milestones, so any real completion
-      // rounds to a visible nonzero percentage), so this doesn't need its
-      // own separate milestone-count check. Not-started properties now get
-      // a neutral gray "NOT STARTED" tile instead of On Track's blue,
-      // matching the gray used for Pre-Construction elsewhere in the app
-      // (b-noncore). Falls back to the normal On Track/At Risk logic the
-      // moment even one construction milestone completes.
-      const notStarted=d.pct===0;
-      const borderColor=notStarted?'var(--gray-mid)':isRisk?'var(--red)':'var(--blue-dark)';
-      const bgColor=notStarted?'var(--gray-pale)':isRisk?'var(--red-pale)':'#eff6ff';
-      const lblColor=notStarted?'var(--gray-mid)':isRisk?'var(--red)':'var(--blue-dark)';
-      const lbl=notStarted?'NOT STARTED':isRisk?'AT RISK':'ON TRACK';
-      const overdueText=!notStarted&&d.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:'';
+      const borderColor=isRisk?'var(--red)':'var(--blue-dark)';
+      const bgColor=isRisk?'var(--red-pale)':'#eff6ff';
+      const lblColor=isRisk?'var(--red)':'var(--blue-dark)';
+      const lbl=isRisk?'AT RISK':'ON TRACK';
+      const overdueText=d.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${d.daysLate}d overdue</div>`:'';
       return `<div style="border:1.5px solid ${borderColor};border-radius:8px;padding:10px 12px;background:${bgColor};cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${d.name.replace(/'/g,"\\'")}')">
-        <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(d.name)}</div>
+        <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(d.name)}${heatTileCounter(d)}</div>
         <div style="margin-top:auto">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:10px;font-weight:700;color:${lblColor};letter-spacing:.04em">${lbl}</span>
@@ -22478,6 +22672,32 @@ function renderDashboard(){
     }).join(''):'';
     dashGrid.innerHTML=activeTiles+completeTiles;
   }
+  // v55g — Pre-Construction Heat Map. Same dashHeatData source, the
+  // complementary pct===0 slice that the Construction grid above now
+  // excludes. Neutral gray styling (was the old "NOT STARTED" tile color
+  // on the combined map) since nothing here can legitimately be behind
+  // schedule on work that hasn't started yet — no risk/at-risk state to
+  // show, just the property name, counter, and a 0% bar for visual
+  // consistency with the Construction card's tile shape.
+  const dashPreConGrid=document.getElementById('dash-precon-heat-grid');
+  if(dashPreConGrid){
+    const preConTiles=dashHeatData.filter(d=>d.pct===0).map(d=>{
+      return `<div style="border:1.5px solid var(--gray-mid);border-radius:8px;padding:10px 12px;background:var(--gray-pale);cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${d.name.replace(/'/g,"\\'")}')">
+        <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(d.name)}${heatTileCounter(d)}</div>
+        <div style="margin-top:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:10px;font-weight:700;color:var(--gray-mid);letter-spacing:.04em">NOT STARTED</span>
+          <span style="font-size:10px;color:var(--gray-mid);font-family:'Plus Jakarta Sans',sans-serif">0%</span>
+        </div>
+        <div style="margin-top:6px;height:4px;background:var(--gray-xpale);border-radius:2px">
+          <div style="height:100%;width:0%;background:var(--gray-mid);border-radius:2px"></div>
+        </div>
+        </div>
+      </div>`;
+    }).join('');
+    dashPreConGrid.innerHTML=preConTiles;
+  }
+
 
   // Attention Required strip — above heat map
   const allPort=window.PORTFOLIO||[];
@@ -24186,6 +24406,13 @@ async function saveScheduledMeeting(){
   const attendees=getSmtgAttendees();
   const recurCfg=getSmtgRecurrenceConfig();
   const recurStr=formatSmtgRecurrenceForAirtable(recurCfg);
+  // v55e — end-before-start guardrail, per direct instruction. Only
+  // meaningful when recurrence is on AND "End by" a specific date is the
+  // chosen end mode -- recurCfg.endMode/until already encode both
+  // conditions, so no separate DOM read of the radio/checkbox is needed.
+  if(recurCfg.endMode==='date'&&recurCfg.until){
+    if(!validateDateOrder(date,recurCfg.until,'Meeting Date','Recurrence End Date'))return;
+  }
   // v45i — generic, provider-agnostic Video Call Link. Deliberately not
   // Zoom- or Teams-specific: a manually pasted link works today, and once
   // an API integration is chosen this same field (and the Airtable column
@@ -25066,6 +25293,29 @@ function fmtShortDate(dateStr){
   if(!dateStr)return'—';
   const d=new Date(dateStr+'T12:00:00');
   return d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+}
+// v55e — shared date-order validation, used everywhere a form has a
+// start/end (or planned/completion) date pair. Per direct instruction:
+// an end date before its start date should be flagged and blocked
+// everywhere in the app, not just on Unit Phases where this was first
+// raised. Returns true if the pair is fine to save (including when
+// either side is blank -- an incomplete pair isn't this check's job to
+// enforce, only a genuinely backwards one), false if it blocked and
+// already showed an error toast, so every call site can just do
+// `if(!validateDateOrder(...))return;` right before its write. Anchored
+// with T12:00:00 (same fix as the v54a action-item timezone bug) so a
+// bare YYYY-MM-DD string can't misparse as UTC midnight and produce a
+// false positive/negative depending on the browser's timezone.
+function validateDateOrder(startVal,endVal,startLabel,endLabel){
+  if(!startVal||!endVal)return true;
+  const start=new Date(startVal+'T12:00:00');
+  const end=new Date(endVal+'T12:00:00');
+  if(isNaN(start.getTime())||isNaN(end.getTime()))return true;
+  if(end<start){
+    showToast(`${endLabel} can't be before ${startLabel}. Please check the dates and try again.`,'warn');
+    return false;
+  }
+  return true;
 }
 // v51k — single shared Portfolio View row template, called by both
 // populatePortfolio() and sortPortfolioByPriority(). Those two functions
@@ -28153,6 +28403,28 @@ function stopLivePolling(){
 // matching the single-timer discipline of the view-level system above.
 const PROP_POLL_INTERVAL_MS=45000;
 let _propPollTimer=null;
+// v55g — Milestones edit-vs-poll guard (see updateMilestoneField's own
+// comment for the bug this fixes). Keyed by property name since polling
+// is already scoped to one property/tab at a time. markMilestoneEditActive
+// resets a short timer on every field edit, so a fast sequence of several
+// field saves in a row (the exact scenario that reproduced the bug) keeps
+// extending the protected window rather than reopening it after each
+// individual save. pollMilestones() still fetches on schedule either way
+// (so data isn't stale once editing settles, and other users' concurrent
+// edits are picked up on the next tick after this one is skipped) — it
+// only skips the window.MILESTONES replace + re-render while active.
+let _msEditActiveUntil=0;
+// propName intentionally unused — pollMilestones() already only ever polls
+// whichever single property is currentProp, so a PM editing Milestones can
+// only be editing that same property's tab. Kept as a parameter anyway so
+// the call site at the point of every field edit stays self-documenting.
+function markMilestoneEditActive(propName){
+  _msEditActiveUntil=Date.now()+4000;
+}
+function isMilestoneEditActive(){
+  return Date.now()<_msEditActiveUntil;
+}
+
 let _propPollTab=null;
 function startPropTabPolling(tab){
   stopPropTabPolling();
@@ -28197,6 +28469,17 @@ async function pollMilestones(){
   if(!currentProp||_propPollTab!=='milestones')return;
   try{
     const recs=await atGet('Milestones');
+    // v55g — still fetch on every tick regardless of edit-in-progress (so
+    // this poller doesn't fall behind once editing settles, and so a
+    // concurrent edit by someone else on a different device is picked up
+    // on schedule) but skip applying the response — replacing
+    // window.MILESTONES and re-rendering — while a field save is active
+    // on this property. See updateMilestoneField's and
+    // markMilestoneEditActive's own comments for the bug this prevents:
+    // an in-flight sequence of field saves getting its just-written
+    // Status clobbered back to a stale value by a poll response that was
+    // fetched before the write landed.
+    if(isMilestoneEditActive())return;
     window.MILESTONES=(recs||[]).map(r=>({
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
@@ -28796,7 +29079,8 @@ const CUSTOM_REPORT_SECTIONS=[
   {id:'dashboard',label:'Dashboard',icon:'ti-layout-dashboard',viewId:'dashboard',
     subItems:[
       {id:'dashboard-stats',label:'Stat cards',elId:'dashboard-stats-row'},
-      {id:'dashboard-heatmap',label:'Portfolio heat map',elId:'dashboard-heatmap-card'},
+      {id:'dashboard-heatmap',label:'Construction heat map',elId:'dashboard-heatmap-card'},
+      {id:'dashboard-precon-heatmap',label:'Pre-construction heat map',elId:'dashboard-precon-heatmap-card'},
       {id:'dashboard-attention',label:'Attention required',elId:'dash-attention-section'},
       {id:'dashboard-horizon',label:'Action horizon',elId:'dash-action-horizon'},
       {id:'dashboard-activity',label:'Activity feed',elId:'dash-activity-feed'}
@@ -28837,7 +29121,7 @@ function crDefaultSelections(){
   return {
     sections:{dashboard:true,analytics:true,budgetoutlook:true,milestonereport:false},
     subItems:{
-      'dashboard-stats':false,'dashboard-heatmap':true,'dashboard-attention':false,'dashboard-horizon':false,'dashboard-activity':false,
+      'dashboard-stats':false,'dashboard-heatmap':true,'dashboard-precon-heatmap':true,'dashboard-attention':false,'dashboard-horizon':false,'dashboard-activity':false,
       'analytics-stats':false,
       'analytics-portfolio-complete':false,'analytics-budget-spent':false,
       'analytics-forecasted-completion':true,'analytics-forecasted-spend':true
