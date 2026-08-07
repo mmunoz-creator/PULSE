@@ -4406,7 +4406,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55n</div>
     </div>
   </nav>
 
@@ -7439,6 +7439,7 @@ window.uimSaveNumberField=uimSaveNumberField;
 
 async function uimSaveSelectField(id,airtableField,localField,value,selectEl){
   const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
+  const _prevVal=u?u[localField]:undefined;
   if(u)u[localField]=localField==='priority'?(value?parseInt(value):null):value;
   // v52e fix — same issue as uimSaveNumberField above: the flash fired
   // before the write result was known. Status in particular drives
@@ -7449,6 +7450,11 @@ async function uimSaveSelectField(id,airtableField,localField,value,selectEl){
     if(_res)uimFieldSaved(selectEl);
     else uimFieldFailed(selectEl,airtableField);
   }
+  // v55l — audited: on a failed write, u[localField] stayed at the new,
+  // never-saved value with only a red flash to signal it (easy to miss,
+  // no persistent error state) — reverting here so the field genuinely
+  // reflects what's in Airtable rather than relying on the flash alone.
+  if(!_res&&u)u[localField]=_prevVal;
   // Unit Type feeds the property hero's Elev/Esc/Lift/Other pills directly
   // (Design Spec Section 1b) — refresh the underlying property view so that
   // stays in sync without requiring the modal to close first.
@@ -7471,6 +7477,13 @@ async function uimSaveManualStatus(id,value){
   // downstream derivation logic across the app (unit health, phase
   // rollups, etc.), so a failure here is surfaced with a toast — there's
   // no single input element on this control to flash red against.
+  // v55l — audited: u.status was left at the new, never-saved value on
+  // failure with nothing reverting it, so every render below (this
+  // function's own renderUimTable/renderPropertyView/etc.) would keep
+  // showing the unsaved status until a later reload silently reverted
+  // it. _prevStatus snapshot lets a failed write restore the real value
+  // before any of those renders run.
+  const _prevStatus=u.status;
   let _res;
   if(value===''){
     const derived=computeDerivedUnitStatus(u);
@@ -7480,7 +7493,10 @@ async function uimSaveManualStatus(id,value){
     u.status=value;
     _res=await atUpdate('Unit Inventory List',id,{'Status':value});
   }
-  if(!_res)showToast('Could not save Status. Check your connection and try again.','error');
+  if(!_res){
+    u.status=_prevStatus;
+    showToast('Could not save Status. Check your connection and try again.','error');
+  }
   renderUimTable(u.property);
   if(currentProp){renderPropertyView(currentProp);renderUnitsTab(currentProp);renderEditPropertyUnitStats(currentProp);}
 }
@@ -8594,12 +8610,31 @@ async function deriveAndWritePropertyStatus(propName){
   // on-hold scope shouldn't itself pull the property into a status), UNLESS
   // every scope on the property is On Hold, in which case the property
   // rolls up to On Hold too rather than falling through to Capital Plan.
+  // v55l — audited: both writes below were pure fire-and-forget (no
+  // captured return value at all, let alone checked), with prop2.st/
+  // prop.st mutated unconditionally before them. This is a background
+  // auto-rollup (not a direct save-button click), so a failure here
+  // wouldn't read as "my edit vanished" the way the Critical findings
+  // did, but the property's Status badge could silently desync from
+  // Airtable indefinitely with zero signal anywhere — and the NEXT login
+  // (loadAllData reading Airtable's real, un-updated Status) would show
+  // a different value than what was last on screen, which looks exactly
+  // like an unexplained revert from the PM's side. Now checks the result
+  // and reverts local state + logs on failure, same pattern as every
+  // other write in this file.
   const activeStatuses=statuses.filter(s=>s!=='On Hold');
   if(activeStatuses.length===0){
     const prop2=(window.PORTFOLIO||[]).find(p=>p.n===propName);
     if(prop2&&prop2.st!=='On Hold'){
+      const _prevSt2=prop2.st;
       prop2.st='On Hold';
-      if(!demoMode&&prop2.id)await atUpdate('Properties',prop2.id,{'Status':'On Hold'});
+      if(!demoMode&&prop2.id){
+        const _res2=await atUpdate('Properties',prop2.id,{'Status':'On Hold'});
+        if(!_res2){
+          prop2.st=_prevSt2;
+          console.error(`Property status auto-update to On Hold FAILED to save for ${propName} — reverted locally to ${_prevSt2}`);
+        }
+      }
     }
     return;
   }
@@ -8610,10 +8645,16 @@ async function deriveAndWritePropertyStatus(propName){
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===propName);
   if(!prop)return;
   if(prop.st!==newStatus){
+    const _prevSt=prop.st;
     prop.st=newStatus;
     if(!demoMode&&prop.id){
-      await atUpdate('Properties',prop.id,{'Status':newStatus});
-      console.log(`Property status auto-updated: ${propName} → ${newStatus}`);
+      const _res=await atUpdate('Properties',prop.id,{'Status':newStatus});
+      if(_res){
+        console.log(`Property status auto-updated: ${propName} → ${newStatus}`);
+      }else{
+        prop.st=_prevSt;
+        console.error(`Property status auto-update to ${newStatus} FAILED to save for ${propName} — reverted locally to ${_prevSt}`);
+      }
     }
   }
   refreshDashActions();
@@ -9995,11 +10036,21 @@ async function toggleMilestoneManualOverride(propName,newVal){
   const previousVal=!!p.milestoneManualOverride;
   p.milestoneManualOverride=newVal;
   if(currentProp&&currentProp.n===propName)renderMilestones(p);
+  // v55l — atUpdate() never throws on an ordinary Airtable rejection
+  // (permission error, validation error, rate limit); it catches
+  // internally and resolves to null. This try/catch's rollback was
+  // therefore dead code for any real-world failure — only a genuine
+  // network exception (rare) would ever reach the catch block, so a
+  // normal write failure silently "succeeded" from the toggle's point of
+  // view: p.milestoneManualOverride stayed flipped locally with nothing
+  // actually written to Airtable, and no error shown. Same bug class as
+  // the recalculateAllMilestoneStatuses/deriveAndWriteScopeStatus fixes
+  // earlier in this file (see their own v52g/v52i/v52j comments) — missed
+  // here until now. Checks the real return value instead.
   if(!demoMode&&p.id){
-    try{
-      await atUpdate('Properties',p.id,{'Milestone Manual Override':newVal});
-    }catch(e){
-      console.error('Failed to update Milestone Manual Override — reverting toggle',e);
+    const overrideRes=await atUpdate('Properties',p.id,{'Milestone Manual Override':newVal});
+    if(!overrideRes){
+      console.error('Failed to update Milestone Manual Override — reverting toggle');
       p.milestoneManualOverride=previousVal;
       if(currentProp&&currentProp.n===propName)renderMilestones(p);
       alert('Could not save the Milestone Manual Override change. Please try again.');
@@ -15923,15 +15974,24 @@ async function cleanupOrphanedPhaseTasks(){
   console.log(`cleanupOrphanedPhaseTasks: found ${orphans.length} orphaned Phase Tasks records:`);
   console.table(orphans.map(s=>({property:s.property,phaseName:s.phaseName,taskName:s.taskName,plannedEnd:s.plannedEnd,status:s.status})));
   if(!confirm(`Delete ${orphans.length} orphaned Phase Tasks records? This cannot be undone.`))return;
-  let deleted=0;
+  // v55n -- audited: atDelete's return value was never checked, so a
+  // failed delete (e.g. a permission error or dropped connection)
+  // still counted toward `deleted` and the record was still stripped out
+  // of window.PHASE_STEPS locally -- meaning the orphan would silently
+  // reappear on next reload (still real in Airtable) with no record here
+  // that the delete had actually failed. Admin-only, confirm-gated tool,
+  // so blast radius is low, but fixed for consistency with the rest of
+  // this file's write-checking pattern.
+  let deleted=0,failed=0;
+  const stillPresent=[];
   for(const task of orphans){
     if(task.id&&task.id.startsWith('rec')){
-      await atDelete('Phase Tasks',task.id);
-      deleted++;
+      const delRes=await atDelete('Phase Tasks',task.id);
+      if(delRes){deleted++;}else{failed++;stillPresent.push(task);}
     }
   }
-  window.PHASE_STEPS=(window.PHASE_STEPS||[]).filter(s=>!orphans.includes(s));
-  console.log(`cleanupOrphanedPhaseTasks: deleted ${deleted} records. Refresh to confirm Dashboard/Portfolio Heat Map badges updated.`);
+  window.PHASE_STEPS=(window.PHASE_STEPS||[]).filter(s=>!orphans.includes(s)||stillPresent.includes(s));
+  console.log(`cleanupOrphanedPhaseTasks: deleted ${deleted} records${failed>0?`, ${failed} FAILED to delete (left in place, still orphaned in Airtable)`:''}. Refresh to confirm Dashboard/Portfolio Heat Map badges updated.`);
 }
 window.cleanupOrphanedPhaseTasks=cleanupOrphanedPhaseTasks;
 
@@ -16186,7 +16246,14 @@ function cfInit(){
   }
   const stSel=document.getElementById('cf-state');
   if(stSel){
-    const states=[...new Set(port.map(p=>p.s).filter(Boolean))].sort();
+    // v55m -- same free-text State dedup fix as pfPopulateDropdowns (Portfolio
+    // View filter) -- see that function's comment for root cause.
+    const seenStatesCf={};
+    port.map(p=>p.s).filter(Boolean).forEach(s=>{
+      const norm=s.trim().toUpperCase();
+      if(norm&&!seenStatesCf[norm])seenStatesCf[norm]=s.trim();
+    });
+    const states=Object.values(seenStatesCf).sort();
     stSel.innerHTML='<option value="">All States</option>'+states.map(s=>`<option value="${s}"${CF.state===s?' selected':''}>${s}</option>`).join('');
   }
   const conSel=document.getElementById('cf-consultant');
@@ -19457,11 +19524,22 @@ async function saveCapitalPlanEntry(skipClose){
           'Year/Budget Cycle':plannedYear,
           'Priority':scopePriority(priority),
         };
+        // v55l — audited: sc.year/sc.priority were set unconditionally
+        // here regardless of whether the write above actually succeeded.
+        // editSaveFailed was already correctly surfaced in this
+        // function's closing toast, but the local Scope object itself
+        // never reflected that failure — so the Capital Plan table could
+        // keep showing a new Year/Priority the Scope never actually
+        // received in Airtable, until the next reload silently reverted
+        // it. Only commits the local mutation when the write (or
+        // demo-mode's no-write path) genuinely succeeded.
         if(sc.id){
           const scUpdRes=await atUpdate('Scopes',sc.id,scFields);
-          if(!scUpdRes)editSaveFailed=true;
+          if(!scUpdRes){editSaveFailed=true;}
+          else{sc.year=plannedYear;sc.priority=scopePriority(priority);}
+        }else{
+          sc.year=plannedYear;sc.priority=scopePriority(priority);
         }
-        sc.year=plannedYear;sc.priority=scopePriority(priority);
       }
     } else {
       const res=await atCreate('Properties',fields);
@@ -21908,6 +21986,14 @@ async function executeCancelCalEvent(type,id){
   const record=isVisit?siteVisits.find(v=>v.id===id):meetings.find(m=>m.id===id);
   if(!record)return;
   document.getElementById('cal-cancel-overlay')?.remove();
+  // v55n -- guard against the stale-button double-cancel this function's
+  // caller could hit before the v55n render fix (see renderPropMeetings
+  // call above): if the record is already Cancelled, a second click
+  // (e.g. from a tab whose DOM hadn't refreshed yet) would otherwise
+  // re-run the write and re-send cancellation emails to every attendee a
+  // second time. Bail out silently -- the record is already in the state
+  // this click was trying to reach.
+  if(record.status==='Cancelled')return;
   // v52i — dead try/catch: atUpdate resolves to null on failure rather
   // than throwing, so this catch block could never actually fire on a
   // real write failure. The local status flipped to Cancelled and the
@@ -21947,7 +22033,21 @@ async function executeCancelCalEvent(type,id){
   }
   if(demoMode){showToast(`${isVisit?'Site visit':'Meeting'} cancelled (demo mode)`,'success');}
   else showToast(`${isVisit?'Site visit':'Meeting'} cancelled${sentCount>0?` — ${sentCount} attendee${sentCount!==1?'s':''} notified`:''}`,'success');
-  if(currentProp&&currentProp.n===record.property)renderPropertyView(currentProp);
+  // v55n -- audited: the Meetings & Actions tab's own Meeting Log
+  // (renderPropMeetings, #prop-meetings-list) is a SEPARATE render
+  // function from renderPropertyView's Overview-tab card of the same
+  // name -- this refresh block only ever called renderPropertyView, so a
+  // PM sitting on the Meetings & Actions tab and clicking Cancel saw the
+  // toast fire (the write genuinely succeeded) but the Cancel button
+  // stayed on screen with no visual change, since that tab's DOM was
+  // never touched. Reported live: cancelling the same meeting twice sent
+  // two real cancellation emails to attendees because the stale button
+  // was still clickable. Now refreshes whichever tab is actually showing
+  // this data.
+  if(currentProp&&currentProp.n===record.property){
+    renderPropertyView(currentProp);
+    renderPropMeetings(currentProp);
+  }
   renderAllSiteVisits();
   renderCalendar();
 }
@@ -22247,6 +22347,19 @@ async function saveEditCalEvent(type,id){
   _savingEditCalEvent=true;
   const saveBtn=document.getElementById('caledit-save-btn');
   if(saveBtn)saveBtn.disabled=true;
+  // v55l — reported/audited: every field below was written directly onto
+  // the live meetings/siteVisits array object before the write ran, and
+  // on a failed write (mainSaveFailed, already correctly checked) nothing
+  // ever reverted them — the error toast fired, but the calendar card
+  // kept showing the new, never-saved date/consultant/purpose/agenda
+  // until a full reload silently reverted it back, which reads as data
+  // loss even though nothing was actually lost (Airtable still had the
+  // old values the whole time; the local object was just briefly wrong).
+  // Snapshotting every field this function can touch before mutating, so
+  // a failed write can restore the record to exactly what it was.
+  const _preEdit={property:record.property,date:record.date,time:record.time,tz:record.tz,
+    consultant:record.consultant,purpose:record.purpose,type:record.type,agenda:record.agenda,
+    attendees:record.attendees};
   record.property=document.getElementById('caledit-property')?.value||record.property;
   record.date=document.getElementById('caledit-date')?.value||record.date;
   record.time=document.getElementById('caledit-time')?.value||record.time;
@@ -22283,8 +22396,16 @@ async function saveEditCalEvent(type,id){
     }
     if(!mainSaveFailed)record.attendees=await syncCaleditAttendees('Meetings',record.atId,record.attendees,attendeeRows);
   }
+  if(mainSaveFailed){
+    // v55l — restore every field to its pre-edit value now that the write
+    // is confirmed to have failed, before any re-render happens, so
+    // nothing on screen ever shows the unsaved edit.
+    record.property=_preEdit.property;record.date=_preEdit.date;record.time=_preEdit.time;record.tz=_preEdit.tz;
+    record.consultant=_preEdit.consultant;record.purpose=_preEdit.purpose;record.type=_preEdit.type;record.agenda=_preEdit.agenda;
+    record.attendees=_preEdit.attendees;
+  }
   document.getElementById('cal-edit-overlay')?.remove();
-  if(currentProp&&currentProp.n===record.property)renderPropertyView(currentProp);
+  if(currentProp&&(currentProp.n===record.property||currentProp.n===_preEdit.property))renderPropertyView(currentProp);
   renderAllSiteVisits();
   renderCalendar();
   if(mainSaveFailed){
@@ -25996,6 +26117,18 @@ async function saveEditProperty(){
   _savingEditProperty=true;
   const saveBtn=document.getElementById('save-edit-property-btn');
   if(saveBtn)saveBtn.disabled=true;
+  // v55l — audited: every field below was mutated directly onto the live
+  // PORTFOLIO object before the write ran, and on a failed write (the
+  // else branch below, which already correctly shows an error toast)
+  // nothing ever reverted them — renderPropertyView/populatePortfolio
+  // still ran unconditionally afterward, so the property tile and hero
+  // kept showing the new, never-saved name/address/state/type/priority/
+  // notes/counts until a later reload silently reverted them. Snapshot
+  // every field this function touches before mutating, so a failed write
+  // can be rolled back to exactly what it was.
+  const _preEdit={n:p.n,addr:p.addr,s:p.s,type:p.type,priority:p.priority,comment:p.comment,
+    units:p.units,elevatorCount:p.elevatorCount,escalatorCount:p.escalatorCount,
+    liftCount:p.liftCount,otherCount:p.otherCount};
   // Update local property object
   p.n=name;p.addr=propFields['Address'];p.s=propFields['State'];
   if(propFields['Asset Type'])p.type=propFields['Asset Type'];
@@ -26013,12 +26146,14 @@ async function saveEditProperty(){
   // than throwing, the catch block below was dead code and a real write
   // failure still showed "Property updated" success. Now checks the real
   // result before reporting success.
+  let _editPropSaveFailed=false;
   if(!demoMode){
     if(p.id){
       const updRes=await atUpdate('Properties',p.id,propFields);
       if(updRes){
         showToast('Property updated','success');
       }else{
+        _editPropSaveFailed=true;
         showToast('Could not save changes to Airtable. Please try again.','error');
       }
     }else{
@@ -26026,6 +26161,14 @@ async function saveEditProperty(){
     }
   } else {
     showToast('Updated locally','success');
+  }
+  if(_editPropSaveFailed){
+    // v55l — restore every field to its pre-edit value now that the write
+    // is confirmed to have failed, before the re-render below runs, so
+    // nothing on screen ever shows the unsaved edit.
+    p.n=_preEdit.n;p.addr=_preEdit.addr;p.s=_preEdit.s;p.type=_preEdit.type;p.priority=_preEdit.priority;
+    p.comment=_preEdit.comment;p.units=_preEdit.units;p.elevatorCount=_preEdit.elevatorCount;
+    p.escalatorCount=_preEdit.escalatorCount;p.liftCount=_preEdit.liftCount;p.otherCount=_preEdit.otherCount;
   }
   closeEditPropertyPanel();
   renderPropertyView(p);
@@ -26064,7 +26207,18 @@ function pfPopulateDropdowns(){
   const stateSel=document.getElementById('pf-state');
   const ecSel=document.getElementById('pf-ec');
   if(stateSel){
-    const states=[...new Set(port.map(p=>p.s).filter(Boolean))].sort();
+    // v55m -- audited: State is free-text in Airtable, not a picklist, so
+    // e.g. "CO" and "CO " (trailing space) or "Fl"/"FL" both survived a
+    // plain Set() dedup and rendered as two separate dropdown entries for
+    // what's really one state (reported live by Misty via screenshot).
+    // Dedup case/whitespace-insensitively, keep the first-seen original
+    // casing as the display label so nothing looks auto-altered.
+    const seenStates={};
+    port.map(p=>p.s).filter(Boolean).forEach(s=>{
+      const norm=s.trim().toUpperCase();
+      if(norm&&!seenStates[norm])seenStates[norm]=s.trim();
+    });
+    const states=Object.values(seenStates).sort();
     stateSel.innerHTML=`<option value="all">All States</option>${states.map(s=>`<option value="${s}"${PF.state===s?' selected':''}>${s}</option>`).join('')}`;
   }
   if(ecSel){
@@ -26445,7 +26599,19 @@ async function acceptSuggestedActionItem(id){
   actionItems.push({id:newId,property:s.property,description:s.description,owner:s.suggestedOwner||'',due:s.suggestedDue||'TBD',priority:s.suggestedPriority||'Medium',status:'Open',meetingId:null});
   if(s.suggestedOwner)notifyActionItemOwner(s.suggestedOwner,s.description,s.property,s.suggestedDue,s.suggestedPriority);
   s.status='Accepted';
-  if(!demoMode)await atUpdate('Suggested Action Items',id,{'Status':'Accepted'});
+  // v55l — audited: this write was fire-and-forget (result never
+  // captured). The real Action Item above is already safely created at
+  // this point, so a failure here doesn't lose the PM's action — but the
+  // suggestion's own status silently drifts from Airtable, and would
+  // reappear as "Open" in the queue on next reload even though it's
+  // already been acted on, risking a duplicate Action Item if accepted
+  // again. Logged (not toasted — the real work already succeeded and
+  // showed its own success toast below) so this is at least visible in
+  // the console rather than fully silent.
+  if(!demoMode){
+    const _sres=await atUpdate('Suggested Action Items',id,{'Status':'Accepted'});
+    if(!_sres)console.error(`Suggested Action Item ${id} status failed to save as Accepted — may reappear in queue on next reload.`);
+  }
   refreshDashActions();
   if(currentProp&&currentProp.n===s.property)renderPropertyView(currentProp);
   renderSuggestedActionItems();
@@ -26457,7 +26623,13 @@ async function dismissSuggestedActionItem(id){
   if(!s)return;
   if(s.status!=='Open')return;
   s.status='Dismissed';
-  if(!demoMode)await atUpdate('Suggested Action Items',id,{'Status':'Dismissed'});
+  // v55l — audited: same fire-and-forget gap as acceptSuggestedActionItem
+  // above. A failed write here means the suggestion silently reappears
+  // as "Open" on next reload; logged so it's at least visible.
+  if(!demoMode){
+    const _sres=await atUpdate('Suggested Action Items',id,{'Status':'Dismissed'});
+    if(!_sres)console.error(`Suggested Action Item ${id} status failed to save as Dismissed — may reappear in queue on next reload.`);
+  }
   renderSuggestedActionItems();
   showToast('Suggestion dismissed','info');
 }
@@ -27638,19 +27810,26 @@ async function addReply(threadId){
   // Flip the other party's read state to unread on all thread records
   if(flagRecord){
     const threadRecords=(window.CLIENT_COMMENTS||[]).filter(c=>c.threadId===threadId);
+    // v55l — audited: atUpdate never throws on an ordinary failure (it
+    // catches internally and resolves null), so these try/catch blocks
+    // were dead code for a real write failure — the local read-state flip
+    // above always "succeeded" from the UI's point of view even when
+    // Airtable's copy never changed. Worst case is a stale unread badge
+    // (not lost message content, the reply itself is already confirmed
+    // saved above), but fixed for consistency with the rest of this pass.
     if(isClient){
       // Client replied — reset VDA reads
       threadRecords.forEach(c=>{c.readByPM=false;c.readByConsultant=false;});
       if(!demoMode&&flagRecord.id&&!flagRecord.id.startsWith('cc-')){
-        try{await atUpdate('Client Comments',flagRecord.id,{'Read by PM':false,'Read by Consultant':false});}
-        catch(e){console.warn('Could not reset VDA read state',e);}
+        const _rres=await atUpdate('Client Comments',flagRecord.id,{'Read by PM':false,'Read by Consultant':false});
+        if(!_rres)console.warn('Could not reset VDA read state for',flagRecord.id);
       }
     } else {
       // PM or consultant replied — reset client read
       threadRecords.forEach(c=>{c.readByClient=false;});
       if(!demoMode&&flagRecord.id&&!flagRecord.id.startsWith('cc-')){
-        try{await atUpdate('Client Comments',flagRecord.id,{'Read by Client':false});}
-        catch(e){console.warn('Could not reset client read state',e);}
+        const _rres=await atUpdate('Client Comments',flagRecord.id,{'Read by Client':false});
+        if(!_rres)console.warn('Could not reset client read state for',flagRecord.id);
       }
     }
   }
@@ -27694,11 +27873,15 @@ async function markThreadRead(threadId, isRead){
   const localField=isPMRole?'readByPM':isConsultant?'readByConsultant':'readByClient';
   const threadRecords=cc.filter(c=>c.threadId===threadId);
   threadRecords.forEach(c=>c[localField]=isRead);
+  // v55l — audited: same dead-catch issue as the reply function above —
+  // atUpdate resolves null rather than throwing, so this never actually
+  // caught a real failure. Fixed for consistency; worst case remains a
+  // stale unread badge, not lost content.
   if(!demoMode){
     for(const c of threadRecords){
       if(c.id&&!c.id.startsWith('cc-')){
-        try{await atUpdate('Client Comments',c.id,{[fieldName]:isRead});}
-        catch(e){console.warn('Could not save read status on record',c.id,e);}
+        const _rres=await atUpdate('Client Comments',c.id,{[fieldName]:isRead});
+        if(!_rres)console.warn('Could not save read status on record',c.id);
       }
     }
   }
