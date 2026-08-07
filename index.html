@@ -1,4 +1,85 @@
 <!--
+pulse_v55c. Changes from v55b, this round. Same backlog. Requires no
+worker changes.
+  1. M1 (Modernization Survey) and M4 (Contract Award) simplified to a
+     single date field per direct instruction -- their separate Planned
+     Start and Actual Start inputs were real fields no one used for these
+     two milestones and just added noise; each now shows one "Survey
+     Date" (M1) or "Award Date" (M4) field, backed by the existing
+     Completion Date column. Every other calendar milestone (M2, M3, M13,
+     M14) is unchanged.
+     M1's single date is genuinely load-bearing elsewhere in the app, not
+     just a Milestones-tab display choice, so every consumer was
+     repointed from Planned/Actual Date to Completion Date rather than
+     just hiding the row's inputs: deriveAndWriteScopeDates() (Scope
+     Planned Start / Actual Start derivation), deriveAndWriteScopeStatus()
+     and its read-only drift-detection twin (Capital Plan -> In Progress
+     graduation signal), the Capital Plan table's "Activating" indicator
+     (both the single-scope and multi-scope row renderers), and the Split
+     Into Projects wizard's Modernization Survey Date field (both its
+     prefill and its two write sites, create and update). M4 needed no
+     equivalent repointing -- its one downstream consumer
+     (autoCreateContractRatesAction, fired when M4's Status transitions to
+     Complete) only ever reads the derived Status, never the date fields
+     directly, and deriveCalendarStatus() already returns 'Complete' the
+     moment a Completion Date exists regardless of whether Planned/Actual
+     Start were ever set.
+  2. M11 (Punchlists Complete) / M12 (Inspections Complete (AHJ)) swap
+     control, per direct instruction and approved mockup. A small swap
+     icon appears next to each of these two milestones' labels, but only
+     when Manual Entry Override is on for that property (same gating as
+     Mark Complete Today). Clicking it swaps which milestone occupies
+     slot 11 vs slot 12 -- row positions never move, but each milestone's
+     own name, dates, status, and notes travel with it into the other
+     slot, so a project where inspections genuinely finished before
+     punchlists can reflect that without an Airtable edit. New
+     swapMilestoneOrder(), guarded against double-submission, swaps only
+     the Milestone Number field on the two underlying records (both
+     writes must succeed before the local swap commits, otherwise the two
+     records would silently disagree with Airtable about which number
+     each holds). Confirmed safe against MILESTONE_DERIVATION's per-number
+     phase-rollup rules (M11 is punchlist rollup, M12 is inspection
+     rollup, genuinely different derivation logic) before building this:
+     the swap control is only ever reachable while Manual Override is on,
+     and Manual Override already forces every milestone including M11/M12
+     into plain calendar-editable mode with no phase-rollup derivation
+     active, so swapping their numbers in that state cannot desynchronize
+     either record from a derivation rule that isn't running in the first
+     place.
+
+<!--
+pulse_v55b. Changes from v55a, this round. Same backlog as v55a. Requires
+no worker changes.
+  1. Removed the Property-level VDA Consultant field from the Property
+     hero label and the Create/Edit Property panel (this panel is shared
+     between New Property and Edit Property), per direct instruction --
+     Consultant is assigned and edited at the Project (Scope) level only
+     going forward (se-consultant in the Project edit modal, already the
+     correct field). The hero pill now reads currentScope?.v only, with
+     no fallback to the Property-level field, rendering "-" when the open
+     Project has no consultant set. saveEditProperty() no longer reads or
+     writes Properties.VDA Consultant; openEditPropertyPanel() no longer
+     prefills it. propertyConsultants()/propertyConsultantsDisplay()/
+     allKnownConsultants()/propertyHasConsultant() (used elsewhere --
+     Portfolio View's remaining tables via the Analytics filter, PM
+     Update/action attribution, and Consultant-role login scoping) are
+     unchanged and still fall back to reading the Property-level field
+     for any property that still has one on file from before this round;
+     only the ability to newly set or edit it from this panel is removed.
+  2. Ran the v55a audit (auditPropertyLevelOnlyConsultants) before this
+     change shipped, per standing process. One property flagged --
+     Juniper Hotel Cupertino, Curio Collection -- with a Property-level
+     consultant (Ron Welts) and no Scope-level consultant recognized on
+     its one Project by the audit's own matching logic. Misty confirmed
+     Ron Welts is in fact already assigned on that Project in the UI, so
+     the flag is a data-matching discrepancy (blank/differently-formatted
+     Scope-level value, most likely) rather than a genuinely missing
+     assignment, and chose to proceed without digging further this round.
+     Flagged here for awareness: if Ron's access to Juniper looks wrong
+     after this ships, the root cause is very likely whatever caused this
+     mismatch in the first place, and is worth a closer look then.
+
+<!--
 pulse_v55a. Changes from v54f, this round. First build in the new backlog
 Misty approved after v54f shipped live (Portfolio View cleanup, Property
 Consultant cleanup, Milestone chart changes, data-integrity guardrails,
@@ -3872,7 +3953,11 @@ window.PROPERTIES_SEED = [
       <div class="form-group"><label class="form-label">State</label><input class="form-input" type="text" id="ep-state" placeholder="e.g. CO" maxlength="2"></div>
       <div class="form-group"><label class="form-label">Asset Type</label><select class="form-select" id="ep-type"><option value="Core">Core</option><option value="Non-Core">Non-core</option></select></div>
       <div class="form-group" id="ep-priority-group"><label class="form-label">Priority</label><select class="form-select" id="ep-priority"><option value="">Select priority</option><option value="1: Critical">1: Critical</option><option value="2: High">2: High</option><option value="3: Medium">3: Medium</option><option value="4: Standard">4: Standard</option></select></div>
-      <div class="form-group" style="grid-column:1/-1"><label class="form-label">VDA Consultant</label><input class="form-input" type="text" id="ep-consultant" placeholder="e.g. Jeff Sena"></div>
+      <!-- v55a -- VDA Consultant field removed from this panel. Consultant
+      is assigned and edited at the Project (Scope) level only (see the
+      Project edit modal's own Consultant field, se-consultant), per direct
+      instruction -- this Property-level field was a second, stale source
+      of truth for the same information. -->
       <!-- v43a — Project Details section (Elevator Company, VDA Project #,
       Client Project #, Project Budget, Contract Rates, Retainage, Contract
       Award Value) removed from Edit Property entirely. Those fields are
@@ -4307,7 +4392,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55c</div>
     </div>
   </nav>
 
@@ -7556,10 +7641,13 @@ function renderPropertyView(p){
   document.getElementById('prop-hero-meta').innerHTML=
     `<div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px"><i class="ti ti-map-pin"></i></span><span style="color:rgba(255,255,255,.9)">${_addrParts.join(', ')}</span></div>
      <div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px"><i class="ti ti-elevator"></i></span><span style="color:rgba(255,255,255,.9)">${currentScope?.ec||p.ec}</span></div>
-     <!-- v37f — same fix as the elevator company pill just above (currentScope
-     first, property fallback): was showing raw p.v, the stale Property-level
-     field, ignoring whichever Project is actually open. -->
-     <div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px">Consultant:</span><span style="color:rgba(255,255,255,.9)">${currentScope?.v||propertyConsultantsDisplay(p.n)}</span></div>
+     <!-- v55a -- Consultant is assigned and edited at the Project (Scope)
+     level only, per direct instruction. No property-wide fallback anymore
+     (propertyConsultantsDisplay's Property-level fallback was the exact
+     stale/wrong-level surface being removed here) -- renders "-" when the
+     open Project has no consultant set, rather than reaching for a
+     different Project's or a legacy Property-level value. -->
+     <div class="prop-hero-pill"><span style="color:var(--blue-light);margin-right:3px">Consultant:</span><span style="color:rgba(255,255,255,.9)">${currentScope?.v||'-'}</span></div>
      ${elevCount||escCount||liftCount||otherCount?`<div class="prop-hero-pill" style="margin-left:6px;padding-left:10px;border-left:1px solid rgba(255,255,255,.15);gap:12px;align-items:center">
        ${elevCount>0?`<span style="display:flex;align-items:center;gap:4px"><i class="ti ti-elevator" style="color:var(--blue-light);font-size:18px"></i><span style="color:rgba(255,255,255,.9);font-size:13px;font-weight:600">${elevCount}</span><span style="color:rgba(255,255,255,.45);font-size:11px">Elev</span></span>`:''}
        ${escCount>0?`<span style="display:flex;align-items:center;gap:4px"><i class="ti ti-stairs-up" style="color:var(--blue-light);font-size:18px"></i><span style="color:rgba(255,255,255,.9);font-size:13px;font-weight:600">${escCount}</span><span style="color:rgba(255,255,255,.45);font-size:11px">Esc</span></span>`:''}
@@ -8245,8 +8333,12 @@ async function updateMilestone(msId,fields,propName){
   // saved, not when someone edits M1/M14 directly, which is now the
   // primary way these fields change. Harmless no-op call for every other
   // milestone number or edited field.
+  // v55c -- M1 now only ever writes Completion Date (Planned/Actual Date
+  // inputs removed from its row), so the trigger condition needs
+  // Completion Date included or an M1 edit would stop re-deriving Scope
+  // dates. M14 is unaffected and still writes all three as before.
   if(ms?.scopeId&&(ms.milestoneNumber===1||ms.milestoneNumber===14)&&
-     (fields['Planned Date']!==undefined||fields['Actual Date']!==undefined||fields['Status']!==undefined)){
+     (fields['Planned Date']!==undefined||fields['Actual Date']!==undefined||fields['Completion Date']!==undefined||fields['Status']!==undefined)){
     await deriveAndWriteScopeDates(ms.scopeId);
   }
   return true;
@@ -8299,9 +8391,13 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // matter what survey dates existed in Milestones — only already-
   // graduated scopes got their status recalculated. Fixed: evaluate
   // ms1.actualDate first so Capital Plan -> In Progress can happen.
+  // v55c -- ms1.actualDate no longer exists as an input (M1's Planned/
+  // Actual Start fields were removed, see the Milestones row render);
+  // ms1.completionDate is now the single "has the survey happened" signal
+  // this graduation check needs.
   let newStatus=scope.status==='Capital Plan'?'Capital Plan':'Planned';
   if(msFinal&&(msFinal.completionDate||msFinal.actualDate))newStatus='Complete';
-  else if(ms1&&ms1.actualDate)newStatus='In Progress';
+  else if(ms1&&ms1.completionDate)newStatus='In Progress';
   // v37d — Units-Complete override takes priority over whatever Milestones
   // alone would have derived, since real completed-unit data is more
   // trustworthy than an untouched Milestones list for pre-existing work.
@@ -8699,8 +8795,11 @@ function renderScopeCards(p){
       const finalMsNum=MILESTONES_DEF.length;
       const msFinal=realMs.find(m=>m.milestoneNumber===finalMsNum);
       const ms1Real=realMs.find(m=>m.milestoneNumber===1);
+      // v55c -- mirrors the same completionDate repointing as
+      // deriveAndWriteScopeStatus above, so this read-only drift check
+      // keeps agreeing with what actually derives the real status.
       const milestonesJustify=(msFinal&&(msFinal.completionDate||msFinal.actualDate||msFinal.status==='Complete'))?'Complete'
-        :(ms1Real&&ms1Real.actualDate)?'In Progress'
+        :(ms1Real&&ms1Real.completionDate)?'In Progress'
         :(s.status==='Capital Plan'?'Capital Plan':'Planned');
       if(milestonesJustify!==s.status&&!(s.status==='On Hold')){
         driftMsg=`Status says <strong>${escHtml(s.status)}</strong>, but milestones show <strong>${milestonesJustify}</strong>`;
@@ -9610,14 +9709,54 @@ function renderMilestones(p){
         <i class="ti ${statusIcons[m.status]||'ti-circle'}" style="font-size:13px"></i>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:12px;font-weight:500;color:var(--navy);margin-bottom:6px">${m.milestoneNumber}. ${m.milestoneName}${varDisplay}</div>
+        <div style="font-size:12px;font-weight:500;color:var(--navy);margin-bottom:6px;display:flex;align-items:center;gap:6px">
+          <span>${m.milestoneNumber}. ${m.milestoneName}${varDisplay}</span>
+          ${canEdit&&p.milestoneManualOverride&&(m.milestoneNumber===11||m.milestoneNumber===12)?`
+          <!-- v55c -- M11/M12 swap control. Punchlists Complete and
+          Inspections Complete (AHJ) sometimes finish out of their usual
+          order on a real project; this lets a PM say which one actually
+          happened first without needing an Airtable edit. Swaps
+          Milestone Number on the two underlying records (their own name/
+          dates/status/notes travel with them) -- row positions 11 and 12
+          never move, only which milestone occupies each stays fixed to
+          whichever the PM says came first. Only ever shown under Manual
+          Override, same gating as Mark Complete Today, since that's also
+          when both M11 and M12 already behave as plain calendar
+          milestones with no phase-rollup derivation active -- swapping
+          their numbers here can't collide with or bypass that derivation
+          logic because it's already off for both of them in this state. -->
+          <span style="display:inline-flex;border:1px solid var(--border-strong,#d0cec8);border-radius:12px;overflow:hidden;flex-shrink:0" title="Swap order with M${m.milestoneNumber===11?12:11}">
+            <button onclick="swapMilestoneOrder('${p.n.replace(/'/g,"\\'")}','${(m.scopeId||'').replace(/'/g,"\\'")}')" style="width:20px;height:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:var(--gray-xpale);border:none;padding:0" title="Swap M11/M12 order"><i class="ti ti-arrows-left-right" style="font-size:11px;color:var(--gray-mid)"></i></button>
+          </span>`:''}
+        </div>
         ${canEdit||canConsultant?`
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Status</div>
             <div style="padding:3px 0">${statusBadge}</div>
           </div>
-          ${canEdit&&isCalendar?`
+          ${canEdit&&isCalendar?(
+            // v55c -- M1 (Modernization Survey) and M4 (Contract Award) only
+            // ever need one date: when the survey happened / when the
+            // contract was awarded. Planned Start and Actual Start were
+            // real fields no one used for these two milestones and just
+            // added noise per direct instruction. Their one remaining date
+            // (Completion) is exactly what deriveAndWriteScopeDates(),
+            // deriveAndWriteScopeStatus(), the Capital Plan "Activating"
+            // indicator, and the Split Into Projects Modernization Survey
+            // Date field all now read (see those functions/call sites for
+            // the repointing) -- M1/M4's single date IS the survey/award
+            // date everywhere else in the app already expected it to be.
+            // Every other calendar milestone (M2, M3, M13, M14) is
+            // unaffected and keeps all three fields exactly as before.
+            (m.milestoneNumber===1||m.milestoneNumber===4)?`
+          <div style="min-width:130px">
+            <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${m.milestoneNumber===1?'Survey Date':'Award Date'}</div>
+            ${m.manuallyCompleted?
+            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real date">`:
+            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.completionDate||''}"
+              onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">`}
+          </div>`:`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.plannedDate||''}"
@@ -9634,7 +9773,8 @@ function renderMilestones(p){
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real Completion date">`:
             `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.completionDate||''}"
               onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">`}
-          </div>`:canEdit?`
+          </div>`
+          ):canEdit?`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
             <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.plannedDate||''}"
@@ -9707,6 +9847,59 @@ function renderMilestones(p){
 // UI when nothing had actually saved. Now rolls the checkbox back and
 // re-renders on a failed write so the visible state always matches what's
 // actually saved.
+// v55c -- M11 (Punchlists Complete) / M12 (Inspections Complete (AHJ))
+// swap. Only reachable while Manual Entry Override is on for this
+// property (see the swap control markup in renderMilestones above), which
+// is also the one state where both milestones already render as plain
+// calendar fields with no phase-rollup derivation in play (isCalendar
+// forces true regardless of MILESTONE_DERIVATION's rule.type whenever
+// override is on) -- so swapping which milestone occupies slot 11 vs 12
+// here cannot desynchronize a record from the derivation rule its number
+// implies, because that derivation path is already inactive for both
+// records in this state. Row positions 11 and 12 never move on screen;
+// only each record's own Milestone Number field changes, carrying its
+// own Milestone Name/dates/status/notes with it exactly as it already
+// existed -- nothing about either milestone's data is altered, only which
+// numbered slot it's filed under.
+let _swappingM11M12=false;
+async function swapMilestoneOrder(propName,scopeId){
+  if(_swappingM11M12)return;
+  if(!scopeId){showToast('Could not determine which project this milestone belongs to.','error');return;}
+  const ms11=(window.MILESTONES||[]).find(m=>m.scopeId===scopeId&&m.milestoneNumber===11);
+  const ms12=(window.MILESTONES||[]).find(m=>m.scopeId===scopeId&&m.milestoneNumber===12);
+  if(!ms11||!ms12||!ms11.id||!ms12.id){
+    showToast('Both M11 and M12 need to exist before they can be swapped.','error');
+    return;
+  }
+  _swappingM11M12=true;
+  let swapFailCount=0;
+  if(!demoMode){
+    const [res11,res12]=await Promise.all([
+      atUpdate('Milestones',ms11.id,{'Milestone Number':12}),
+      atUpdate('Milestones',ms12.id,{'Milestone Number':11}),
+    ]);
+    if(!res11)swapFailCount++;
+    if(!res12)swapFailCount++;
+  }
+  // v55c -- only commit the local swap once both writes are confirmed
+  // (or in demo mode, where there's nothing to confirm). A partial
+  // failure here would otherwise leave the two records disagreeing with
+  // Airtable about which number each one actually holds, the same
+  // silent-drift shape every other write in this file already guards
+  // against.
+  if(swapFailCount===0){
+    ms11.milestoneNumber=12;
+    ms12.milestoneNumber=11;
+  }
+  _swappingM11M12=false;
+  if(swapFailCount>0){
+    showToast('Could not swap M11/M12. Please try again.','error');
+    return;
+  }
+  if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+  showToast('Milestone order swapped','success');
+}
+
 async function toggleMilestoneManualOverride(propName,newVal){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const p=port.find(x=>x.n===propName);
@@ -13759,10 +13952,16 @@ async function deriveAndWriteScopeDates(scopeId){
   const phasePlannedEnds=phases.map(p=>toTime(p.plannedCompletion)).filter(Boolean);
   const allPhasesComplete=phases.length>0&&phases.every(p=>p.status==='Complete');
   const phaseActualEnds=allPhasesComplete?phases.map(p=>toTime(p.actualCompletion)).filter(Boolean):[];
-  const newPlannedStart=m1?.plannedDate||sc.plannedStart||null;
+  // v55c -- M1 lost its separate Planned Start/Actual Start fields (see
+  // the Milestones row render, ~line 9659) and now carries a single
+  // Completion date meaning "when the survey happened." Both Planned
+  // Start and Actual Start below now read that same completionDate --
+  // there is no longer a separate "planned" vs "actual" survey date to
+  // distinguish, matching how the field is actually used going forward.
+  const newPlannedStart=m1?.completionDate||sc.plannedStart||null;
   const newTargetCompletion=m14?.plannedDate
     ||(phasePlannedEnds.length>0?toIso(Math.max(...phasePlannedEnds)):sc.targetCompletion||null);
-  const newActualStart=(m1?.status==='Complete'&&m1?.actualDate)?m1.actualDate:(sc.actualStart||null);
+  const newActualStart=(m1?.status==='Complete'&&m1?.completionDate)?m1.completionDate:(sc.actualStart||null);
   const newActualCompletion=(m14?.status==='Complete'&&m14?.actualDate)?m14.actualDate
     :(phaseActualEnds.length>0?toIso(Math.max(...phaseActualEnds)):sc.actualCompletion||null);
   const nothingChanged=newPlannedStart===(sc.plannedStart||null)
@@ -16606,8 +16805,11 @@ function renderCapitalPlan(){
           if(g.totalScopeCount===1){
             // Single-Scope property — unchanged row format from before.
             const s=g.scopes[0];
+            // v55c -- m1.plannedDate no longer exists (M1's Planned/Actual
+            // Start fields removed); m1.completionDate is now the single
+            // survey date this "Activating" indicator reads.
             const m1=(window.MILESTONES||[]).find(m=>m.scopeId===s.id&&m.milestoneNumber===1);
-            const m1Date=m1?.plannedDate||'';
+            const m1Date=m1?.completionDate||'';
             const graduating=m1Date&&m1Date!=='';
             return `<tr style="${graduating?'background:var(--green-xpale,#f0faf4)':''}">
               <td>
@@ -16676,8 +16878,10 @@ function renderCapitalPlan(){
             <table class="data-table" style="table-layout:fixed;background:var(--gray-xpale)">
               <tbody>
               ${g.scopes.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')||(a.year||0)-(b.year||0)).map(s=>{
+                // v55c -- same completionDate repointing as the single-scope
+                // row above.
                 const m1=(window.MILESTONES||[]).find(m=>m.scopeId===s.id&&m.milestoneNumber===1);
-                const m1Date=m1?.plannedDate||'';
+                const m1Date=m1?.completionDate||'';
                 const graduating=m1Date&&m1Date!=='';
                 return `<tr style="${graduating?'background:var(--green-xpale,#f0faf4)':''}">
                   <td style="width:20%;padding-left:30px;font-size:12px;color:var(--gray-mid)">${graduating?`<span style="color:var(--green);font-weight:600"><i class="ti ti-arrow-up-right" style="font-size:10px"></i> Activating</span>`:''}</td>
@@ -19199,8 +19403,10 @@ function addSplitScopeBlock(scope){
   // per Property). Pre-fill from this Scope's own M1 milestone if one
   // already exists; field stays blank until the user enters a date — no
   // forced graduation just because the modal is open.
+  // v55c -- existingM1.plannedDate no longer exists; completionDate is
+  // now M1's single date field, prefilled here the same way.
   const existingM1=s.id?(window.MILESTONES||[]).find(m=>m.scopeId===s.id&&m.milestoneNumber===1):null;
-  const m1dateVal=existingM1?.plannedDate||'';
+  const m1dateVal=existingM1?.completionDate||'';
   const block=document.createElement('div');
   block.id=id;
   block.className='split-scope-block';
@@ -19531,13 +19737,20 @@ async function saveSplitIntoScopes(){
       const existingM1=(window.MILESTONES||[]).find(m=>m.scopeId===scopeId&&m.milestoneNumber===1);
       if(!existingM1){
         let newM1Id='ms-'+Date.now();
+        // v55c -- M1 writes Completion Date now, not Planned Date (its
+        // Planned/Actual Start fields were removed; this is M1's one
+        // remaining date field). Status starts 'Not Started' either way --
+        // deriveCalendarStatus() below (via updateMilestoneField's usual
+        // path, or the graduation logic further down here) will flip it
+        // to 'Complete' once Completion Date is actually read back, same
+        // as any other calendar milestone.
         if(!demoMode){
           const newMs=await atCreate('Milestones',{
             'Property Name':propertyNameToLink(prop.n),
             'Linked Scope':[scopeId],
             'Milestone Number':1,
             'Milestone Name':'Modernization Survey',
-            'Planned Date':r.m1date,
+            'Completion Date':r.m1date,
             'Status':'Not Started',
           });
           // v51j — same fabricated-id-on-failure pattern as the Scopes
@@ -19552,13 +19765,13 @@ async function saveSplitIntoScopes(){
             newM1Id=newMs.records[0].id;
           }
         }
-        window.MILESTONES=(window.MILESTONES||[]).concat([{id:newM1Id,property:prop.n,scopeId,milestoneNumber:1,milestoneName:'Modernization Survey',plannedDate:r.m1date,status:'Not Started',actualDate:'',completionDate:'',variance:null,notes:''}]);
-      } else if(existingM1.plannedDate!==r.m1date){
-        const priorM1Date=existingM1.plannedDate;
-        existingM1.plannedDate=r.m1date;
+        window.MILESTONES=(window.MILESTONES||[]).concat([{id:newM1Id,property:prop.n,scopeId,milestoneNumber:1,milestoneName:'Modernization Survey',plannedDate:'',status:'Not Started',actualDate:'',completionDate:r.m1date,variance:null,notes:''}]);
+      } else if(existingM1.completionDate!==r.m1date){
+        const priorM1Date=existingM1.completionDate;
+        existingM1.completionDate=r.m1date;
         if(!demoMode&&existingM1.id){
-          const updRes=await atUpdate('Milestones',existingM1.id,{'Planned Date':r.m1date});
-          if(!updRes){existingM1.plannedDate=priorM1Date;scopeCreateFailCount++;}
+          const updRes=await atUpdate('Milestones',existingM1.id,{'Completion Date':r.m1date});
+          if(!updRes){existingM1.completionDate=priorM1Date;scopeCreateFailCount++;}
         }
       }
       await autoPopulateMilestones(prop.n,scopeId);
@@ -24983,7 +25196,7 @@ function openEditPropertyPanel(){
   document.getElementById('ep-type').value=p.type||'Core';
   document.getElementById('ep-priority').value=p.priority||'';
   document.getElementById('ep-notes').value=p.comment||'';
-  document.getElementById('ep-consultant').value=p.v||'';
+  // v55a -- ep-consultant removed along with the field itself.
 
   // v43c hotfix — the count fields below were still reading straight from
   // p.elevatorCount/p.units etc. (the manually-typed Properties fields),
@@ -25361,11 +25574,13 @@ async function saveEditProperty(){
   const assetType=document.getElementById('ep-type').value;
 
   // Property-level fields only — identity, location, unit counts, consultant, budget
+  // v55a -- VDA Consultant no longer written from this panel; the field
+  // was removed. Consultant is assigned/edited at the Project (Scope)
+  // level only, via the Project edit modal (se-consultant/saveScopeEditModal).
   const propFields={
     'Property Name':name,
     'Address':document.getElementById('ep-addr').value.trim(),
     'State':document.getElementById('ep-state').value.trim().toUpperCase(),
-    'VDA Consultant':document.getElementById('ep-consultant').value.trim(),
     'Comments':document.getElementById('ep-notes').value.trim(),
   };
   const priority=document.getElementById('ep-priority').value;
@@ -25420,7 +25635,7 @@ async function saveEditProperty(){
   p.n=name;p.addr=propFields['Address'];p.s=propFields['State'];
   if(propFields['Asset Type'])p.type=propFields['Asset Type'];
   if(priority)p.priority=priority;
-  p.v=propFields['VDA Consultant'];p.comment=propFields['Comments'];
+  p.comment=propFields['Comments'];
   if(propUnitsInv.length===0){
     p.units=units;
     p.elevatorCount=elevators;p.escalatorCount=escalators;
