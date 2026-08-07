@@ -1,4 +1,106 @@
 <!--
+pulse_v52o. Changes from v52n, this round. Reported live by Misty on
+Casa Marina Key West. Requires no worker changes.
+  1. Mark Complete Today toggle sizing. The full-width amber slider row
+     (added v52l, redesigned from the mockup she approved) read as "way
+     too large" against the compact date/notes fields directly above it in
+     the same milestone row. Shrunk the slider itself, its padding, and its
+     text sizes to match the row's density, kept as its own row (matching
+     the approved mockup layout) and kept the amber-in-both-states look —
+     sizing only, no layout change.
+  2. Phase Tasks didn't follow their parent Unit Phase's own Planned Start/
+     Completion after the phase's dates changed post-creation. Root cause:
+     a task's Planned Start/End was only ever seeded from the phase ONCE,
+     at the moment the task was created (v21c) — there was never any
+     ongoing link after that, so moving a phase's own dates later left
+     every already-existing task on its original, now-stale planned dates.
+     Confirmed live: Casa Marina's Phase 1 tasks were all created against
+     the phase's original Planned Completion (12/25/2025); the phase was
+     later moved out to 10/31/2026, but every task still showed the old
+     date, forcing a manual re-date of each task one at a time (and the
+     phase reading "Behind" in the interim, since task dates drive that
+     calculation). saveEditPhase() now shifts a task's Planned Start/End
+     by the same delta the phase itself moved, for any task that doesn't
+     yet have a real Actual Start or Completion Date — an actual represents
+     what really happened and is never touched. Per Misty's explicit
+     direction, only an actual opts a task out of following; a task whose
+     planned dates were manually retyped with no actual yet (e.g. the
+     "Approximate Date"/"Elevated" notes-style entries seen on her
+     screenshots) still follows, since a bare planned date with no actual
+     behind it is still just a forecast. Shifts by delta rather than
+     snapping to the phase's exact new date, so a task deliberately planned
+     a few days before/after the phase boundary keeps that same relative
+     offset. New failure count folded into saveEditPhase's existing closing
+     toast, matching the pattern the rest of the function already uses.
+
+pulse_v52n. Changes from v52m, this round. Reported live by Misty on
+Analytics: Active Projects by Stage showed "43 total projects" while
+Elevator Company Performance showed "42 projects" for the same portfolio.
+Also a stat-card reorder on Analytics and Dashboard. Requires no worker
+changes.
+  1. Root cause of the 43 vs 42 mismatch: Elevator Company Performance's
+     unfiltered source (elevCoSource) only included properties with status
+     literally "In Progress" (active.filter(p=>p.st==='In Progress')),
+     while Active Projects by Stage's unfiltered source (allProps) includes
+     every non-Capital-Plan property regardless of status (In Progress,
+     Complete, or Planned). A property marked Complete or Planned that
+     still had a real, contractor-assigned Scope dropped out of Elevator
+     Company Performance's total entirely while still counting on the
+     Stage chart. Also self-contradictory on its own terms: the chart
+     already has a Complete bucket in its stacked bar, so excluding
+     Complete-status properties from the source meant that bucket could
+     never actually be reached for them. Per Misty's direction that the
+     two charts are meant to complement each other (same underlying
+     project population, sliced two different ways), elevCoSource now uses
+     the same `active` set (In Progress + Complete + Planned) Active
+     Projects by Stage already uses, so the two totals always agree going
+     forward.
+  2. Analytics and Dashboard's second row of stat cards (Active Units,
+     Units On Hold, Pipeline Units, Completed Units) reordered on both
+     pages to: Completed Units, Active Units, Pipeline Units, Units On
+     Hold, per direct instruction. Cosmetic reorder only, no values or
+     logic changed.
+
+pulse_v52m. Changes from v52l, this round. Portfolio View visual
+consistency pass, mocked up and reviewed with Misty first. Requires no
+worker changes.
+  1. Unified badge/pill system. Every status/type/priority badge across
+     the app previously had its own one-off color and, in several places,
+     its own padding/weight (Portfolio View's Type/Status/Health columns,
+     Property page badges, Field Updates review status, Meeting/Document
+     visibility tags, Action Item priority, etc.) — same .badge base class,
+     but a dozen slightly different hex values had accumulated across
+     rounds. Consolidated into six semantic groups sharing one shape: green
+     (good/on track/done/approved/low priority), red (At Risk/Behind/
+     Returned/On Hold/high priority), amber (in progress/pending review/
+     medium priority), blue (neutral classification tags like Core/type
+     labels), gray (inactive/not started/non-core/capital plan), purple
+     (draft/VDA-internal). Two real inconsistencies this fixes, not just
+     cosmetic drift: milestone-status "At Risk" (b-ms-atrisk) rendered
+     amber while every other At Risk badge in the app rendered red — now
+     red everywhere, per Misty's explicit direction. Property Status
+     "Active" rendered two different colors (light blue or purple)
+     depending on whether the underlying status was "In Progress" or
+     "Planned", despite showing the identical "Active" label either way —
+     both now render the same green as every other Active/good-state
+     badge. Confirmed with Misty that CIP/NIP status labels are not used by
+     Park Hotels (already dead as displayed text since v36b) — the b-cip/
+     b-nip CSS classes stay, since they're still used as generic blue tags
+     for counts/percentages (Milestone Tracker %, Field Update count,
+     Weekly report label), just not as CIP/NIP status text.
+  2. Portfolio View's Current Phase column was a solid dark-fill pill with
+     its own inline hex colors (var(--gray-mid)/var(--blue-dark)/var(--amber)/
+     var(--green) with white text) found nowhere else in the app. Converted
+     to the same light-fill badge style as every other column: gray for
+     Pre-Construction, blue for Construction, amber for Project Closeout,
+     green for Complete.
+  3. Portfolio View table: every column header and cell except Property
+     (left-aligned, since it's the row's identity/link into the property
+     page) now centers both the header label and its cell content, per
+     Misty's explicit direction, instead of the previous left-aligned
+     default that read unevenly against the centered badges already in
+     several columns.
+
 pulse_v52l. Changes from v52k, this round. Four fixes/enhancements
 reported live by Misty on Hilton Denver City Center and elsewhere.
 Requires no worker changes.
@@ -1089,20 +1191,39 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .stat-amber .stat-value{color:var(--amber)}
 .stat-teal .stat-value{color:var(--teal)}
 /* BADGES */
-.badge{font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;letter-spacing:.3px;white-space:nowrap;font-family:'Plus Jakarta Sans',sans-serif;text-transform:capitalize}
-.b-cip{background:#E6F1FB;color:#185FA5}.b-nac{background:#F1EFE8;color:#5F5E5A}.b-nip{background:#EBF2FB;color:#1A56A0}
-.b-health-ontrack{background:#EAF3DE;color:#3B6D11;font-weight:600}
-.b-health-atrisk{background:#FCEBEB;color:#A32D2D;font-weight:600}
-.b-health-ahead{background:#E0F4F1;color:#0D6E5E;font-weight:600}
-.b-health-complete{background:#EAF3DE;color:#3B6D11;font-weight:600}
-.b-health-notstarted{background:#F5F5F4;color:#6B7280}
+/* v52m — unified badge system. Every badge class below now maps to one of
+   six semantic groups (green=good/done, red=problem/at-risk, amber=in
+   progress/pending/caution, blue=neutral classification tag, gray=inactive/
+   not started, purple=draft/VDA-internal), all sharing the same .badge
+   shape/padding/weight, replacing what had drifted into a dozen slightly
+   different pill styles across the app. Class names are unchanged (so
+   every call site below keeps working) but many now point at a shared
+   color instead of their old one-off hex. Two real inconsistencies this
+   fixes: (1) "At Risk" previously rendered red almost everywhere but amber
+   for milestone status (b-ms-atrisk) — now red everywhere, per Misty's
+   explicit direction. (2) "Active" Property Status previously rendered two
+   different colors depending on whether the underlying value was "In
+   Progress" (b-nip, light blue) or "Planned" (b-vda, purple) even though
+   both show the same "Active" label — both now resolve to the same green
+   used for every other Active/good-state badge. b-cip/b-nip keep their
+   original blue (they're used as generic count/percentage/category tags,
+   e.g. Milestone Tracker %, Field Update count, Weekly report tag — not
+   status pills), CIP/NIP as literal displayed status text were confirmed
+   already dead (v36b) and stay dead. */
+.badge{font-size:10px;font-weight:500;padding:3px 9px;border-radius:20px;letter-spacing:.2px;white-space:nowrap;font-family:'Plus Jakarta Sans',sans-serif;text-transform:capitalize}
+.b-cip{background:#E6F1FB;color:#185FA5}.b-nac{background:#F1EFE8;color:#5F5E5A}.b-nip{background:#E6F1FB;color:#185FA5}
+.b-health-ontrack{background:#EAF3DE;color:#3B6D11}
+.b-health-atrisk{background:#FCEBEB;color:#A32D2D}
+.b-health-ahead{background:#EAF3DE;color:#3B6D11}
+.b-health-complete{background:#EAF3DE;color:#3B6D11}
+.b-health-notstarted{background:#F1EFE8;color:#5F5E5A}
 .b-done{background:#EAF3DE;color:#3B6D11}.b-vda{background:#EEEDFE;color:#534AB7}.b-hold{background:#FCEBEB;color:#A32D2D}
-.b-behind{background:#FCEBEB;color:#A32D2D}.b-track{background:#EAF3DE;color:#3B6D11}.b-ahead{background:#E6F1FB;color:#185FA5}
+.b-behind{background:#FCEBEB;color:#A32D2D}.b-track{background:#EAF3DE;color:#3B6D11}.b-ahead{background:#EAF3DE;color:#3B6D11}
 .b-pending{background:#FAEEDA;color:#854F0B}.b-approved{background:#EAF3DE;color:#3B6D11}.b-returned{background:#FCEBEB;color:#A32D2D}
-.b-core{background:#EEEDFE;color:#534AB7}.b-noncore{background:#F1EFE8;color:#5F5E5A}
+.b-core{background:#E6F1FB;color:#185FA5}.b-noncore{background:#F1EFE8;color:#5F5E5A}
 .b-draft{background:#EEEDFE;color:#534AB7}
-.b-ms-complete{background:#EAF3DE;color:#3B6D11}.b-ms-inprog{background:#E6F1FB;color:#185FA5}
-.b-ms-atrisk{background:#FAEEDA;color:#854F0B}.b-ms-notstart{background:#F1EFE8;color:#5F5E5A}
+.b-ms-complete{background:#EAF3DE;color:#3B6D11}.b-ms-inprog{background:#FAEEDA;color:#854F0B}
+.b-ms-atrisk{background:#FCEBEB;color:#A32D2D}.b-ms-notstart{background:#F1EFE8;color:#5F5E5A}
 .b-high{background:#FCEBEB;color:#A32D2D}.b-medium{background:#FAEEDA;color:#854F0B}.b-low{background:#EAF3DE;color:#3B6D11}
 /* PROGRESS */
 .prog-bar{height:6px;background:var(--gray-pale);border-radius:3px;overflow:hidden;flex:1}
@@ -3688,7 +3809,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52o</div>
     </div>
   </nav>
 
@@ -3892,7 +4013,7 @@ from unitEffectiveValue() onto each checkbox). -->
               awkward wrap), so adjacent headers never visually run into
               each other regardless of table width. renderPortfolioRow()'s
               <td> order below was updated to match exactly. -->
-              <thead><tr><th style="width:15%">Property</th><th style="width:5%">State</th><th style="width:6%">Type</th><th style="width:8%">Property<br>Status</th><th style="width:5%">Units</th><th style="width:11%">Current<br>Project</th><th style="width:9%">Current<br>Phase</th><th style="width:8%">Health</th><th style="width:9%">Elev.<br>Company</th><th style="width:8%">Project<br>End</th><th style="width:8%">Budget</th><th style="width:9%">Consultant</th><th id="portfolio-priority-th" style="width:6%;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority<br><i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th></tr></thead>
+              <thead><tr><th style="width:15%;text-align:left">Property</th><th style="width:5%;text-align:center">State</th><th style="width:6%;text-align:center">Type</th><th style="width:8%;text-align:center">Property<br>Status</th><th style="width:5%;text-align:center">Units</th><th style="width:11%;text-align:center">Current<br>Project</th><th style="width:9%;text-align:center">Current<br>Phase</th><th style="width:8%;text-align:center">Health</th><th style="width:9%;text-align:center">Elev.<br>Company</th><th style="width:8%;text-align:center">Project<br>End</th><th style="width:8%;text-align:center">Budget</th><th style="width:9%;text-align:center">Consultant</th><th id="portfolio-priority-th" style="width:6%;text-align:center;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority<br><i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th></tr></thead>
               <tbody id="portfolio-tbody"></tbody>
             </table>
           </div>
@@ -8878,17 +8999,23 @@ function renderMilestones(p){
           </div>`:''}
         </div>
         ${canEdit&&isCalendar?`
-        <div style="margin-top:8px;display:flex;align-items:center;gap:10px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:8px;padding:8px 12px">
-          <label style="position:relative;display:inline-block;width:38px;height:22px;flex-shrink:0;cursor:pointer">
+        <!-- v52o — shrunk to match the density of the rest of the milestone
+             row (reported as "way too large" against the compact date/notes
+             fields above it). Slider 38x22->28x16, padding 8px 12px->5px 9px,
+             title text 12px->11px, helper subtext 10px->9px and only shown
+             in the off state to save vertical space (the on-state timestamp
+             line already says everything needed). Same amber-in-both-states
+             slider look approved for v52l, just smaller. -->
+        <div style="margin-top:6px;display:flex;align-items:center;gap:8px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:6px;padding:5px 9px">
+          <label style="position:relative;display:inline-block;width:28px;height:16px;flex-shrink:0;cursor:pointer">
             <input type="checkbox" ${m.manuallyCompleted?'checked':''} onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="opacity:0;width:0;height:0;position:absolute">
-            <span style="position:absolute;inset:0;background:${m.manuallyCompleted?'#EF9F27':'#CBD5E1'};border-radius:22px;transition:background .15s"></span>
-            <span style="position:absolute;top:3px;${m.manuallyCompleted?'right':'left'}:3px;width:16px;height:16px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
+            <span style="position:absolute;inset:0;background:${m.manuallyCompleted?'#EF9F27':'#CBD5E1'};border-radius:16px;transition:background .15s"></span>
+            <span style="position:absolute;top:2px;${m.manuallyCompleted?'right':'left'}:2px;width:12px;height:12px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
           </label>
           <div style="flex:1;min-width:0">
             ${m.manuallyCompleted?`
-            <div style="font-size:12px;font-weight:600;color:#854F0B"><i class="ti ti-clock" style="font-size:12px;margin-right:4px"></i>Marked complete today (${m.manuallyCompletedOn?new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}) by ${escHtml(m.manuallyCompletedBy||'')}</div>`:`
-            <div style="font-size:12px;font-weight:600;color:#854F0B">Mark complete today</div>
-            <div style="font-size:10px;color:#9A6B1E;margin-top:1px">Marks this milestone Complete as of today, independent of the date fields. Turn off any time to revert to normal status and enter real dates.</div>`}
+            <div style="font-size:11px;font-weight:600;color:#854F0B"><i class="ti ti-clock" style="font-size:11px;margin-right:3px"></i>Marked complete today (${m.manuallyCompletedOn?new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}) by ${escHtml(m.manuallyCompletedBy||'')}</div>`:`
+            <div style="font-size:11px;font-weight:600;color:#854F0B">Mark complete today<span style="font-weight:400;color:#9A6B1E"> — independent of the date fields, turn off any time to revert</span></div>`}
           </div>
         </div>`:''}`:
         `<div style="display:flex;align-items:center;gap:8px;margin-top:2px">${statusBadge}<span style="font-size:11px;color:var(--gray-mid)">${m.plannedDate?'Planned: '+m.plannedDate:''}${m.actualDate?' · Actual: '+m.actualDate:''}</span></div>`}
@@ -12507,10 +12634,15 @@ function renderStatusBadge(st){
   // now render the same visible "Active" badge text. p.st itself is
   // untouched everywhere else (still 'In Progress'/'Planned' under the
   // hood) — this only changes what label this badge shows.
+  // v52m — In Progress and Planned both used to render "Active" but with
+  // two different badge colors (b-nip blue vs b-vda purple) purely because
+  // they came from different source values, even though the visible label
+  // was identical either way. Both now use b-done (green), same as every
+  // other Active/good-state badge in the unified system.
   const map={
-    'In Progress':`<span class="badge b-nip" style="font-size:9px;padding:1px 6px">Active</span>`,
+    'In Progress':`<span class="badge b-done" style="font-size:9px;padding:1px 6px">Active</span>`,
     'Complete':`<span class="badge b-done" style="font-size:9px;padding:1px 6px">Complete</span>`,
-    'Planned':`<span class="badge b-vda" style="font-size:9px;padding:1px 6px">Active</span>`,
+    'Planned':`<span class="badge b-done" style="font-size:9px;padding:1px 6px">Active</span>`,
   };
   return map[st]||`<span class="badge b-nac" style="font-size:9px;padding:1px 6px">${st||'—'}</span>`;
 }
@@ -14082,6 +14214,53 @@ async function saveEditPhase(){
   // else in this function.
   const reclaimFailCount=await reclaimUnitsFromOtherPhases(ph.property,linkedUnitIds,id);
   editPhaseFailCount+=reclaimFailCount||0;
+  // v52o — reported live by Misty: Casa Marina's tasks were all created
+  // against the phase's original Planned Completion (12/25/2025); she later
+  // moved the phase's own dates out to 10/31/2026, but every task kept its
+  // stale original date, so she had to go in and manually re-date each task
+  // one at a time. A task's Planned Start/End was only ever seeded from the
+  // phase ONCE, at task creation (v21c) — there was never any ongoing link
+  // after that.
+  // Per Misty's direction, a task's planned dates should now follow the
+  // phase's planned dates automatically, UNLESS that specific task has a
+  // real Actual Start or Completion Date entered — an actual represents
+  // what really happened and must never be silently overwritten by a
+  // forecast shift. A task whose planned dates were manually retyped (with
+  // no actual yet, e.g. the "Approximate Date"/"Elevated" notes style entry)
+  // still follows, since a bare planned date with no actual behind it is
+  // still just a forecast, not a fact — matches her call that only an
+  // actual should opt a task out.
+  // Only runs when the phase's own dates actually changed, and only
+  // shifts a task's date by the same delta the phase itself moved (not a
+  // blind overwrite to the phase's new date), so a task deliberately
+  // planned a few days before/after the phase boundary keeps that same
+  // relative offset instead of collapsing onto the phase's exact date.
+  let taskDateFollowFailCount=0;
+  const phaseStartChanged=plannedStart!==(ph.plannedStart||'');
+  const phaseEndChanged=plannedEnd!==(ph.plannedCompletion||'');
+  if(phaseStartChanged||phaseEndChanged){
+    const startDeltaMs=(phaseStartChanged&&ph.plannedStart&&plannedStart)?(new Date(plannedStart)-new Date(ph.plannedStart)):0;
+    const endDeltaMs=(phaseEndChanged&&ph.plannedCompletion&&plannedEnd)?(new Date(plannedEnd)-new Date(ph.plannedCompletion)):0;
+    const shiftDate=(dateStr,deltaMs)=>{
+      if(!dateStr||!deltaMs)return dateStr;
+      const d=new Date(dateStr);
+      d.setTime(d.getTime()+deltaMs);
+      return d.toISOString().split('T')[0];
+    };
+    const followingTasks=(window.PHASE_STEPS||[]).filter(s=>s.property===ph.property&&s.phaseName===name&&!s.actualStart&&!s.completionDate);
+    for(const task of followingTasks){
+      const newTaskStart=phaseStartChanged?shiftDate(task.plannedStart,startDeltaMs):task.plannedStart;
+      const newTaskEnd=phaseEndChanged?shiftDate(task.plannedEnd,endDeltaMs):task.plannedEnd;
+      if(newTaskStart===task.plannedStart&&newTaskEnd===task.plannedEnd)continue;
+      task.plannedStart=newTaskStart||'';
+      task.plannedEnd=newTaskEnd||'';
+      if(!demoMode&&task.id&&task.id.startsWith('rec')){
+        const followRes=await atUpdate('Phase Tasks',task.id,{'Planned Start':newTaskStart||null,'Planned End':newTaskEnd||null});
+        if(!followRes)taskDateFollowFailCount++;
+      }
+    }
+  }
+  editPhaseFailCount+=taskDateFollowFailCount;
   window.UNIT_GROUPS[idx]={...ph,phase:name,units,unitNames,linkedUnitIds,productType,
     plannedStart,plannedCompletion:plannedEnd,
     actualStart,actualCompletion:actualEnd,
@@ -18470,7 +18649,21 @@ function renderCharts(){
   // deriveScopeHealth, so a property with two Scopes on two different
   // contractors now shows up correctly under both contractors instead of
   // being smeared into one property-wide bucket. Capital Plan Scopes excluded.
-  const elevCoSource=CF.property.length>0?chartFiltered:active.filter(p=>p.st==='In Progress');
+  // v52n — unfiltered source was active.filter(st==='In Progress') only,
+  // while Active Projects by Stage's unfiltered source (allProps, below)
+  // includes every non-Capital-Plan property regardless of status. A
+  // property marked Complete or Planned with a real, contractor-assigned
+  // Scope dropped out of this chart's total entirely while still counting
+  // on the Stage chart, so the two "total projects" footers could disagree
+  // (reported live: 43 on Stage vs 42 here). Also self-contradictory on its
+  // own terms: this chart already has a Complete bucket in its stacked bar,
+  // so excluding Complete-status properties from the source meant that
+  // bucket could never actually be reached for them. Now uses the same
+  // `active` set (In Progress + Complete + Planned) as the Stage chart, so
+  // the two totals always agree — same underlying project population,
+  // just sliced two different ways, per Misty's direction that the two
+  // charts are meant to complement each other.
+  const elevCoSource=CF.property.length>0?chartFiltered:active;
   const elevCoMap={};
   let elevCoTotalScopeCount=0;
   const elevCoScopes=[];
@@ -18772,25 +18965,25 @@ function renderCharts(){
       <div class="stat-value" style="font-size:20px;color:var(--green)">${totalSavingsAll!=null?fmtCurrency(totalSavingsAll):'—'}</div>
       <div class="stat-sub">Approved Change Orders</div>
     </div>
+    <div class="stat-card" style="border-top:3px solid var(--gray-mid)">
+      <div class="stat-label">Completed Units</div>
+      <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_analyticsUnitBuckets.complete}</div>
+      <div class="stat-sub">Project or Unit Complete</div>
+    </div>
     <div class="stat-card" style="border-top:3px solid var(--teal)">
       <div class="stat-label">Active Units</div>
       <div class="stat-value" style="font-size:20px;color:var(--teal)">${_analyticsUnitBuckets.active}</div>
       <div class="stat-sub">Project In Progress</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--amber)">
-      <div class="stat-label">Units On Hold</div>
-      <div class="stat-value" style="font-size:20px;color:var(--amber)">${_analyticsUnitBuckets.onhold}</div>
-      <div class="stat-sub">Project On Hold</div>
     </div>
     <div class="stat-card" style="border-top:3px solid var(--purple)">
       <div class="stat-label">Pipeline Units</div>
       <div class="stat-value" style="font-size:20px;color:var(--purple)">${_analyticsUnitBuckets.pipeline}</div>
       <div class="stat-sub">Capital Plan, Planned, or Unassigned</div>
     </div>
-    <div class="stat-card" style="border-top:3px solid var(--gray-mid)">
-      <div class="stat-label">Completed Units</div>
-      <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_analyticsUnitBuckets.complete}</div>
-      <div class="stat-sub">Project or Unit Complete</div>
+    <div class="stat-card" style="border-top:3px solid var(--amber)">
+      <div class="stat-label">Units On Hold</div>
+      <div class="stat-value" style="font-size:20px;color:var(--amber)">${_analyticsUnitBuckets.onhold}</div>
+      <div class="stat-sub">Project On Hold</div>
     </div>
   </div>
 
@@ -20764,25 +20957,25 @@ function renderDashboard(){
           <div class="stat-value" style="font-size:20px;color:var(--green)">${_coSav!=null?fmtCurrency(_coSav):'—'}</div>
           <div class="stat-sub">Approved Change Orders</div>
         </div>
+        <div class="stat-card" style="border-top:3px solid var(--gray-mid)">
+          <div class="stat-label">Completed Units</div>
+          <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_completeUnitsPortfolio}</div>
+          <div class="stat-sub">Project or Unit Complete</div>
+        </div>
         <div class="stat-card" style="border-top:3px solid var(--teal)">
           <div class="stat-label">Active Units</div>
           <div class="stat-value" style="font-size:20px;color:var(--teal)">${_actUnits}</div>
           <div class="stat-sub">Project In Progress</div>
-        </div>
-        <div class="stat-card" style="border-top:3px solid var(--amber)">
-          <div class="stat-label">Units On Hold</div>
-          <div class="stat-value" style="font-size:20px;color:var(--amber)">${_onHoldUnits}</div>
-          <div class="stat-sub">Project On Hold</div>
         </div>
         <div class="stat-card" style="border-top:3px solid var(--purple)">
           <div class="stat-label">Pipeline Units</div>
           <div class="stat-value" style="font-size:20px;color:var(--purple)">${_cpUnits}</div>
           <div class="stat-sub">Capital Plan, Planned, or Unassigned</div>
         </div>
-        <div class="stat-card" style="border-top:3px solid var(--gray-mid)">
-          <div class="stat-label">Completed Units</div>
-          <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_completeUnitsPortfolio}</div>
-          <div class="stat-sub">Project or Unit Complete</div>
+        <div class="stat-card" style="border-top:3px solid var(--amber)">
+          <div class="stat-label">Units On Hold</div>
+          <div class="stat-value" style="font-size:20px;color:var(--amber)">${_onHoldUnits}</div>
+          <div class="stat-sub">Project On Hold</div>
         </div>
       </div>`;
     })()}
@@ -23409,7 +23602,14 @@ function fmtShortDate(dateStr){
 // by getCurrentProjectForProperty) and switches the Health column from the
 // old property-wide derivePropertyStatusFromPhases to the new per-project
 // deriveScopeHealth, per direct instruction.
-const PORTFOLIO_PHASE_COLORS={'Pre-Construction':'var(--gray-mid)','Construction':'var(--blue-dark)','Project Closeout':'var(--amber)','Complete':'var(--green)'};
+// v52m — was solid-fill dark pills with inline hex per phase (its own
+// one-off style found nowhere else in the app). Now uses the same light-
+// fill badge classes as every other column: gray for Pre-Construction (not
+// yet a status verdict), blue for Construction (neutral, in-progress-but-
+// not-a-risk-judgment classification), amber for Project Closeout (final
+// approval-pending stage), green for Complete (matches every other
+// Complete badge in the app).
+const PORTFOLIO_PHASE_CLASSES={'Pre-Construction':'b-noncore','Construction':'b-core','Project Closeout':'b-pending','Complete':'b-done'};
 function renderPortfolioRow(p){
   const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
   const endDate=getProjectEndDate(p.n);
@@ -23422,26 +23622,30 @@ function renderPortfolioRow(p){
   const curProj=getCurrentProjectForProperty(p.n);
   const curProjCell=curProj?`<span style="font-size:11px;color:var(--navy)">${escHtml(curProj.name||'—')}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
   const curPhase=curProj?getMilestoneCategoryForScope(curProj):null;
-  const curPhaseCell=curPhase?`<span class="badge" style="background:${PORTFOLIO_PHASE_COLORS[curPhase]};color:#fff">${escHtml(curPhase)}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
+  const curPhaseCell=curPhase?`<span class="badge ${PORTFOLIO_PHASE_CLASSES[curPhase]||'b-nac'}">${escHtml(curPhase)}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
   const healthCell=curProj?renderScopeHealthBadge(deriveScopeHealth(curProj)):`<span class="badge b-health-notstarted">Not Started</span>`;
   // v52c — cell order reordered to match the new header order exactly:
   // Property, State, Type, Property Status, Units, Current Project,
   // Current Phase, Health, Elev. Company, Project End, Budget, Consultant,
   // Priority. No cell content/logic changed, purely reordered.
+  // v52m — every column except Property (which stays left-aligned as the
+  // row's identity/link) now centers both its header and its cell content,
+  // per Misty's direction that values and headings should be centered for
+  // a more consistent table read.
   return `<tr data-status="${p.st}" data-type="${escHtml(p.type)}" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
       <td style="font-size:12px;font-weight:500;color:var(--blue-dark);cursor:pointer">${escHtml(p.n)}</td>
-      <td><span class="geo">${p.s||'—'}</span></td>
-      <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
-      <td>${renderStatusBadge(p.st)}</td>
-      <td style="font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
-      <td>${curProjCell}</td>
-      <td>${curPhaseCell}</td>
-      <td>${healthCell}</td>
-      <td style="font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
-      <td style="font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
-      <td class="portfolio-priority-td" style="font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
+      <td style="text-align:center"><span class="geo">${p.s||'—'}</span></td>
+      <td style="text-align:center"><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
+      <td style="text-align:center">${renderStatusBadge(p.st)}</td>
+      <td style="text-align:center;font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
+      <td style="text-align:center">${curProjCell}</td>
+      <td style="text-align:center">${curPhaseCell}</td>
+      <td style="text-align:center">${healthCell}</td>
+      <td style="text-align:center;font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
+      <td style="text-align:center;font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
+      <td style="text-align:center;font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
+      <td style="text-align:center;font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
+      <td class="portfolio-priority-td" style="text-align:center;font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
     </tr>`;
 }
 function populatePortfolio(){
