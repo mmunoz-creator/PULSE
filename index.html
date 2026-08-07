@@ -1,4 +1,54 @@
 <!--
+pulse_v53b. Changes from v53a, this round. Fixes a gap surfaced by
+v53a's own Mark Complete Today toggle-gating fix, plus new Meeting Overdue/
+Cancelled visibility Misty asked for after reviewing v53a live. Requires no
+worker changes.
+  1. Mark Complete Today toggle gating fix. Reported live: after v53a's
+     fix tied the toggle to Manual Entry Override for calendar-type
+     milestones (1-4/13/14), turning override off could leave a milestone
+     that had Manually Completed set stuck showing Complete with the
+     toggle now gone from the UI — no code anywhere cleared
+     manuallyCompleted when override switched off, despite a nearby
+     comment claiming it did. toggleMilestoneManualOverride() now clears
+     Manually Completed on every milestone for that property that has it
+     set whenever override turns off, re-deriving each one's Status the
+     same way the toggle's own OFF path already does, with the existing
+     rollback-on-write-failure pattern.
+  2. Meeting Overdue/Cancelled badges. Reported live: a meeting whose date
+     passed with no minutes logged and no cancellation stayed labeled
+     Scheduled indefinitely, with no signal anywhere that it needed
+     attention. Meeting cards (property tab and global dashboard list) now
+     show an amber Overdue badge instead of Scheduled once the date has
+     passed, with a Log Minutes button (existing) and a new red Cancel
+     button (reuses the existing confirmCancelCalEvent/
+     executeCancelCalEvent flow, already wired for both Meetings and Site
+     Visits with attendee cancellation emails). A Cancelled meeting now
+     shows a gray Cancelled badge instead of falling through to the
+     Published/Draft/Internal branch. Site Visits deliberately excluded
+     this round — Site Visits has no Scheduled/Cancelled status concept
+     the way Meetings does, only an Upcoming/Past date split with no way to
+     mark one cancelled, so a real Overdue state there needs an Airtable
+     field decision first. Flagged as a known follow-up.
+  3. Meetings & Actions tab badge. New per-property red count badge on the
+     property page's Meetings & Actions tab (same visual pattern as the
+     existing Client Comments sidebar badge), counting overdue open Action
+     Items plus overdue Scheduled meetings for that property — confirmed
+     with Misty the count includes actions, not just meetings/visits,
+     matching the tab's own name. Site Visits excluded from this count for
+     the same reason as item 2.
+  4. Operations Center Overdue section + nav badge. Overdue Scheduled
+     meetings were previously silently dropped from Operations Center
+     entirely (the horizon-item builder only included a meeting if its
+     date was today or later), not shown anywhere in that view. Folded
+     into the same Overdue list already used for overdue Action Items,
+     rendering through the existing Meeting type badge styling already
+     used elsewhere on that page. The sidebar Operations Center nav badge
+     (new-since-last-visit counter) already counted newly created Scheduled
+     meetings the same way it counts Action Items — confirmed with Misty
+     to leave that matching behavior as-is rather than introduce a
+     separate overdue-triggers-badge rule that Action Items don't have
+     either.
+
 pulse_v53a. Changes from v52p, this round. Bundles the two fixes drafted
 undelivered in the prior pulse_v52q_build.html work-in-progress file, plus
 the phase-reorder collision fix approved this session, plus a Portfolio
@@ -3914,7 +3964,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53b</div>
     </div>
   </nav>
 
@@ -4155,7 +4205,7 @@ from unitEffectiveValue() onto each checkbox). -->
             <button class="tab-btn" onclick="switchPropTab('phases',this)">Unit Phases</button>
             <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget Performance</button>
             <button class="tab-btn" onclick="switchPropTab('changeorders',this)">Change Orders</button>
-            <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions</button>
+            <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions<span id="prop-fieldops-tab-badge" class="nav-badge hidden" style="background:var(--red)">0</span></button>
             <button class="tab-btn" onclick="switchPropTab('updates',this)">Field Updates</button>
             <button class="tab-btn" onclick="switchPropTab('docs',this)">Documents</button>
           </div>
@@ -7227,6 +7277,32 @@ function renderPropertyView(p){
   // Budget summary removed from overview (now lives in Budget Performance tab)
   // prop-details-list removed — all detail now in scope cards
 
+  // v53b — Meetings & Actions tab badge. Reported live: a meeting whose
+  // date passed with no minutes logged and no cancellation stayed labeled
+  // Scheduled indefinitely, with nothing anywhere signaling it needed
+  // attention short of opening this exact tab and noticing the stale date
+  // by eye. Counts overdue open Action Items (due date passed, same
+  // definition already used by Operations Center's Overdue section) plus
+  // overdue Scheduled meetings (date passed, status still Scheduled — see
+  // the matching Overdue badge added to meeting cards themselves and to
+  // Operations Center this same round) for this property only. Confirmed
+  // per Misty's direction: the badge is meetings + actions combined,
+  // matching the tab's own "Meetings & Actions" label rather than meetings
+  // alone. Site Visits deliberately excluded this round — Site Visits has
+  // no Scheduled/Cancelled status concept the way Meetings does (only an
+  // Upcoming/Past date split, no way to mark one cancelled), so adding a
+  // real Overdue state there needs an Airtable field decision first.
+  // Flagged as a known follow-up, not built here.
+  const todayForBadge=new Date();todayForBadge.setHours(0,0,0,0);
+  const overdueActionsForProp=openAIs.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<todayForBadge).length;
+  const overdueMeetingsForProp=(meetings||[]).filter(m=>m.property===p.n&&m.status==='Scheduled'&&m.date&&new Date(m.date+'T12:00:00')<todayForBadge).length;
+  const fieldopsOverdueCount=overdueActionsForProp+overdueMeetingsForProp;
+  const fieldopsTabBadge=document.getElementById('prop-fieldops-tab-badge');
+  if(fieldopsTabBadge){
+    fieldopsTabBadge.textContent=fieldopsOverdueCount;
+    fieldopsTabBadge.classList.toggle('hidden',fieldopsOverdueCount===0);
+  }
+
 }
 
 // Get milestones for a property from live data (or seed p.ms as fallback)
@@ -9133,12 +9209,25 @@ function renderMilestones(p){
               onblur="updateMilestoneField('${m.id}','Notes',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>`:''}
         </div>
-        ${canEdit&&isCalendar?`
+        ${canEdit&&isCalendar&&p.milestoneManualOverride?`
         <!-- v52p — per Misty's approved mockup: box now hugs its content
              (inline-flex + width:fit-content) instead of stretching the
              full row width, and the off-state label is now all caps
              "MARK COMPLETE TODAY" with the full helper text inline, ending
-             right after it — no more separate/truncated subtext line. -->
+             right after it — no more separate/truncated subtext line.
+             v53a — reported live: milestones 1-4/13/14 (permanently
+             calendar-type, independent of the override banner — see
+             isCalendar above) kept showing this toggle even after Manual
+             Entry Override was turned off, since this block was previously
+             gated on isCalendar alone, which those milestones satisfy
+             regardless of override state. Added an explicit
+             p.milestoneManualOverride check so the toggle itself is now
+             tied to the override banner for every milestone. Does not
+             change isCalendar or the date-field editability gate directly
+             above this block — milestones 1-4/13/14 remain normal
+             editable date fields with or without override on, per Misty's
+             direction; only the Mark Complete Today shortcut itself is
+             now override-gated. -->
         <div style="margin-top:6px;display:inline-flex;align-items:center;gap:8px;background:#FAEEDA;border:1px solid #EF9F27;border-radius:6px;padding:5px 9px;width:fit-content;max-width:100%">
           <label style="position:relative;display:inline-block;width:28px;height:16px;flex-shrink:0;cursor:pointer">
             <input type="checkbox" ${m.manuallyCompleted?'checked':''} onchange="toggleMilestoneManualCompletion('${m.id}','${p.n.replace(/'/g,"\\'")}',this.checked,'${m.id||idx}','${circleId}')" style="opacity:0;width:0;height:0;position:absolute">
@@ -9187,6 +9276,47 @@ async function toggleMilestoneManualOverride(propName,newVal){
       p.milestoneManualOverride=previousVal;
       if(currentProp&&currentProp.n===propName)renderMilestones(p);
       alert('Could not save the Milestone Manual Override change. Please try again.');
+      return;
+    }
+  }
+  // v53b — turning override off now hides the Mark Complete Today toggle
+  // for calendar-type milestones (1-4/13/14, see renderMilestones' isCalendar
+  // gate) whenever it wasn't already forced visible by override itself.
+  // Before this fix, nothing ever cleared manuallyCompleted when override
+  // turned off, so a milestone that had it set would keep showing Complete
+  // (deriveMilestoneStatus checks manuallyCompleted before anything else)
+  // with the toggle now gone from the UI — stuck, with no visible way to
+  // turn it back off short of switching override back on first. Clears
+  // Manually Completed on every milestone for this property that has it
+  // set, re-deriving each one's Status the same way the toggle's own OFF
+  // path already does (see toggleMilestoneManualCompletion), so nothing is
+  // ever left in a state the UI can't reach.
+  if(!newVal){
+    const propMilestones=(window.MILESTONES||[]).filter(m=>m.property===propName&&m.manuallyCompleted);
+    let clearFailCount=0;
+    for(const ms of propMilestones){
+      const prior={manuallyCompleted:ms.manuallyCompleted,manuallyCompletedBy:ms.manuallyCompletedBy,manuallyCompletedOn:ms.manuallyCompletedOn,status:ms.status};
+      const newStatus=deriveMilestoneStatus(propName,ms.milestoneNumber,ms.plannedDate,ms.actualDate,ms.completionDate,ms.scopeId);
+      ms.manuallyCompleted=false;
+      ms.manuallyCompletedBy='';
+      ms.manuallyCompletedOn='';
+      ms.status=newStatus;
+      if(!demoMode&&ms.id){
+        const result=await atUpdate('Milestones',ms.id,{'Manually Completed':false,'Manually Completed By':'','Manually Completed On':null,'Status':newStatus});
+        if(!result){
+          clearFailCount++;
+          ms.manuallyCompleted=prior.manuallyCompleted;
+          ms.manuallyCompletedBy=prior.manuallyCompletedBy;
+          ms.manuallyCompletedOn=prior.manuallyCompletedOn;
+          ms.status=prior.status;
+        }else if(ms.scopeId){
+          await deriveAndWriteScopeStatus(ms.scopeId);
+        }
+      }
+    }
+    if(currentProp&&currentProp.n===propName)renderMilestones(p);
+    if(clearFailCount>0){
+      showToast(`Override turned off, but ${clearFailCount} milestone${clearFailCount>1?'s':''} could not be un-marked complete. Check your connection and try again.`,'error');
     }
   }
 }
@@ -9994,7 +10124,13 @@ function renderPropMeetings(p){
       <div class="meeting-card-header">
         <div><div class="meeting-card-title">${escHtml(m.type)}</div><div class="meeting-card-meta">${m.date} · ${m.elevco} · ${m.format}</div></div>
         <div style="display:flex;align-items:center;gap:6px">
-          ${m.status==='Scheduled'
+          ${m.status==='Cancelled'
+            ?`<span class="badge" style="background:#F1EFE8;color:#5F5E5A"><i class="ti ti-ban" style="font-size:11px;margin-right:3px"></i>Cancelled</span>`
+            :m.status==='Scheduled'&&m.date&&new Date(m.date+'T12:00:00')<new Date(new Date().setHours(0,0,0,0))
+            ?`<span class="badge" style="background:#FAEEDA;color:#854F0B" title="Date has passed with no minutes logged"><i class="ti ti-alert-triangle" style="font-size:11px;margin-right:3px"></i>Overdue</span>
+              <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>
+              <button class="btn btn-icon" onclick="confirmCancelCalEvent('meeting','${m.id}')" title="Mark this meeting cancelled — it will no longer count as overdue" style="color:var(--red);border-color:var(--red)"><i class="ti ti-x" style="font-size:13px"></i></button>`
+            :m.status==='Scheduled'
             ?`<span class="badge" style="background:#e8f4ff;color:var(--indigo);border:1px solid #c5d9f5">Scheduled</span>
               <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>`
             :`<span class="badge ${m.published?'b-public':m.isDraft||m.visibility==='Draft'?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft||m.visibility==='Draft'?'Draft':'Internal'}</span>
@@ -10338,7 +10474,13 @@ function renderAllMeetings(){
     recentMeetings.map(m=>`<div class="meeting-card">
       <div class="meeting-card-header"><div><div class="meeting-card-title">${escHtml(m.type)} — ${escHtml(m.property)}</div><div class="meeting-card-meta">${m.date}${m.elevco?' · '+m.elevco:''}</div></div>
       <div style="display:flex;align-items:center;gap:6px">
-        ${m.status==='Scheduled'
+        ${m.status==='Cancelled'
+          ?`<span class="badge" style="background:#F1EFE8;color:#5F5E5A"><i class="ti ti-ban" style="font-size:11px;margin-right:3px"></i>Cancelled</span>`
+          :m.status==='Scheduled'&&m.date&&new Date(m.date+'T12:00:00')<new Date(new Date().setHours(0,0,0,0))
+          ?`<span class="badge" style="background:#FAEEDA;color:#854F0B" title="Date has passed with no minutes logged"><i class="ti ti-alert-triangle" style="font-size:11px;margin-right:3px"></i>Overdue</span>
+            <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>
+            <button class="btn btn-icon" onclick="confirmCancelCalEvent('meeting','${m.id}')" title="Mark this meeting cancelled — it will no longer count as overdue" style="color:var(--red);border-color:var(--red)"><i class="ti ti-x" style="font-size:13px"></i></button>`
+          :m.status==='Scheduled'
           ?`<span class="badge" style="background:#e8f4ff;color:var(--indigo);border:1px solid #c5d9f5">Scheduled</span>
             <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>`
           :`<span class="badge ${m.published?'b-public':m.isDraft||m.visibility==='Draft'?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft||m.visibility==='Draft'?'Draft':'Internal'}</span>
@@ -25468,6 +25610,16 @@ function updateOpsCenterBadge(){
       if(created>lastSeen)count++;
     }
   });
+  // v53b — considered making overdue status alone (regardless of
+  // createdTime) trigger this badge for meetings, matching the new Overdue
+  // badge/tab-count added this round, but confirmed with Misty to keep this
+  // matching Action Items' existing behavior instead: only newly-created
+  // items since lastSeen count, whether or not they're overdue. A meeting
+  // that's been sitting overdue for a while but was created before your
+  // last Operations Center visit won't re-trigger this badge — same as an
+  // Action Item in that same situation already doesn't. Deliberate, not an
+  // oversight; the Overdue section itself (see renderOpsCenter) still shows
+  // it regardless of this badge's count.
   (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)).forEach(m=>{
     const created=m.createdTime?new Date(m.createdTime).getTime():0;
     if(created>lastSeen)count++;
@@ -28442,7 +28594,21 @@ function renderOpsCenter(){
     if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${escHtml(v.property||'—')} · ${v.date}${v.consultant?' · '+escHtml(v.consultant):''}`,_prop:v.property||'',_priority:''});
   });
 
-  const overdue=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today).map(a=>({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''})).sort((a,b)=>a._date-b._date);
+  const overdueActionItems=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due)<today).map(a=>({_type:'action',_date:new Date(a.due),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''}));
+  // v53b — meetings whose date passed with status still Scheduled (no
+  // minutes logged, not cancelled) were previously excluded from Operations
+  // Center entirely — the horizonItems build above only includes a meeting
+  // when d>=today, so an overdue one simply vanished from this view with no
+  // signal anywhere that it needed attention. Folded into the same overdue
+  // array as Action Items so it renders through the existing actionRow/
+  // typeBadge Meeting styling already used elsewhere on this page, and
+  // counts toward updateOpsCenterBadge the same way. Site Visits
+  // deliberately excluded this round — see the matching note on the
+  // Meetings & Actions tab badge in renderPropertyView; Site Visits has no
+  // Scheduled/Cancelled status concept yet, so there's no reliable way to
+  // tell an overdue-and-forgotten visit from one that simply happened.
+  const overdueMeetings=(meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)&&new Date(m.date+'T12:00:00')<today).map(m=>({_type:'meeting',_date:new Date(m.date+'T12:00:00'),_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${escHtml(m.property||'—')} · ${m.date}${m.attClient?' · '+escHtml(m.attClient):''}`,_prop:m.property||'',_priority:'',_scopeId:m.scopeId||''}));
+  const overdue=overdueActionItems.concat(overdueMeetings).sort((a,b)=>a._date-b._date);
   const next30=horizonItems.filter(i=>i._date>=today&&i._date<=d30).sort((a,b)=>a._date-b._date);
   const next60=horizonItems.filter(i=>i._date>d30&&i._date<=d60).sort((a,b)=>a._date-b._date);
   const next90=horizonItems.filter(i=>i._date>d60&&i._date<=d90).sort((a,b)=>a._date-b._date);
