@@ -4406,7 +4406,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55h</div>
     </div>
   </nav>
 
@@ -28425,6 +28425,44 @@ function isMilestoneEditActive(){
   return Date.now()<_msEditActiveUntil;
 }
 
+// v55h — same edit-vs-poll guard as Milestones (see markMilestoneEditActive
+// above), generalized for Phases, Change Orders, and Budget. These three
+// tabs don't autosave per field the way Milestones does — each has one
+// Finish & Save/submit click — but their forms (Add/Edit Phase, the Step
+// Dates overlay, Change Order add/edit, Billing entry) can stay open for
+// a while as a PM fills in several fields, and a poll landing mid-fill
+// would replace the tab's underlying array and re-render out from under
+// an open form, risking a save landing on stale assumptions (e.g. phase
+// order, existing tasks) even though it wouldn't corrupt the open form's
+// own typed values directly. Reported live as a real concern, same root
+// cause class as the Milestones bug, fixed proactively here rather than
+// waiting for a live reproduction on these tabs too.
+//
+// Implemented as one delegated listener on document, gated by which tab
+// is currently being polled (_propPollTab), rather than wiring every
+// individual form's open/close — several of these forms/overlays are
+// appended straight to document.body (see Step Dates, Add/Edit Change
+// Order, etc.), not nested inside their tab's own container element, so
+// a listener scoped to just the tab container would miss them. Any
+// input/change anywhere on the page while a poll-tracked tab is active
+// extends the guard window; this is intentionally a little broader than
+// "only fields inside this tab's form," but false-positives here just
+// mean a poll gets skipped one extra tick, which is harmless, versus a
+// false negative letting the original bug back in.
+let _tabEditActiveUntil={};
+function markTabEditActive(tab){
+  _tabEditActiveUntil[tab]=Date.now()+4000;
+}
+function isTabEditActive(tab){
+  return Date.now()<(_tabEditActiveUntil[tab]||0);
+}
+document.addEventListener('input',()=>{
+  if(_propPollTab==='phases'||_propPollTab==='changeorders'||_propPollTab==='budget')markTabEditActive(_propPollTab);
+});
+document.addEventListener('change',()=>{
+  if(_propPollTab==='phases'||_propPollTab==='changeorders'||_propPollTab==='budget')markTabEditActive(_propPollTab);
+});
+
 let _propPollTab=null;
 function startPropTabPolling(tab){
   stopPropTabPolling();
@@ -28507,6 +28545,11 @@ async function pollChangeOrders(){
   if(!currentProp||_propPollTab!=='changeorders')return;
   try{
     const recs=await atGet('Change Order Savings Log');
+    // v55h — still fetch on every tick, skip applying the response while a
+    // Change Order form is actively being filled in on this tab (see the
+    // tab-edit-guard block near startPropTabPolling for the full
+    // rationale, same pattern as Milestones' own fix).
+    if(isTabEditActive('changeorders'))return;
     window.CO_SAVINGS=(recs||[]).map(r=>({
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
@@ -28537,6 +28580,14 @@ async function pollPhases(){
   if(!currentProp||_propPollTab!=='phases')return;
   try{
     const [unitGroups,phaseSteps]=await Promise.all([atGet('Unit Groups'),atGet('Phase Tasks')]);
+    // v55h — still fetch on every tick, skip applying the response while
+    // Add Phase, Edit Phase, or the Step Dates overlay is actively being
+    // filled in on this tab (see the tab-edit-guard block near
+    // startPropTabPolling for the full rationale, same pattern as
+    // Milestones' own fix). Phases has the most exposure of these three —
+    // Add/Edit Phase and Step Dates can all stay open for a while with
+    // several fields being filled in before one Finish & Save click.
+    if(isTabEditActive('phases'))return;
     window.UNIT_GROUPS=(unitGroups||[]).map(r=>({
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
@@ -28579,6 +28630,11 @@ async function pollBudget(){
   if(!currentProp||_propPollTab!=='budget')return;
   try{
     const [billingLog,retainageReleases]=await Promise.all([atGet('Billing Log'),atGet('Retainage Releases')]);
+    // v55h — still fetch on every tick, skip applying the response while a
+    // Billing or Retainage entry form is actively being filled in on this
+    // tab (see the tab-edit-guard block near startPropTabPolling for the
+    // full rationale, same pattern as Milestones' own fix).
+    if(isTabEditActive('budget'))return;
     window.BILLING_LOG=(billingLog||[]).map(r=>({
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
