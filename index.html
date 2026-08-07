@@ -1,4 +1,56 @@
 <!--
+pulse_v53a. Changes from v52p, this round. Bundles the two fixes drafted
+undelivered in the prior pulse_v52q_build.html work-in-progress file, plus
+the phase-reorder collision fix approved this session, plus a Portfolio
+View color adjustment. Requires no worker changes.
+  1. Save-guard fix. Reported live via 3 screenshots: after manually
+     creating "Phase 1" on 4 Escalators with 2 units, the collapsed card
+     showed 16 Phase Tasks instead of ~8, every task name duplicated
+     exactly once. Most likely explanation: Finish & Save firing twice from
+     a double-click, since nothing previously guarded against a second
+     click starting a second full save cycle while the first was still in
+     flight or had already completed. saveNewPhase() and saveEditPhase()
+     now disable their Finish & Save button the instant it's clicked, only
+     re-enabling it if the save fails partway through.
+  2. Milestones tab Notes field height fix. The inline Notes text field
+     didn't match the height of the adjacent date fields — most likely
+     browser-default rendering differences between <input type="date">
+     (which reserves extra room for its native calendar-icon control) and
+     <input type="text">. Explicit height:26px added to both input types
+     across all Milestones tab date/notes fields (Planned Start, Actual
+     Start, Completion, and Notes, in both the calendar-type and derived/
+     locked variants).
+  3. Phase-reorder collision fix. Reported: on 4 Escalators, after manually
+     creating two phases, both displayed as "Phase 2," and the Move up/
+     Move down reorder buttons couldn't fix it. Root cause was two-fold:
+     (a) saveNewPhase()'s nextPhaseOrder was computed from
+     existingPhasesForScope.length, so two phases created close together
+     without a full data reload between them could both compute the same
+     number and both get created as "Phase 2" with the same Phase Order
+     value; (b) getOrderedPhases(), reorderPhase(), and two further copies
+     of the same comparator found during this fix (getProjectDates(),
+     renderPhasesTab()) all sorted by the number parsed out of the phase
+     NAME first, falling back to the stored phaseOrder field only when a
+     name had no numeric prefix — with two phases both literally named
+     "Phase 2," this name-based sort couldn't tell them apart, so any
+     reorder attempt just reasserted the same arbitrary order and rewrote
+     both names to "Phase 2" again. Fixed: nextPhaseOrder is now based on
+     the actual max existing Phase Order value in a freshly-filtered scope
+     list, not array length; all four sort call sites now use phaseOrder as
+     the primary sort key, with the name-parsed number only as a fallback
+     tiebreaker for older records missing a real phaseOrder value. This
+     round self-heals a prior collision on the next reorder click — no
+     manual Airtable edit needed.
+  4. Portfolio View Current Phase color adjustment. Per Misty's approved
+     mockup: Construction and Project Closeout swap their badge colors —
+     Construction is now amber (was light blue), Project Closeout is now
+     light blue (was amber). Each now uses its own dedicated badge class
+     (b-phase-construction, b-phase-closeout) instead of reusing the shared
+     b-core/b-pending classes (also used for Core property type and
+     Pending/Draft status elsewhere), so a future recolor of either of
+     those won't silently recolor these phase pills too. Pre-Construction
+     and Complete are unchanged.
+
 pulse_v52p. Changes from v52o, this round. Reported live by Misty on
 Hilton Denver City Center, plus one approved mockup and one prior
 follow-up item. Requires worker_v44d.mjs deployed alongside this file
@@ -1273,6 +1325,7 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .b-behind{background:#FCEBEB;color:#A32D2D}.b-track{background:#EAF3DE;color:#3B6D11}.b-ahead{background:#EAF3DE;color:#3B6D11}
 .b-pending{background:#FAEEDA;color:#854F0B}.b-approved{background:#EAF3DE;color:#3B6D11}.b-returned{background:#FCEBEB;color:#A32D2D}
 .b-core{background:#E6F1FB;color:#185FA5}.b-noncore{background:#F1EFE8;color:#5F5E5A}
+.b-phase-construction{background:#FAEEDA;color:#854F0B}.b-phase-closeout{background:#E6F1FB;color:#185FA5}
 .b-draft{background:#EEEDFE;color:#534AB7}
 .b-ms-complete{background:#EAF3DE;color:#3B6D11}.b-ms-inprog{background:#FAEEDA;color:#854F0B}
 .b-ms-atrisk{background:#FCEBEB;color:#A32D2D}.b-ms-notstart{background:#F1EFE8;color:#5F5E5A}
@@ -3861,7 +3914,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v52p</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53a</div>
     </div>
   </nav>
 
@@ -4237,7 +4290,7 @@ from unitEffectiveValue() onto each checkbox). -->
                 </div>
               </div>
               <div style="display:flex;gap:8px;margin-top:12px">
-                <button class="btn btn-primary" onclick="saveNewPhase()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+                <button class="btn btn-primary" id="save-new-phase-btn" onclick="saveNewPhase()"><i class="ti ti-check"></i>Finish &amp; Save</button>
                 <button class="btn" onclick="document.getElementById('add-phase-form').style.display='none'">Cancel</button>
               </div>
             </div>
@@ -4287,7 +4340,7 @@ from unitEffectiveValue() onto each checkbox). -->
                 </div>
               </div>
               <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
-                <button class="btn btn-primary" onclick="saveEditPhase()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+                <button class="btn btn-primary" id="save-edit-phase-btn" onclick="saveEditPhase()"><i class="ti ti-check"></i>Finish &amp; Save</button>
                 <button class="btn" onclick="document.getElementById('edit-phase-form').style.display='none'">Cancel</button>
               </div>
             </div>
@@ -7195,17 +7248,26 @@ function getPhaseTasksForProp(propName,scopeId){
 function getOrderedPhases(propName,scopeId){
   const all=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
   const phases=scopeId?all.filter(u=>u.scopeId===scopeId):all;
-  // Sort by phase order if available, else by name (Phase 1, Phase 2...)
-  // v29g: phase name number is the authoritative sort key — "Phase 1" always
-  // sorts before "Phase 2" regardless of what phaseOrder is stored in Airtable.
-  // phaseOrder is only used when the name has no numeric prefix (edge case).
+  // v53a — was the reverse: name-parsed number as the authoritative sort
+  // key, phaseOrder only as a fallback when a name had no numeric prefix.
+  // That meant two phases that both ended up literally named "Phase 2"
+  // (see saveNewPhase's phaseOrder collision fix, same round) could never
+  // be told apart here — the name-parse comparator returns 0 for a tie,
+  // so this function couldn't distinguish or correctly order them, and
+  // reorderPhase() (which locates phases using this same comparator)
+  // couldn't self-heal the collision either. phaseOrder is now the primary
+  // sort key, since it's the field a reorder or a collision-proof creation
+  // actually updates; the name-parsed number is now only a fallback for
+  // older records that might be missing a real phaseOrder value.
   return phases.slice().sort((a,b)=>{
+    const aOrder=a.phaseOrder||0;
+    const bOrder=b.phaseOrder||0;
+    if(aOrder&&bOrder)return aOrder-bOrder;
+    if(aOrder)return -1;
+    if(bOrder)return 1;
     const aName=parseInt((a.phase||a.phaseName||'').match(/\d+/)?.[0]||0);
     const bName=parseInt((b.phase||b.phaseName||'').match(/\d+/)?.[0]||0);
-    if(aName&&bName)return aName-bName;
-    if(aName)return -1;
-    if(bName)return 1;
-    return (a.phaseOrder||0)-(b.phaseOrder||0);
+    return aName-bName;
   });
 }
 
@@ -9036,38 +9098,38 @@ function renderMilestones(p){
           ${canEdit&&isCalendar?`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
-            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.plannedDate||''}"
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.plannedDate||''}"
               onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Actual Start</div>
-            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.actualDate||''}"
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.actualDate||''}"
               onchange="updateMilestoneField('${m.id}','Actual Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Completion</div>
             ${m.manuallyCompleted?
-            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real Completion date">`:
-            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.completionDate||''}"
+            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${m.manuallyCompletedOn||''}" disabled title="Locked while Manually Completed is on — turn it off to enter a real Completion date">`:
+            `<input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.completionDate||''}"
               onchange="updateMilestoneField('${m.id}','Completion Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">`}
           </div>`:canEdit?`
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Start</div>
-            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px" value="${m.plannedDate||''}"
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px" value="${m.plannedDate||''}"
               onchange="updateMilestoneField('${m.id}','Planned Date',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Actual Start</div>
-            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${derivedDates.actualStart||''}" disabled title="Derived from Phase Tasks — view in Unit Phases tab">
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${derivedDates.actualStart||''}" disabled title="Derived from Phase Tasks — view in Unit Phases tab">
           </div>
           <div>
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Completion</div>
-            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${derivedDates.completionDate||''}" disabled title="Derived from Phase Tasks — view in Unit Phases tab">
+            <input type="date" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:130px;background:var(--gray-xpale);color:var(--gray-mid);cursor:default" value="${derivedDates.completionDate||''}" disabled title="Derived from Phase Tasks — view in Unit Phases tab">
           </div>`:''}
           ${canEdit?`
           <div style="min-width:220px;max-width:420px;flex:1">
             <div style="font-size:9px;color:var(--gray-light);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Notes</div>
-            <input type="text" class="form-input" style="font-size:11px;padding:3px 6px;height:auto;width:100%" value="${escHtml(m.notes||'')}" placeholder="Notes..."
+            <input type="text" class="form-input" style="font-size:11px;padding:3px 6px;height:26px;width:100%" value="${escHtml(m.notes||'')}" placeholder="Notes..."
               onblur="updateMilestoneField('${m.id}','Notes',this.value,'${p.n.replace(/'/g,"\\'")}','${m.id||idx}','${circleId}')">
           </div>`:''}
         </div>
@@ -9225,11 +9287,6 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
     fields['Status']=deriveCalendarStatus(plannedDate,actualDate,completionDate);
   }
   const msSaveOk=await updateMilestone(msId,fields,propName);
-  // If a newer edit to this same milestone was issued while this write was
-  // in flight, this call is stale — don't let it clobber the DOM with an
-  // outdated status. The newer call's own patch (or a future one) is the
-  // one that should win.
-  if(window._msFieldReqToken[msId]!==myToken)return;
   // v52p — updateMilestone() now reports whether its Airtable write
   // actually succeeded. On failure, stop here rather than continuing on to
   // update the circle/badge/pill and progress counters as if the edit had
@@ -9239,6 +9296,11 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId){
     showToast('Could not save milestone change. Check your connection and try again.','error');
     return;
   }
+  // If a newer edit to this same milestone was issued while this write was
+  // in flight, this call is stale — don't let it clobber the DOM with an
+  // outdated status. The newer call's own patch (or a future one) is the
+  // one that should win.
+  if(window._msFieldReqToken[msId]!==myToken)return;
   // M4 — Contract Award: auto-create a real Action Item the moment this
   // milestone newly transitions to Complete (not on re-saves of an already-
   // complete milestone). Silent, no PM confirmation needed (confirmed design
@@ -12880,14 +12942,22 @@ function derivePhaseStatusOLD(phaseId, propName, phaseName){return derivePhaseSt
 // not the one being viewed.
 function getProjectDates(propName,scopeId){
   const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName&&(!scopeId||u.scopeId===scopeId));
-  // v29g: sort by name-derived number — phase name is authoritative order.
+  // v53a — third copy of the same name-parse-first comparator fixed in
+  // getOrderedPhases and reorderPhase this same round (see their comments
+  // for the full collision explanation). This one determines which phase
+  // counts as Project Start/Project End for the Unit Phases tab header
+  // summary, so a "Phase 2"/"Phase 2" naming collision could have picked
+  // the wrong phase's dates here too. phaseOrder is now primary, name-
+  // parsed number is only a fallback for older records missing it.
   phases.sort((a,b)=>{
+    const aOrder=a.phaseOrder||0;
+    const bOrder=b.phaseOrder||0;
+    if(aOrder&&bOrder)return aOrder-bOrder;
+    if(aOrder)return -1;
+    if(bOrder)return 1;
     const aName=parseInt((a.phase||a.phaseName||'').match(/\d+/)?.[0]||0);
     const bName=parseInt((b.phase||b.phaseName||'').match(/\d+/)?.[0]||0);
-    if(aName&&bName)return aName-bName;
-    if(aName)return -1;
-    if(bName)return 1;
-    return (a.phaseOrder||0)-(b.phaseOrder||0);
+    return aName-bName;
   });
   // v30e: use min across ALL phase starts, not just phase1
   // v51e — date-only strings (YYYY-MM-DD) parse as UTC midnight under bare
@@ -13128,11 +13198,22 @@ function renderPhasesTab(p){
     // was missing. reorderPhase correctly renames phases and updates phaseOrder,
     // but renderPhasesTab was rendering in unsorted window.UNIT_GROUPS array
     // order, so the visual position never changed after a reorder.
+    // v53a — fourth copy of the same name-parse-first comparator fixed in
+    // getOrderedPhases, reorderPhase, and getProjectDates this same round.
+    // This is the most directly user-visible one — it's what actually
+    // determines the on-screen order of phase cards on the Unit Phases tab,
+    // so a "Phase 2"/"Phase 2" naming collision could show them in the
+    // wrong visual order even after reorderPhase's own fix corrected their
+    // underlying phaseOrder values. phaseOrder is now primary, name-parsed
+    // number is only a fallback for older records missing it.
+    const aOrder=a.phaseOrder||0;
+    const bOrder=b.phaseOrder||0;
+    if(aOrder&&bOrder)return aOrder-bOrder;
+    if(aOrder)return -1;
+    if(bOrder)return 1;
     const aNum=parseInt((a.phase||a.phaseName||'').match(/\d+/)?.[0]||0);
     const bNum=parseInt((b.phase||b.phaseName||'').match(/\d+/)?.[0]||0);
-    if(aNum&&bNum)return aNum-bNum;
-    if(aNum)return -1;if(bNum)return 1;
-    return (a.phaseOrder||0)-(b.phaseOrder||0);
+    return aNum-bNum;
   });
   // v29d Bug 12 fix: use scope-level unit count when currentScope has breakdown data.
   // p.units is property-level total; when viewing a specific scope, use that scope's
@@ -13965,7 +14046,22 @@ function confirmPhaseTypeMismatch(pickedUnits,productType){
 }
 window.confirmPhaseTypeMismatch=confirmPhaseTypeMismatch;
 
+// v53a — reported live: a phase created with 2 units ended up with 16
+// Phase Tasks records instead of 8 (every real task name duplicated
+// exactly once), and the collapsed Unit Phases card wasn't showing the
+// phase's Planned dates. Traced the task-creation loop and the checklist
+// renderer and found no duplication bug in either — both produce exactly
+// one entry per real task. The most likely explanation is Finish & Save
+// firing twice (nothing previously stopped a double-click from running
+// the whole save function, including the Phase Tasks creation loop,
+// twice start to finish). This guard disables the button the instant it's
+// clicked and only re-enables it if the save fails partway through
+// (validation error or a real write failure), so a second click physically
+// can't start a second full save cycle while the first is still in
+// flight or has already succeeded.
+let _savingNewPhase=false;
 async function saveNewPhase(){
+  if(_savingNewPhase)return;
   if(!currentProp)return;
   const phaseNum=document.getElementById('phase-number-input')?.value.trim()||'';
   const phaseDesc=document.getElementById('phase-description-input')?.value.trim()||'';
@@ -13989,14 +14085,30 @@ async function saveNewPhase(){
   // conventions like "PE1"/"ESC1" and would miss anything that didn't
   // follow them).
   if(!confirmPhaseTypeMismatch(pickedUnits,productType))return;
+  // v53a — every validation check above this point is a pure read (no
+  // writes happen if one fails, so nothing is at risk from clicking again
+  // after a validation toast). The guard only needs to cover what follows,
+  // where the actual Unit Groups + Phase Tasks writes happen.
+  _savingNewPhase=true;
+  const saveBtn=document.getElementById('save-new-phase-btn');
+  if(saveBtn)saveBtn.disabled=true;
   // Collect selected tasks
   const selectedMs=[...document.querySelectorAll('.phase-ms-check:checked')].map(c=>c.value);
   const scopeId=currentScope?.id;
   // v29e Bug 11 fix: set phaseOrder on creation so phases sort correctly.
   // Without this, phaseOrder is undefined/0 on all new phases, making sort
   // order indeterminate and causing Phase 2 to appear above Phase 1.
+  // v53a — was existingPhasesForScope.length+1, which collides whenever
+  // two phases get created close together in the same session without a
+  // full data reload between them (both read the same array length before
+  // either write lands, so both compute the same nextPhaseOrder and both
+  // get created as "Phase 2" with the same Phase Order value). Now based
+  // on the actual max Phase Order already present in a freshly-filtered
+  // scope list, so a new phase always gets a genuinely-next number even if
+  // the array-length count would have collided.
   const existingPhasesForScope=(window.UNIT_GROUPS||[]).filter(u=>u.property===currentProp.n&&(!scopeId||u.scopeId===scopeId));
-  const nextPhaseOrder=existingPhasesForScope.length+1;
+  const maxExistingPhaseOrder=existingPhasesForScope.reduce((max,u)=>Math.max(max,u.phaseOrder||0),0);
+  const nextPhaseOrder=maxExistingPhaseOrder+1;
   const ugFields={
     'Property Name':propertyNameToLink(currentProp.n),
     'Phase Name':name,
@@ -14019,6 +14131,8 @@ async function saveNewPhase(){
   // a phase that doesn't really exist.
   if(!res?.records?.[0]?.id){
     showToast('Could not save phase to Airtable. Check your connection and try again.','error');
+    _savingNewPhase=false;
+    if(saveBtn)saveBtn.disabled=false;
     return;
   }
   const newPhaseId=res.records[0].id;
@@ -14106,7 +14220,8 @@ async function saveNewPhase(){
   if(demoMode){showToast('Phase added — Demo mode: changes reset on logout','info');}
   else if(phaseTaskFailCount>0){showToast(`Phase added, but ${phaseTaskFailCount} task${phaseTaskFailCount>1?'s':''} failed to save. Check your connection and try again.`,'error');}
   else{showToast('Phase added','success');}
-
+  _savingNewPhase=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 
 function openEditPhaseForm(id,propName){
@@ -14185,7 +14300,13 @@ function selectAllEditPhaseSteps(checked){
   document.querySelectorAll('.edit-phase-step-check').forEach(c=>c.checked=checked);
 }
 
+// v53a — same double-click risk as saveNewPhase() (see its own comment):
+// nothing previously stopped Finish & Save here from firing twice, which
+// would run the unchecked-task delete loop, the new-task create loop, and
+// the main Unit Groups update all a second time. Same guard pattern.
+let _savingEditPhase=false;
 async function saveEditPhase(){
+  if(_savingEditPhase)return;
   if(!currentProp)return;
   const id=document.getElementById('edit-phase-id').value;
   const idx=(window.UNIT_GROUPS||[]).findIndex(u=>u.id===id);
@@ -14210,6 +14331,9 @@ async function saveEditPhase(){
   const selectedSteps=[...document.querySelectorAll('.edit-phase-step-check:checked')].map(c=>c.value);
   if(!name){showToast('Phase name required','warn');return;}
   if(!confirmPhaseTypeMismatch(pickedUnits,productType))return;
+  _savingEditPhase=true;
+  const editSaveBtn=document.getElementById('save-edit-phase-btn');
+  if(editSaveBtn)editSaveBtn.disabled=true;
   const oldPhaseName=ph.phase;
   // v52h — this whole function silently discarded write-failure signals at
   // five separate points: the unchecked-task atDelete loop, the rename
@@ -14383,6 +14507,8 @@ async function saveEditPhase(){
   } else {
     showToast('Phase updated','success');
   }
+  _savingEditPhase=false;
+  if(editSaveBtn)editSaveBtn.disabled=false;
 }
 
 async function reorderPhase(id,propName,dir){
@@ -14393,14 +14519,25 @@ async function reorderPhase(id,propName,dir){
   const targetPhase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
   const scopeId=targetPhase?.scopeId||'';
   const propPhases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName&&(!scopeId||u.scopeId===scopeId));
-  // v29g: sort by name-derived number before swap — phase name is authoritative.
+  // v53a — was the reverse: name-derived number as the authoritative
+  // sort key here too (see getOrderedPhases' matching fix, same round, for
+  // the full explanation). With two phases both literally named "Phase 2"
+  // (a creation-time phaseOrder collision), this comparator couldn't tell
+  // them apart, so the swap-and-renumber logic below just reasserted
+  // whatever arbitrary order the tied sort left them in and rewrote both
+  // names to "Phase 2" again instead of correcting to "Phase 1"/"Phase 2".
+  // phaseOrder is now primary here too, so a reorder click can now actually
+  // locate the right phase and self-heal a prior collision, name-parsed
+  // number is only a fallback for older records missing a real phaseOrder.
   propPhases.sort((a,b)=>{
+    const aOrder=a.phaseOrder||0;
+    const bOrder=b.phaseOrder||0;
+    if(aOrder&&bOrder)return aOrder-bOrder;
+    if(aOrder)return -1;
+    if(bOrder)return 1;
     const aName=parseInt((a.phase||a.phaseName||'').match(/\d+/)?.[0]||0);
     const bName=parseInt((b.phase||b.phaseName||'').match(/\d+/)?.[0]||0);
-    if(aName&&bName)return aName-bName;
-    if(aName)return -1;
-    if(bName)return 1;
-    return (a.phaseOrder||0)-(b.phaseOrder||0);
+    return aName-bName;
   });
   const idx=propPhases.findIndex(u=>u.id===id);
   if(idx<0)return;
@@ -23704,13 +23841,19 @@ function fmtShortDate(dateStr){
 // old property-wide derivePropertyStatusFromPhases to the new per-project
 // deriveScopeHealth, per direct instruction.
 // v52m — was solid-fill dark pills with inline hex per phase (its own
-// one-off style found nowhere else in the app). Now uses the same light-
-// fill badge classes as every other column: gray for Pre-Construction (not
-// yet a status verdict), blue for Construction (neutral, in-progress-but-
-// not-a-risk-judgment classification), amber for Project Closeout (final
-// approval-pending stage), green for Complete (matches every other
-// Complete badge in the app).
-const PORTFOLIO_PHASE_CLASSES={'Pre-Construction':'b-noncore','Construction':'b-core','Project Closeout':'b-pending','Complete':'b-done'};
+// one-off style found nowhere else in the app). Now uses light-fill badge
+// classes: gray for Pre-Construction (not yet a status verdict), green for
+// Complete (matches every other Complete badge in the app).
+// v53a — Construction and Project Closeout were reusing the shared
+// b-core/b-pending classes (also used for Core property type and
+// Pending/Draft status elsewhere), so a future recolor of either of those
+// would have silently recolored these phase pills too. Per Misty's
+// approved mockup, Construction and Project Closeout also swap colors
+// from what they were: Construction is now amber (b-phase-construction,
+// was blue), Project Closeout is now light blue (b-phase-closeout, was
+// amber) — each its own dedicated class so it can't drift with Core/
+// Pending/Draft again. Pre-Construction and Complete are unchanged.
+const PORTFOLIO_PHASE_CLASSES={'Pre-Construction':'b-noncore','Construction':'b-phase-construction','Project Closeout':'b-phase-closeout','Complete':'b-done'};
 function renderPortfolioRow(p){
   const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
   const endDate=getProjectEndDate(p.n);
