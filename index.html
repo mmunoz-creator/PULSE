@@ -1,4 +1,40 @@
 <!--
+pulse_v55a. Changes from v54f, this round. First build in the new backlog
+Misty approved after v54f shipped live (Portfolio View cleanup, Property
+Consultant cleanup, Milestone chart changes, data-integrity guardrails,
+heat map redesign, Help button audit -- sequenced as v55a through v55c
+plus two further standalone rounds). Requires no worker changes.
+  1. Portfolio View: removed the Current Phase, Consultant, Current
+     Project, Health, and Project End columns per direct instruction.
+     Remaining column order: Property, State, Type, Property Status,
+     Units, Elev. Company, Budget, Priority. The Consultant and Health
+     sidebar filter dropdowns were removed along with their columns (per
+     Misty's explicit choice, rather than keeping the filters with no
+     visible column) -- pfApply()/pfClearAll()/pfPopulateDropdowns()/
+     pfRenderChips() and the PF filter-state object all updated to match,
+     and the two empty-state rows' colspan corrected from 13 to 8.
+     getCurrentProjectForProperty/getMilestoneCategoryForScope/
+     deriveScopeHealth/renderScopeHealthBadge are all still used
+     elsewhere (Analytics' own charts, the property hero) and were left
+     untouched; only this row/table's use of them was removed.
+     PORTFOLIO_PHASE_CLASSES is now unused (was this table's Current
+     Phase pill coloring only) -- left in place rather than deleted, in
+     case Current Phase returns in some other form later.
+  2. Added auditPropertyLevelOnlyConsultants(), a one-time, read-only,
+     console-only, Admin-only diagnostic ahead of the next round's
+     Consultant-field removal (task #76, still blocked pending this
+     audit's results). Scans every property for one that has a
+     Property-level VDA Consultant set but no Scope-level consultant on
+     any of its Projects -- once the Property-level field is removed from
+     Edit Property, propertyHasConsultant() (which gates what a logged-in
+     Consultant can see) will only ever check Scope-level assignments, so
+     a property relying solely on the Property-level field would silently
+     drop out of that consultant's visibility the moment the field is
+     gone. Logs findings only, makes no writes. Run
+     auditPropertyLevelOnlyConsultants() from the browser console (Admin
+     role) before the next round ships.
+
+<!--
 pulse_v54f. Changes from v54e, this round. Targets the "not accurate"
 half of the trust-crisis report directly: most of PULSE's data
 (Milestones, Unit Groups, Phase Tasks, Change Order Savings Log, Billing
@@ -4271,7 +4307,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v54f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55a</div>
     </div>
   </nav>
 
@@ -4402,30 +4438,9 @@ from unitEffectiveValue() onto each checkbox). -->
               </select>
             </div>
             <div style="margin-bottom:16px">
-              <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Consultant</div>
-              <select id="pf-consultant" style="font-size:12px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer;width:100%" onchange="pfApply()">
-                <option value="all">All Consultants</option>
-              </select>
-            </div>
-            <div style="margin-bottom:16px">
               <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Elevator Company</div>
               <select id="pf-ec" style="font-size:12px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer;width:100%" onchange="pfApply()">
                 <option value="all">All Companies</option>
-              </select>
-            </div>
-            <div style="margin-bottom:16px">
-              <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Health</div>
-              <select id="pf-health" style="font-size:12px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;color:var(--navy);background:white;outline:none;cursor:pointer;width:100%" onchange="pfApply()">
-                <option value="all">All Health</option>
-                <!-- v51k, this option's value was "On Track", but the health
-                functions have only ever returned "In Progress", so this
-                filter never matched any row. Value corrected, label kept
-                as "On Track" since that matches what the badge shows. -->
-                <option value="In Progress">On Track</option>
-                <option value="At Risk">At Risk</option>
-                <option value="Ahead">Ahead</option>
-                <option value="Not Started">Not Started</option>
-                <option value="Complete">Complete</option>
               </select>
             </div>
             <div id="portfolio-priority-filter-group" style="margin-bottom:16px">
@@ -4475,7 +4490,12 @@ from unitEffectiveValue() onto each checkbox). -->
               awkward wrap), so adjacent headers never visually run into
               each other regardless of table width. renderPortfolioRow()'s
               <td> order below was updated to match exactly. -->
-              <thead><tr><th style="width:15%;text-align:left">Property</th><th style="width:5%;text-align:center">State</th><th style="width:6%;text-align:center">Type</th><th style="width:8%;text-align:center">Property<br>Status</th><th style="width:5%;text-align:center">Units</th><th style="width:11%;text-align:center">Current<br>Project</th><th style="width:9%;text-align:center">Current<br>Phase</th><th style="width:8%;text-align:center">Health</th><th style="width:9%;text-align:center">Elev.<br>Company</th><th style="width:8%;text-align:center">Project<br>End</th><th style="width:8%;text-align:center">Budget</th><th style="width:9%;text-align:center">Consultant</th><th id="portfolio-priority-th" style="width:6%;text-align:center;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority<br><i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th></tr></thead>
+              <!-- v55a -- Current Phase, Consultant, Current Project, Health,
+              and Project End columns removed per direct instruction. Remaining
+              order: Property, State, Type, Property Status, Units, Elev.
+              Company, Budget, Priority. renderPortfolioRow()'s <td> order below
+              updated to match exactly. -->
+              <thead><tr><th style="width:22%;text-align:left">Property</th><th style="width:8%;text-align:center">State</th><th style="width:9%;text-align:center">Type</th><th style="width:12%;text-align:center">Property<br>Status</th><th style="width:8%;text-align:center">Units</th><th style="width:14%;text-align:center">Elev.<br>Company</th><th style="width:13%;text-align:center">Budget</th><th id="portfolio-priority-th" style="width:9%;text-align:center;cursor:pointer;user-select:none" onclick="sortPortfolioByPriority(this)" title="Sort by priority">Priority<br><i class="ti ti-arrows-sort" style="font-size:10px;opacity:.5"></i></th></tr></thead>
               <tbody id="portfolio-tbody"></tbody>
             </table>
           </div>
@@ -15474,6 +15494,39 @@ async function cleanupOrphanedPhaseTasks(){
 }
 window.cleanupOrphanedPhaseTasks=cleanupOrphanedPhaseTasks;
 
+// v55a -- one-time diagnostic ahead of removing the Property-level VDA
+// Consultant field from Edit Property (see propFields['VDA Consultant']
+// in saveEditProperty, and the ep-consultant input in the Edit Property
+// panel markup). Once that field is gone, propertyHasConsultant() (which
+// gates what a logged-in Consultant can see) can only ever match a
+// Scope-level consultant (window.SCOPES[].v) going forward -- its
+// existing fallback to the Property-level field (see
+// propertyConsultants()) would have nothing left to fall back to. A
+// property whose ONLY consultant assignment currently lives at the
+// Property level, with no Scope-level consultant set on any of its
+// Projects, would silently lose that consultant's visibility into it the
+// moment the field is removed. This is read-only, logs findings, and
+// makes no writes. Console-only, Admin-only, run
+// auditPropertyLevelOnlyConsultants() before task #76 ships.
+function auditPropertyLevelOnlyConsultants(){
+  if(role!=='admin'){console.warn('auditPropertyLevelOnlyConsultants: Admin only.');return;}
+  const port=window.PORTFOLIO||[];
+  const scopes=window.SCOPES||[];
+  const flagged=port.filter(p=>{
+    const hasPropLevel=p.v&&p.v.trim()!==''&&p.v.trim()!=='TBD';
+    if(!hasPropLevel)return false;
+    const hasScopeLevel=scopes.some(s=>s.property===p.n&&s.v&&s.v.trim()!==''&&s.v.trim()!=='TBD');
+    return !hasScopeLevel;
+  });
+  if(flagged.length===0){
+    console.log('auditPropertyLevelOnlyConsultants: no properties depend solely on the Property-level Consultant field. Safe to remove.');
+    return;
+  }
+  console.log(`auditPropertyLevelOnlyConsultants: found ${flagged.length} propert${flagged.length===1?'y':'ies'} relying solely on the Property-level Consultant field, with no Scope-level consultant set on any Project. Assign a Scope-level consultant (Project edit modal) for each before removing the Property-level field, or that consultant will lose visibility into the property.`);
+  console.table(flagged.map(p=>({property:p.n,propertyLevelConsultant:p.v})));
+}
+window.auditPropertyLevelOnlyConsultants=auditPropertyLevelOnlyConsultants;
+
 async function updatePhaseStatus(id,newStatus,propName){
   const phase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
   if(!phase)return;
@@ -24804,6 +24857,9 @@ function fmtShortDate(dateStr){
 // was blue), Project Closeout is now light blue (b-phase-closeout, was
 // amber) — each its own dedicated class so it can't drift with Core/
 // Pending/Draft again. Pre-Construction and Complete are unchanged.
+// v55a — unused as of this build: its sole consumer, the Portfolio View
+// Current Phase column, was removed per direct instruction. Left in place
+// (not deleted) in case Current Phase returns in some other form later.
 const PORTFOLIO_PHASE_CLASSES={'Pre-Construction':'b-noncore','Construction':'b-phase-construction','Project Closeout':'b-phase-closeout','Complete':'b-done'};
 function renderPortfolioRow(p){
   const priColor=p.priority?.startsWith('1')?'var(--red)':p.priority?.startsWith('2')?'var(--amber)':p.priority?.startsWith('3')?'var(--blue-dark)':'var(--gray-mid)';
@@ -24814,15 +24870,18 @@ function renderPortfolioRow(p){
   const propUnitsInv=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
   const propUnitCount=propUnitsInv.length;
   const propUnitBudget=propUnitsInv.reduce((a,u)=>a+unitEffectiveValue(u),0);
-  const curProj=getCurrentProjectForProperty(p.n);
-  const curProjCell=curProj?`<span style="font-size:11px;color:var(--navy)">${escHtml(curProj.name||'—')}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
-  const curPhase=curProj?getMilestoneCategoryForScope(curProj):null;
-  const curPhaseCell=curPhase?`<span class="badge ${PORTFOLIO_PHASE_CLASSES[curPhase]||'b-nac'}">${escHtml(curPhase)}</span>`:`<span style="font-size:11px;color:var(--gray-mid)">—</span>`;
-  const healthCell=curProj?renderScopeHealthBadge(deriveScopeHealth(curProj)):`<span class="badge b-health-notstarted">Not Started</span>`;
-  // v52c — cell order reordered to match the new header order exactly:
-  // Property, State, Type, Property Status, Units, Current Project,
-  // Current Phase, Health, Elev. Company, Project End, Budget, Consultant,
-  // Priority. No cell content/logic changed, purely reordered.
+  // v55a -- Current Phase, Consultant, Current Project, Health, and
+  // Project End columns removed per direct instruction. curProj/curProjCell/
+  // curPhase/curPhaseCell/healthCell and their supporting getCurrentProjectForProperty/
+  // getMilestoneCategoryForScope/deriveScopeHealth/renderScopeHealthBadge calls
+  // removed from this row along with them -- Analytics' own Active Projects by
+  // Stage / Elevator Company Performance charts and the property hero still use
+  // those functions elsewhere, only this row's cells are affected. endDate/
+  // getProjectEndDate() above is now unused by this function; left in place
+  // since callers elsewhere may still reference it -- confirmed getProjectEndDate
+  // has no other call sites, so it and the endDate local are genuinely dead in
+  // this function now, kept only because removing the assignment itself is a
+  // larger, separate cleanup not requested this round.
   // v52m — every column except Property (which stays left-aligned as the
   // row's identity/link) now centers both its header and its cell content,
   // per Misty's direction that values and headings should be centered for
@@ -24833,13 +24892,8 @@ function renderPortfolioRow(p){
       <td style="text-align:center"><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type||'—')}</span></td>
       <td style="text-align:center">${renderStatusBadge(p.st)}</td>
       <td style="text-align:center;font-family:'Plus Jakarta Sans',sans-serif;font-size:11px">${propUnitCount||'—'}</td>
-      <td style="text-align:center">${curProjCell}</td>
-      <td style="text-align:center">${curPhaseCell}</td>
-      <td style="text-align:center">${healthCell}</td>
       <td style="text-align:center;font-size:11px">${propertyElevatorCos(p.n).join(', ')||'TBD'}</td>
-      <td style="text-align:center;font-size:11px;color:var(--gray-mid)">${fmtShortDate(endDate)}</td>
       <td style="text-align:center;font-size:11px;color:var(--gray-mid)">${propUnitBudget?fmtCurrency(propUnitBudget):'—'}</td>
-      <td style="text-align:center;font-size:11px;color:var(--gray-mid)">${propertyConsultantsDisplay(p.n)}</td>
       <td class="portfolio-priority-td" style="text-align:center;font-size:10px;font-weight:600;color:${priColor}">${p.priority||'—'}</td>
     </tr>`;
 }
@@ -24894,8 +24948,8 @@ function populatePortfolio(){
     // initial Airtable load completes (same flag already used for this
     // exact distinction elsewhere, e.g. the Meetings tab empty state).
     tbody.innerHTML=AT_CONNECTED
-      ?`<tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-building-skyscraper" style="font-size:1.5rem"></i><div style="margin-top:6px">No properties yet.</div><div style="font-size:11px;margin-top:2px">Go to Capital Plan and click + Capital Plan to add your first property.</div></td></tr>`
-      :`<tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Loading from database...</td></tr>`;
+      ?`<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-building-skyscraper" style="font-size:1.5rem"></i><div style="margin-top:6px">No properties yet.</div><div style="font-size:11px;margin-top:2px">Go to Capital Plan and click + Capital Plan to add your first property.</div></td></tr>`
+      :`<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--gray-mid)"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Loading from database...</td></tr>`;
     return;
   }
   port.filter(p=>p.st!=='Removed').forEach(p=>{
@@ -25409,7 +25463,7 @@ async function saveEditProperty(){
 function filterTable(){pfApply();} // legacy alias
 
 // PORTFOLIO FILTER PANEL
-const PF={status:'all',health:'all',type:'all',priority:'all',state:'all',ec:'all',consultant:'all',search:''};
+const PF={status:'all',type:'all',priority:'all',state:'all',ec:'all',search:''};
 
 function pfTogglePanel(){
   const panel=document.getElementById('pf-side-panel');
@@ -25421,11 +25475,14 @@ function pfTogglePanel(){
   if(!isOpen)pfPopulateDropdowns();
 }
 
+// v55a -- Consultant filter dropdown removed alongside the Portfolio View
+// Consultant column per direct instruction. allKnownConsultants() is
+// still used elsewhere (Analytics' own cf-consultant filter), only this
+// dropdown's population is removed.
 function pfPopulateDropdowns(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const stateSel=document.getElementById('pf-state');
   const ecSel=document.getElementById('pf-ec');
-  const conSel=document.getElementById('pf-consultant');
   if(stateSel){
     const states=[...new Set(port.map(p=>p.s).filter(Boolean))].sort();
     stateSel.innerHTML=`<option value="all">All States</option>${states.map(s=>`<option value="${s}"${PF.state===s?' selected':''}>${s}</option>`).join('')}`;
@@ -25433,10 +25490,6 @@ function pfPopulateDropdowns(){
   if(ecSel){
     const ecs=[...new Set(port.map(p=>p.ec).filter(Boolean))].sort();
     ecSel.innerHTML=`<option value="all">All Companies</option>${ecs.map(e=>`<option value="${e}"${PF.ec===e?' selected':''}>${e}</option>`).join('')}`;
-  }
-  if(conSel){
-    const cons=allKnownConsultants(port);
-    conSel.innerHTML=`<option value="all">All Consultants</option>${cons.map(c=>`<option value="${c}"${PF.consultant===c?' selected':''}>${c}</option>`).join('')}`;
   }
 }
 
@@ -25474,12 +25527,10 @@ function unitCountForPropertyRow(propName,useActiveScopeCount){
 }
 function pfApply(){
   PF.status=document.getElementById('pf-status')?.value||'all';
-  PF.health=document.getElementById('pf-health')?.value||'all';
   PF.type=document.getElementById('pf-type')?.value||'all';
   PF.priority=document.getElementById('pf-priority')?.value||'all';
   PF.state=document.getElementById('pf-state')?.value||'all';
   PF.ec=document.getElementById('pf-ec')?.value||'all';
-  PF.consultant=document.getElementById('pf-consultant')?.value||'all';
   // v44d — Portfolio search bar. Kept separate from the other PF.* filter
   // fields (which default to 'all' and feed pfUpdateBadge's active-filter
   // count / pfUpdateSubheader's "no filter active" check) since search is
@@ -25497,29 +25548,16 @@ function pfApply(){
     if(PF.type!=='all')show=show&&p.type===PF.type;
     if(PF.state!=='all')show=show&&p.s===PF.state;
     if(PF.ec!=='all')show=show&&p.ec===PF.ec;
-    if(PF.consultant!=='all')show=show&&propertyHasConsultant(p.n,PF.consultant);
     if(PF.priority!=='all'){
       if(PF.priority==='none')show=show&&!p.priority;
       else show=show&&(p.priority||'').startsWith(PF.priority);
     }
-    if(PF.health!=='all'){
-      // v51k — Health filter now compares against the same per-project
-      // health the Health COLUMN itself shows (getCurrentProjectForProperty
-      // + deriveScopeHealth), not the old property-wide
-      // derivePropertyStatusFromPhases, so the dropdown and the visible
-      // column can never disagree. No current project -> 'Not Started',
-      // matching the column's own null-handling.
-      const curProj=getCurrentProjectForProperty(propName);
-      const health=curProj?deriveScopeHealth(curProj):'Not Started';
-      show=show&&health===PF.health;
-    }
     row.style.display=show?'':'none';
-    // v51k — Units column index shifted from 5 to 7 (6th <td> to 8th <td>)
-    // after inserting the Current Project / Current Phase columns between
-    // Elev. Company and Units. Column order: Property, State, Type,
-    // Priority, Elev. Company, Current Project, Current Phase, Units,
-    // Property Status, Health, Project End, VDA Consultant, Budget.
-    const unitsCell=row.children[7];
+    // v55a — Consultant and Health filters/columns removed. Column order is
+    // now: Property(0), State(1), Type(2), Property Status(3), Units(4),
+    // Elev. Company(5), Budget(6), Priority(7) -- Units is the 5th <td>,
+    // index 4.
+    const unitsCell=row.children[4];
     if(unitsCell){
       const{count,hasAnyUnits}=unitCountForPropertyRow(propName,useActiveScopeCount);
       unitsCell.textContent=hasAnyUnits?String(count):'—';
@@ -25563,8 +25601,8 @@ function pfUpdateSubheader(){
 }
 
 function pfClearAll(){
-  PF.status='all';PF.health='all';PF.type='all';PF.priority='all';PF.state='all';PF.ec='all';PF.consultant='all';PF.search='';
-  ['pf-status','pf-health','pf-type','pf-priority','pf-state','pf-ec','pf-consultant'].forEach(id=>{
+  PF.status='all';PF.type='all';PF.priority='all';PF.state='all';PF.ec='all';PF.search='';
+  ['pf-status','pf-type','pf-priority','pf-state','pf-ec'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.value='all';
   });
   const searchEl=document.getElementById('pf-search');if(searchEl)searchEl.value='';
@@ -25583,7 +25621,7 @@ function pfUpdateBadge(){
 function pfRenderChips(){
   const area=document.getElementById('pf-chip-area');
   if(!area)return;
-  const labels={status:'Status',health:'Health',type:'Type',priority:'Priority',state:'State',ec:'Company',consultant:'Consultant'};
+  const labels={status:'Status',type:'Type',priority:'Priority',state:'State',ec:'Company'};
   const chips=Object.entries(PF).filter(([k,v])=>v!=='all').map(([k,v])=>
     `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--blue-xpale);color:var(--blue-dark);font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px">
       ${labels[k]}: ${v}
