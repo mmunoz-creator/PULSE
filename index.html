@@ -1,4 +1,76 @@
 <!--
+pulse_v53f. Changes from v53e, this round. Reported live by Misty: toasts
+fire in the bottom-right corner where the fixed Help button also lives,
+and the Help button (higher z-index) partially covers the toast text.
+Requires no worker changes.
+  1. Toast position moved to bottom-center. showToast() was
+     bottom:24px;right:24px, the exact same corner as the Help button
+     (z-index:1050 vs the toast's 999), so the Help button visually sat on
+     top of and covered part of every toast. Moved the toast to
+     bottom-center instead of repositioning the Help button, since the
+     Help button has more surrounding visibility-toggle logic tied to its
+     current position.
+
+pulse_v53e. Changes from v53d, this round. Remaining findings from the
+same full code audit that produced the v53d atDelete fix, batched into
+one round per standing process. Requires no worker changes.
+  1. Unguarded write follow-ups. deriveAndWriteScopeDates(),
+     deriveAndWriteScopeStatus(), updateAssetType(), and setScopeOnHold()
+     now check their atUpdate result before committing local state, with
+     rollback and an error toast on the direct user-facing actions (asset
+     type toggle, Put On Hold / Resume) and a console.error-only background
+     rollup log where the write is a secondary derived side effect running
+     from 8+ call sites (scope status/date rollups). Dead try/catch blocks
+     replaced with real result checks in recalculateAllMilestoneStatuses()
+     (single summary log, this runs on every Milestones tab render),
+     saveMeeting()'s existing-draft update branch, saveStepDates()'s
+     existing Phase Task edit branch, and confirmDeleteProperty()'s
+     Properties soft-delete step.
+  2. publishDraftAction() / dismissDraftAction() unguarded secondary
+     writes to Field Updates. publishDraftAction's real write (the Action
+     Item itself) was already guarded from v51j; only the secondary
+     "mark draft published" flag write was unguarded, now logged on
+     failure rather than blocking since the important write already
+     succeeded. dismissDraftAction had no equally-important primary write
+     to fall back on, so it gets the full rollback-plus-toast treatment
+     matching approveSubmission()'s existing pattern, instead of closing
+     the modal and reporting success on a write that never reached
+     Airtable.
+  3. XSS gaps closed. Several free-text Airtable fields (Elevator
+     Company, Consultant, Comment Type, Issue Status) were interpolated
+     raw into template strings alongside properly escHtml()-escaped
+     sibling fields in the same card/preview markup, including one on the
+     client-facing approved-updates feed. All now wrapped in the existing
+     escHtml() helper, consistent with the rest of the app. The RTF/print
+     export paths for meeting minutes and field updates were checked and
+     confirmed already safe (RTF escaping or escHtml() via a local esc()
+     alias), not touched.
+  4. Meetings & Actions tab badge spacing. The red count badge sat flush
+     against the tab label; added margin-left:6px so it doesn't crowd the
+     text.
+
+pulse_v53d. Changes from v53c, this round. Confirmed root-cause fix from
+a full code audit Misty requested after reports of users frustrated with
+data not persisting. Requires no worker changes (the Worker already
+passes through Airtable's real status code correctly — this bug was
+entirely on the client side).
+  1. atDelete() missing failure detection. atUpdate() and atCreate() both
+     check r.ok and return null on any non-2xx response before atDelete()
+     was added; atDelete() never got the same check and always parsed and
+     returned whatever came back, including Airtable's own error response
+     body on a rejected delete (permission denial, bad record ID,
+     validation error, a role/field 403 from the Worker itself) — which is
+     still valid, truthy JSON. Roughly three dozen call sites across the
+     app (property removal, billing entries, retainage releases, phase
+     tasks, milestones, bid line items, and more) already correctly check
+     "if(!result)" after calling atDelete and roll back / show an error
+     toast on failure — but that check was effectively dead code against
+     any real Airtable rejection, since the value being checked was always
+     truthy unless the request failed at the network level entirely. Found
+     via a full audit of every atUpdate/atCreate/atDelete call site in the
+     app, confirmed against the actual Worker response behavior before
+     fixing. Now mirrors atUpdate/atCreate exactly.
+
 pulse_v53c. Changes from v53b, this round. Reported live by Misty on the
 Dashboard's Portfolio Heat Map. Requires no worker changes.
   1. Heat Map "NOT STARTED" tile state. Properties still in Pre-
@@ -2276,6 +2348,25 @@ function propertyNameToLink(name){
   return p&&p.id?[p.id]:[];
 }
 
+// v53d — atDelete() was the one write helper missing the r.ok check that
+// atUpdate()/atCreate() both already have (see those two, right above).
+// A rejected delete (permission denial, bad record ID, validation error,
+// a role/field 403 from the Worker itself) still comes back with a JSON
+// body — Airtable and the Worker both return an error object, not an
+// empty response — so r.json() succeeded and returned a truthy value even
+// on failure. Every call site across the app that correctly checks
+// "did the delete actually work?" (roughly three dozen: property removal,
+// billing entries, retainage releases, phase tasks, milestones, bid line
+// items, and more) was checking a value that was ALWAYS truthy unless the
+// request failed at the network level entirely, so their rollback-on-
+// failure logic could never actually trigger against a real Airtable
+// rejection, only a dropped connection. This is the same class of bug the
+// v52e-v52j silent-fail audit series fixed everywhere else, just missed
+// here since atDelete's failure mode (a same-shape JSON error body) reads
+// differently than atUpdate/atCreate's. Now mirrors them exactly: checks
+// r.ok before parsing the body, returns null on any non-2xx response so
+// every existing "if(!result)" check across the app starts working
+// against real Airtable failures the way it was always meant to.
 async function atDelete(table, id) {
   if(demoMode){console.log('[DEMO] atDelete blocked:',table,id);return null;}
   if (!id) return null;
@@ -2284,6 +2375,11 @@ async function atDelete(table, id) {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' }
     });
+    if(!r.ok){
+      const errText=await r.text();
+      console.error(`atDelete ${table} ${id} failed (${r.status}):`, errText);
+      return null;
+    }
     return await r.json();
   } catch(e) { console.error('atDelete error:', e); return null; }
 }
@@ -3091,10 +3187,15 @@ function showLoadingOverlay(show, msg='Loading...') {
   o.style.display = show ? 'flex' : 'none';
 }
 
+// v53f — was bottom:24px;right:24px, the same corner as the fixed Help
+// button (bottom-trigger-btn, z-index:1050 vs this toast's z-index:999),
+// so the Help button visually sat on top of and covered part of every
+// toast that fired. Moved to bottom-center, clear of the Help button and
+// the left nav, rather than repositioning the Help button itself.
 function showToast(msg, type='info') {
   const colors={info:'#185FA5',success:'#3B6D11',warn:'#854F0B',error:'#A32D2D'};
   const t=document.createElement('div');
-  t.style.cssText=`position:fixed;bottom:24px;right:24px;background:${colors[type]};color:white;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:500;z-index:999;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:320px;line-height:1.4`;
+  t.style.cssText=`position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:${colors[type]};color:white;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:500;z-index:999;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:320px;line-height:1.4`;
   t.textContent=msg;document.body.appendChild(t);
   setTimeout(()=>t.remove(),4000);
 }
@@ -3983,7 +4084,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v53f</div>
     </div>
   </nav>
 
@@ -4224,7 +4325,7 @@ from unitEffectiveValue() onto each checkbox). -->
             <button class="tab-btn" onclick="switchPropTab('phases',this)">Unit Phases</button>
             <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget Performance</button>
             <button class="tab-btn" onclick="switchPropTab('changeorders',this)">Change Orders</button>
-            <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions<span id="prop-fieldops-tab-badge" class="nav-badge hidden" style="background:var(--red)">0</span></button>
+            <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions<span id="prop-fieldops-tab-badge" class="nav-badge hidden" style="background:var(--red);margin-left:6px">0</span></button>
             <button class="tab-btn" onclick="switchPropTab('updates',this)">Field Updates</button>
             <button class="tab-btn" onclick="switchPropTab('docs',this)">Documents</button>
           </div>
@@ -7563,22 +7664,40 @@ function getDerivedDatesForMilestone(propName,milestoneNumber,scopeId){
 // Correct, reliable fix: key off s.status==='Complete' instead — a real,
 // always-populated field for every Scope regardless of how it was created,
 // and exactly the field Misty is already using to mark a project done.
+// v53e — the try/catch around the atUpdate call below was dead code:
+// atUpdate resolves to null on any write failure rather than throwing, so
+// this catch could never actually fire against a real Airtable rejection,
+// only a thrown exception that atUpdate itself is specifically written
+// not to produce. m.status was also mutated before the write ran, so a
+// failed write left the milestone's status looking correct on screen with
+// no error of any kind. Since this function runs automatically on every
+// Milestones-tab render and can touch many milestones in one pass, this
+// now counts failures instead of adding a toast per milestone, and only
+// commits the local status change once the write is confirmed.
 async function recalculateAllMilestoneStatuses(propName){
   const completeBucketScopeIds=new Set((window.SCOPES||[]).filter(s=>s.property===propName&&(s.isCompleteBucket||s.status==='Complete')).map(s=>s.id));
   const ms=(window.MILESTONES||[]).filter(m=>m.property===propName&&!completeBucketScopeIds.has(m.scopeId));
   let anyChanged=false;
+  let recalcFailCount=0;
   const changedScopeIds=new Set();
   for(const m of ms){
     const newStatus=deriveMilestoneStatus(propName,m.milestoneNumber,m.plannedDate,m.actualDate,m.completionDate,m.scopeId,undefined,m.manuallyCompleted,m.manuallyCompletedOn);
     if(newStatus!==m.status){
+      if(m.id&&!demoMode){
+        const result=await atUpdate('Milestones',m.id,{'Status':newStatus});
+        if(!result){
+          recalcFailCount++;
+          console.error('recalculateAllMilestoneStatuses: failed to save status for milestone',m.id);
+          continue;
+        }
+      }
       m.status=newStatus;
       anyChanged=true;
       if(m.scopeId)changedScopeIds.add(m.scopeId);
-      if(m.id&&!demoMode){
-        try{await atUpdate('Milestones',m.id,{'Status':newStatus});}
-        catch(e){console.error('Milestone status recalc error:',e);}
-      }
     }
+  }
+  if(recalcFailCount>0){
+    console.error(`recalculateAllMilestoneStatuses: ${recalcFailCount} milestone status update(s) failed to save for ${propName}.`);
   }
   // v28b — re-derive status for every Scope that had a milestone change
   // (not just a single property-wide rollup), since Scope.Status is now
@@ -7937,17 +8056,33 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   if(allUnitsComplete)newStatus='Complete';
   const statusChanged=scope.status!==newStatus;
   if(statusChanged){
-    scope.status=newStatus;
     // v37g — Status Changed Date, stamped alongside every real status
     // change (both here and in setScopeOnHold below), feeds the Activity
     // Feed's Scope-status entries. Local ISO date is enough precision for
     // an activity feed; not trying to capture time-of-day.
     const _statusChangedDate=new Date().toISOString().split('T')[0];
-    scope.statusChangedDate=_statusChangedDate;
     // Only write to Airtable in live mode — demo mode still updates
     // the in-memory Scope so status badges and rollups reflect reality
     // without requiring a page reload or live Airtable connection.
-    if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':newStatus,'Status Changed Date':_statusChangedDate});
+    // v53e — this write was fire-and-forget with scope.status/
+    // statusChangedDate mutated unconditionally beforehand, so a failed
+    // write left the Scope's status badge showing a value that never
+    // reached Airtable. This function runs as a background side effect
+    // from many call sites (milestone saves, reconciliation passes, etc.),
+    // not as its own direct user action, so — matching the same choice
+    // made for deriveAndWriteScopeDates this same round — it now returns
+    // true/false and only commits the local mutation on a confirmed
+    // write, logging (not toasting) on failure so a background rollup
+    // doesn't need to interrupt whatever the user was actually doing.
+    if(!demoMode&&scope.id){
+      const result=await atUpdate('Scopes',scope.id,{'Status':newStatus,'Status Changed Date':_statusChangedDate});
+      if(!result){
+        console.error('deriveAndWriteScopeStatus: failed to save Scope status for',scopeId);
+        return false;
+      }
+    }
+    scope.status=newStatus;
+    scope.statusChangedDate=_statusChangedDate;
   }
   // v34l — a Scope's status change is exactly what flips its units between
   // Active and Planned. Recompute regardless of whether newStatus actually
@@ -7955,6 +8090,7 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // scope's last status write).
   await recomputeStatusesForScope(scopeId);
   await deriveAndWritePropertyStatus(scope.property);
+  return true;
 }
 
 // v33a — Manual On Hold toggle, set from the Scope Card. Setting On Hold
@@ -7962,14 +8098,36 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
 // an immediate derivation pass (force:true) so the scope snaps to
 // wherever its real milestone progress actually is, rather than sitting
 // at a stale value until the next milestone save.
+// v53e — this is the direct handler behind the Scope Card's Put On
+// Hold/Resume buttons. The onHold branch's write was fire-and-forget with
+// scope.status/statusChangedDate mutated unconditionally beforehand, so a
+// failed write left the card showing "On Hold" while Airtable still had
+// the prior status — the user clicks Put On Hold, sees it take effect,
+// and it silently doesn't stick. Unlike deriveAndWriteScopeStatus (a
+// background rollup called from many places, handled above with a quiet
+// log-only failure path), this is a direct single-click user action, so
+// it gets the full rollback-plus-toast treatment: local state only
+// commits on a confirmed write, and a failure reverts the card and tells
+// the user to try again. The false branch already delegates to
+// deriveAndWriteScopeStatus, which now returns true/false itself (see
+// above) — checked here so a failed Resume also surfaces honestly instead
+// of the card silently staying on On Hold with no error shown.
 async function setScopeOnHold(scopeId,onHold){
   const scope=(window.SCOPES||[]).find(s=>s.id===scopeId);
   if(!scope)return;
   if(onHold){
-    scope.status='On Hold';
+    const priorStatus=scope.status;
+    const priorChangedDate=scope.statusChangedDate;
     const _statusChangedDate=new Date().toISOString().split('T')[0];
+    if(!demoMode&&scope.id){
+      const result=await atUpdate('Scopes',scope.id,{'Status':'On Hold','Status Changed Date':_statusChangedDate});
+      if(!result){
+        showToast('Could not put this project on hold. Please try again.','error');
+        return;
+      }
+    }
+    scope.status='On Hold';
     scope.statusChangedDate=_statusChangedDate;
-    if(!demoMode&&scope.id) await atUpdate('Scopes',scope.id,{'Status':'On Hold','Status Changed Date':_statusChangedDate});
     // v34l — On Hold still counts as "not Capital Plan" for unit-status
     // derivation purposes (units read Active, matching the Scope card's
     // own On Hold display convention — a frozen display state, not a
@@ -7977,7 +8135,11 @@ async function setScopeOnHold(scopeId,onHold){
     await recomputeStatusesForScope(scopeId);
     await deriveAndWritePropertyStatus(scope.property);
   }else{
-    await deriveAndWriteScopeStatus(scopeId,{force:true});
+    const ok=await deriveAndWriteScopeStatus(scopeId,{force:true});
+    if(!ok){
+      showToast('Could not resume this project. Please try again.','error');
+      return;
+    }
   }
 }
 
@@ -10030,8 +10192,18 @@ async function saveMeeting(){
   if(mScopeId)fields['Linked Scope']=[mScopeId];
   let atId=existingDraftId||null;
   if(existingDraftId){
-    // Update draft in place — just change Visibility and any edited fields
-    await atUpdate('Meetings',existingDraftId,fields);
+    // v53e — update existing draft, same silent-loss pattern the create
+    // branch below and saveMeetingDraft()'s equivalent update (v52i)
+    // already had fixed: the atUpdate result was discarded, so a failed
+    // save to an already-drafted meeting (changing date, attendees,
+    // notes, or publishing it) still updated local state, closed the
+    // modal, and reported success. Now aborts here instead, leaving the
+    // panel open so nothing entered is lost, matching saveMeetingDraft().
+    const updRes=await atUpdate('Meetings',existingDraftId,fields);
+    if(!updRes){
+      showToast('Could not save meeting to Airtable. Check your connection and try again.','error');
+      return;
+    }
     atId=existingDraftId;
     // Update local cache
     const m=meetings.find(x=>x.id===existingDraftId);
@@ -10141,7 +10313,7 @@ function renderPropMeetings(p){
     `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No meetings logged</div><div class="empty-state-sub">${role==='pm'?'Click Log meeting above to add':role==='client'?'No published meetings yet':''}</div></div>`:
     recent.map(m=>`<div class="meeting-card">
       <div class="meeting-card-header">
-        <div><div class="meeting-card-title">${escHtml(m.type)}</div><div class="meeting-card-meta">${m.date} · ${m.elevco} · ${m.format}</div></div>
+        <div><div class="meeting-card-title">${escHtml(m.type)}</div><div class="meeting-card-meta">${m.date} · ${escHtml(m.elevco)} · ${escHtml(m.format)}</div></div>
         <div style="display:flex;align-items:center;gap:6px">
           ${m.status==='Cancelled'
             ?`<span class="badge" style="background:#F1EFE8;color:#5F5E5A"><i class="ti ti-ban" style="font-size:11px;margin-right:3px"></i>Cancelled</span>`
@@ -10491,7 +10663,7 @@ function renderAllMeetings(){
   if(mList)mList.innerHTML=meetings.length===0?
     `<div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">${AT_CONNECTED?'No meetings logged yet':'Loading from database...'}</div><div class="empty-state-sub">${AT_CONNECTED?'Log meetings from a property page or the button above':'Live meetings will appear here shortly'}</div></div>`:
     recentMeetings.map(m=>`<div class="meeting-card">
-      <div class="meeting-card-header"><div><div class="meeting-card-title">${escHtml(m.type)} — ${escHtml(m.property)}</div><div class="meeting-card-meta">${m.date}${m.elevco?' · '+m.elevco:''}</div></div>
+      <div class="meeting-card-header"><div><div class="meeting-card-title">${escHtml(m.type)} — ${escHtml(m.property)}</div><div class="meeting-card-meta">${m.date}${m.elevco?' · '+escHtml(m.elevco):''}</div></div>
       <div style="display:flex;align-items:center;gap:6px">
         ${m.status==='Cancelled'
           ?`<span class="badge" style="background:#F1EFE8;color:#5F5E5A"><i class="ti ti-ban" style="font-size:11px;margin-right:3px"></i>Cancelled</span>`
@@ -10522,7 +10694,7 @@ function renderAllMeetings(){
       `<div class="empty-state" style="padding:1rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No field updates yet</div><div class="empty-state-sub">Approved field updates will appear here</div></div>`:
       approvedSubs.map(s=>`<div class="meeting-card">
         <div class="meeting-card-header">
-          <div><div class="meeting-card-title">${escHtml(s.property)} — Field Update</div><div class="meeting-card-meta">Week of ${s.week} · ${s.consultant}</div></div>
+          <div><div class="meeting-card-title">${escHtml(s.property)} — Field Update</div><div class="meeting-card-meta">Week of ${s.week} · ${escHtml(s.consultant)}</div></div>
           <div style="display:flex;align-items:center;gap:6px">
             <span class="badge b-public">Approved</span>
             <button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:14px"></i></button>
@@ -13197,11 +13369,27 @@ async function deriveAndWriteScopeDates(scopeId){
     &&newTargetCompletion===(sc.targetCompletion||null)
     &&newActualStart===(sc.actualStart||null)
     &&newActualCompletion===(sc.actualCompletion||null);
-  if(nothingChanged)return;
-  sc.plannedStart=newPlannedStart||'';
-  sc.targetCompletion=newTargetCompletion||'';
-  sc.actualStart=newActualStart||'';
-  sc.actualCompletion=newActualCompletion||'';
+  if(nothingChanged)return true;
+  // v53e — this write was fire-and-forget with no result check, and the
+  // sc.* fields above were mutated before the write ever ran, so a failed
+  // write to Airtable left the Scope's Planned Start/Target Completion/
+  // Actual Start/Actual Completion/Year showing new values in the app
+  // that never actually saved — same silent-fail shape the v52e-v52j
+  // audit series fixed elsewhere, missed here since this function runs as
+  // a background side effect of saving a phase or an M1/M14 milestone
+  // edit, not as its own direct user action. Now returns true/false and
+  // only commits the local sc.* mutation on a confirmed write, matching
+  // the pattern updateMilestone() already uses (v52p) for the same
+  // reason: don't update local state ahead of a write that didn't happen.
+  // Callers (saveNewPhase, saveEditPhase, updateMilestone) already have
+  // their own save-guard/toast for the phase or milestone save itself;
+  // this only prevents the Scope-level derived dates from silently
+  // drifting out of sync with Airtable on top of that.
+  const priorScopeDates={plannedStart:sc.plannedStart,targetCompletion:sc.targetCompletion,actualStart:sc.actualStart,actualCompletion:sc.actualCompletion,year:sc.year};
+  const newPlannedStartVal=newPlannedStart||'';
+  const newTargetCompletionVal=newTargetCompletion||'';
+  const newActualStartVal=newActualStart||'';
+  const newActualCompletionVal=newActualCompletion||'';
   // v51g — Year/Budget Cycle (the single integer year Capital Plan groups
   // by) previously stayed a manually-set field, independent of the date
   // fields above, so Capital Plan and Budget Outlook could silently show
@@ -13211,14 +13399,23 @@ async function deriveAndWriteScopeDates(scopeId){
   // already computed above, rather than re-deriving separately from phase
   // dates, so the two can never drift apart from each other.
   const newYear=newPlannedStart?new Date(newPlannedStart+'T12:00:00').getFullYear():null;
-  if(newYear!=null)sc.year=newYear;
-  await atUpdate('Scopes',scopeId,{
+  const result=await atUpdate('Scopes',scopeId,{
     'Planned Start':newPlannedStart,
     'Target Completion':newTargetCompletion,
     'Actual Start':newActualStart,
     'Actual Completion':newActualCompletion,
     ...(newYear!=null?{'Year/Budget Cycle':newYear}:{}),
   });
+  if(!result){
+    console.error('deriveAndWriteScopeDates: failed to save Scope dates for',scopeId);
+    return false;
+  }
+  sc.plannedStart=newPlannedStartVal;
+  sc.targetCompletion=newTargetCompletionVal;
+  sc.actualStart=newActualStartVal;
+  sc.actualCompletion=newActualCompletionVal;
+  if(newYear!=null)sc.year=newYear;
+  return true;
 }
 // v50c — MARLI Unit Phase suggestions. Structural (not text/AI-based)
 // suggestions: for a Scope past Capital Plan status, groups its own
@@ -13703,7 +13900,22 @@ async function saveStepDates(phaseId){
     const notes=row.querySelector('.step-notes')?.value.trim()||'';
     const fields={'Property Name':propertyNameToLink(propName),'Phase Name':phaseName,'Task Name':stepName,'Task Order':stepOrder,'Planned Start':plannedStart,'Planned End':plannedEnd,'Actual Start':actualStart,'Completion Date':actualEnd,'Status':status,'Notes':notes};
     if(existingId){
-      if(!demoMode)await atUpdate('Phase Tasks',existingId,fields);
+      // v53e — editing an existing Phase Task row was fire-and-forget,
+      // unlike the atCreate branch right below (fixed in v51j, see its
+      // comment) which already correctly counts failures into
+      // stepSaveFailCount. Local state updated unconditionally here, so a
+      // failed save to an existing task's dates/status/notes still showed
+      // as saved with the closing "Tasks saved" toast reporting success.
+      // Now matches the create branch's pattern.
+      let updOk=true;
+      if(!demoMode){
+        const updRes=await atUpdate('Phase Tasks',existingId,fields);
+        if(!updRes)updOk=false;
+      }
+      if(!updOk){
+        stepSaveFailCount++;
+        continue;
+      }
       const ex=window.PHASE_STEPS.find(x=>x.id===existingId);
       if(ex)Object.assign(ex,{plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',completionDate:actualEnd||'',status,taskOrder:stepOrder,checked,notes});
     } else {
@@ -14326,7 +14538,10 @@ async function saveNewPhase(){
   // v51f — recompute this Scope's own effective Planned Start/Target
   // Completion (and Actual Start/Actual Completion) now that a new dated
   // phase exists. See deriveAndWriteScopeDates for the full rule.
-  if(scopeId)await deriveAndWriteScopeDates(scopeId);
+  // v53e — now returns false on a failed write; folded into the same
+  // fail count as the Phase Tasks writes above so a failure here isn't
+  // silently dropped, without adding a second separate error toast.
+  if(scopeId&&!(await deriveAndWriteScopeDates(scopeId)))phaseTaskFailCount++;
   // Write tasks to PHASE_STEPS locally so they render immediately
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
   // Bug fix (v21c) — previously every task was created with blank Planned
@@ -14657,7 +14872,10 @@ async function saveEditPhase(){
   // v51f — recompute this Scope's own effective Planned Start/Target
   // Completion (and Actual Start/Actual Completion) now that this phase's
   // dates may have changed. See deriveAndWriteScopeDates for the full rule.
-  if(ph.scopeId)await deriveAndWriteScopeDates(ph.scopeId);
+  // v53e — now returns false on a failed write; folded into
+  // editPhaseFailCount so a failure here surfaces in the same closing
+  // toast this function already shows, instead of being silently dropped.
+  if(ph.scopeId&&!(await deriveAndWriteScopeDates(ph.scopeId)))editPhaseFailCount++;
   document.getElementById('edit-phase-form').style.display='none';
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
@@ -14797,7 +15015,10 @@ async function deletePhase(id,propName){
     if(!delRes)deletePhaseFailCount++;
   }
   await deriveAndWritePropertyStatus(propName);
-  if(scopeIdForDerivation)await deriveAndWriteScopeDates(scopeIdForDerivation);
+  // v53e — now returns false on a failed write; folded into
+  // deletePhaseFailCount so a failure here surfaces in the same closing
+  // toast this function already shows, instead of being silently dropped.
+  if(scopeIdForDerivation&&!(await deriveAndWriteScopeDates(scopeIdForDerivation)))deletePhaseFailCount++;
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
   if(deletePhaseFailCount>0){
@@ -22662,14 +22883,29 @@ function printCharts(){
   setTimeout(()=>el?.classList.remove('print-active'),1000);
 }
 
+// v53e — was fire-and-forget: the atUpdate result was discarded entirely
+// (not even assigned to a variable) and the success toast fired
+// unconditionally whenever propId existed, regardless of whether the
+// write actually reached Airtable. Same silent-fail shape the v52e-v52j
+// audit series fixed elsewhere. Now checks the result, rolls the local
+// Core/Non-Core badge back on failure, and shows an honest error toast
+// instead of a false success.
 async function updateAssetType(propId, propName, isCore){
   const newType=isCore?'Core':'Non-Core';
   // Update local portfolio
   const p=PORTFOLIO.find(x=>x.n===propName);
+  const priorType=p?.type;
   if(p)p.type=newType;
   // Write to Airtable
   if(propId){
-    await atUpdate('Properties',propId,{'Asset Type':newType});
+    const result=await atUpdate('Properties',propId,{'Asset Type':newType});
+    if(!result){
+      if(p)p.type=priorType;
+      populatePortfolio();
+      populateMilestonesTable();
+      showToast(`Could not update ${propName}'s asset type. Please try again.`,'error');
+      return;
+    }
     showToast(`${propName} set to ${newType}`,'success');
   } else {
     showToast(`${propName} set to ${newType} — Airtable ID missing, refresh to persist`,'warn');
@@ -23872,12 +24108,12 @@ function previewDoc(docId, syntheticDoc){
       <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${escHtml(s.property)}</div>
       <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">Week of ${s.week} · Submitted ${s.submittedAt}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
-        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant}</strong></div>
+        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${escHtml(s.consultant)}</strong></div>
         <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase)}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${escHtml(s.status)}</strong></div>
         <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${escHtml(s.commentType)}</strong></div>
-        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus}</strong></div>
+        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${escHtml(s.issueStatus)}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:${s.reviewStatus==='approved'?'var(--green)':'var(--amber)'}">${s.reviewStatus}</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
@@ -23892,7 +24128,7 @@ function previewDoc(docId, syntheticDoc){
       <div style="font-size:18px;font-weight:700;color:var(--navy);border-bottom:2px solid var(--blue-dark);padding-bottom:8px;margin-bottom:12px">${escHtml(m.property)}</div>
       <div style="font-size:11px;color:var(--gray-mid);margin-bottom:16px">${escHtml(m.type)} · ${m.date} · ${m.format||''}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
-        ${m.elevco?`<div><span style="color:var(--gray-mid)">Elevator Co:</span> <strong>${m.elevco}</strong></div>`:''}
+        ${m.elevco?`<div><span style="color:var(--gray-mid)">Elevator Co:</span> <strong>${escHtml(m.elevco)}</strong></div>`:''}
         ${m.attVDA?`<div><span style="color:var(--gray-mid)">VDA Team:</span> <strong>${escHtml(m.attVDA)}</strong></div>`:''}
         ${m.attElev?`<div><span style="color:var(--gray-mid)">Elev. Co:</span> <strong>${escHtml(m.attElev)}</strong></div>`:''}
         ${m.attClient?`<div><span style="color:var(--gray-mid)">Client:</span> <strong>${escHtml(m.attClient)}</strong></div>`:''}
@@ -24396,13 +24632,25 @@ async function confirmDeleteProperty(){
   if(!demoMode){
     showToast(`Deleting ${name} and all associated records...`,'info');
     // v30e: soft-delete property record — set Status='Removed' and Date Removed
+    // v53e — this was a dead try/catch: atUpdate resolves to null on any
+    // write failure rather than throwing, so the catch block could never
+    // actually fire against a real Airtable rejection, and "soft-deleted
+    // OK" logged unconditionally regardless of whether the write reached
+    // Airtable. This is the FIRST step of the whole cascade, so a failure
+    // here specifically means the property's own Status never actually
+    // flipped to Removed — it can silently persist as active in Airtable
+    // while the app hides it from the UI, exactly the "I deleted it and
+    // it came back" shape. Now checks the result directly, matching every
+    // atDelete call in the cascade below it.
     if(prop?.id){
-      try{
-        const todayIso=new Date().toISOString().split('T')[0];
-        await atUpdate('Properties',prop.id,{'Status':'Removed','Date Removed':todayIso});
+      const todayIso=new Date().toISOString().split('T')[0];
+      const softDeleteResult=await atUpdate('Properties',prop.id,{'Status':'Removed','Date Removed':todayIso});
+      if(!softDeleteResult){
+        console.warn('Property soft-delete failed for',prop.id);
+        failedSteps.push('Property record');
+      }else{
         console.log('[deleteProperty] Properties record soft-deleted OK:',prop.id);
       }
-      catch(e){console.warn('Property soft-delete failed',e);console.log('[deleteProperty] Properties soft-delete FAILED — see warning above');failedSteps.push('Property record');}
     }
     // Cascade delete all related Airtable records
     const cascadeTargets=[
@@ -24835,7 +25083,7 @@ function previewFieldUpdateCard(subId){
     </div>
     <div style="overflow-y:auto;padding:20px;flex:1">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
-        <div><span style="color:var(--gray-mid)">Submitted by</span><br><strong>${s.consultant}</strong></div>
+        <div><span style="color:var(--gray-mid)">Submitted by</span><br><strong>${escHtml(s.consultant)}</strong></div>
         <div><span style="color:var(--gray-mid)">Date</span><br><strong>${s.submittedAt}</strong></div>
         <div><span style="color:var(--gray-mid)">Phase</span><br><strong>${escHtml(s.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Status</span><br><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></div>
@@ -24870,7 +25118,7 @@ function renderPropUpdates(p){
     </div>
     <div class="update-card-meta">${escHtml(s.phase)} · ${escHtml(s.status)} · ${s.submittedAt}</div>
     <div class="update-card-body">${escHtml(s.notes)}</div>
-    <div class="update-card-tags"><span class="badge b-nac">${s.commentType}</span><span class="badge b-nac">${s.issueStatus}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
+    <div class="update-card-tags"><span class="badge b-nac">${escHtml(s.commentType)}</span><span class="badge b-nac">${escHtml(s.issueStatus)}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
   </div>`).join('');
 }
 
@@ -24892,7 +25140,7 @@ function refreshQueue(){
           <button class="btn btn-icon" onclick="previewQueueItem('${s.id}')" title="Preview update"><i class="ti ti-eye" style="font-size:14px"></i></button>
         </div>
       </div>
-      <div class="queue-item-meta">Submitted by ${s.consultant} · ${s.submittedAt} · Units: ${escHtml(s.units)} · Phase: ${escHtml(s.phase)}</div>
+      <div class="queue-item-meta">Submitted by ${escHtml(s.consultant)} · ${s.submittedAt} · Units: ${escHtml(s.units)} · Phase: ${escHtml(s.phase)}</div>
       <div class="queue-item-body">${escHtml((s.notes||'').slice(0,120))}${(s.notes||'').length>120?'...':''}</div>
       <div class="queue-actions">
         <button class="btn btn-success" onclick="approveSubmission('${s.id}')"><i class="ti ti-check"></i>Approve</button>
@@ -25330,13 +25578,13 @@ function previewFieldUpdateDetail(subId){
     </div>
     <div style="overflow-y:auto;padding:20px;flex:1">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
-        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${escHtml(s.consultant||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Submitted:</span> <strong>${s.submittedAt||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${escHtml(s.status||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${escHtml(s.commentType||'—')}</strong></div>
-        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${escHtml(s.issueStatus||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--green)">Approved</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
@@ -25396,13 +25644,13 @@ function previewQueueItem(subId){
     </div>
     <div style="overflow-y:auto;padding:20px;flex:1">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">
-        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${s.consultant||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Submitted By:</span> <strong>${escHtml(s.consultant||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Submitted:</span> <strong>${s.submittedAt||'—'}</strong></div>
         <div><span style="color:var(--gray-mid)">Units Updated:</span> <strong>${escHtml(s.units||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Project Phase:</span> <strong>${escHtml(s.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Progress Status:</span> <strong>${escHtml(s.status||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Comment Type:</span> <strong>${escHtml(s.commentType||'—')}</strong></div>
-        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${s.issueStatus||'—'}</strong></div>
+        <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${escHtml(s.issueStatus||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--amber)">Pending</strong></div>
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
@@ -25457,7 +25705,16 @@ async function publishDraftAction(subId){
   actionItems.push({id:newId,property:s.property,description:d.description,owner:d.owner||'',due:d.due||'TBD',priority:d.priority||'Medium',status:'Open',meetingId:null});
   if(d.owner)notifyActionItemOwner(d.owner,d.description,s.property,d.due,d.priority);
   s.draftAction.published=true;
-  if(s.atId)await atUpdate('Field Updates',s.atId,{'Draft Action Published':true});
+  // v53e — the real Action Item above is already confirmed-created at
+  // this point (checked above per v51j), so this secondary flag write
+  // (marking the draft itself as published, so it doesn't offer to
+  // publish twice) failing doesn't lose the action item data itself —
+  // logged rather than blocking the publish, since the important write
+  // already succeeded.
+  if(s.atId){
+    const draftFlagRes=await atUpdate('Field Updates',s.atId,{'Draft Action Published':true});
+    if(!draftFlagRes)console.error('publishDraftAction: failed to flag draft as published for',s.atId);
+  }
   refreshDashActions();
   if(currentProp&&currentProp.n===s.property)renderPropertyView(currentProp);
   document.getElementById('queue-preview-overlay')?.remove();
@@ -25490,17 +25747,30 @@ function openDismissDraftAction(subId){
   document.body.appendChild(overlay);
 }
 
+// v53e — was fire-and-forget: s.draftAction.dismissed/dismissNote were
+// mutated before the write, and the atUpdate result was never checked, so
+// a failed dismiss still closed the modal and showed "Action dismissed"
+// while Airtable never actually recorded it — the draft action would
+// reappear as still-pending on the next refresh with no error ever shown.
+// Unlike publishDraftAction's secondary flag write, this write IS the
+// primary action here, so it gets the full rollback-plus-toast treatment.
 async function dismissDraftAction(subId){
   const s=submissions.find(x=>x.id===subId);
   if(!s||!s.draftAction)return;
   if(s.draftAction.published||s.draftAction.dismissed){document.getElementById('dismiss-draft-overlay')?.remove();return;}
   const noteEl=document.getElementById('dismiss-draft-note');
   const note=noteEl?noteEl.value.trim():'';
-  s.draftAction.dismissed=true;
-  s.draftAction.dismissNote=note;
   const updateFields={'Draft Action Dismissed':true};
   if(note)updateFields['Draft Action Dismiss Note']=note;
-  if(s.atId)await atUpdate('Field Updates',s.atId,updateFields);
+  if(s.atId){
+    const dismissRes=await atUpdate('Field Updates',s.atId,updateFields);
+    if(!dismissRes){
+      showToast('Could not dismiss this action. Please try again.','error');
+      return;
+    }
+  }
+  s.draftAction.dismissed=true;
+  s.draftAction.dismissNote=note;
   document.getElementById('dismiss-draft-overlay')?.remove();
   document.getElementById('queue-preview-overlay')?.remove();
   previewQueueItem(subId);
@@ -28799,7 +29069,7 @@ function renderOpsCenter(){
           ?'<div style="font-size:12px;color:var(--gray-mid)">No meetings logged yet.</div>'
           :recentMeetings.map(m=>{const _mSc=m.scopeId?(window.SCOPES||[]).find(s=>s.id===m.scopeId):null;const _mScTag=_mSc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo)">${escHtml(_mSc.name)}</span>`:'';return `<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
             <div class="action-dot" style="background:var(--blue-dark)"></div>
-            <div class="action-desc" style="flex:1"><strong>${(m.type||'Meeting')}: ${escHtml(m.property)}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+m.elevco:''}</span></div>
+            <div class="action-desc" style="flex:1"><strong>${escHtml(m.type||'Meeting')}: ${escHtml(m.property)}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+escHtml(m.elevco):''}</span></div>
             <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${_mScTag}<i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px"></i></div>
           </div>`}).join('')
         }
