@@ -4474,7 +4474,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v56f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v56h</div>
     </div>
   </nav>
 
@@ -11743,7 +11743,20 @@ const PROPS_STAGE_COLORS={'Pre-Construction':'var(--gray-mid)','Construction':'v
 // table, small dots). This is a separate palette used only by
 // propsDotColor() below -- the shared PROPS_STAGE_COLORS values and
 // every other consumer (Analytics chart, phase classes) are untouched.
-const PROPS_DOT_COLORS={'Pre-Construction':'#8A8776','Construction':'#1C7ED6','Project Closeout':'#E8590C','Complete':'#2F9E44'};
+// v56h -- palette replaced after Misty reviewed several visual mockups
+// and picked a mixed combo: Pre-Construction and Project Closeout use a
+// fill+border pairing (light neutral/amber fill with a darker matching
+// border) borrowed from one mockup option, while Construction and
+// Complete keep the original solid blue/green from the v56f palette.
+// Each stage now carries its own {fill,border} pair instead of a single
+// color, so propsDotColor() returns an object and the border is no
+// longer a flat rgba(0,0,0,0.35) applied to every dot.
+const PROPS_DOT_COLORS={
+  'Pre-Construction':{fill:'#EFEDE5',border:'#6B6A63'},
+  'Construction':{fill:'#1C7ED6',border:'rgba(0,0,0,0.35)'},
+  'Project Closeout':{fill:'#F3B15A',border:'#7A4808'},
+  'Complete':{fill:'#2F9E44',border:'rgba(0,0,0,0.35)'}
+};
 function propsDotColor(stage){return PROPS_DOT_COLORS[stage]||PROPS_DOT_COLORS['Pre-Construction'];}
 let propsSortField='name',propsSortDir='asc',propsStatusFilter='all',propsSearchQuery='';
 // Per-property rollup: blended progress, per-Scope stage dots, blockers,
@@ -11985,7 +11998,23 @@ function renderPropertiesTable(){
       // that shared meaning, worth flagging before touching).
       const dotsHtml=r.dots.length?r.dots.map(d=>{
         const c=propsDotColor(d.stage);
-        return `<div title="${esc(d.stage)}" style="width:12px;height:12px;border-radius:50%;background:${c};border:1px solid rgba(0,0,0,0.35)"></div>`;
+        // v56g -- fix real runtime bug reported live: v56f called esc(),
+        // but esc is not a real global in this file -- it's a local alias
+        // (const esc=escHtml;) declared inside ~9 specific functions that
+        // need it (print/report builders, tooltips), each scoped to that
+        // function only. This dot-rendering code lives in a function with
+        // no such local alias, so esc() resolved to nothing at runtime and
+        // broke the entire Properties table with "ReferenceError: Can't
+        // find variable: esc". Fixed by calling the real global escHtml()
+        // directly instead. node --check only validates syntax, not that
+        // every referenced name actually resolves at runtime -- a real gap
+        // in the pre-handoff checklist, worth remembering for future
+        // builds.
+        // v56h -- dot size bumped 12px to 16px (Misty's ask, on top of
+        // the palette change, both aimed at fixing distinguishability).
+        // Border now comes from c.border (per-stage, see PROPS_DOT_COLORS
+        // above) instead of one flat rgba applied to every stage.
+        return `<div title="${escHtml(d.stage)}" style="width:16px;height:16px;border-radius:50%;background:${c.fill};border:1.5px solid ${c.border}"></div>`;
       }).join(''):'<span style="font-size:10px;color:var(--gray-mid)">—</span>';
       const cityState=[r.p.city,r.p.s].filter(Boolean).join(', ');
       // v56c -- Est. completion, reusing the existing getProjectedCompletion()
