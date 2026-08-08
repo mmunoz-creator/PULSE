@@ -2675,6 +2675,56 @@ async function atDelete(table, id) {
   } catch(e) { console.error('atDelete error:', e); return null; }
 }
 
+// v55o — Optimistic-locking conflict detection (task #90). Deferred from
+// this session's earlier edit-active-guard fixes (v54c/v55h/v55k), which
+// only pause a background poll from clobbering an in-progress edit for a
+// few seconds. That doesn't cover two people editing the same record at
+// once, or an edit that takes longer than the guard window -- there was
+// still no real mechanism to detect "this record changed underneath me"
+// and stop a save from silently overwriting someone else's work. Misty:
+// "we're on the precipice of introducing more users soon."
+//
+// Design (confirmed with Misty): last-modified-timestamp comparison, not
+// version numbers -- each of the 5 target tables now has its own Airtable
+// "Last modified time" field (watching every editable field that table's
+// own save function writes), added directly in Airtable by Misty. Round 1
+// covers the highest-traffic saves only: Milestones, Phases (Unit
+// Groups), Change Orders, Billing Log, Properties. On conflict: block the
+// save and show the user their own unsaved value plus how long ago the
+// real record changed, then let them reload and redo the edit -- no
+// auto-merge, per Misty's explicit choice.
+//
+// CONFLICT_TS_FIELD maps each table to the exact Airtable field name
+// Misty configured (confirmed against her screenshots, not guessed):
+const CONFLICT_TS_FIELD={
+  'Milestones':'Milestones Last Modified',
+  'Unit Groups':'Unit Groups Last Modified',
+  'Change Order Savings Log':'Change Order Last Modified',
+  'Billing Log':'Billing Log Last Modified',
+  'Properties':'Property Last Modified',
+};
+// Fetches the record's current Last Modified timestamp fresh from
+// Airtable (never trusts the in-memory copy, which is exactly what could
+// be stale) and compares it to the timestamp captured when this edit
+// session started. Returns {conflict:false} if they match (or if the
+// live record has no timestamp yet -- a brand new record with no edits
+// since creation), or {conflict:true, liveTs} if they differ.
+// demoMode always returns no-conflict -- there's no real Airtable behind
+// demo data for this to mean anything against.
+async function checkForEditConflict(table,recordId,loadedTs){
+  if(demoMode||!recordId)return{conflict:false};
+  const field=CONFLICT_TS_FIELD[table];
+  if(!field){console.warn('checkForEditConflict: no timestamp field configured for table',table);return{conflict:false};}
+  const formula=`RECORD_ID()='${recordId}'`;
+  const recs=await atGet(table,formula);
+  const rec=recs&&recs[0];
+  if(!rec)return{conflict:false}; // record vanished (deleted elsewhere) -- let the save's own atUpdate fail normally rather than double-reporting here
+  const liveTs=rec.fields[field]||'';
+  if(!liveTs)return{conflict:false}; // never modified since creation -- nothing to conflict with
+  if(loadedTs&&liveTs!==loadedTs)return{conflict:true,liveTs};
+  return{conflict:false};
+}
+
 // v51a: seedIfEmpty() removed along with PROPERTIES_SEED (see note at the
 // former seed block). It only ever mattered on a brand new empty base and
 // cost every login an extra full Properties fetch.
@@ -2789,6 +2839,8 @@ async function loadAllData() {
         // fields regardless of MILESTONE_DERIVATION type. Does not touch the
         // underlying Unit Phase auto-calc logic — see renderMilestones().
         milestoneManualOverride: r.fields['Milestone Manual Override']===true,
+        // v55o — optimistic-locking conflict detection (task #90).
+        conflictTs: r.fields['Property Last Modified']||'',
         ms: [], // milestones now from MILESTONES table
       })).filter(p=>p.n).sort((a,b)=>a.n.localeCompare(b.n));
       window.PORTFOLIO = livePortfolio;
@@ -2963,6 +3015,8 @@ async function loadAllData() {
       // see the note near window.SCOPES.forEach below).
       linkedUnitIds: [],
       phaseTasks: r.fields['Phase Tasks']?r.fields['Phase Tasks'].split(',').map(s=>s.trim()).filter(Boolean):[],
+      // v55o — optimistic-locking conflict detection (task #90).
+      conflictTs: r.fields['Unit Groups Last Modified']||'',
     }));
     // Phase Steps
     window.PHASE_STEPS = phaseSteps.map(r=>({
@@ -2989,6 +3043,8 @@ async function loadAllData() {
       invoiceMonth: r.fields['Invoice Month']||'',
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
+      // v55o — optimistic-locking conflict detection (task #90).
+      conflictTs: r.fields['Billing Log Last Modified']||'',
     })).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
 
     // Retainage Releases — discrete release events (client pays contractor
@@ -3026,6 +3082,12 @@ async function loadAllData() {
       // should still surface as recent activity for a few days, which its
       // own Completion Date alone can't signal.
       lastModified: r.fields['Last Modified Time']||'',
+      // v55o — separate, wider Last Modified field for optimistic-locking
+      // conflict detection (task #90), distinct from lastModified above
+      // (which only watches Status + Completion Date for Activity Feed
+      // recency). Watches every field this record's own save function
+      // actually writes -- see checkForEditConflict.
+      conflictTs: r.fields['Milestones Last Modified']||'',
       // v52f — Manual Completion Override, per-milestone. Only surfaces in
       // the UI when the property's Milestone Manual Override is also on
       // (see renderMilestones) — this is a fast-path shortcut within that
@@ -3287,6 +3349,8 @@ async function loadAllData() {
       otHours: r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
       materialCost: r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
       opClaimed: r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
+      // v55o — optimistic-locking conflict detection (task #90).
+      conflictTs: r.fields['Change Order Last Modified']||'',
     })).sort((a,b)=>new Date(b.date)-new Date(a.date));
     // v47a — VDA Project billing-tracking feature. Loaded fire-and-forget,
     // same pattern as backfillAllUnassignedUnits() below, so a slow VDA
@@ -4288,6 +4352,7 @@ from unitEffectiveValue() onto each checkbox). -->
       <div class="nav-section">
         <div class="nav-section-label">Program</div>
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
+        <button class="nav-item" onclick="gotoView('properties',this)"><i class="ti ti-building"></i>Properties</button>
         <button class="nav-item" onclick="gotoView('scorecard',this)"><i class="ti ti-trophy"></i>Scorecard</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
@@ -4317,6 +4382,7 @@ from unitEffectiveValue() onto each checkbox). -->
       <div class="nav-section">
         <div class="nav-section-label">Program</div>
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
+        <button class="nav-item" onclick="gotoView('properties',this)"><i class="ti ti-building"></i>Properties</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
         <button class="nav-item" onclick="gotoView('vdaproject',this)"><i class="ti ti-file-invoice"></i>VDA Project</button>
@@ -4344,6 +4410,7 @@ from unitEffectiveValue() onto each checkbox). -->
       <div class="nav-section">
         <div class="nav-section-label">Program</div>
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
+        <button class="nav-item" onclick="gotoView('properties',this)"><i class="ti ti-building"></i>Properties</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
@@ -4370,6 +4437,7 @@ from unitEffectiveValue() onto each checkbox). -->
       <div class="nav-section">
         <div class="nav-section-label">Program</div>
         <button class="nav-item active" onclick="gotoView('dashboard',this)"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
+        <button class="nav-item" onclick="gotoView('properties',this)"><i class="ti ti-building"></i>Properties</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('capital',this)"><i class="ti ti-calendar-stats"></i>Capital Plan</button>
         <button class="nav-item" onclick="gotoView('portfolio',this)"><i class="ti ti-building-skyscraper"></i>Portfolio View</button>
@@ -4406,7 +4474,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v55n</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v56a</div>
     </div>
   </nav>
 
@@ -4501,6 +4569,61 @@ from unitEffectiveValue() onto each checkbox). -->
           </div>
           <input class="form-input no-print" type="text" id="vda-search" placeholder="Search by VDA Project #, nickname, or property..." oninput="renderVdaProjects()" style="max-width:400px;margin-bottom:16px">
           <div id="vda-card-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px"></div>
+        </div>
+      </div>
+
+      <!-- v56a -- new Properties tab. Additive: Portfolio View below is left
+      completely untouched. Properties is a separate, newer take on the
+      same property-list job: KPI ring cards (with MARLI Why buttons),
+      blended per-property progress, lifecycle-stage-colored project dots,
+      and a simplified blocker count (overdue Action Items only this
+      round, Change Orders / meeting-minute flags deferred). White
+      background per Misty's direction, distinct from the app's usual
+      surface-gray. -->
+      <div id="view-properties" class="hidden" style="background:#fff">
+        <div class="page-header">
+          <div class="page-header-left"><h1>Properties</h1><p id="properties-sub">Loading properties...</p></div>
+          <div class="header-actions">
+            <div class="no-print" style="position:relative;display:flex;align-items:center">
+              <i class="ti ti-search" style="position:absolute;left:10px;font-size:14px;color:var(--gray-mid);pointer-events:none"></i>
+              <input type="text" id="props-search" placeholder="Search properties..." oninput="propsApply()" style="font-size:12px;padding:7px 10px 7px 30px;border:1px solid var(--border);border-radius:6px;color:var(--navy);outline:none;width:180px">
+            </div>
+          </div>
+        </div>
+
+        <div id="props-kpi-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px"></div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);margin-bottom:10px">
+          <div id="props-status-tabs" style="display:flex;gap:4px"></div>
+        </div>
+
+        <div style="display:flex;gap:16px;flex-wrap:wrap;padding:0 0 10px;font-size:11px;color:var(--gray-mid)">
+          <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:var(--gray-mid)"></div>Pre-construction</div>
+          <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:var(--blue-dark)"></div>Construction</div>
+          <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:var(--amber)"></div>Project closeout</div>
+          <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:var(--green)"></div>Complete</div>
+        </div>
+
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:820px">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('name')">Property <i class="ti ti-arrows-sort" style="font-size:10px"></i></th>
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('units')">Total units</th>
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('pct')">Percent complete</th>
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('spend')">Spent to date</th>
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Projects</th>
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Blockers</th>
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('status')">Status</th>
+              </tr>
+            </thead>
+            <tbody id="props-table-body"></tbody>
+          </table>
+        </div>
+
+        <div style="padding:12px 0;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--gray-mid)">
+          <div><i class="ti ti-sparkles" style="font-size:13px;vertical-align:-2px;margin-right:4px"></i>Why buttons ask MARLI for a live, data-specific explanation.</div>
+          <div id="props-pagination"></div>
         </div>
       </div>
 
@@ -4918,44 +5041,7 @@ from unitEffectiveValue() onto each checkbox). -->
         </div>
       </div>
 
-      <div id="view-milestones" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Active Properties</h1><p>Schedule Health and Milestone Progress</p></div></div>
-        <div class="page-body">
-          <div class="card"><div class="card-header"><div class="card-title">Project Overview</div></div>
-            <div class="table-wrap"><table class="data-table" style="table-layout:fixed"><thead><tr><th style="width:24%">Property</th><th style="width:7%">Type</th><th style="width:13%">Elev. Company</th><th style="width:6%">Units</th><th style="width:18%">Current Milestone</th><th style="width:16%">Current Phase</th><th style="width:16%">Health</th></tr></thead><tbody id="milestones-tbody"></tbody></table></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- MEETINGS VIEW -->
-      <div id="view-meetings" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Schedule</h1><p>Meetings, Field Updates, and Open Actions</p></div><div class="header-actions"><button class="btn btn-add" id="schedule-action-btn" onclick="openActionItemModal()">+ <i class="ti ti-checkbox"></i>Action</button><button class="btn btn-add" id="schedule-meeting-btn" onclick="openScheduleMeetingModal()"><i class="ti ti-calendar-plus"></i> Schedule Meeting</button></div></div>
-        <div class="page-body">
-          <div id="schedule-loading" class="alert alert-info" style="margin-bottom:1rem;display:none"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i>Loading meetings from database...</div>
-          <div class="two-col">
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Recent Meetings</div><div id="all-meetings-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">No Meetings Logged Yet</div><div class="empty-state-sub">Log meetings from a property page or the button above</div></div></div></div>
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Open Action Items — All Properties</div><div id="all-actions-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No Open Actions</div></div></div></div>
-          </div>
-          <div class="card" style="margin-top:16px"><div class="card-title" style="margin-bottom:1rem">Recent Field Updates</div><div id="all-fieldupdates-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No field updates yet</div><div class="empty-state-sub">Approved field updates will appear here</div></div></div></div>
-        </div>
-      </div>
-
-      <!-- SITE VISITS -->
-      <div id="view-sitevisits" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Site Visits</h1><p>Scheduled and Past Property Visits</p></div><div class="header-actions"><button class="btn btn-add" onclick="showGlobalVisitEntry()">+ <i class="ti ti-calendar-plus"></i>Site Visit</button></div></div>
-        <div class="page-body">
-          <div class="two-col">
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Upcoming Visits</div><div id="upcoming-visits-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-off"></i><div class="empty-state-title">No Visits Scheduled</div></div></div></div>
-            <div class="card"><div class="card-title" style="margin-bottom:1rem">Past Visits</div><div id="past-visits-list"><div class="empty-state" style="padding:1rem"><i class="ti ti-calendar-x"></i><div class="empty-state-title">No Past Visits</div></div></div></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ANALYTICS -->
-      <div id="view-reports" class="hidden">
-        <div class="page-header"><div class="page-header-left"><h1>Analytics</h1><p>Portfolio Performance and Breakdown</p></div><div class="header-actions"><button class="btn btn-primary" onclick="gotoView('report',null)"><i class="ti ti-file-analytics"></i><span>Performance Report</span></button></div></div>
-        <div class="page-body" id="reports-body"></div>
-      </div>
+      <!-- v55q -- view-milestones (Active Properties/Schedule Health), view-meetings, view-sitevisits, and view-reports removed. All four had zero nav buttons in any of the 4 role blocks and zero gotoView() dispatcher calls reaching them -- confirmed dead per the nav IA audit. Superseded by Operations Center (meetings/site visits horizon) and Analytics/view-charts (renderCharts, the reachable Analytics page -- distinct from the now-unused renderAnalytics()). -->
 
       <!-- PERFORMANCE REPORT -->
       <div id="view-report" class="hidden">
@@ -6215,8 +6301,8 @@ async function _finishLogin(){
             if(typeof openProperty==='function')openProperty(_restoreProp);
           }catch(e){console.error('Session restore: deferred openProperty failed, staying on Dashboard:',e);}
         }
-        populatePortfolio();populateMilestonesTable();
-        renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();renderAllMeetings();populateMilestonesTable();populatePanelPropertyList();updatePMUpdatesBadge();
+        populatePortfolio();
+        renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();populatePanelPropertyList();updatePMUpdatesBadge();
         // Bug fix (v22b): populateSubmitDropdown() previously only ran once,
         // at the moment gotoView('submit') fired — which for a consultant
         // happens immediately on login, before this loadAllData() promise
@@ -6517,17 +6603,12 @@ function gotoView(viewId,btn){
   if(btn)btn.classList.add('active');
   updateGlobalHelpBtn(viewId);
   if(viewId==='queue'){refreshQueue();loadDueDaySetting();checkAndGenerateSuggestions();}
+  if(viewId==='properties')renderPropertiesTab();
   if(viewId==='scorecard')renderScorecard();
   if(viewId==='marliinsights')renderMarliInsights();
   if(viewId==='my-updates')refreshMyUpdates();
   if(viewId==='report')renderReportLibrary();
   if(viewId==='documents'){docNavLevel=0;docNavProperty='';docNavSubfolder='';docSearchQuery='';renderDocFolders();}
-  if(viewId==='fieldops'){
-    const loadingEl=document.getElementById('schedule-loading');
-    if(loadingEl)loadingEl.style.display=AT_CONNECTED?'none':'flex';
-    renderAllMeetings();
-  }
-  if(viewId==='sitevisits')renderAllSiteVisits();
   if(viewId==='chatbot'){
     const blocked=document.getElementById('chatbot-blocked');
     const active=document.getElementById('chatbot-active');
@@ -6581,7 +6662,6 @@ function gotoView(viewId,btn){
     renderClientProjectUpdates();
     startLivePolling('clientprojectupdates');
   }
-  if(viewId==='reports')renderAnalytics();
   if(viewId==='charts'||viewId==='analytics')renderCharts();
   if(viewId==='calendar')renderCalendar();
   if(viewId==='capital')renderCapitalPlan();
@@ -7694,9 +7774,13 @@ function renderPropertyView(p){
   const openAIs=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
 
   // Budget & unit variables — needed for both mini grid and budget card
+  // v55p — was the single latest Billing Log entry across the whole
+  // property, blind to which Scope it belonged to. Now sums the latest
+  // entry PER active Scope via getPropertyBilledAndBasis (see its own
+  // comment for the full rationale).
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
-  const latestBilling=propBilling[0]||null;
-  const billedYTD=latestBilling?Number(latestBilling.billedYTD):0;
+  const _billedAndBasis=getPropertyBilledAndBasis(p);
+  const billedYTD=_billedAndBasis.billed;
   // v35c fix — VT Units tile was reading the stale typed Properties.Units
   // field (p.units) instead of a live count from Unit Inventory List, the
   // same staleness pattern already fixed everywhere else (Capital Plan,
@@ -7709,8 +7793,12 @@ function renderPropertyView(p){
   const unitsInProgress=propUnitInventory.filter(u=>u.status==='In Progress').length;
   const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProgress);
   const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
-  const billingBasis=getBillingBasis(p);
-  const pctBilled=billingBasis.amount>0?Math.round((billedYTD/billingBasis.amount)*100):0;
+  // v55p — basis now comes from the same Scope-aware sum as billedYTD
+  // above (_billedAndBasis), so numerator and denominator can never drift
+  // out of sync with each other, the same guarantee getBillingBasis's own
+  // v42a fix established for the single-Scope case.
+  const billingBasis={amount:_billedAndBasis.basis};
+  const pctBilled=_billedAndBasis.pctBilled;
   const variance=pctBilled-pctComplete;
 
   // Product mix
@@ -8402,6 +8490,12 @@ async function updateMilestone(msId,fields,propName){
     const result=await atUpdate('Milestones',msId,cleanFields);
     console.log('Milestone update:',msId,'fields:',Object.keys(cleanFields).join(','),'result:',result?.id||JSON.stringify(result)?.slice(0,80));
     if(!result)writeOk=false;
+    // v55o — capture the fresh Last Modified timestamp Airtable just
+    // recomputed on this write, so the NEXT edit's conflict check
+    // compares against a current baseline rather than the one from
+    // before this save (which would otherwise make every immediate
+    // follow-up edit look like a false conflict against itself).
+    var _msFreshConflictTs=result?.fields?.['Milestones Last Modified'];
   }
   if(!writeOk)return false;
   // Update local cache
@@ -8412,6 +8506,7 @@ async function updateMilestone(msId,fields,propName){
     if(fields['Actual Date']!==undefined)ms.actualDate=fields['Actual Date']||'';
     if(fields['Completion Date']!==undefined)ms.completionDate=fields['Completion Date']||'';
     if(fields['Notes']!==undefined)ms.notes=fields['Notes'];
+    if(typeof _msFreshConflictTs!=='undefined'&&_msFreshConflictTs)ms.conflictTs=_msFreshConflictTs;
   }
   if(currentProp&&currentProp.n===propName){
     const msCompleteCount=getMsComplete(propName);
@@ -8422,7 +8517,17 @@ async function updateMilestone(msId,fields,propName){
   // Auto-derive and write Scope status (which rolls up to Property status)
   // from milestone data — v28b, was deriveAndWritePropertyStatus(propName)
   // directly; now scoped to the specific Scope this milestone belongs to.
-  if(fields['Status']&&ms?.scopeId)await deriveAndWriteScopeStatus(ms.scopeId);
+  // v56a fix -- this previously only re-derived when fields['Status']
+  // itself changed. deriveAndWriteScopeStatus's own graduation check
+  // (Capital Plan/Planned -> In Progress) is driven by ms1.completionDate,
+  // and Complete is driven by msFinal's completionDate/actualDate, so
+  // clearing (or entering) a date on M1 or the final milestone, with the
+  // Status field left untouched, never triggered re-derivation and could
+  // leave a Scope's status stale after exactly that edit. Confirmed via
+  // direct code read against deriveAndWriteScopeStatus (not assumed) and
+  // reported by Misty as a real gap. Now also fires whenever a date field
+  // on this milestone actually changed, not just Status.
+  if(ms?.scopeId&&(fields['Status']!==undefined||fields['Planned Date']!==undefined||fields['Actual Date']!==undefined||fields['Completion Date']!==undefined))await deriveAndWriteScopeStatus(ms.scopeId);
   // v51l — M1 and M14 now directly drive the Scope's Planned Start/Target
   // Completion/Actual Start/Actual Completion (see deriveAndWriteScopeDates).
   // Re-derive whenever either milestone's date or status changes, or those
@@ -8658,7 +8763,6 @@ async function deriveAndWritePropertyStatus(propName){
     }
   }
   refreshDashActions();
-  if(!demoMode)populateMilestonesTable();
   // v35b fix — deriveAndWriteScopeStatus/deriveAndWritePropertyStatus
   // correctly mutate window.SCOPES and write Airtable, but nothing was
   // forcing the visible Overview Scope cards to redraw. Data was right;
@@ -10227,6 +10331,26 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId,i
     }
     fields['Status']=deriveCalendarStatus(plannedDate,actualDate,completionDate);
   }
+  // v55o — optimistic-locking conflict check (task #90). Runs right
+  // before the write, using the loaded conflictTs from the in-memory
+  // record (set whenever this milestone was last read from Airtable —
+  // initial load, poll, or a prior successful save). If the real record
+  // in Airtable has moved on since then, someone else edited it first;
+  // block this save rather than silently overwriting their change.
+  const msForConflict=(window.MILESTONES||[]).find(m=>m.id===msId);
+  const conflictCheck=await checkForEditConflict('Milestones',msId,msForConflict?.conflictTs||'');
+  if(conflictCheck.conflict){
+    if(inputEl&&msForConflict){
+      const revertVal=fieldName==='Planned Date'?msForConflict.plannedDate:
+        fieldName==='Actual Date'?msForConflict.actualDate:
+        fieldName==='Completion Date'?msForConflict.completionDate:inputEl.value;
+      inputEl.value=revertVal||'';
+    }
+    showEditConflictModal(conflictCheck.liveTs,fieldName,String(value),()=>{
+      if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+    });
+    return;
+  }
   const msSaveOk=await updateMilestone(msId,fields,propName);
   // v52p — updateMilestone() now reports whether its Airtable write
   // actually succeeded. On failure, stop here rather than continuing on to
@@ -10589,7 +10713,6 @@ async function saveActionItem(){
   notifyActionItemOwner(owner,description,property,due,priority);
   document.getElementById('action-item-overlay')?.remove();
   refreshDashActions();
-  renderAllMeetings();
   if(currentProp&&currentProp.n===property){
     renderPropMeetings(currentProp);
     // Also refresh Overview action list
@@ -10766,7 +10889,6 @@ async function saveMeetingDraft(){
     if(ownerTyped)notifyActionItemOwner(ownerTyped,desc,propName,due,priority);
   }
   closePanel(false); // keep draft ID so re-opening panel updates same record
-  renderAllMeetings();
   if(currentProp&&currentProp.n===propName)renderPropMeetings(currentProp);
   showToast('Draft saved — pick it up anytime from the Meeting log','success');
   _savingMeetingPanel=false;
@@ -10966,7 +11088,7 @@ async function saveMeeting(){
     renderDocFolders();
   }
   if(currentProp&&currentProp.n===propName){renderPropMeetings(currentProp);renderPropertyView(currentProp);}
-  renderAllMeetings();refreshDashActions();
+  refreshDashActions();
   // v51j — atId is now guaranteed non-null by this point (the create branch
   // above aborts early on failure), so this !atId case is unreachable in
   // practice, but left in place as a defensive fallback rather than
@@ -11115,7 +11237,6 @@ async function closeAction(id){
     if(!r){
       a.status=priorStatus;a.closedDate=priorClosedDate;
       if(currentProp)renderPropMeetings(currentProp);
-      renderAllMeetings();
       refreshDashActions();
       showToast('Could not close this action item. Please try again.','error');
       return;
@@ -11159,7 +11280,6 @@ async function closeAction(id){
     }
   }
   if(currentProp)renderPropMeetings(currentProp);
-  renderAllMeetings();
   refreshDashActions();
   renderDocFolders();
   if(typeof _archiveDocFailed!=='undefined'&&_archiveDocFailed){
@@ -11458,6 +11578,49 @@ function getBillingBasis(p,scope){
     return{amount:p.budget,source:'budget'};
   return{amount:0,source:'none'};
 }
+// v55p — Scope-aware billing rollup (task: fix Billing Log gap). Every
+// caller below (property hero, Analytics Budget % Spent) previously took
+// the single most-recent Billing Log entry across the WHOLE property,
+// ignoring which Scope it belonged to -- on a property with two active
+// Scopes and only one with recent billing activity, that silently
+// under-reported the property's true spend (the other Scope's billing
+// history was invisible to the %). Confirmed live: Billing Log records
+// carry a real scopeId (Linked Scope) already, same as Milestones/Phases/
+// Change Orders, so this was a real gap, not a display choice.
+//
+// Per Misty: billing is the one genuinely top-down number in PULSE (a
+// recommended budget from unit inventory -> client-approved budget ->
+// awarded contract value), unlike % complete/unit counts which are
+// bottom-up from Unit Inventory. This function sums BOTH halves —
+// billed-to-date and its basis (award value, else planned budget) — per
+// active Scope, so a property's "% billed" always reflects every Scope
+// actually spending money, not just whichever one logged most recently.
+// Returns {billed, basis, pctBilled, scopeCount} so a caller never has to
+// recompute the denominator separately and risk it drifting from the
+// numerator (the exact class of bug getBillingBasis's own v42a fix
+// addressed for the single-Scope case).
+function getPropertyBilledAndBasis(p){
+  const activeScopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status==='In Progress');
+  if(activeScopes.length===0){
+    // No active Scope (pre-Scope legacy property, or everything
+    // Complete/On Hold/Planned) — fall back to the old property-wide
+    // latest-entry behavior exactly as before, so a property with no
+    // In Progress Scope doesn't regress to showing nothing.
+    const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n)
+      .sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+    const billed=propBilling[0]?Number(propBilling[0].billedYTD):0;
+    const basis=getBillingBasis(p).amount;
+    return{billed,basis,pctBilled:basis>0?Math.round((billed/basis)*100):0,scopeCount:0};
+  }
+  let billed=0,basis=0;
+  activeScopes.forEach(sc=>{
+    const scBilling=(window.BILLING_LOG||[]).filter(b=>b.scopeId===sc.id)
+      .sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+    if(scBilling[0])billed+=Number(scBilling[0].billedYTD)||0;
+    basis+=getBillingBasis(p,sc).amount;
+  });
+  return{billed,basis,pctBilled:basis>0?Math.round((billed/basis)*100):0,scopeCount:activeScopes.length};
+}
 function fmtBudget(val){
   if(!val||isNaN(val))return 'TBD';
   const n=Number(val);
@@ -11465,6 +11628,230 @@ function fmtBudget(val){
   if(n>=1000)return '$'+(n/1000).toFixed(0)+'K';
   return '$'+n.toLocaleString();
 }
+// ── PROPERTIES TAB (v56a) ───────────────────────────────────────────
+// New tab, additive alongside the untouched Portfolio View. Per Misty's
+// direction: white background, KPI ring cards with MARLI Why buttons
+// (button wired to open MARLI with a pre-filled question this round;
+// a dedicated Why rate-limit bucket is server-side Worker work, deferred
+// to a later build), lifecycle-stage-colored project dots (reusing the
+// same 4-color system as Analytics' Active Projects by Stage chart),
+// property-level blended progress, and a simplified blocker count
+// (overdue Action Items only this round, Change Orders and
+// meeting-minute flags deferred to a later build per Misty's direction).
+const PROPS_STAGE_COLORS={'Pre-Construction':'var(--gray-mid)','Construction':'var(--blue-dark)','Project Closeout':'var(--amber)','Complete':'var(--green)'};
+let propsSortField='name',propsSortDir='asc',propsStatusFilter='all',propsSearchQuery='',propsPage=1;
+const PROPS_PAGE_SIZE=10;
+// Per-property rollup: blended progress, per-Scope stage dots, blockers,
+// spend/basis (reusing getPropertyBilledAndBasis, same helper Total
+// Investment sums from), and an overall status bucket for the filter
+// tabs. Status bucket logic mirrors the existing Property Status field
+// (Complete/In Progress/Planned/Capital Plan/On Hold) but folds At Risk
+// in from real per-Scope schedule risk the same way the Heat Map already
+// does, so "At Risk" here means the same thing it means everywhere else
+// in the app, not a new invented definition.
+function getPropsRowData(p){
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan');
+  const dots=scopes.map(s=>({stage:getMilestoneCategoryForScope(s),id:s.id}));
+  const totalUnits=p.units||scopes.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
+  // Blended percent complete, same unit-based measure Dashboard's
+  // Portfolio % Complete ring uses (completeUnitCount/totalUnitCount),
+  // scoped to this one property's own units rather than the whole
+  // portfolio. Falls back to 0 for a property with no units recorded yet.
+  const propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+  const completeUnits=propUnits.filter(u=>u.status==='Complete').length;
+  const pctComplete=propUnits.length>0?Math.round((completeUnits/propUnits.length)*100):0;
+  const {billed,basis}=getPropertyBilledAndBasis(p);
+  // Simplified blocker count, v56a: overdue open Action Items for this
+  // property only. Same overdue definition already used everywhere else
+  // in the app (due date passed, T12:00:00 anchor to avoid the v54a
+  // timezone bug). Change Orders / meeting-minute flags deliberately
+  // left out this round, narrower scope Misty approved for v56a.
+  const today=new Date();today.setHours(0,0,0,0);
+  // v56a fix -- this was originally written against window.ACTION_ITEMS,
+  // which is never actually populated in this file; the real live array
+  // is the top-level `actionItems` variable (see the actions.map() load
+  // at line ~2920). Confirmed field names (property/status/due) directly
+  // against that mapping before using them here.
+  const blockers=(actionItems||[]).filter(a=>a.property===p.n&&a.status==='Open'&&a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today).length;
+  // Status bucket for the filter tabs. A property with any Scope whose
+  // calcScopeScheduleRisk(propName,scopeId) riskLevel is 'High' shows At
+  // Risk regardless of its stored Property Status, same function and
+  // same "High" threshold the Heat Map/Dashboard badges already use, so
+  // this tab's At Risk means the same thing everywhere else in the app.
+  // v56a fix -- calcScopeScheduleRisk takes (propName,scopeId), not a
+  // Scope object, and returns {riskLevel,...} where riskLevel is one of
+  // 'On Track'/'Medium'/'High'/'Ahead', never the string 'At Risk'.
+  // Caught via direct code read before shipping, not assumed.
+  let statusBucket='onTrack';
+  const anyAtRisk=scopes.some(s=>typeof calcScopeScheduleRisk==='function'&&calcScopeScheduleRisk(p.n,s.id).riskLevel==='High');
+  if(p.st==='Complete')statusBucket='complete';
+  else if(anyAtRisk)statusBucket='atRisk';
+  else if(p.st==='On Hold')statusBucket='delayed';
+  return{p,dots,totalUnits,pctComplete,completeUnits,unitsTotal:propUnits.length,billed,basis,blockers,statusBucket};
+}
+function propsSetSort(field){
+  if(propsSortField===field)propsSortDir=propsSortDir==='asc'?'desc':'asc';
+  else{propsSortField=field;propsSortDir='asc';}
+  propsPage=1;
+  renderPropertiesTable();
+}
+function propsApply(){
+  propsSearchQuery=(document.getElementById('props-search')?.value||'').toLowerCase();
+  propsPage=1;
+  renderPropertiesTable();
+}
+function propsSetStatusFilter(bucket){
+  propsStatusFilter=bucket;
+  propsPage=1;
+  renderPropertiesTable();
+}
+function propsAskMarli(question){
+  // v56a -- Why button opens MARLI (AI Assistant view) with the question
+  // pre-filled in the chat input, ready to send. A dedicated per-click
+  // rate-limit bucket separate from the existing 7/day MARLI cap is
+  // Worker-side work, deferred to a later build per Misty's direction.
+  // This round reuses the existing chat send path and existing cap.
+  gotoView('chatbot',null);
+  setTimeout(()=>{
+    const input=document.getElementById('chat-input');
+    if(input){input.value=question;input.focus();}
+  },150);
+}
+window.propsAskMarli=propsAskMarli;
+function renderPropsKpiRow(){
+  const el=document.getElementById('props-kpi-row');
+  if(!el)return;
+  const props=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed');
+  const rows=props.map(getPropsRowData);
+  const totalBilled=rows.reduce((a,r)=>a+r.billed,0);
+  const totalBasis=rows.reduce((a,r)=>a+r.basis,0);
+  const totalUnitsAll=rows.reduce((a,r)=>a+r.unitsTotal,0);
+  const completeUnitsAll=rows.reduce((a,r)=>a+r.completeUnits,0);
+  const overallPct=totalUnitsAll>0?Math.round((completeUnitsAll/totalUnitsAll)*100):0;
+  const buildingsComplete=rows.filter(r=>r.statusBucket==='complete').length;
+  const buildingsAtRisk=rows.filter(r=>r.statusBucket==='atRisk').length;
+  const buildingsDelayed=rows.filter(r=>r.statusBucket==='delayed').length;
+  const buildingsOnTrack=rows.filter(r=>r.statusBucket==='onTrack').length;
+  const ring=(pct,color)=>{
+    const r=24,circ=2*Math.PI*r;
+    const offset=circ-(Math.min(100,Math.max(0,pct))/100)*circ;
+    return `<svg width="56" height="56" viewBox="0 0 56 56" style="flex-shrink:0"><circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--border)" stroke-width="6"/><circle cx="28" cy="28" r="${r}" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}" transform="rotate(-90 28 28)"/><text x="28" y="31" text-anchor="middle" font-size="11" font-weight="600" fill="var(--navy)">${pct}%</text></svg>`;
+  };
+  const whyBtn=(q)=>`<button aria-label="Ask MARLI why" onclick="propsAskMarli('${q.replace(/'/g,"\\'")}')" style="width:20px;height:20px;padding:0;border-radius:50%;border:0.5px solid var(--border);background:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer"><i class="ti ti-sparkles" style="font-size:11px;color:var(--blue-dark)"></i></button>`;
+  const pctBasis=totalBasis>0?Math.round((totalBilled/totalBasis)*100):0;
+  el.innerHTML=`
+    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+      ${ring(pctBasis,'var(--blue-dark)')}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Total investment</div>${whyBtn('Why is Total Investment at '+fmtBudget(totalBilled)+' this week?')}</div>
+        <div style="font-size:19px;font-weight:700;color:var(--navy);margin-top:2px">${fmtBudget(totalBilled)}</div>
+        <div style="font-size:10px;color:var(--gray-mid)">of ${fmtBudget(totalBasis)} budget</div>
+      </div>
+    </div>
+    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+      ${ring(overallPct,'var(--green)')}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Overall progress</div>${whyBtn('Why is Overall Portfolio Progress at '+overallPct+' percent?')}</div>
+        <div style="font-size:19px;font-weight:700;color:var(--navy);margin-top:2px">${overallPct}%</div>
+        <div style="font-size:10px;color:var(--gray-mid)">units complete</div>
+      </div>
+    </div>
+    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+      ${ring(props.length>0?Math.round((buildingsComplete/props.length)*100):0,'var(--green)')}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Buildings complete</div>${whyBtn('Which buildings are complete and what changed recently?')}</div>
+        <div style="font-size:19px;font-weight:700;color:var(--navy);margin-top:2px">${buildingsComplete}</div>
+        <div style="font-size:10px;color:var(--gray-mid)">of ${props.length} properties</div>
+      </div>
+    </div>
+    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+      ${ring(props.length>0?Math.round((buildingsAtRisk/props.length)*100):0,'var(--red)')}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Buildings at risk</div>${whyBtn('Why are '+buildingsAtRisk+' buildings currently at risk?')}</div>
+        <div style="font-size:19px;font-weight:700;color:${buildingsAtRisk>0?'var(--red)':'var(--navy)'};margin-top:2px">${buildingsAtRisk}</div>
+        <div style="font-size:10px;color:var(--gray-mid)">${buildingsDelayed} delayed, ${buildingsOnTrack} on track</div>
+      </div>
+    </div>`;
+}
+function renderPropsStatusTabs(){
+  const el=document.getElementById('props-status-tabs');
+  if(!el)return;
+  const props=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed');
+  const rows=props.map(getPropsRowData);
+  const counts={all:rows.length,onTrack:rows.filter(r=>r.statusBucket==='onTrack').length,atRisk:rows.filter(r=>r.statusBucket==='atRisk').length,delayed:rows.filter(r=>r.statusBucket==='delayed').length,complete:rows.filter(r=>r.statusBucket==='complete').length};
+  const tabs=[['all','All'],['onTrack','On track'],['atRisk','At risk'],['delayed','Delayed'],['complete','Complete']];
+  el.innerHTML=tabs.map(([key,label])=>{
+    const active=propsStatusFilter===key;
+    return `<div onclick="propsSetStatusFilter('${key}')" style="font-size:13px;font-weight:${active?'600':'500'};color:${active?'var(--blue-dark)':'var(--gray-mid)'};padding:0 8px 10px;border-bottom:2px solid ${active?'var(--blue-dark)':'transparent'};cursor:pointer">${label} (${counts[key]})</div>`;
+  }).join('');
+}
+function propsStatusPillHtml(bucket){
+  const cfg={onTrack:{bg:'var(--blue-xpale)',c:'var(--blue-dark)',label:'On track'},atRisk:{bg:'#fdecea',c:'var(--red)',label:'At risk'},delayed:{bg:'#fff7ed',c:'#b45309',label:'Delayed'},complete:{bg:'var(--green-pale)',c:'var(--green)',label:'Complete'}}[bucket];
+  return `<span style="background:${cfg.bg};color:${cfg.c};font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap">${cfg.label}</span>`;
+}
+function renderPropertiesTable(){
+  const tbody=document.getElementById('props-table-body');
+  const pagEl=document.getElementById('props-pagination');
+  if(!tbody)return;
+  let rows=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed').map(getPropsRowData);
+  if(propsStatusFilter!=='all')rows=rows.filter(r=>r.statusBucket===propsStatusFilter);
+  if(propsSearchQuery)rows=rows.filter(r=>r.p.n.toLowerCase().includes(propsSearchQuery));
+  const sortVal=r=>{
+    if(propsSortField==='name')return r.p.n.toLowerCase();
+    if(propsSortField==='units')return r.totalUnits;
+    if(propsSortField==='pct')return r.pctComplete;
+    if(propsSortField==='spend')return r.billed;
+    if(propsSortField==='status')return r.statusBucket;
+    return r.p.n.toLowerCase();
+  };
+  rows.sort((a,b)=>{
+    const av=sortVal(a),bv=sortVal(b);
+    const cmp=av<bv?-1:av>bv?1:0;
+    return propsSortDir==='asc'?cmp:-cmp;
+  });
+  const totalRows=rows.length;
+  const start=(propsPage-1)*PROPS_PAGE_SIZE;
+  const pageRows=rows.slice(start,start+PROPS_PAGE_SIZE);
+  if(pageRows.length===0){
+    tbody.innerHTML=`<tr><td colspan="7" style="padding:2rem;text-align:center;color:var(--gray-mid);font-size:13px">No properties match your search or filter.</td></tr>`;
+  }else{
+    tbody.innerHTML=pageRows.map(r=>{
+      const barColor=r.statusBucket==='atRisk'?'var(--red)':r.statusBucket==='complete'?'var(--green)':'var(--blue-dark)';
+      const dotsHtml=r.dots.length?r.dots.map(d=>`<div style="width:8px;height:8px;border-radius:50%;background:${PROPS_STAGE_COLORS[d.stage]||'var(--gray-mid)'}"></div>`).join(''):'<span style="font-size:10px;color:var(--gray-mid)">—</span>';
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:10px 6px"><div style="display:flex;align-items:center;gap:8px"><div style="width:32px;height:32px;border-radius:6px;background:var(--gray-xpale);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-building" style="font-size:14px;color:var(--gray-mid)"></i></div><div style="font-weight:600;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${r.p.n.replace(/'/g,"\\'")}')">${escHtml(r.p.n)}</div></div></td>
+        <td style="padding:10px 6px;color:var(--gray-dark)">${r.totalUnits||'—'} units</td>
+        <td style="padding:10px 6px">
+          <div style="font-weight:600;color:var(--navy)">${r.pctComplete}%</div>
+          <div style="height:4px;width:70px;background:var(--border);border-radius:2px;margin-top:3px"><div style="width:${r.pctComplete}%;height:100%;background:${barColor};border-radius:2px"></div></div>
+          <div style="font-size:10px;color:var(--gray-mid);margin-top:2px">${r.completeUnits} of ${r.unitsTotal} units</div>
+        </td>
+        <td style="padding:10px 6px;color:var(--gray-dark)">${fmtBudget(r.billed)} <span style="color:var(--gray-mid)">of ${fmtBudget(r.basis)}</span></td>
+        <td style="padding:10px 6px"><div style="color:var(--gray-dark);margin-bottom:3px">${r.dots.length} project${r.dots.length===1?'':'s'}</div><div style="display:flex;gap:3px">${dotsHtml}</div></td>
+        <td style="padding:10px 6px;font-weight:600;color:${r.blockers>0?'var(--red)':'var(--navy)'}">${r.blockers}</td>
+        <td style="padding:10px 6px">${propsStatusPillHtml(r.statusBucket)}</td>
+      </tr>`;
+    }).join('');
+  }
+  if(pagEl){
+    const totalPages=Math.max(1,Math.ceil(totalRows/PROPS_PAGE_SIZE));
+    pagEl.innerHTML=`<div style="display:flex;align-items:center;gap:10px"><span>Showing ${totalRows===0?0:start+1} to ${Math.min(start+PROPS_PAGE_SIZE,totalRows)} of ${totalRows} properties</span><button aria-label="Previous page" onclick="propsGoPage(-1)" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center" ${propsPage<=1?'disabled':''}><i class="ti ti-chevron-left" style="font-size:14px"></i></button><span style="font-weight:600;color:var(--navy)">${propsPage}</span><button aria-label="Next page" onclick="propsGoPage(1)" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center" ${propsPage>=totalPages?'disabled':''}><i class="ti ti-chevron-right" style="font-size:14px"></i></button></div>`;
+  }
+}
+function propsGoPage(delta){
+  propsPage=Math.max(1,propsPage+delta);
+  renderPropertiesTable();
+}
+function renderPropertiesTab(){
+  const sub=document.getElementById('properties-sub');
+  const livePropCount=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed').length;
+  if(sub)sub.textContent=`Real-time view of your elevator modernization program across ${livePropCount} properties`;
+  renderPropsKpiRow();
+  renderPropsStatusTabs();
+  propsPage=1;
+  renderPropertiesTable();
+}
+window.renderPropertiesTab=renderPropertiesTab;
 function fmtCurrencyFull(val){
   if(!val||isNaN(val))return '';
   return Number(val).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0});
@@ -13211,6 +13598,20 @@ async function saveCO(){
   const propName=currentProp?.n||'';
   const scopeId=currentScope?.id||'';
   const loggedBy=window._userName||'PM User';
+  // v55o — optimistic-locking conflict check (task #90). Only meaningful
+  // on an edit of an existing record — a brand new CO (editId blank) has
+  // nothing in Airtable yet to conflict with.
+  if(editId){
+    const coForConflict=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
+    const conflictCheck=await checkForEditConflict('Change Order Savings Log',editId,coForConflict?.conflictTs||'');
+    if(conflictCheck.conflict){
+      showEditConflictModal(conflictCheck.liveTs,'Negotiated amount',fmtCurrency(neg),()=>{
+        closeCOModal();
+        if(currentProp)renderChangeOrdersTab(currentProp);
+      });
+      return;
+    }
+  }
   // v54c — this form had no double-submit guard; a fast double-click on
   // "Finish & Save" could create two identical Change Order records.
   _savingCO=true;
@@ -13282,6 +13683,7 @@ async function saveCO(){
           opClaimed:r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
           linkedUnitIds:r.fields['Linked Units']||[],
           appliesToWholeProject:!!r.fields['Applies to Whole Project'],
+          conflictTs:r.fields['Change Order Last Modified']||'',
         })).sort((a,b)=>new Date(b.date)-new Date(a.date));
       }
     }catch(e){showToast('Error saving change order','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
@@ -15157,6 +15559,56 @@ function showUnitConflictModal(conflicts,onConfirm){
 }
 window.showUnitConflictModal=showUnitConflictModal;
 
+// v55o — Optimistic-locking conflict modal (task #90). Shown when
+// checkForEditConflict finds the record changed since this edit session
+// started. Per Misty's explicit design choice: block the save and
+// explain, no auto-merge, no "save anyway" override -- the only path
+// forward is reloading the current data and redoing the edit against it.
+// yourValueLabel/yourValueText show the user's own unsaved change so
+// nothing they typed just vanishes from view without explanation; onReload
+// is the caller's own re-render/re-fetch-and-reopen logic for that record.
+function fmtConflictAge(isoTs){
+  if(!isoTs)return'a moment ago';
+  const ms=Date.now()-new Date(isoTs).getTime();
+  if(ms<0||isNaN(ms))return'a moment ago';
+  const mins=Math.floor(ms/60000);
+  if(mins<1)return'less than a minute ago';
+  if(mins<60)return`${mins} minute${mins!==1?'s':''} ago`;
+  const hrs=Math.floor(mins/60);
+  if(hrs<24)return`${hrs} hour${hrs!==1?'s':''} ago`;
+  const days=Math.floor(hrs/24);
+  return`${days} day${days!==1?'s':''} ago`;
+}
+function showEditConflictModal(liveTs,yourValueLabel,yourValueText,onReload){
+  const existing=document.getElementById('edit-conflict-overlay');
+  if(existing)existing.remove();
+  const overlay=document.createElement('div');
+  overlay.id='edit-conflict-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2100;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:420px;box-shadow:var(--shadow-md);padding:24px">
+    <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:16px">
+      <div style="width:36px;height:36px;border-radius:50%;background:#faeeda;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ti-alert-triangle" style="font-size:18px;color:#854f0b"></i>
+      </div>
+      <div>
+        <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:4px">This record changed since you opened it</div>
+        <div style="font-size:13px;color:var(--gray-mid);line-height:1.6">This was updated ${fmtConflictAge(liveTs)}. Your changes were not saved.</div>
+      </div>
+    </div>
+    ${yourValueText?`<div style="background:var(--bg-pale,#f8f8f6);border-radius:8px;padding:12px 14px;margin-bottom:20px">
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">Your unsaved change</div>
+      <div style="font-size:13px;color:var(--navy)">${escHtml(yourValueLabel||'')}: <span style="color:var(--gray-mid)">${escHtml(yourValueText)}</span></div>
+    </div>`:''}
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-primary" id="edit-conflict-reload-btn"><i class="ti ti-refresh"></i>Reload latest and try again</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const reloadBtn=document.getElementById('edit-conflict-reload-btn');
+  if(reloadBtn)reloadBtn.onclick=()=>{overlay.remove();if(onReload)onReload();};
+}
+window.showEditConflictModal=showEditConflictModal;
+
 function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhaseId){
   const container=document.getElementById(containerId);
   if(!container)return;
@@ -15636,6 +16088,21 @@ async function saveEditPhase(){
   await _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNames,units,productType,plannedStart,plannedEnd,actualStart,actualEnd,notes,selectedSteps);
 }
 async function _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNames,units,productType,plannedStart,plannedEnd,actualStart,actualEnd,notes,selectedSteps){
+  // v55o — optimistic-locking conflict check (task #90). This is a
+  // click-Save form (unlike Milestones' per-field autosave), so the check
+  // gates the whole save up front, before any of the delete/rename/create
+  // work below starts touching Phase Tasks or Unit Groups records.
+  const conflictCheck=await checkForEditConflict('Unit Groups',id,ph?.conflictTs||'');
+  if(conflictCheck.conflict){
+    _savingEditPhase=false;
+    const editSaveBtn0=document.getElementById('save-edit-phase-btn');
+    if(editSaveBtn0)editSaveBtn0.disabled=false;
+    showEditConflictModal(conflictCheck.liveTs,'Phase name',name,()=>{
+      document.getElementById('edit-phase-form').style.display='none';
+      if(currentProp)renderPhasesTab(currentProp);
+    });
+    return;
+  }
   _savingEditPhase=true;
   const editSaveBtn=document.getElementById('save-edit-phase-btn');
   if(editSaveBtn)editSaveBtn.disabled=true;
@@ -15797,6 +16264,10 @@ async function _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNam
       'Notes':notes||'',
     });
     if(!mainRes)editPhaseFailCount++;
+    // v55o — capture the fresh Last Modified timestamp so the next edit's
+    // conflict check has a current baseline instead of comparing against
+    // the pre-save one.
+    else if(mainRes.fields?.['Unit Groups Last Modified'])window.UNIT_GROUPS[idx].conflictTs=mainRes.fields['Unit Groups Last Modified'];
   }
   // v51f — recompute this Scope's own effective Planned Start/Target
   // Completion (and Actual Start/Actual Completion) now that this phase's
@@ -16080,7 +16551,6 @@ async function deleteDraft(){
     try{await workerFetch(`${WORKER_URL}?table=Meetings&recordId=${draftId}`,{method:'DELETE'});}catch(e){console.warn('Delete draft failed:',e);}
   }
   closePanel();
-  renderAllMeetings();
   showToast('Draft deleted','success');
 }
 
@@ -16120,6 +16590,23 @@ async function saveBillingModal(){
   // Allow budget update without a billing entry
   if(budget===null&&ytd===null){showToast('Please enter a Project Budget or Billed YTD amount','warn');return;}
   if(ytd!==null&&!date){showToast('Please enter an entry date for the billing entry','warn');return;}
+  // v55o — optimistic-locking conflict check (task #90). Only meaningful
+  // when editing an existing Billing Log entry — a brand new entry
+  // (editingId blank) has nothing in Airtable yet to conflict with. Only
+  // covers the Billing Log record itself, not the Properties.Project
+  // Budget write below (that field's own conflict coverage lives in
+  // saveEditProperty).
+  if(ytd!==null&&editingId){
+    const billForConflict=(window.BILLING_LOG||[]).find(b=>b.id===editingId);
+    const conflictCheck=await checkForEditConflict('Billing Log',editingId,billForConflict?.conflictTs||'');
+    if(conflictCheck.conflict){
+      showEditConflictModal(conflictCheck.liveTs,'Billed YTD',fmtCurrency(ytd),()=>{
+        closeBillingModal();
+        if(currentProp){renderPropertyView(currentProp);switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));}
+      });
+      return;
+    }
+  }
   // v54c — this form had no double-submit guard, and can fire up to two
   // writes per call (Project Budget + a Billing Log entry). Guard set here
   // after validation, before either write begins.
@@ -16158,6 +16645,10 @@ async function saveBillingModal(){
           const updRes=await atUpdate('Billing Log',editingId,{
             'Billed YTD':ytd,'Entry Date':date,'Invoice Month':invoiceMonth||'','Notes':notes||'',
           });
+          // v55o — capture the fresh Last Modified timestamp on a
+          // successful save so the next edit's conflict check compares
+          // against a current baseline.
+          if(updRes&&updRes.fields?.['Billing Log Last Modified'])existing.conflictTs=updRes.fields['Billing Log Last Modified'];
           if(!updRes){
             Object.assign(existing,priorVals);
             showToast('Could not save changes to this billing entry. Please try again.','error');
@@ -20612,19 +21103,22 @@ function renderCharts(){
   // fsSource/p.budget pairing, which no longer exists after the
   // Forecasted Completion/Spend rebuild above - this is a from-scratch,
   // correct computation, not a patch on the old one.
+  // v55p — was two independently-computed halves that could drift: basis
+  // picked one Scope per property (current In Progress, or latest by
+  // year as a fallback) while billed took the single latest Billing Log
+  // entry across the WHOLE property regardless of Scope. A property with
+  // two active Scopes and billing on only one had its other Scope's
+  // spend silently invisible to this %. Now both halves come from
+  // getPropertyBilledAndBasis(p) — same active-Scope set, summed
+  // together, so numerator and denominator can never disagree about
+  // which Scopes they're describing.
   const _budgetSpentSource=filtered.filter(p=>p.st!=='Removed');
-  const totalPortBudget=_budgetSpentSource.reduce((a,p)=>{
-    const propScope=(window.SCOPES||[]).find(s=>s.property===p.n&&s.status==='In Progress')
-      ||(window.SCOPES||[]).filter(s=>s.property===p.n).sort((a2,b2)=>(b2.year||0)-(a2.year||0))[0]
-      ||null;
-    return a+getBillingBasis(p,propScope).amount;
-  },0);
-  const filteredPropNames=new Set(filtered.map(p=>p.n));
-  const totalBilledAll=(window.BILLING_LOG||[]).reduce((sum,b)=>{
-    if(!filteredPropNames.has(b.property))return sum;
-    const latest=(window.BILLING_LOG||[]).filter(x=>x.property===b.property).sort((a,bb)=>{const d=new Date(bb.entryDate)-new Date(a.entryDate);return d!==0?d:Number(bb.billedYTD)-Number(a.billedYTD);})[0];
-    return latest&&latest.id===b.id?sum+(Number(b.billedYTD)||0):sum;
-  },0);
+  let totalPortBudget=0,totalBilledAll=0;
+  _budgetSpentSource.forEach(p=>{
+    const bb=getPropertyBilledAndBasis(p);
+    totalPortBudget+=bb.basis;
+    totalBilledAll+=bb.billed;
+  });
   const pctBudgetSpent=totalPortBudget>0?Math.round((totalBilledAll/totalPortBudget)*100):0;
 
   // Milestone funnel data removed (replaced by Top 5 chart)
@@ -22048,7 +22542,6 @@ async function executeCancelCalEvent(type,id){
     renderPropertyView(currentProp);
     renderPropMeetings(currentProp);
   }
-  renderAllSiteVisits();
   renderCalendar();
 }
 function showRescheduleCalEvent(type,id){
@@ -22141,7 +22634,6 @@ async function executeRescheduleCalEvent(type,id){
     showToast(`${isVisit?'Site visit':'Meeting'} rescheduled from ${fmtShortDate(oldDate)} to ${fmtShortDate(newDate)}${attendeeRecordIds.length>0?` — ${attendeeRecordIds.length} attendee${attendeeRecordIds.length!==1?'s':''} re-invited`:''}`,'success');
   }
   if(currentProp&&currentProp.n===record.property)renderPropertyView(currentProp);
-  renderAllSiteVisits();
   renderCalendar();
 }
 function showEditCalEvent(type,id){
@@ -22406,7 +22898,6 @@ async function saveEditCalEvent(type,id){
   }
   document.getElementById('cal-edit-overlay')?.remove();
   if(currentProp&&(currentProp.n===record.property||currentProp.n===_preEdit.property))renderPropertyView(currentProp);
-  renderAllSiteVisits();
   renderCalendar();
   if(mainSaveFailed){
     showToast(`Could not save changes to this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
@@ -22469,7 +22960,6 @@ async function deleteCalEvent(type,id){
   }
   document.getElementById('cal-delete-overlay')?.remove();
   if(currentProp)renderPropertyView(currentProp);
-  renderAllSiteVisits();
   renderCalendar();
   if(deleteFailed){
     showToast(`Could not delete this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
@@ -24131,7 +24621,6 @@ async function updateAssetType(propId, propName, isCore){
     if(!result){
       if(p)p.type=priorType;
       populatePortfolio();
-      populateMilestonesTable();
       showToast(`Could not update ${propName}'s asset type. Please try again.`,'error');
       return;
     }
@@ -24141,7 +24630,6 @@ async function updateAssetType(propId, propName, isCore){
   }
   // Refresh any visible tables
   populatePortfolio();
-  populateMilestonesTable();
 }
 
 // SITE VISITS
@@ -24995,7 +25483,6 @@ async function showVisitForm(propName,prefillDate,prefillConsultant,prefillPurpo
   siteVisits.push(newVisit);
   // Immediately refresh property view if on that property
   if(currentProp&&currentProp.n===propName)renderPropertyView(currentProp);
-  renderAllSiteVisits();
   renderCalendar();
   // v51j — attendeeSyncFailCount was tracked above but never surfaced. The
   // visit itself saved fine, but silently under-reporting who was actually
@@ -26112,6 +26599,18 @@ async function saveEditProperty(){
     delete propFields['Unit Count'];
   }
 
+  // v55o — optimistic-locking conflict check (task #90). Runs before the
+  // double-submit guard locks the button and before the _preEdit
+  // snapshot/mutation block below touches p, so a blocked save here is a
+  // clean no-op with nothing to roll back.
+  const conflictCheck=await checkForEditConflict('Properties',p.id,p.conflictTs||'');
+  if(conflictCheck.conflict){
+    showEditConflictModal(conflictCheck.liveTs,'Property name',name,()=>{
+      closeEditPropertyPanel();
+      renderPropertyView(p);
+    });
+    return;
+  }
   // v54e — this form had no double-submit guard; a fast double-click
   // could re-run this write twice against the same Properties record.
   _savingEditProperty=true;
@@ -26152,6 +26651,9 @@ async function saveEditProperty(){
       const updRes=await atUpdate('Properties',p.id,propFields);
       if(updRes){
         showToast('Property updated','success');
+        // v55o — capture the fresh Last Modified timestamp so the next
+        // edit's conflict check compares against a current baseline.
+        if(updRes.fields?.['Property Last Modified'])p.conflictTs=updRes.fields['Property Last Modified'];
       }else{
         _editPropSaveFailed=true;
         showToast('Could not save changes to Airtable. Please try again.','error');
@@ -28861,6 +29363,10 @@ async function pollChangeOrders(){
       otHours: r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
       materialCost: r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
       opClaimed: r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
+      // v55o — optimistic-locking conflict detection (task #90). Must
+      // stay current here too -- pollChangeOrders() reassigns
+      // window.CO_SAVINGS wholesale every ~45s.
+      conflictTs: r.fields['Change Order Last Modified']||'',
     })).sort((a,b)=>new Date(b.date)-new Date(a.date));
     if(currentProp&&_propPollTab==='changeorders'&&document.getElementById('prop-tab-changeorders')?.classList.contains('active')){
       renderChangeOrdersTab(currentProp);
@@ -28897,6 +29403,11 @@ async function pollPhases(){
       unitNames: r.fields['Unit Names']||'',
       linkedUnitIds: normalizeLookupIds(r.fields['Linked Units']),
       phaseTasks: r.fields['Phase Tasks']?r.fields['Phase Tasks'].split(',').map(s=>s.trim()).filter(Boolean):[],
+      // v55o — optimistic-locking conflict detection (task #90). Must stay
+      // current here too -- pollPhases() reassigns window.UNIT_GROUPS wholesale
+      // every ~45s, so omitting this would blank conflictTs on every poll tick
+      // and make the very next edit look falsely conflicted.
+      conflictTs: r.fields['Unit Groups Last Modified']||'',
     }));
     window.PHASE_STEPS=(phaseSteps||[]).map(r=>({
       id: r.id,
@@ -28936,6 +29447,10 @@ async function pollBudget(){
       invoiceMonth: r.fields['Invoice Month']||'',
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
+      // v55o — optimistic-locking conflict detection (task #90). Must stay
+      // current here too -- pollBudget() reassigns window.BILLING_LOG
+      // wholesale every ~45s.
+      conflictTs: r.fields['Billing Log Last Modified']||'',
     })).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
     window.RETAINAGE_RELEASES=(retainageReleases||[]).map(r=>({
       id: r.id,
