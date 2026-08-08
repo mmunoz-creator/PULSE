@@ -4609,12 +4609,12 @@ from unitEffectiveValue() onto each checkbox). -->
             <thead>
               <tr style="border-bottom:1px solid var(--border)">
                 <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('name')">Property <i class="ti ti-arrows-sort" style="font-size:10px"></i></th>
-                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('units')">Total units</th>
-                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('pct')">Percent complete</th>
-                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('spend')">Spent to date</th>
-                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Projects</th>
-                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Blockers</th>
-                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('status')">Status</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('units')">Total units</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('pct')">Percent complete</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('spend')">Spent to date</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Projects</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Blockers</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('status')">Status</th>
               </tr>
             </thead>
             <tbody id="props-table-body"></tbody>
@@ -4623,7 +4623,7 @@ from unitEffectiveValue() onto each checkbox). -->
 
         <div style="padding:12px 0;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--gray-mid)">
           <div><i class="ti ti-sparkles" style="font-size:13px;vertical-align:-2px;margin-right:4px"></i>Why buttons ask MARLI for a live, data-specific explanation.</div>
-          <div id="props-pagination"></div>
+          <div id="props-count"></div>
         </div>
       </div>
 
@@ -11639,8 +11639,7 @@ function fmtBudget(val){
 // (overdue Action Items only this round, Change Orders and
 // meeting-minute flags deferred to a later build per Misty's direction).
 const PROPS_STAGE_COLORS={'Pre-Construction':'var(--gray-mid)','Construction':'var(--blue-dark)','Project Closeout':'var(--amber)','Complete':'var(--green)'};
-let propsSortField='name',propsSortDir='asc',propsStatusFilter='all',propsSearchQuery='',propsPage=1;
-const PROPS_PAGE_SIZE=10;
+let propsSortField='name',propsSortDir='asc',propsStatusFilter='all',propsSearchQuery='';
 // Per-property rollup: blended progress, per-Scope stage dots, blockers,
 // spend/basis (reusing getPropertyBilledAndBasis, same helper Total
 // Investment sums from), and an overall status bucket for the filter
@@ -11652,12 +11651,23 @@ const PROPS_PAGE_SIZE=10;
 function getPropsRowData(p){
   const scopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan');
   const dots=scopes.map(s=>({stage:getMilestoneCategoryForScope(s),id:s.id}));
-  const totalUnits=p.units||scopes.reduce((a,s)=>a+((s.elevatorCount||0)+(s.escalatorCount||0)+(s.liftCount||0)+(s.otherCount||0)),0);
+  // v56b fix -- Total Units previously read p.units (Properties table's
+  // own typed Unit Count field) first, falling back to Scope unit-type
+  // counts only if that was blank. Confirmed live: DoubleTree Hotel
+  // Durango showed "— units" in this column while its Percent Complete
+  // column correctly showed "0 of 3 units", because Percent Complete
+  // was already reading Unit Inventory List (the real source) and Total
+  // Units was not. Same class of drift already flagged in the brief
+  // ("Portfolio View Units column confirmed still reading stale
+  // Properties-level typed field, never rewired") — fixed here for this
+  // tab by reading Unit Inventory List for both columns consistently, so
+  // they can never disagree with each other again on this tab.
+  const propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+  const totalUnits=propUnits.length;
   // Blended percent complete, same unit-based measure Dashboard's
   // Portfolio % Complete ring uses (completeUnitCount/totalUnitCount),
   // scoped to this one property's own units rather than the whole
   // portfolio. Falls back to 0 for a property with no units recorded yet.
-  const propUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
   const completeUnits=propUnits.filter(u=>u.status==='Complete').length;
   const pctComplete=propUnits.length>0?Math.round((completeUnits/propUnits.length)*100):0;
   const {billed,basis}=getPropertyBilledAndBasis(p);
@@ -11682,7 +11692,17 @@ function getPropsRowData(p){
   // Scope object, and returns {riskLevel,...} where riskLevel is one of
   // 'On Track'/'Medium'/'High'/'Ahead', never the string 'At Risk'.
   // Caught via direct code read before shipping, not assumed.
-  let statusBucket='onTrack';
+  // v56b fix -- confirmed live: DoubleTree Hotel Durango (0 projects, 0%
+  // complete, 0 blockers, TBD budget, nothing happening on this
+  // property at all) was still showing "On track", which reads as "this
+  // property is actively progressing on schedule" when in reality
+  // nothing has started. Added a real notStarted bucket (zero graduated
+  // Scopes) so a property with no active work is labeled honestly rather
+  // than defaulting into the same bucket as a property genuinely on
+  // schedule. Matches the same distinction the Heat Map already makes
+  // (gray NOT STARTED tile vs. blue On Track) per the brief's v53b-c
+  // range, just applied here to this tab's status bucket too.
+  let statusBucket=scopes.length===0?'notStarted':'onTrack';
   const anyAtRisk=scopes.some(s=>typeof calcScopeScheduleRisk==='function'&&calcScopeScheduleRisk(p.n,s.id).riskLevel==='High');
   if(p.st==='Complete')statusBucket='complete';
   else if(anyAtRisk)statusBucket='atRisk';
@@ -11692,17 +11712,14 @@ function getPropsRowData(p){
 function propsSetSort(field){
   if(propsSortField===field)propsSortDir=propsSortDir==='asc'?'desc':'asc';
   else{propsSortField=field;propsSortDir='asc';}
-  propsPage=1;
   renderPropertiesTable();
 }
 function propsApply(){
   propsSearchQuery=(document.getElementById('props-search')?.value||'').toLowerCase();
-  propsPage=1;
   renderPropertiesTable();
 }
 function propsSetStatusFilter(bucket){
   propsStatusFilter=bucket;
-  propsPage=1;
   renderPropertiesTable();
 }
 function propsAskMarli(question){
@@ -11732,44 +11749,47 @@ function renderPropsKpiRow(){
   const buildingsAtRisk=rows.filter(r=>r.statusBucket==='atRisk').length;
   const buildingsDelayed=rows.filter(r=>r.statusBucket==='delayed').length;
   const buildingsOnTrack=rows.filter(r=>r.statusBucket==='onTrack').length;
+  const buildingsNotStarted=rows.filter(r=>r.statusBucket==='notStarted').length;
   const ring=(pct,color)=>{
-    const r=24,circ=2*Math.PI*r;
+    const r=27,circ=2*Math.PI*r;
     const offset=circ-(Math.min(100,Math.max(0,pct))/100)*circ;
-    return `<svg width="56" height="56" viewBox="0 0 56 56" style="flex-shrink:0"><circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--border)" stroke-width="6"/><circle cx="28" cy="28" r="${r}" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}" transform="rotate(-90 28 28)"/><text x="28" y="31" text-anchor="middle" font-size="11" font-weight="600" fill="var(--navy)">${pct}%</text></svg>`;
+    return `<svg width="64" height="64" viewBox="0 0 64 64" style="flex-shrink:0"><circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--border)" stroke-width="7"/><circle cx="32" cy="32" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}" transform="rotate(-90 32 32)"/><text x="32" y="36" text-anchor="middle" font-size="13" font-weight="600" fill="var(--navy)">${pct}%</text></svg>`;
   };
   const whyBtn=(q)=>`<button aria-label="Ask MARLI why" onclick="propsAskMarli('${q.replace(/'/g,"\\'")}')" style="width:20px;height:20px;padding:0;border-radius:50%;border:0.5px solid var(--border);background:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer"><i class="ti ti-sparkles" style="font-size:11px;color:var(--blue-dark)"></i></button>`;
   const pctBasis=totalBasis>0?Math.round((totalBilled/totalBasis)*100):0;
+  // v56b polish round -- KPI cards enlarged (18px padding, 64px ring,
+  // bigger type) per Misty's "stat cards are small" feedback.
   el.innerHTML=`
-    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+    <div style="background:var(--gray-xpale);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px">
       ${ring(pctBasis,'var(--blue-dark)')}
       <div style="flex:1;min-width:0">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Total investment</div>${whyBtn('Why is Total Investment at '+fmtBudget(totalBilled)+' this week?')}</div>
-        <div style="font-size:19px;font-weight:700;color:var(--navy);margin-top:2px">${fmtBudget(totalBilled)}</div>
-        <div style="font-size:10px;color:var(--gray-mid)">of ${fmtBudget(totalBasis)} budget</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Total investment</div>${whyBtn('Why is Total Investment at '+fmtBudget(totalBilled)+' this week?')}</div>
+        <div style="font-size:24px;font-weight:700;color:var(--navy);margin-top:3px">${fmtBudget(totalBilled)}</div>
+        <div style="font-size:11px;color:var(--gray-mid)">of ${fmtBudget(totalBasis)} budget</div>
       </div>
     </div>
-    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+    <div style="background:var(--gray-xpale);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px">
       ${ring(overallPct,'var(--green)')}
       <div style="flex:1;min-width:0">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Overall progress</div>${whyBtn('Why is Overall Portfolio Progress at '+overallPct+' percent?')}</div>
-        <div style="font-size:19px;font-weight:700;color:var(--navy);margin-top:2px">${overallPct}%</div>
-        <div style="font-size:10px;color:var(--gray-mid)">units complete</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Overall progress</div>${whyBtn('Why is Overall Portfolio Progress at '+overallPct+' percent?')}</div>
+        <div style="font-size:24px;font-weight:700;color:var(--navy);margin-top:3px">${overallPct}%</div>
+        <div style="font-size:11px;color:var(--gray-mid)">units complete</div>
       </div>
     </div>
-    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+    <div style="background:var(--gray-xpale);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px">
       ${ring(props.length>0?Math.round((buildingsComplete/props.length)*100):0,'var(--green)')}
       <div style="flex:1;min-width:0">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Buildings complete</div>${whyBtn('Which buildings are complete and what changed recently?')}</div>
-        <div style="font-size:19px;font-weight:700;color:var(--navy);margin-top:2px">${buildingsComplete}</div>
-        <div style="font-size:10px;color:var(--gray-mid)">of ${props.length} properties</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Buildings complete</div>${whyBtn('Which buildings are complete and what changed recently?')}</div>
+        <div style="font-size:24px;font-weight:700;color:var(--navy);margin-top:3px">${buildingsComplete}</div>
+        <div style="font-size:11px;color:var(--gray-mid)">of ${props.length} properties</div>
       </div>
     </div>
-    <div style="background:var(--gray-xpale);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+    <div style="background:var(--gray-xpale);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px">
       ${ring(props.length>0?Math.round((buildingsAtRisk/props.length)*100):0,'var(--red)')}
       <div style="flex:1;min-width:0">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:11px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Buildings at risk</div>${whyBtn('Why are '+buildingsAtRisk+' buildings currently at risk?')}</div>
-        <div style="font-size:19px;font-weight:700;color:${buildingsAtRisk>0?'var(--red)':'var(--navy)'};margin-top:2px">${buildingsAtRisk}</div>
-        <div style="font-size:10px;color:var(--gray-mid)">${buildingsDelayed} delayed, ${buildingsOnTrack} on track</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Buildings at risk</div>${whyBtn('Why are '+buildingsAtRisk+' buildings currently at risk?')}</div>
+        <div style="font-size:24px;font-weight:700;color:${buildingsAtRisk>0?'var(--red)':'var(--navy)'};margin-top:3px">${buildingsAtRisk}</div>
+        <div style="font-size:11px;color:var(--gray-mid)">${buildingsDelayed} delayed, ${buildingsOnTrack} on track, ${buildingsNotStarted} not started</div>
       </div>
     </div>`;
 }
@@ -11778,20 +11798,29 @@ function renderPropsStatusTabs(){
   if(!el)return;
   const props=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed');
   const rows=props.map(getPropsRowData);
-  const counts={all:rows.length,onTrack:rows.filter(r=>r.statusBucket==='onTrack').length,atRisk:rows.filter(r=>r.statusBucket==='atRisk').length,delayed:rows.filter(r=>r.statusBucket==='delayed').length,complete:rows.filter(r=>r.statusBucket==='complete').length};
-  const tabs=[['all','All'],['onTrack','On track'],['atRisk','At risk'],['delayed','Delayed'],['complete','Complete']];
+  const counts={all:rows.length,onTrack:rows.filter(r=>r.statusBucket==='onTrack').length,atRisk:rows.filter(r=>r.statusBucket==='atRisk').length,delayed:rows.filter(r=>r.statusBucket==='delayed').length,complete:rows.filter(r=>r.statusBucket==='complete').length,notStarted:rows.filter(r=>r.statusBucket==='notStarted').length};
+  const tabs=[['all','All'],['onTrack','On track'],['atRisk','At risk'],['delayed','Delayed'],['complete','Complete'],['notStarted','Not started']];
   el.innerHTML=tabs.map(([key,label])=>{
     const active=propsStatusFilter===key;
     return `<div onclick="propsSetStatusFilter('${key}')" style="font-size:13px;font-weight:${active?'600':'500'};color:${active?'var(--blue-dark)':'var(--gray-mid)'};padding:0 8px 10px;border-bottom:2px solid ${active?'var(--blue-dark)':'transparent'};cursor:pointer">${label} (${counts[key]})</div>`;
   }).join('');
 }
 function propsStatusPillHtml(bucket){
-  const cfg={onTrack:{bg:'var(--blue-xpale)',c:'var(--blue-dark)',label:'On track'},atRisk:{bg:'#fdecea',c:'var(--red)',label:'At risk'},delayed:{bg:'#fff7ed',c:'#b45309',label:'Delayed'},complete:{bg:'var(--green-pale)',c:'var(--green)',label:'Complete'}}[bucket];
+  // v56b fix -- notStarted added, same neutral-gray convention the Heat
+  // Map already uses for its own NOT STARTED tile state (brief v53b-c
+  // range), so a property with zero graduated Scopes reads as "hasn't
+  // begun" rather than being folded into On Track, which implies active
+  // work proceeding on schedule.
+  const cfg={onTrack:{bg:'var(--blue-xpale)',c:'var(--blue-dark)',label:'On track'},atRisk:{bg:'#fdecea',c:'var(--red)',label:'At risk'},delayed:{bg:'#fff7ed',c:'#b45309',label:'Delayed'},complete:{bg:'var(--green-pale)',c:'var(--green)',label:'Complete'},notStarted:{bg:'var(--gray-pale)',c:'var(--gray-mid)',label:'Not started'}}[bucket];
   return `<span style="background:${cfg.bg};color:${cfg.c};font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap">${cfg.label}</span>`;
 }
+// v56b polish round -- switched from pagination to one long scroll per
+// Misty's direction ("nobody wants to page-click to see if something's
+// at risk" on a status-monitoring tool checked often). propsPage/
+// PROPS_PAGE_SIZE/propsGoPage removed; all matching rows render at once.
 function renderPropertiesTable(){
   const tbody=document.getElementById('props-table-body');
-  const pagEl=document.getElementById('props-pagination');
+  const countEl=document.getElementById('props-count');
   if(!tbody)return;
   let rows=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed').map(getPropsRowData);
   if(propsStatusFilter!=='all')rows=rows.filter(r=>r.statusBucket===propsStatusFilter);
@@ -11809,38 +11838,37 @@ function renderPropertiesTable(){
     const cmp=av<bv?-1:av>bv?1:0;
     return propsSortDir==='asc'?cmp:-cmp;
   });
-  const totalRows=rows.length;
-  const start=(propsPage-1)*PROPS_PAGE_SIZE;
-  const pageRows=rows.slice(start,start+PROPS_PAGE_SIZE);
-  if(pageRows.length===0){
+  if(rows.length===0){
     tbody.innerHTML=`<tr><td colspan="7" style="padding:2rem;text-align:center;color:var(--gray-mid);font-size:13px">No properties match your search or filter.</td></tr>`;
   }else{
-    tbody.innerHTML=pageRows.map(r=>{
-      const barColor=r.statusBucket==='atRisk'?'var(--red)':r.statusBucket==='complete'?'var(--green)':'var(--blue-dark)';
-      const dotsHtml=r.dots.length?r.dots.map(d=>`<div style="width:8px;height:8px;border-radius:50%;background:${PROPS_STAGE_COLORS[d.stage]||'var(--gray-mid)'}"></div>`).join(''):'<span style="font-size:10px;color:var(--gray-mid)">—</span>';
+    tbody.innerHTML=rows.map(r=>{
+      const barColor=r.statusBucket==='atRisk'?'var(--red)':r.statusBucket==='complete'?'var(--green)':r.statusBucket==='notStarted'?'var(--gray-light)':'var(--blue-dark)';
+      // v56b polish round -- dots enlarged 8px->11px, gap widened 3px->5px,
+      // and a white ring (box-shadow, not a real border so it doesn't
+      // shift layout) added around each dot so two adjacent stage colors
+      // (e.g. gray Pre-Construction next to blue Construction) stay
+      // visually separated even when the row is scanned quickly, per
+      // Misty's "colors are too similar to register the difference"
+      // feedback. Colors themselves are unchanged (still the same
+      // 4-color system as Analytics' Active Projects by Stage chart).
+      const dotsHtml=r.dots.length?r.dots.map(d=>`<div style="width:11px;height:11px;border-radius:50%;background:${PROPS_STAGE_COLORS[d.stage]||'var(--gray-mid)'};box-shadow:0 0 0 2px var(--gray-xpale)"></div>`).join(''):'<span style="font-size:10px;color:var(--gray-mid)">—</span>';
+      const cityState=[r.p.city,r.p.s].filter(Boolean).join(', ');
       return `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:10px 6px"><div style="display:flex;align-items:center;gap:8px"><div style="width:32px;height:32px;border-radius:6px;background:var(--gray-xpale);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-building" style="font-size:14px;color:var(--gray-mid)"></i></div><div style="font-weight:600;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${r.p.n.replace(/'/g,"\\'")}')">${escHtml(r.p.n)}</div></div></td>
-        <td style="padding:10px 6px;color:var(--gray-dark)">${r.totalUnits||'—'} units</td>
-        <td style="padding:10px 6px">
+        <td style="padding:10px 6px"><div style="display:flex;align-items:center;gap:8px"><div style="width:32px;height:32px;border-radius:6px;background:var(--gray-xpale);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-building" style="font-size:14px;color:var(--gray-mid)"></i></div><div><div style="font-weight:600;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${r.p.n.replace(/'/g,"\\'")}')">${escHtml(r.p.n)}</div>${cityState?`<div style="font-size:10px;color:var(--gray-mid);margin-top:1px">${escHtml(cityState)}</div>`:''}</div></div></td>
+        <td style="padding:10px 4px;color:var(--gray-dark);text-align:center">${r.totalUnits||'—'} units</td>
+        <td style="padding:10px 6px;text-align:center">
           <div style="font-weight:600;color:var(--navy)">${r.pctComplete}%</div>
-          <div style="height:4px;width:70px;background:var(--border);border-radius:2px;margin-top:3px"><div style="width:${r.pctComplete}%;height:100%;background:${barColor};border-radius:2px"></div></div>
+          <div style="height:4px;width:70px;background:var(--border);border-radius:2px;margin:3px auto 0"><div style="width:${r.pctComplete}%;height:100%;background:${barColor};border-radius:2px"></div></div>
           <div style="font-size:10px;color:var(--gray-mid);margin-top:2px">${r.completeUnits} of ${r.unitsTotal} units</div>
         </td>
-        <td style="padding:10px 6px;color:var(--gray-dark)">${fmtBudget(r.billed)} <span style="color:var(--gray-mid)">of ${fmtBudget(r.basis)}</span></td>
-        <td style="padding:10px 6px"><div style="color:var(--gray-dark);margin-bottom:3px">${r.dots.length} project${r.dots.length===1?'':'s'}</div><div style="display:flex;gap:3px">${dotsHtml}</div></td>
-        <td style="padding:10px 6px;font-weight:600;color:${r.blockers>0?'var(--red)':'var(--navy)'}">${r.blockers}</td>
-        <td style="padding:10px 6px">${propsStatusPillHtml(r.statusBucket)}</td>
+        <td style="padding:10px 6px;color:var(--gray-dark);text-align:center">${fmtBudget(r.billed)} <span style="color:var(--gray-mid)">of ${fmtBudget(r.basis)}</span></td>
+        <td style="padding:10px 6px;text-align:center"><div style="color:var(--gray-dark);margin-bottom:4px">${r.dots.length} project${r.dots.length===1?'':'s'}</div><div style="display:flex;gap:5px;justify-content:center">${dotsHtml}</div></td>
+        <td style="padding:10px 6px;font-weight:600;color:${r.blockers>0?'var(--red)':'var(--navy)'};text-align:center">${r.blockers}</td>
+        <td style="padding:10px 6px;text-align:center">${propsStatusPillHtml(r.statusBucket)}</td>
       </tr>`;
     }).join('');
   }
-  if(pagEl){
-    const totalPages=Math.max(1,Math.ceil(totalRows/PROPS_PAGE_SIZE));
-    pagEl.innerHTML=`<div style="display:flex;align-items:center;gap:10px"><span>Showing ${totalRows===0?0:start+1} to ${Math.min(start+PROPS_PAGE_SIZE,totalRows)} of ${totalRows} properties</span><button aria-label="Previous page" onclick="propsGoPage(-1)" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center" ${propsPage<=1?'disabled':''}><i class="ti ti-chevron-left" style="font-size:14px"></i></button><span style="font-weight:600;color:var(--navy)">${propsPage}</span><button aria-label="Next page" onclick="propsGoPage(1)" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center" ${propsPage>=totalPages?'disabled':''}><i class="ti ti-chevron-right" style="font-size:14px"></i></button></div>`;
-  }
-}
-function propsGoPage(delta){
-  propsPage=Math.max(1,propsPage+delta);
-  renderPropertiesTable();
+  if(countEl)countEl.textContent=`Showing ${rows.length} propert${rows.length===1?'y':'ies'}`;
 }
 function renderPropertiesTab(){
   const sub=document.getElementById('properties-sub');
@@ -11848,7 +11876,6 @@ function renderPropertiesTab(){
   if(sub)sub.textContent=`Real-time view of your elevator modernization program across ${livePropCount} properties`;
   renderPropsKpiRow();
   renderPropsStatusTabs();
-  propsPage=1;
   renderPropertiesTable();
 }
 window.renderPropertiesTab=renderPropertiesTab;
