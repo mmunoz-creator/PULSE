@@ -4474,7 +4474,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v56a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v56b</div>
     </div>
   </nav>
 
@@ -4608,10 +4608,11 @@ from unitEffectiveValue() onto each checkbox). -->
           <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:820px">
             <thead>
               <tr style="border-bottom:1px solid var(--border)">
-                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('name')">Property <i class="ti ti-arrows-sort" style="font-size:10px"></i></th>
+                <th style="text-align:left;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer;width:220px" onclick="propsSetSort('name')">Property <i class="ti ti-arrows-sort" style="font-size:10px"></i></th>
                 <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('units')">Total units</th>
                 <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('pct')">Percent complete</th>
                 <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('spend')">Spent to date</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Est. completion</th>
                 <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Projects</th>
                 <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em">Blockers</th>
                 <th style="text-align:center;padding:8px 6px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;font-size:10px;letter-spacing:.02em;cursor:pointer" onclick="propsSetSort('status')">Status</th>
@@ -4813,6 +4814,7 @@ from unitEffectiveValue() onto each checkbox). -->
           <!-- UNIT PHASES TAB -->
           <div id="prop-tab-phases" class="tab-content">
             <div id="phases-scope-tabs"></div>
+            <div id="phases-scope-accent-bar" style="height:3px;border-radius:2px;margin:-8px 0 12px;display:none"></div>
             <!-- v50c — MARLI Unit Phase suggestions. Structural (not
             text-based) suggestions: groups of 2+ units in this project
             sharing equipment type and CapEx Year that aren't already
@@ -4821,7 +4823,7 @@ from unitEffectiveValue() onto each checkbox). -->
             once per calendar day (see checkAndGenerateUnitPhaseSuggestions),
             gated to only run for projects past Capital Plan status. -->
             <div id="unit-phase-suggestions"></div>
-            <div class="card">
+            <div class="card" id="phases-tracker-card" style="border-left:3px solid transparent">
               <div class="card-header">
                 <div>
                   <div class="card-title">Modernization Construction Project</div>
@@ -4971,8 +4973,9 @@ from unitEffectiveValue() onto each checkbox). -->
           </div>
           <div id="prop-tab-milestones" class="tab-content">
             <div id="ms-scope-tabs"></div>
+            <div id="ms-scope-accent-bar" style="height:3px;border-radius:2px;margin:-8px 0 12px;display:none"></div>
             <div id="ms-manual-override-banner"></div>
-            <div class="card"><div class="card-header"><div><div class="card-title">Modernization Milestone Tracker</div><div class="card-sub">Planned vs Actual — Click to Edit Inline</div></div><span id="ms-progress-badge" class="badge b-cip">0%</span></div><div id="prop-milestones-list"></div></div>
+            <div class="card" id="ms-tracker-card" style="border-left:3px solid transparent"><div class="card-header"><div><div class="card-title">Modernization Milestone Tracker</div><div class="card-sub">Planned vs Actual — Click to Edit Inline</div></div><span id="ms-progress-badge" class="badge b-cip">0%</span></div><div id="prop-milestones-list"></div></div>
           </div>
           <div id="prop-tab-bids" class="tab-content">
             <div class="card" id="bid-round-selector-card">
@@ -6752,11 +6755,19 @@ function openProperty(name){
   const propScopes=(window.SCOPES||[]).filter(s=>s.property===name);
   // Default to the first graduated (non-Capital Plan) scope so the
   // Milestones tab shows real data immediately on open. Fall back to
-  // first alphabetically if all scopes are still Capital Plan.
-  const graduatedScopes=propScopes.filter(s=>s.status!=='Capital Plan')
-    .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const allSorted=propScopes.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  currentScope=graduatedScopes.length>0?graduatedScopes[0]:allSorted.length>0?allSorted[0]:null;
+  // first overall if all scopes are still Capital Plan.
+  // v56b fix -- this previously sorted alphabetically by name, while the
+  // scope-tab pill row (renderScopeTabs, sortScopesForTabs below) sorts
+  // Capital Plan last then by year. The two orders could disagree (e.g.
+  // "2028 Project" sorts alphabetically before "Escalators 1-4" even
+  // though it displays as the third pill), so the scope selected by
+  // default on property open didn't match the first pill actually shown,
+  // confirmed live on Hilton Denver City Center. Now uses the exact same
+  // sortScopesForTabs() helper renderScopeTabs() uses, so "first pill
+  // shown" and "scope selected by default" can never diverge again.
+  const sortedForOpen=sortScopesForTabs(propScopes);
+  const graduatedScopes=sortedForOpen.filter(s=>s.status!=='Capital Plan');
+  currentScope=graduatedScopes.length>0?graduatedScopes[0]:sortedForOpen.length>0?sortedForOpen[0]:null;
   document.querySelectorAll('[id^="view-"]').forEach(v=>v.classList.add('hidden'));
   document.getElementById('view-property').classList.remove('hidden');
   // Bug fix (v21c) — previously passed null for the button arg, so
@@ -8841,32 +8852,94 @@ async function reconcileAllPropertyStatuses(){
 // Bids, Budget Performance, and Change Orders tabs. Renders nothing for
 // single-scope properties. For multi-scope properties renders one pill per
 // scope: graduated/active scopes first, Capital Plan scopes last (muted).
-// Clicking a pill calls setCurrentScope(scopeId) which re-renders the
-// active tab against the selected scope.
-function renderScopeTabs(containerId, propName){
-  const container=document.getElementById(containerId);
-  if(!container)return;
-  const allScopes=(window.SCOPES||[]).filter(s=>s.property===propName);
-  if(allScopes.length<=1){container.innerHTML='';return;}
-  const sorted=allScopes.slice().sort((a,b)=>{
+// v56b -- shared sort, single source of truth for "what order do a
+// property's Scopes display in as pills" (Capital Plan pushed last,
+// then by year). Extracted out of renderScopeTabs() so gotoProperty()'s
+// default-scope selection (see the v56b fix comment there) can use the
+// identical order instead of its own separate alphabetical sort, which
+// is what caused the first-pill/default-selected mismatch bug.
+function sortScopesForTabs(scopes){
+  return scopes.slice().sort((a,b)=>{
     const aCP=a.status==='Capital Plan'?1:0;
     const bCP=b.status==='Capital Plan'?1:0;
     return aCP-bCP||(a.year||9999)-(b.year||9999);
   });
+}
+// v56b -- fixed 5-shade navy-to-seamoss palette for project identity
+// (which project, distinct from lifecycle stage color). Position 1 is
+// always navy on every property, position 2 always mid-blue, etc, so a
+// given position reads the same color on every property. Properties
+// with more than 5 graduated Scopes (the 12-project/64-unit outlier
+// case) cycle back through the same 5 colors at reduced opacity for
+// positions 6+, so repeats are visually distinguishable from originals.
+// Approved design: skip-every-other spacing within the navy/seamoss
+// family for visual distinctiveness (Option B from the swatch
+// comparison), not evenly-stepped adjacent shades.
+const SCOPE_POSITION_COLORS=['#0A2A4A','#2F7DBF','#4FB88C','#89C6D6','#BFE0EA'];
+function getScopePositionColor(idx){
+  const base=SCOPE_POSITION_COLORS[idx%SCOPE_POSITION_COLORS.length];
+  const cycled=idx>=SCOPE_POSITION_COLORS.length;
+  return{color:base,opacity:cycled?0.5:1};
+}
+// Clicking a pill calls setCurrentScope(scopeId) which re-renders the
+// active tab against the selected scope.
+// v56b -- accentTargets param (optional): when provided as
+// {barId, cardId}, this call also colors the pill row's underline bar
+// and the tab's tracker card left-border with the active Scope's
+// position color, so the active project stays visually identifiable
+// while scrolling past the pill row (not just the pill itself). Only
+// wired up from Milestones and Unit Phases per Misty's direction — the
+// three other tabs sharing this function (Budget, Change Orders, Bids)
+// are intentionally left unchanged, no accentTargets passed.
+function renderScopeTabs(containerId, propName, accentTargets){
+  const container=document.getElementById(containerId);
+  const clearAccent=()=>{
+    if(!accentTargets)return;
+    const barEl=document.getElementById(accentTargets.barId);
+    const cardEl=document.getElementById(accentTargets.cardId);
+    if(barEl)barEl.style.display='none';
+    if(cardEl)cardEl.style.borderLeftColor='transparent';
+  };
+  if(!container){clearAccent();return;}
+  const allScopes=(window.SCOPES||[]).filter(s=>s.property===propName);
+  if(allScopes.length<=1){container.innerHTML='';clearAccent();return;}
+  const sorted=sortScopesForTabs(allScopes);
   const activeId=currentScope?.id;
+  // Position index is assigned only among graduated (non-Capital Plan)
+  // Scopes, in the same sorted order the pills render in -- a Capital
+  // Plan scope never occupies a position-color slot since it doesn't
+  // get one visually anyway (still shows the dashed gray Capital Plan
+  // treatment, unchanged).
+  let posIdx=0;
   const pills=sorted.map(s=>{
     const isCP=s.status==='Capital Plan';
     const isActive=s.id===activeId;
     const msData=getMilestonesForProp(propName,s.id);
     const msComplete=msData.filter(m=>m.status==='Complete').length;
     const msPct=msData.length?Math.round(msComplete/MILESTONES_DEF.length*100):0;
-    const bg=isActive?'var(--navy)':isCP?'var(--gray-pale)':'var(--blue-xpale)';
+    const pos=isCP?null:getScopePositionColor(posIdx++);
+    const bg=isActive?(pos?pos.color:'var(--navy)'):isCP?'var(--gray-pale)':'var(--blue-xpale)';
     const color=isActive?'#fff':isCP?'var(--gray-mid)':'var(--blue-dark)';
     const border=isCP?'1px dashed var(--border)':'1px solid transparent';
+    const opacity=pos&&pos.opacity<1?`opacity:${pos.opacity};`:'';
     const label=`${escHtml(s.name||'Project')}${isCP?'':' · '+msPct+'%'}`;
-    return `<button onclick="setCurrentScope('${s.id.replace(/'/g,"\\'")}');renderScopeTabs('${containerId}','${propName.replace(/'/g,"\\'")}');" style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px;border:${border};background:${bg};color:${color};cursor:pointer;white-space:nowrap;${isCP?'opacity:.7':''}">${label}</button>`;
+    return `<button onclick="setCurrentScope('${s.id.replace(/'/g,"\\'")}');renderScopeTabs('${containerId}','${propName.replace(/'/g,"\\'")}'${accentTargets?`,${JSON.stringify(accentTargets).replace(/"/g,"'")}`:''});" style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px;border:${border};background:${bg};color:${color};cursor:pointer;white-space:nowrap;${isCP?'opacity:.7':''}${opacity}">${label}</button>`;
   }).join('');
   container.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:6px;padding:0 0 12px 0">${pills}</div>`;
+  if(accentTargets){
+    const activeScope=sorted.find(s=>s.id===activeId);
+    const activeIsCP=activeScope&&activeScope.status==='Capital Plan';
+    if(activeScope&&!activeIsCP){
+      const graduatedBeforeActive=sorted.slice(0,sorted.indexOf(activeScope)).filter(s=>s.status!=='Capital Plan').length;
+      const activePos=getScopePositionColor(graduatedBeforeActive);
+      const barEl=document.getElementById(accentTargets.barId);
+      const cardEl=document.getElementById(accentTargets.cardId);
+      if(barEl){barEl.style.display='block';barEl.style.background=activePos.color;barEl.style.opacity=activePos.opacity;}
+      if(cardEl)cardEl.style.borderLeftColor=activePos.color;
+    }else{
+      clearAccent();
+    }
+  }
 }
 
 // v28b — Overview-tab Scopes card. Shows nothing for a single-Scope
@@ -9771,7 +9844,7 @@ async function saveScopeEditModal(scopeId){
 window.saveScopeEditModal=saveScopeEditModal;
 
 function renderMilestones(p){
-  renderScopeTabs('ms-scope-tabs',p.n);
+  renderScopeTabs('ms-scope-tabs',p.n,{barId:'ms-scope-accent-bar',cardId:'ms-tracker-card'});
   const msList=document.getElementById('prop-milestones-list');
   const canEdit=role==='pm'||role==='admin';
   const canConsultant=role==='consultant';
@@ -11639,6 +11712,12 @@ function fmtBudget(val){
 // (overdue Action Items only this round, Change Orders and
 // meeting-minute flags deferred to a later build per Misty's direction).
 const PROPS_STAGE_COLORS={'Pre-Construction':'var(--gray-mid)','Construction':'var(--blue-dark)','Project Closeout':'var(--amber)','Complete':'var(--green)'};
+// v56c -- light-tint counterpart for the dot fill, paired with the solid
+// PROPS_STAGE_COLORS value as the border, so each dot reads as a
+// distinct light-fill-plus-strong-border shape rather than a flat color
+// swatch. Reuses the existing pale variants already defined in :root for
+// all 4 stages (confirmed each one exists before using it here).
+const PROPS_STAGE_COLORS_LIGHT={'Pre-Construction':'var(--gray-pale)','Construction':'var(--blue-pale)','Project Closeout':'var(--amber-pale)','Complete':'var(--green-pale)'};
 let propsSortField='name',propsSortDir='asc',propsStatusFilter='all',propsSearchQuery='';
 // Per-property rollup: blended progress, per-Scope stage dots, blockers,
 // spend/basis (reusing getPropertyBilledAndBasis, same helper Total
@@ -11771,9 +11850,9 @@ function renderPropsKpiRow(){
     <div style="background:var(--gray-xpale);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px">
       ${ring(overallPct,'var(--green)')}
       <div style="flex:1;min-width:0">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Overall progress</div>${whyBtn('Why is Overall Portfolio Progress at '+overallPct+' percent?')}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:12px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">Units complete</div>${whyBtn('Why is Units Complete at '+overallPct+' percent?')}</div>
         <div style="font-size:24px;font-weight:700;color:var(--navy);margin-top:3px">${overallPct}%</div>
-        <div style="font-size:11px;color:var(--gray-mid)">units complete</div>
+        <div style="font-size:11px;color:var(--gray-mid)">${completeUnitsAll.toLocaleString()} of ${totalUnitsAll.toLocaleString()} units</div>
       </div>
     </div>
     <div style="background:var(--gray-xpale);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px">
@@ -11814,6 +11893,24 @@ function propsStatusPillHtml(bucket){
   const cfg={onTrack:{bg:'var(--blue-xpale)',c:'var(--blue-dark)',label:'On track'},atRisk:{bg:'#fdecea',c:'var(--red)',label:'At risk'},delayed:{bg:'#fff7ed',c:'#b45309',label:'Delayed'},complete:{bg:'var(--green-pale)',c:'var(--green)',label:'Complete'},notStarted:{bg:'var(--gray-pale)',c:'var(--gray-mid)',label:'Not started'}}[bucket];
   return `<span style="background:${cfg.bg};color:${cfg.c};font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap">${cfg.label}</span>`;
 }
+// v56c -- Blocker trend sparkline. Honest caveat: there is no stored
+// historical blocker-count time series anywhere in PULSE today (this
+// build only just started computing the live snapshot), so a real
+// week-over-week trend line isn't available yet. Rather than fabricate
+// a fake-looking line, a property with 0 blockers shows just the number
+// (nothing to trend), and a property with 1+ blockers shows a flat
+// neutral line labeled "tracking starts now" so it's clear this is the
+// baseline, not a claim about direction. Once blocker snapshots are
+// actually being stored somewhere (not built yet), this can be swapped
+// for a real trend without changing the call site.
+function propsBlockerCellHtml(r){
+  if(r.blockers===0)return `<span style="font-weight:600;color:var(--navy)">0</span>`;
+  return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+    <span style="font-weight:600;color:var(--red)">${r.blockers}</span>
+    <svg width="40" height="12" viewBox="0 0 40 12" aria-hidden="true"><line x1="1" y1="6" x2="39" y2="6" stroke="var(--red)" stroke-width="1.5" stroke-dasharray="2,2"/></svg>
+    <span style="font-size:9px;color:var(--gray-mid)">tracking starts now</span>
+  </div>`;
+}
 // v56b polish round -- switched from pagination to one long scroll per
 // Misty's direction ("nobody wants to page-click to see if something's
 // at risk" on a status-monitoring tool checked often). propsPage/
@@ -11839,31 +11936,48 @@ function renderPropertiesTable(){
     return propsSortDir==='asc'?cmp:-cmp;
   });
   if(rows.length===0){
-    tbody.innerHTML=`<tr><td colspan="7" style="padding:2rem;text-align:center;color:var(--gray-mid);font-size:13px">No properties match your search or filter.</td></tr>`;
+    tbody.innerHTML=`<tr><td colspan="8" style="padding:2rem;text-align:center;color:var(--gray-mid);font-size:13px">No properties match your search or filter.</td></tr>`;
   }else{
     tbody.innerHTML=rows.map(r=>{
       const barColor=r.statusBucket==='atRisk'?'var(--red)':r.statusBucket==='complete'?'var(--green)':r.statusBucket==='notStarted'?'var(--gray-light)':'var(--blue-dark)';
-      // v56b polish round -- dots enlarged 8px->11px, gap widened 3px->5px,
-      // and a white ring (box-shadow, not a real border so it doesn't
-      // shift layout) added around each dot so two adjacent stage colors
-      // (e.g. gray Pre-Construction next to blue Construction) stay
-      // visually separated even when the row is scanned quickly, per
-      // Misty's "colors are too similar to register the difference"
-      // feedback. Colors themselves are unchanged (still the same
-      // 4-color system as Analytics' Active Projects by Stage chart).
-      const dotsHtml=r.dots.length?r.dots.map(d=>`<div style="width:11px;height:11px;border-radius:50%;background:${PROPS_STAGE_COLORS[d.stage]||'var(--gray-mid)'};box-shadow:0 0 0 2px var(--gray-xpale)"></div>`).join(''):'<span style="font-size:10px;color:var(--gray-mid)">—</span>';
+      // v56c polish round -- dots still weren't reading as distinct
+      // colors per Misty's follow-up. Switched from a flat fill + white
+      // ring to a lighter tint fill (PROPS_STAGE_COLORS_LIGHT) with a
+      // solid darker-tone border, same light-fill-plus-strong-border
+      // pattern badges elsewhere in the app already use for the same
+      // "readable at a glance" reason, rather than inventing a new look.
+      const dotsHtml=r.dots.length?r.dots.map(d=>{
+        const c=PROPS_STAGE_COLORS[d.stage]||'var(--gray-mid)';
+        const cl=PROPS_STAGE_COLORS_LIGHT[d.stage]||'var(--gray-pale)';
+        return `<div style="width:12px;height:12px;border-radius:50%;background:${cl};border:2px solid ${c}"></div>`;
+      }).join(''):'<span style="font-size:10px;color:var(--gray-mid)">—</span>';
       const cityState=[r.p.city,r.p.s].filter(Boolean).join(', ');
+      // v56c -- Est. completion, reusing the existing getProjectedCompletion()
+      // helper (latest planned completion across the property's Unit
+      // Groups/phases) rather than writing new date logic. Matches the
+      // inspiration mockup's Est. Building Completion column, including
+      // the relative "In X Yrs, Y Mos" subline.
+      const projEnd=typeof getProjectedCompletion==='function'?getProjectedCompletion(r.p.n):null;
+      let estCompHtml='<span style="color:var(--gray-mid)">TBD</span>';
+      if(projEnd){
+        const now=new Date();
+        const monthsOut=Math.max(0,Math.round((projEnd-now)/(1000*60*60*24*30.44)));
+        const yrs=Math.floor(monthsOut/12),mos=monthsOut%12;
+        const relStr=monthsOut<=0?'Due':yrs>0?`In ${yrs} Yr${yrs===1?'':'s'}${mos>0?`, ${mos} Mo${mos===1?'':'s'}`:''}`:`In ${mos} Mo${mos===1?'':'s'}`;
+        estCompHtml=`<div style="font-weight:600;color:var(--navy)">${projEnd.toLocaleDateString('en-US',{month:'short',year:'numeric'})}</div><div style="font-size:10px;color:var(--gray-mid)">${relStr}</div>`;
+      }
       return `<tr style="border-bottom:1px solid var(--border)">
         <td style="padding:10px 6px"><div style="display:flex;align-items:center;gap:8px"><div style="width:32px;height:32px;border-radius:6px;background:var(--gray-xpale);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-building" style="font-size:14px;color:var(--gray-mid)"></i></div><div><div style="font-weight:600;color:var(--blue-dark);cursor:pointer" onclick="openProperty('${r.p.n.replace(/'/g,"\\'")}')">${escHtml(r.p.n)}</div>${cityState?`<div style="font-size:10px;color:var(--gray-mid);margin-top:1px">${escHtml(cityState)}</div>`:''}</div></div></td>
-        <td style="padding:10px 4px;color:var(--gray-dark);text-align:center">${r.totalUnits||'—'} units</td>
+        <td style="padding:10px 6px;color:var(--gray-dark);text-align:center">${r.totalUnits||'—'} units</td>
         <td style="padding:10px 6px;text-align:center">
           <div style="font-weight:600;color:var(--navy)">${r.pctComplete}%</div>
           <div style="height:4px;width:70px;background:var(--border);border-radius:2px;margin:3px auto 0"><div style="width:${r.pctComplete}%;height:100%;background:${barColor};border-radius:2px"></div></div>
           <div style="font-size:10px;color:var(--gray-mid);margin-top:2px">${r.completeUnits} of ${r.unitsTotal} units</div>
         </td>
         <td style="padding:10px 6px;color:var(--gray-dark);text-align:center">${fmtBudget(r.billed)} <span style="color:var(--gray-mid)">of ${fmtBudget(r.basis)}</span></td>
-        <td style="padding:10px 6px;text-align:center"><div style="color:var(--gray-dark);margin-bottom:4px">${r.dots.length} project${r.dots.length===1?'':'s'}</div><div style="display:flex;gap:5px;justify-content:center">${dotsHtml}</div></td>
-        <td style="padding:10px 6px;font-weight:600;color:${r.blockers>0?'var(--red)':'var(--navy)'};text-align:center">${r.blockers}</td>
+        <td style="padding:10px 6px;text-align:center">${estCompHtml}</td>
+        <td style="padding:10px 6px;text-align:center"><div style="display:flex;gap:5px;justify-content:center;margin-bottom:4px">${dotsHtml}</div><div style="color:var(--gray-dark)">${r.dots.length} Project${r.dots.length===1?'':'s'}</div></td>
+        <td style="padding:10px 6px;text-align:center">${propsBlockerCellHtml(r)}</td>
         <td style="padding:10px 6px;text-align:center">${propsStatusPillHtml(r.statusBucket)}</td>
       </tr>`;
     }).join('');
@@ -14738,7 +14852,7 @@ window.dismissSuggestedUnitPhase=dismissSuggestedUnitPhase;
 
 function renderPhasesTab(p){
   if(!p)return;
-  renderScopeTabs('phases-scope-tabs',p.n);
+  renderScopeTabs('phases-scope-tabs',p.n,{barId:'phases-scope-accent-bar',cardId:'phases-tracker-card'});
   const canPM=role==='pm'||role==='admin';
   const canConsultant=role==='consultant';
   const addPhaseBtn=document.getElementById('unit-add-phase-btn');
