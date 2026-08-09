@@ -2758,7 +2758,26 @@ function normalizeLookupIds(val){
   });
   return [...new Set(ids.filter(Boolean))];
 }
+// v58i-diag -- TEMPORARY diagnostic tracer for the "refresh briefly shows
+// zero" bug (open item since v57c, never root-caused live -- polling via
+// Claude in Chrome after the fact is structurally too slow to catch it,
+// Airtable resolves faster than a tool round-trip). Logs timestamped
+// checkpoints to localStorage.__pulseLoadTrace so the real sequence can be
+// read after any refresh, whenever it happens, without anyone needing to
+// be watching live. NOT a fix -- pure instrumentation, remove once the
+// real root cause is found and fixed for real.
+window.__pulseTrace=(label)=>{
+  try{
+    const key='__pulseLoadTrace';
+    const log=JSON.parse(localStorage.getItem(key)||'[]');
+    log.push({t:Date.now(),label,portLen:(window.PORTFOLIO||[]).length,connected:!!window.AT_CONNECTED});
+    if(log.length>200)log.splice(0,log.length-200);
+    localStorage.setItem(key,JSON.stringify(log));
+  }catch(e){}
+};
+window.__pulseTrace('script-eval');
 async function loadAllData() {
+  window.__pulseTrace('loadAllData:start');
   // Loading in background - no overlay
   try {
     // Loading portfolio data...
@@ -3366,6 +3385,7 @@ async function loadAllData() {
     // Project table never blocks the rest of the app's initial render.
     loadVdaProjectData();
     AT_CONNECTED = true;
+    window.__pulseTrace('AT_CONNECTED=true');
     console.log('AT_CONNECTED set to true - updating UI');
     const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
     if(dot){dot.style.background='#5DCAA5';}if(lbl){lbl.textContent='Live database';}
@@ -4495,7 +4515,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58j</div>
     </div>
   </nav>
 
@@ -6231,6 +6251,7 @@ async function verifyRestoredSessionStillActive(recordId){
 // just no longer sits on the critical path to showing the page the user
 // was already on.
 async function tryRestorePulseSession(){
+  window.__pulseTrace('tryRestorePulseSession:start');
   let saved=null;
   try{
     const raw=sessionStorage.getItem('pulse_session');
@@ -6300,13 +6321,17 @@ async function _finishLogin(){
       try{
         window.PORTFOLIO=JSON.parse(cached);
         window.PARK_PORTFOLIO=window.PORTFOLIO;
-      }catch(e){window.PORTFOLIO=[];}
+        window.__pulseTrace('finishLogin:cache-hit');
+      }catch(e){window.PORTFOLIO=[];window.__pulseTrace('finishLogin:cache-parse-fail');}
     } else {
       window.PORTFOLIO=[]; // empty until Airtable loads
+      window.__pulseTrace('finishLogin:cache-miss-empty-portfolio');
     }
   }
   populatePortfolio();
+  window.__pulseTrace('finishLogin:pre-renderDashboard');
   renderDashboard(); // will show loading state if no data
+  window.__pulseTrace('finishLogin:post-renderDashboard');
   // v31t: Consultant now lands on Dashboard, same as PM/Admin/Client —
   // previously routed straight to the Submit/Field Update view.
   // v42l — a restored session (browser refresh) should return to the page
@@ -34064,7 +34089,20 @@ function _tourPositionPopover(pop,anchor){
 </script>
 <script>
 // On page load — pre-fill token input if saved, show setup if never configured
+window.__pulseTrace && window.__pulseTrace('window-load-listener-registered');
+// v58i-diag -- console helper to read the trace log. Type
+// window.dumpPulseTrace() in the browser console after a refresh to see
+// the full timestamped sequence (each entry: ms since first entry, label,
+// portfolio length at that moment, AT_CONNECTED at that moment).
+window.dumpPulseTrace=function(){
+  const log=JSON.parse(localStorage.getItem('__pulseLoadTrace')||'[]');
+  if(!log.length){console.log('No trace data yet.');return;}
+  const t0=log[0].t;
+  console.table(log.map(e=>({msSinceStart:e.t-t0,label:e.label,portLen:e.portLen,connected:e.connected})));
+  return log;
+};
 window.addEventListener('load', async () => {
+  window.__pulseTrace('load-event-fired');
   // Status updates once loadAllData completes
   const dot=document.getElementById('at-dot');const lbl=document.getElementById('at-label');
   if(dot)dot.style.background='#EF9F27';if(lbl)lbl.textContent='Connecting...';
