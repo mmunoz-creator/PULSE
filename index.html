@@ -4515,7 +4515,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58l</div>
     </div>
   </nav>
 
@@ -28325,7 +28325,15 @@ async function acceptSuggestedActionItem(id){
   // showed its own success toast below) so this is at least visible in
   // the console rather than fully silent.
   if(!demoMode){
-    const _sres=await atUpdate('Suggested Action Items',id,{'Status':'Accepted'});
+    // v58-security -- Actioned Date now written alongside Status. This
+    // field already existed in Airtable but nothing ever wrote to it,
+    // which is exactly why the worker's dedupe logic (generateSuggested
+    // ActionItems) had no reliable way to time-box stale Dismissed
+    // suggestions -- a pre-fix Dismissed record could permanently block a
+    // later, legitimately different suggestion with similar wording, with
+    // no way to tell how old the block was. Written here too (not just on
+    // dismiss) so Accepted has the same real timestamp for consistency.
+    const _sres=await atUpdate('Suggested Action Items',id,{'Status':'Accepted','Actioned Date':new Date().toISOString().split('T')[0]});
     if(!_sres)console.error(`Suggested Action Item ${id} status failed to save as Accepted — may reappear in queue on next reload.`);
   }
   refreshDashActions();
@@ -28343,7 +28351,11 @@ async function dismissSuggestedActionItem(id){
   // above. A failed write here means the suggestion silently reappears
   // as "Open" on next reload; logged so it's at least visible.
   if(!demoMode){
-    const _sres=await atUpdate('Suggested Action Items',id,{'Status':'Dismissed'});
+    // v58-security -- Actioned Date now written alongside Status, same
+    // reasoning as acceptSuggestedActionItem() above. This is the field
+    // the worker's dedupe logic now reads to time-box stale Dismissed
+    // suggestions instead of blocking on them forever.
+    const _sres=await atUpdate('Suggested Action Items',id,{'Status':'Dismissed','Actioned Date':new Date().toISOString().split('T')[0]});
     if(!_sres)console.error(`Suggested Action Item ${id} status failed to save as Dismissed — may reappear in queue on next reload.`);
   }
   renderSuggestedActionItems();
