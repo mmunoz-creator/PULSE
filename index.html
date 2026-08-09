@@ -8392,35 +8392,20 @@ function calcScheduleRisk(propName){
     });
   }
 
-  // v57a -- same real bug and same fix as the Scope-scoped sibling below
-  // (calcScopeScheduleRisk) -- see its v57a comment for the full
-  // investigation. This property-wide version powers the Dashboard At
-  // Risk badge (line ~16777), so the false "On Track" result was live
-  // there too, not just on the heat map. Falls back to Milestones data
-  // only when phase-level data found zero signal, and respects the same
-  // On Hold exclusion already computed above (onHoldScopeIds) so an
-  // on-hold Scope's milestones don't reintroduce risk this function
-  // deliberately pauses.
-  if(atRiskCount===0&&overdueCount===0&&aheadCount===0){
-    const msRisk=getMilestonesForProp(propName).filter(m=>!onHoldScopeIds.has(m.scopeId));
-    let msDaysLate=0,msAtRisk=0;
-    msRisk.forEach(m=>{
-      if(m.status==='Complete')return;
-      if(m.status==='At Risk')msAtRisk++;
-      if(m.plannedDate){
-        const planned=new Date(m.plannedDate);
-        if(planned<today){
-          const delta=Math.round((today-planned)/(1000*60*60*24));
-          msDaysLate=Math.max(msDaysLate,delta);
-        }
-      }
-    });
-    if(msAtRisk>0||msDaysLate>0){
-      atRiskCount=msAtRisk;
-      daysLate=msDaysLate;
-      overdueCount=msDaysLate>0?1:0;
-    }
-  }
+  // v57c -- REVERTED, same as the Scope-scoped sibling below
+  // (calcScopeScheduleRisk). The v57a/v57b Milestones fallback
+  // misread Milestones' "Planned Date" as a due date; for an In
+  // Progress milestone it is actually the planned START date, so
+  // work that started exactly on schedule was being flagged as
+  // overdue by however many days had passed since it started. Real
+  // example that surfaced this live: Hilton Boston Logan Airport's
+  // RFP/Bid Process milestone, on schedule and still genuinely in
+  // progress, showed as 82 days overdue. Fully removed rather than
+  // patched -- back to reading only
+  // window.PHASE_STEPS/window.UNIT_GROUPS, as before v57a. The
+  // original problem (thin phase-level data silently reading as "on
+  // track") is real and still open, but needs a genuine due-date
+  // field, not a start-date field, before it ships again.
 
   // Risk level — driven by construction steps
   let riskLevel='On Track';
@@ -8490,43 +8475,25 @@ function calcScopeScheduleRisk(propName,scopeId){
     });
   }
 
-  // v57a -- real bug found from a live screenshot: this function (and its
-  // property-wide sibling calcScheduleRisk() below) only ever read
-  // window.PHASE_STEPS/window.UNIT_GROUPS -- task-level phase data that's
-  // genuinely thin across the base. Checked live: Hilton New Orleans
-  // Riverside has zero Unit Groups records at all, and most other
-  // properties' phase dates are scheduled 2027/2028 or simply blank. So
-  // "no phase data flags a problem" was silently read as "nothing's
-  // wrong," producing false "On Track" results even for properties with
-  // real, confirmed overdue milestones (New Orleans 145 days, Denver 5
-  // days, Casa Marina 1 day -- all confirmed via Milestones' own
-  // Status='At Risk' flags and past Planned Dates with no Completion
-  // Date). Milestones is the populated, trustworthy source. Falling back
-  // to it here ONLY when the phase-level check above found zero signal
-  // (atRiskCount/overdueCount/aheadCount all 0), so a property with real
-  // phase-level data keeps using it untouched -- this only fills in the
-  // previously-blind "no data to check" cases.
-  if(atRiskCount===0&&overdueCount===0&&aheadCount===0){
-    const msRisk=getMilestonesForProp(propName,scopeId);
-    let msDaysLate=0,msAtRisk=0;
-    msRisk.forEach(m=>{
-      if(m.status==='Complete')return;
-      if(m.status==='At Risk')msAtRisk++;
-      if(m.plannedDate){
-        const planned=new Date(m.plannedDate);
-        if(planned<today){
-          const delta=Math.round((today-planned)/(1000*60*60*24));
-          msDaysLate=Math.max(msDaysLate,delta);
-        }
-      }
-    });
-    if(msAtRisk>0||msDaysLate>0){
-      atRiskCount=msAtRisk;
-      daysLate=msDaysLate;
-      overdueCount=msDaysLate>0?1:0;
-    }
-  }
-
+  // v57c -- REVERTED. The v57a/v57b Milestones fallback below was wrong
+  // and has been fully removed, not patched. It read Milestones'
+  // "Planned Date" as if it were a due/completion date, but for an
+  // In Progress milestone that field is actually the planned START date
+  // -- so a milestone that started exactly on schedule and is still
+  // correctly in progress toward a future completion was being flagged
+  // as overdue by however many days have passed since it started. Real
+  // example that surfaced this live: Hilton Boston Logan Airport's
+  // RFP/Bid Process milestone started on time (05/18/2026, matching its
+  // own Planned Start) and was still showing "Bid interviews set for
+  // 8/17" in its notes -- genuinely on track -- but was flagged 82 days
+  // overdue. This function is back to reading only
+  // window.PHASE_STEPS/window.UNIT_GROUPS, exactly as it did before
+  // v57a. The original problem this was trying to solve (thin phase-
+  // level data silently reading as "on track") is real and still open,
+  // but the fix needs a genuine due-date field, not a start-date field,
+  // and should not ship again without being checked against multiple
+  // real in-progress milestones first, not just the ones that happened
+  // to look right.
   let riskLevel='On Track';
   if(atRiskCount>0||daysLate>60)riskLevel='High';
   else if(overdueCount>0||daysLate>0)riskLevel='Medium';
