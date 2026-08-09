@@ -4515,7 +4515,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58k</div>
     </div>
   </nav>
 
@@ -6448,6 +6448,15 @@ async function _finishLogin(){
         }
         populatePortfolio();
         renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();renderDashboard();populatePanelPropertyList();updatePMUpdatesBadge();
+        // v58k -- Action Board never had an equivalent to renderDashboard()'s
+        // unconditional re-render here, so its new AT_CONNECTED loading
+        // state (added this same round) would otherwise stay stuck forever
+        // if the user refreshed while already sitting on Action Board --
+        // the loading spinner would show, but nothing would ever call
+        // renderActionBoard() again once the real data actually arrived.
+        // Only re-renders if Action Board is the currently visible view, to
+        // avoid wasted work on every other refresh.
+        if(document.getElementById('view-actionboard')&&getComputedStyle(document.getElementById('view-actionboard')).display!=='none')renderActionBoard();
         // Bug fix (v22b): populateSubmitDropdown() previously only ran once,
         // at the moment gotoView('submit') fired — which for a consultant
         // happens immediately on login, before this loadAllData() promise
@@ -6495,6 +6504,11 @@ async function _finishLogin(){
           populatePortfolio();renderDashboard();
           if(typeof renderCharts==='function')renderCharts();
           if(typeof renderCapitalPlan==='function'&&!document.getElementById('view-capital')?.classList.contains('hidden'))renderCapitalPlan();
+          // v58k -- Action Board reads p.st via getPortfolioClassification()
+          // same as the other screens re-rendered here, but was missing
+          // from this list, same gap as the loadAllData resolution point
+          // above.
+          if(typeof renderActionBoard==='function'&&document.getElementById('view-actionboard')&&getComputedStyle(document.getElementById('view-actionboard')).display!=='none')renderActionBoard();
         }).catch(e=>console.error('Property/Scope status reconciliation failed:',e));
         if(!document.getElementById('view-comments').classList.contains('hidden'))renderCommentsView();
         showToast('Live data connected ✓','success');
@@ -11958,6 +11972,30 @@ function abSetHeatTab(tab){abHeatTab=tab;renderActionBoard();}
 function renderActionBoard(){
   const container=document.getElementById('actionboard-body');
   if(!container)return;
+  // v58k -- confirmed live bug: on a refresh with no sessionStorage
+  // portfolio cache, window.PORTFOLIO starts empty and AT_CONNECTED is
+  // false for several real seconds while loadAllData() (17 parallel
+  // Airtable table fetches) is still in flight. Unlike renderDashboard(),
+  // which has carried an AT_CONNECTED-gated loading state since v36n,
+  // renderActionBoard() had no such guard at all -- it read directly from
+  // actionItems/window.UNIT_INVENTORY/window.MILESTONES/window.CO_SAVINGS,
+  // all of which are genuinely empty until loadAllData() resolves, so the
+  // stat cards showed real, correct-per-the-data-available-at-that-moment
+  // zeros (Active properties 0, Open action items 0, Total estimated
+  // investment $0.0M) -- not a rendering bug, a missing loading state.
+  // Confirmed via a live instrumented trace (window.dumpPulseTrace()):
+  // AT_CONNECTED didn't flip true until ~5.6s after the page became
+  // interactive on one real refresh. Matches renderDashboard()'s own
+  // spinner exactly rather than inventing a new pattern.
+  if(!AT_CONNECTED&&!demoMode){
+    container.innerHTML=`
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem;gap:12px">
+        <i class="ti ti-loader" style="font-size:32px;color:var(--gray-light);animation:spin 1s linear infinite"></i>
+        <div style="font-size:14px;font-weight:500;color:var(--gray-mid)">Loading portfolio data...</div>
+        <div style="font-size:12px;color:var(--gray-light)">Connecting to live database</div>
+      </div>`;
+    return;
+  }
   const cls=getPortfolioClassification();
   const removedNames=new Set((window.PORTFOLIO||[]).filter(p=>p.st==='Removed').map(p=>p.n));
   const port=(window.PORTFOLIO||[]).filter(p=>!removedNames.has(p.n));
