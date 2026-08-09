@@ -4486,7 +4486,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v57b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v57c</div>
     </div>
   </nav>
 
@@ -11859,6 +11859,13 @@ function propsDotColor(stage){return PROPS_DOT_COLORS[stage]||PROPS_DOT_COLORS['
 //    first at load.
 //  - Ask MARLI: calls the real propsAskMarli() (line ~11844), same
 //    pattern already live on Properties.
+// v57c -- real tab state for the heat map (Construction/Pre-construction/
+// Complete). Was previously non-functional -- all 3 buttons just showed
+// a "coming soon" toast. Module-level like propsStatusFilter above, so
+// it survives across renderActionBoard() re-renders when a tab is
+// clicked (see abSetHeatTab()).
+let abHeatTab='construction';
+function abSetHeatTab(tab){abHeatTab=tab;renderActionBoard();}
 function renderActionBoard(){
   const container=document.getElementById('actionboard-body');
   if(!container)return;
@@ -11916,6 +11923,13 @@ function renderActionBoard(){
   }
   const constructionTiles=abGroupTiles('construction');
   const preconTiles=abGroupTiles('precon');
+  // Complete tiles -- same real source Dashboard's own heat map uses
+  // (groupScopesToTiles' sibling logic, line ~23707): properties with
+  // Property Status = Complete, Removed-excluded. Misty asked for this
+  // as the 3rd real heat tab, matching the approved mockup's 3-tab
+  // layout (Construction / Pre-construction / Complete) instead of the
+  // 2 tabs previously wired.
+  const completeTiles=port.filter(p=>p.st==='Complete').map(p=>({property:p.n,pct:100,isRisk:false,daysLate:0}));
   // Milestones in motion -- real In Progress milestones, Removed-safe.
   const milestonesInMotion=(window.MILESTONES||[]).filter(m=>m.status==='In Progress'&&!removedNames.has(m.property)).slice(0,6);
   // Recent field activity -- real PM Updates, already newest-first sorted
@@ -11968,14 +11982,17 @@ function renderActionBoard(){
   if(insightItems.length===0){
     insightItems.push({cls:'ok',icon:'ti-circle-check',text:'Portfolio remains on track &mdash; no overdue actions or schedule risk flagged right now.'});
   }
+  // v57c -- data-note banner removed entirely per Misty's explicit
+  // request. Stat cards now carry the mockup's real caption line under
+  // each value (Status = In Progress, etc) -- only the overdue-actions
+  // card had one before; the other 4 were silently missing theirs.
   container.innerHTML=`
-    <div style="font-size:11px;color:var(--gray-mid);background:var(--gray-xpale);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:16px;display:flex;align-items:center;gap:7px"><i class="ti ti-database" style="color:var(--blue-dark);font-size:14px;flex-shrink:0"></i>Every number on this page is pulled and computed live from Airtable. Total estimated investment sums Unit Inventory List's Total Work Est. field (the only cost figure with real, near-complete data &mdash; Property/Scope-level budget fields are still empty).</div>
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:12px">
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-building','var(--blue-pale)','var(--blue-dark)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Active properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${cls.activeProps.length}</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-git-branch','var(--teal-pale)','var(--teal)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Pipeline properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${cls.pipelineProps.length}</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-alert-triangle','var(--amber-pale)','var(--amber)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Open action items</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${openActions.length}</p>${overdueActions.length>0?`<p style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px">${overdueActions.length} overdue</p>`:''}</div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-inbox','var(--purple-pale)','var(--purple)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Pending review</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${pendingReviewCount}</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-currency-dollar','var(--green-pale)','var(--green)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Total estimated investment</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${totalEstDisplay}</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-building','var(--blue-pale)','var(--blue-dark)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Active properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${cls.activeProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Status = In Progress</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-git-branch','var(--teal-pale)','var(--teal)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Pipeline properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${cls.pipelineProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Status = Capital Plan</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-alert-triangle','var(--amber-pale)','var(--amber)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Open action items</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${openActions.length}</p>${overdueActions.length>0?`<p style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px">${overdueActions.length} overdue</p>`:'<p style="font-size:11px;color:var(--gray-mid);margin-top:2px">None overdue</p>'}</div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-inbox','var(--purple-pale)','var(--purple)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Pending review</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${pendingReviewCount}</p><p style="font-size:11px;color:${pendingReviewCount===0?'var(--green)':'var(--gray-mid)'};font-weight:${pendingReviewCount===0?600:400};margin-top:2px">${pendingReviewCount===0?'Nothing waiting on approval':'Awaiting review'}</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-currency-dollar','var(--green-pale)','var(--green)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Total estimated investment</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${totalEstDisplay}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Summed across ${(window.UNIT_INVENTORY||[]).length} units</p></div></div>
     </div>
     <div style="display:flex;align-items:center;background:var(--blue-xpale,#f0f7fe);border:1px solid var(--blue-pale);border-radius:12px;padding:12px 16px;margin-bottom:20px;gap:20px">
       ${insightItems.map((it,i)=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--gray-dark);flex:1;${i<insightItems.length-1?'padding-right:16px;border-right:1px solid var(--blue-pale)':''}"><i class="ti ${it.icon}" style="font-size:15px;flex-shrink:0;margin-top:1px;color:${it.cls==='warn'?'var(--amber)':it.cls==='info'?'var(--blue-dark)':'var(--green)'}"></i>${it.text}</div>`).join('')}
@@ -11985,25 +12002,26 @@ function renderActionBoard(){
       <div class="card">
         ${panelTitle('Action items',overdueActions.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${overdueActions.length} overdue</span>`:'')}
         <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead><tr><th style="text-align:left;padding:0 8px 8px 0"></th><th style="text-align:left;padding:0 8px 8px 0">Property</th><th style="text-align:left;padding:0 8px 8px 0">Action required</th><th style="text-align:left;padding:0 8px 8px 0">Due</th></tr></thead>
+          <thead><tr><th style="text-align:left;padding:0 8px 8px 0"></th><th style="text-align:left;padding:0 8px 8px 0">Property</th><th style="text-align:left;padding:0 8px 8px 0">Action required</th><th style="text-align:left;padding:0 8px 8px 0">Due</th><th style="text-align:left;padding:0 8px 8px 0"></th></tr></thead>
           <tbody>${openActions.slice(0,6).map(a=>{
             const isOverdue=a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today;
-            return `<tr><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;${isOverdue?'background:var(--red-pale,#FCEBEB);color:var(--red)':'background:var(--blue-pale,#E6F1FB);color:var(--blue-dark)'}">${isOverdue?'Overdue':'Open'}</span></td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border);font-weight:600">${escHtml(a.property||'')}</td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)">${escHtml(a.description||'')}</td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)">${escHtml(a.due||'TBD')}</td></tr>`;
-          }).join('')||'<tr><td colspan="4" style="padding:12px 0;color:var(--gray-mid)">No open action items.</td></tr>'}</tbody>
+            return `<tr><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;${isOverdue?'background:var(--red-pale,#FCEBEB);color:var(--red)':'background:var(--blue-pale,#E6F1FB);color:var(--blue-dark)'}">${isOverdue?'Overdue':'Open'}</span></td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border);font-weight:600">${escHtml(a.property||'')}</td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)">${escHtml(a.description||'')}</td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)">${escHtml(a.due||'TBD')}</td><td style="padding:8px 0 8px 8px;border-top:1px solid var(--border);text-align:right"><a class="row-link" style="cursor:pointer;color:var(--blue-dark);font-weight:600;font-size:11.5px" onclick="openProperty('${escHtml(a.property||'').replace(/'/g,"\\'")}')">Open</a></td></tr>`;
+          }).join('')||'<tr><td colspan="5" style="padding:12px 0;color:var(--gray-mid)">No open action items.</td></tr>'}</tbody>
         </table>
       </div>
       <div class="card">
         ${panelTitle('Priority properties')}
-        ${priorityProps.map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="width:28px;height:28px;border-radius:8px;background:var(--gray-xpale);color:var(--gray-mid);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0"><i class="ti ti-building-skyscraper"></i></div><div style="flex:1"><p style="font-size:12.5px;font-weight:600;margin:0">${escHtml(p.name)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${p.complete} of ${p.total} units complete${p.atRisk?' (At Risk milestone)':''}</p></div><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap;flex-shrink:0;${p.atRisk?'background:var(--amber-pale,#FAEEDA);color:var(--amber)':'background:var(--gray-pale,#F1EFE8);color:var(--gray-mid)'}">${p.pct}%</span></div>`).join('')||'<p style="color:var(--gray-mid);font-size:12px">No properties with unit data yet.</p>'}
+        ${priorityProps.map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="width:28px;height:28px;border-radius:8px;background:var(--gray-xpale);color:var(--gray-mid);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0"><i class="ti ti-building-skyscraper"></i></div><div style="flex:1"><p style="font-size:12.5px;font-weight:600;margin:0">${escHtml(p.name)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 4px">${p.complete} of ${p.total} units complete${p.atRisk?' (At Risk milestone)':''}</p><div class="pct-track" style="height:5px;background:var(--gray-xpale);border-radius:3px;overflow:hidden"><div class="pct-fill" style="height:100%;width:${p.pct}%;border-radius:3px;background:${p.atRisk?'var(--amber)':'var(--blue-dark)'}"></div></div></div><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap;flex-shrink:0;${p.atRisk?'background:var(--amber-pale,#FAEEDA);color:var(--amber)':'background:var(--gray-pale,#F1EFE8);color:var(--gray-mid)'}">${p.pct}%</span></div>`).join('')||'<p style="color:var(--gray-mid);font-size:12px">No properties with unit data yet.</p>'}
       </div>
     </div>
     <div class="card" style="margin-bottom:16px">
-      ${panelTitle('Construction heat map')}
+      ${panelTitle('Construction Heat Map')}
       <div style="display:flex;gap:4px;margin-bottom:12px">
-        <button class="btn" style="background:var(--navy);border-color:var(--navy);color:#fff;padding:6px 12px;font-size:12px" onclick="showToast('Filtering by stage coming soon','info')">Construction (${constructionTiles.length})</button>
-        <button class="btn" style="padding:6px 12px;font-size:12px" onclick="showToast('Filtering by stage coming soon','info')">Pre-construction (${preconTiles.length})</button>
+        <button class="btn" style="${abHeatTab==='construction'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px" onclick="abSetHeatTab('construction')">Construction (${constructionTiles.length})</button>
+        <button class="btn" style="${abHeatTab==='precon'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px" onclick="abSetHeatTab('precon')">Pre-Construction (${preconTiles.length})</button>
+        <button class="btn" style="${abHeatTab==='complete'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px" onclick="abSetHeatTab('complete')">Complete (${completeTiles.length})</button>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px">${constructionTiles.map(t=>`<div style="border:1.5px solid ${t.isRisk?'var(--red)':'var(--blue-dark)'};background:${t.isRisk?'var(--red-pale,#FCEBEB)':'#eff6ff'};border-radius:8px;padding:10px 12px;width:190px" title="${t.daysLate>0?t.daysLate+' days behind schedule':''}"><div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:6px">${escHtml(t.property)}</div><div style="display:flex;justify-content:space-between"><span style="font-size:10px;font-weight:700;color:${t.isRisk?'var(--red)':'var(--blue-dark)'}">${t.isRisk?'AT RISK':'ON TRACK'}</span><span style="font-size:10px;color:var(--gray-mid)">${t.pct}%</span></div>${t.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${t.daysLate}d overdue</div>`:''}</div>`).join('')||'<p style="color:var(--gray-mid);font-size:12px">No properties currently in construction.</p>'}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:completeTiles).map(t=>`<div style="border:1.5px solid ${t.isRisk?'var(--red)':'var(--blue-dark)'};background:${t.isRisk?'var(--red-pale,#FCEBEB)':'#eff6ff'};border-radius:8px;padding:10px 12px;width:190px;display:flex;flex-direction:column" title="${t.daysLate>0?t.daysLate+' days behind schedule':''}"><div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:6px;min-height:32px;display:flex;align-items:flex-start">${escHtml(t.property)}</div><div style="display:flex;justify-content:space-between;margin-top:auto"><span style="font-size:10px;font-weight:700;color:${t.isRisk?'var(--red)':'var(--blue-dark)'}">${t.isRisk?'AT RISK':'ON TRACK'}</span><span style="font-size:10px;color:var(--gray-mid)">${t.pct}%</span></div>${t.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${t.daysLate}d overdue</div>`:''}</div>`).join('')||`<p style="color:var(--gray-mid);font-size:12px">No properties in ${abHeatTab==='construction'?'construction':abHeatTab==='precon'?'pre-construction':'complete'} status.</p>`}</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
       <div class="card">
