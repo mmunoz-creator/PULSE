@@ -4495,7 +4495,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v57g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v57i</div>
     </div>
   </nav>
 
@@ -12088,16 +12088,23 @@ function renderActionBoard(){
     if(isNaN(dt))return d;
     return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
   };
+  // v57h -- same "for {property}" trailing-clause problem the insight bar
+  // already handles also shows up in the Action Items table's "Action
+  // required" cell: live screenshot showed the full "Enter Contract Rates
+  // for Royal Palm South Beach Miami, a Tribute Portfolio Resort" wrapping
+  // to 2 lines, vs. mockup's plain "Enter contract rates". Factored the
+  // insight bar's strip logic out into a shared helper so both call sites
+  // use one implementation.
+  const abShortDesc=(desc,property)=>{
+    const raw=(desc||'action');
+    const propLower=(property||'').toLowerCase();
+    const forIdx=raw.toLowerCase().lastIndexOf(' for '+propLower);
+    return forIdx>-1?raw.slice(0,forIdx):raw;
+  };
   const insightItems=[];
   if(overdueActions.length>0){
     const a=overdueActions[0];
-    const rawDesc=(a.description||'action').toLowerCase();
-    const propLower=(a.property||'').toLowerCase();
-    // Strip a trailing "for {property}" clause the description may already
-    // carry (e.g. "enter contract rates for royal palm south beach miami")
-    // so it isn't stated a second time right after the property name.
-    const forIdx=rawDesc.lastIndexOf(' for '+propLower);
-    const cleanDesc=forIdx>-1?rawDesc.slice(0,forIdx):rawDesc;
+    const cleanDesc=abShortDesc(a.description,a.property).toLowerCase();
     insightItems.push({cls:'warn',icon:'ti-alert-triangle',text:`${escHtml(abShortName(a.property))}'s ${escHtml(cleanDesc)} is overdue &mdash; was due ${escHtml(abFmtDue(a.due))}.`});
   }
   if(worstHeatTile&&worstHeatTile.daysLate>0){
@@ -12167,7 +12174,17 @@ function renderActionBoard(){
           <thead><tr><th style="text-align:left;padding:0 8px 8px 0"></th><th style="text-align:left;padding:0 8px 8px 0;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Property</th><th style="text-align:left;padding:0 8px 8px 0;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Action required</th><th style="text-align:left;padding:0 8px 8px 0;white-space:nowrap;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Due</th><th style="text-align:left;padding:0 8px 8px 0"></th></tr></thead>
           <tbody>${abPriorityActions.slice(0,6).map(a=>{
             const isOverdue=a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today;
-            return `<tr><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border)"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap;${isOverdue?'background:var(--red-pale,#FCEBEB);color:var(--red)':'background:var(--blue-pale,#E6F1FB);color:var(--blue-dark)'}">${isOverdue?'Overdue':'Open'}</span></td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border);font-weight:600;color:var(--navy)">${escHtml(a.property||'')}</td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border)">${escHtml(a.description||'')}</td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border);white-space:nowrap">${abFmtDue(a.due)}</td><td style="padding:9px 0 9px 8px;border-top:1px solid var(--border);text-align:right"><a class="row-link" style="cursor:pointer;color:var(--blue-dark);font-weight:600;font-size:11px;white-space:nowrap" onclick="openProperty('${escHtml(a.property||'').replace(/'/g,"\\'")}')">Open</a></td></tr>`;
+            // v57h -- prop-name cell was rendering a.property raw/unshortened
+            // (full legal name incl. ", a Tribute Portfolio Resort" etc.),
+            // wrapping to 2 lines and crowding the Action required column
+            // into wrapping too, per live screenshot vs. mockup's
+            // single-line shortened name. Description cell had the same
+            // "for {property}" duplication problem the insight bar already
+            // solves. Both now reuse abShortName()/abShortDesc() so there's
+            // one implementation.
+            const shortProp=abShortName(a.property);
+            const shortDesc=abShortDesc(a.description,a.property);
+            return `<tr><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border)"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap;${isOverdue?'background:var(--red-pale,#FCEBEB);color:var(--red)':'background:var(--blue-pale,#E6F1FB);color:var(--blue-dark)'}">${isOverdue?'Overdue':'Open'}</span></td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border);font-weight:600;color:var(--navy);white-space:nowrap" title="${escHtml(a.property||'')}">${escHtml(shortProp)}</td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border);white-space:nowrap">${escHtml(shortDesc)}</td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border);white-space:nowrap">${abFmtDue(a.due)}</td><td style="padding:9px 0 9px 8px;border-top:1px solid var(--border);text-align:right"><a class="row-link" style="cursor:pointer;color:var(--blue-dark);font-weight:600;font-size:11px;white-space:nowrap" onclick="openProperty('${escHtml(a.property||'').replace(/'/g,"\\'")}')">Open</a></td></tr>`;
           }).join('')||'<tr><td colspan="5" style="padding:12px 0;color:var(--gray-mid)">No open action items.</td></tr>'}</tbody>
         </table>
       </div>
@@ -21881,49 +21898,60 @@ function renderCharts(){
   // v35i section 6b for the earlier drift this caused). Now reads
   // getPortfolioClassification().unitBuckets, the single shared source.
   const _analyticsUnitBuckets=getPortfolioClassification().unitBuckets;
+
+  // v57i -- Top Insights from MARLI, real data only (no invented copy),
+  // reusing values already computed above in this same function rather
+  // than a second independent pass:
+  //   - overdue open action items: same due-date math Action Board's
+  //     insight bar uses (openActions filtered by due<today), sourced
+  //     from the same top-level `actionItems` array.
+  //   - at-risk scopes: elevCoScopes (already built above for the
+  //     Elevator Company chart) filtered through the same real
+  //     deriveScopeHealth() classifier that chart already uses.
+  //   - budget risk: properties from _budgetSpentSource whose billed/basis
+  //     ratio already exceeds 90%, using the same getPropertyBilledAndBasis()
+  //     this page's own Budget % Spent donut is built from.
+  const _todayForInsights=new Date();_todayForInsights.setHours(0,0,0,0);
+  const _overdueOpenActions=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<_todayForInsights);
+  const _atRiskScopes=elevCoScopes.filter(s=>deriveScopeHealth(s)==='At Risk');
+  const _atRiskPropNames=[...new Set(_atRiskScopes.map(s=>s.property))];
+  const _budgetRiskProps=_budgetSpentSource.filter(p=>{
+    const bb=getPropertyBilledAndBasis(p);
+    return bb.basis>0&&(bb.billed/bb.basis)>0.9;
+  });
+  const marliInsights=[];
+  if(_atRiskPropNames.length>0){
+    marliInsights.push({cls:'risk',icon:'ti-alert-triangle',title:`${_atRiskPropNames.length} propert${_atRiskPropNames.length===1?'y is':'ies are'} at risk`,sub:_atRiskPropNames.slice(0,2).join(', ')+(_atRiskPropNames.length>2?` +${_atRiskPropNames.length-2} more`:'')});
+  }
+  if(_overdueOpenActions.length>0){
+    marliInsights.push({cls:'warn',icon:'ti-alert-circle',title:`${_overdueOpenActions.length} action item${_overdueOpenActions.length===1?'':'s'} overdue`,sub:'View Open Task Roll-up below'});
+  }
+  if(_budgetRiskProps.length>0){
+    marliInsights.push({cls:'warn',icon:'ti-chart-dots',title:`Budget at risk on ${_budgetRiskProps.length} propert${_budgetRiskProps.length===1?'y':'ies'}`,sub:'Billed over 90% of budget'});
+  }
+  if(marliInsights.length===0){
+    marliInsights.push({cls:'ok',icon:'ti-circle-check',title:'Portfolio remains on track',sub:'No overdue actions or at-risk scopes flagged right now.'});
+  }
+
+  // v57i -- icon-badge stat-card style, per Misty's approved Analytics
+  // mockup v4 and her standing "icons everywhere it makes sense" note.
+  // Same badge() helper pattern already used by renderActionBoard() and
+  // Properties' render function (~line 12041/12451) -- not a new shared
+  // CSS class, a local inline-markup helper, matching precedent exactly.
+  // This round only changes the static look/markup of these 8 cards;
+  // every value/expression below is untouched from the prior version.
+  const badge=(icon,bg,fg)=>`<div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${bg}"><i class="ti ${icon}" style="font-size:18px;color:${fg}"></i></div>`;
   container.innerHTML=`
   <!-- PROGRAM SUMMARY BAR -->
   <div class="custom-report-subsection" id="analytics-stats-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
-    <div class="stat-card" style="border-top:3px solid var(--navy)">
-      <div class="stat-label">Total Program Value</div>
-      <div class="stat-value" style="font-size:20px">${totalProgramValue?fmtBudget(totalProgramValue):'—'}</div>
-      <div class="stat-sub">Active + Pipeline</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--blue-dark)">
-      <div class="stat-label">Active Properties</div>
-      <div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${filtersActive?active.length:activePortProps.length}</div>
-      <div class="stat-sub">${filtersActive?'Filtered':activeBudget?fmtBudget(activeBudget)+' Estimated':'Budget TBD'}</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--indigo)">
-      <div class="stat-label">Pipeline Properties</div>
-      <div class="stat-value" style="font-size:20px;color:var(--indigo)">${capitalProps.length}</div>
-      <div class="stat-sub">${capitalBudgetTotal?fmtBudget(capitalBudgetTotal)+' Est.':'Budget TBD'}</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--green)">
-      <div class="stat-label">CO Savings Captured</div>
-      <div class="stat-value" style="font-size:20px;color:var(--green)">${totalSavingsAll!=null?fmtCurrency(totalSavingsAll):'—'}</div>
-      <div class="stat-sub">Approved Change Orders</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--gray-mid)">
-      <div class="stat-label">Completed Units</div>
-      <div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_analyticsUnitBuckets.complete}</div>
-      <div class="stat-sub">Project or Unit Complete</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--teal)">
-      <div class="stat-label">Active Units</div>
-      <div class="stat-value" style="font-size:20px;color:var(--teal)">${_analyticsUnitBuckets.active}</div>
-      <div class="stat-sub">Project In Progress</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--purple)">
-      <div class="stat-label">Pipeline Units</div>
-      <div class="stat-value" style="font-size:20px;color:var(--purple)">${_analyticsUnitBuckets.pipeline}</div>
-      <div class="stat-sub">Capital Plan, Planned, or Unassigned</div>
-    </div>
-    <div class="stat-card" style="border-top:3px solid var(--amber)">
-      <div class="stat-label">Units On Hold</div>
-      <div class="stat-value" style="font-size:20px;color:var(--amber)">${_analyticsUnitBuckets.onhold}</div>
-      <div class="stat-sub">Project On Hold</div>
-    </div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-currency-dollar','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><div class="stat-label">Total Program Value</div><div class="stat-value" style="font-size:20px">${totalProgramValue?fmtBudget(totalProgramValue):'—'}</div><div class="stat-sub">Active + Pipeline</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-building','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><div class="stat-label">Active Properties</div><div class="stat-value" style="font-size:20px;color:var(--blue-dark)">${filtersActive?active.length:activePortProps.length}</div><div class="stat-sub">${filtersActive?'Filtered':activeBudget?fmtBudget(activeBudget)+' Estimated':'Budget TBD'}</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-git-branch','var(--indigo-pale)','var(--indigo)')}<div style="min-width:0"><div class="stat-label">Pipeline Properties</div><div class="stat-value" style="font-size:20px;color:var(--indigo)">${capitalProps.length}</div><div class="stat-sub">${capitalBudgetTotal?fmtBudget(capitalBudgetTotal)+' Est.':'Budget TBD'}</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-report-money','var(--green-pale)','var(--green)')}<div style="min-width:0"><div class="stat-label">CO Savings Captured</div><div class="stat-value" style="font-size:20px;color:var(--green)">${totalSavingsAll!=null?fmtCurrency(totalSavingsAll):'—'}</div><div class="stat-sub">Approved Change Orders</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-check','var(--gray-pale)','var(--gray-mid)')}<div style="min-width:0"><div class="stat-label">Completed Units</div><div class="stat-value" style="font-size:20px;color:var(--gray-mid)">${_analyticsUnitBuckets.complete}</div><div class="stat-sub">Project or Unit Complete</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-progress','var(--teal-pale)','var(--teal)')}<div style="min-width:0"><div class="stat-label">Active Units</div><div class="stat-value" style="font-size:20px;color:var(--teal)">${_analyticsUnitBuckets.active}</div><div class="stat-sub">Project In Progress</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-list-details','var(--purple-pale)','var(--purple)')}<div style="min-width:0"><div class="stat-label">Pipeline Units</div><div class="stat-value" style="font-size:20px;color:var(--purple)">${_analyticsUnitBuckets.pipeline}</div><div class="stat-sub">Capital Plan, Planned, or Unassigned</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-player-pause','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><div class="stat-label">Units On Hold</div><div class="stat-value" style="font-size:20px;color:var(--amber)">${_analyticsUnitBuckets.onhold}</div><div class="stat-sub">Project On Hold</div></div></div>
   </div>
 
   <!-- v36g — Capital Outlook chart removed. Per direct instruction, it
@@ -21933,15 +21961,42 @@ function renderCharts(){
   here. capitalProps/capitalBudgetTotal are still used elsewhere on this
   page (stat cards, other charts), so they're left intact. -->
 
-  <!-- ROW 1: Portfolio % Complete | Budget % Spent -->
-  <div class="two-col" style="gap:20px;margin-bottom:20px">
+  <!-- v57i -- per Misty's approved Analytics mockup v4:
+  1. ROW 1 widened from two-col to a 3-column row: Portfolio % Complete |
+     Budget % Spent | Top Insights from MARLI (new card, real data below).
+  2. Card-header icon badges added to every chart card that had none
+     (Portfolio % Complete, Budget % Spent, Forecasted Completion,
+     Forecasted Spend, Active Projects by Stage, Elevator Company
+     Performance, Open Task Roll-up, Budget vs Billed) -- same badge()
+     helper as the stat cards above.
+  3. "Top 5 Properties by Unit Count" card removed from ROW 4 per direct
+     instruction ("we don't need Top 5 Properties because we have Core
+     properties on Action Board"). Open Task Roll-up now stands alone,
+     full-width. NOTE: the top5-units-chart render block below (~line
+     22004 pre-edit) is intentionally left in place, not deleted -- its
+     target div no longer exists in the DOM so it's inert, and removing
+     working render logic wasn't part of this ask; only the static
+     page layout changed.
+  4. All chart IDs (portfolio-complete-chart, budget-spent-chart, fc-chart,
+     fs-chart, fs-legend, ms-stage-chart, elev-co-chart, task-rollup-chart,
+     budget-bars) and every custom-report-subsection id are UNCHANGED --
+     these are load-bearing for CUSTOM_REPORT_SECTIONS (report customizer,
+     ~line 30748) and for every chart-rendering block below that queries
+     these ids by getElementById. Nothing about tooltips, hover states, or
+     click/drilldown handlers on any chart was touched -- those all live in
+     the render blocks below this template string, which are untouched. -->
+  <div class="three-col" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px">
     <div class="card custom-report-subsection" id="analytics-portfolio-complete-card">
-      <div class="card-header"><div class="card-title">Portfolio % Complete</div><div class="card-sub">Buildings Modernized vs Total Portfolio</div></div>
+      <div class="card-header">${badge('ti-chart-donut','var(--blue-pale)','var(--blue-dark)')}<div><div class="card-title">Portfolio % Complete</div><div class="card-sub">Buildings Modernized vs Total Portfolio</div></div></div>
       <div id="portfolio-complete-chart" style="margin-top:10px"></div>
     </div>
     <div class="card custom-report-subsection" id="analytics-budget-spent-card">
-      <div class="card-header"><div class="card-title">Budget % Spent</div><div class="card-sub">Total billed YTD vs active properties budget</div></div>
+      <div class="card-header">${badge('ti-report-money','var(--green-pale)','var(--green)')}<div><div class="card-title">Budget % Spent</div><div class="card-sub">Total billed YTD vs active properties budget</div></div></div>
       <div id="budget-spent-chart" style="margin-top:10px"></div>
+    </div>
+    <div class="card custom-report-subsection" id="analytics-marli-insights-card">
+      <div class="card-header">${badge('ti-sparkles','var(--blue-pale)','var(--blue-dark)')}<div><div class="card-title">Top Insights from MARLI</div><div class="card-sub">What needs your attention this week</div></div></div>
+      <div id="marli-insights-list" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -21949,6 +22004,7 @@ function renderCharts(){
   <div class="two-col" style="gap:20px;margin-bottom:20px">
     <div class="card custom-report-subsection" id="analytics-forecasted-completion-card" style="position:relative">
       <div class="card-header">
+        ${badge('ti-calendar-stats','var(--teal-pale)','var(--teal)')}
         <div>
           <div class="card-title">Forecasted Completion</div>
           <div class="card-sub">Units completing, rolling 12 months, active projects only</div>
@@ -21958,10 +22014,10 @@ function renderCharts(){
     </div>
     <div class="card custom-report-subsection" id="analytics-forecasted-spend-card" style="position:relative">
       <div class="card-header">
-        <div>
+        <div style="display:flex;align-items:center;gap:10px">${badge('ti-chart-bar','var(--amber-pale)','var(--amber)')}<div>
           <div class="card-title">Forecasted Spend</div>
           <div class="card-sub">Rolling 12 months, one-month billing lag, straight-line proration</div>
-        </div>
+        </div></div>
         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid);cursor:pointer;white-space:nowrap">
           <input type="checkbox" id="fs-vda-toggle" onchange="toggleVdaForecastInclude('charts',this.checked)">Include VDA billing
         </label>
@@ -21978,35 +22034,44 @@ function renderCharts(){
   <!-- ROW 3: Active Projects by Stage | Elevator Company Performance -->
   <div class="two-col" style="gap:20px;margin-bottom:20px">
     <div class="card custom-report-subsection" id="analytics-projects-by-stage-card">
-      <div class="card-header"><div class="card-title">Active Projects by Stage</div><div class="card-sub">Portfolio distribution across project lifecycle stages</div></div>
+      <div class="card-header">${badge('ti-stack-2','var(--blue-pale)','var(--blue-dark)')}<div><div class="card-title">Active Projects by Stage</div><div class="card-sub">Portfolio distribution across project lifecycle stages</div></div></div>
       <div id="ms-stage-chart" style="margin-top:10px"></div>
     </div>
     <div class="card custom-report-subsection" id="analytics-elevator-co-card">
-      <div class="card-header"><div class="card-title">Elevator Company Performance</div><div class="card-sub">Project count by status per contractor</div></div>
+      <div class="card-header">${badge('ti-elevator','var(--red-pale)','var(--red)')}<div><div class="card-title">Elevator Company Performance</div><div class="card-sub">Project count by status per contractor</div></div></div>
       <div id="elev-co-chart" style="margin-top:10px"></div>
     </div>
   </div>
 
-  <!-- ROW 4: Open Task Roll-up | Top 5 Properties by Unit Count -->
-  <div class="two-col" style="gap:20px;margin-bottom:20px">
-    <div class="card custom-report-subsection" id="analytics-task-rollup-card">
-      <div class="card-header"><div class="card-title">Open Task Roll-up</div><div class="card-sub">Open action items by priority</div></div>
-      <div id="task-rollup-chart" style="margin-top:10px"></div>
-    </div>
-    <div class="card custom-report-subsection" id="analytics-top5-units-card">
-      <div class="card-header"><div class="card-title">Top 5 Properties by Unit Count</div><div class="card-sub">Health of largest properties</div></div>
-      <div id="top5-units-chart" style="margin-top:10px"></div>
-    </div>
+  <!-- ROW 4: Open Task Roll-up (Top 5 Properties by Unit Count removed
+  per direct instruction -- Core properties on Action Board already cover
+  this). Full-width now that it has no row partner. -->
+  <div class="card custom-report-subsection" id="analytics-task-rollup-card" style="margin-bottom:20px">
+    <div class="card-header">${badge('ti-list-check','var(--amber-pale)','var(--amber)')}<div><div class="card-title">Open Task Roll-up</div><div class="card-sub">Open action items by priority</div></div></div>
+    <div id="task-rollup-chart" style="margin-top:10px"></div>
   </div>
 
   <!-- ROW 5: Budget vs Billed — full width -->
   <div class="card custom-report-subsection" id="analytics-budget-vs-billed-card" style="margin-bottom:20px">
-    <div class="card-header"><div class="card-title">Budget vs Billed</div><div class="card-sub">Project Budget vs YTD Billed: ${CF.status?CF.status.toLowerCase()+' properties':CF.property.length===1?CF.property[0]:CF.property.length>1?CF.property.length+' properties selected':'all properties'}</div></div>
+    <div class="card-header">${badge('ti-report-money','var(--blue-pale)','var(--blue-dark)')}<div><div class="card-title">Budget vs Billed</div><div class="card-sub">Project Budget vs YTD Billed: ${CF.status?CF.status.toLowerCase()+' properties':CF.property.length===1?CF.property[0]:CF.property.length>1?CF.property.length+' properties selected':'all properties'}</div></div></div>
     <div id="budget-bars" style="margin-top:10px"></div>
     ${budgetData.length===0?'<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:16px">Log billing entries to populate this chart.</div>':''}
   </div>
 `;
 
+  // ── 6c. TOP INSIGHTS FROM MARLI ───────────────────────────────────
+  // Populated from marliInsights (real data, computed above alongside the
+  // other chart data prep -- see that block for sourcing notes). Same
+  // insight-row visual language as the Analytics/MARLI mockup Misty
+  // approved, and the same real-data-only rule Action Board's insight bar
+  // already follows (no invented example text).
+  const marliInsightsList=document.getElementById('marli-insights-list');
+  if(marliInsightsList){
+    marliInsightsList.innerHTML=marliInsights.map(it=>{
+      const iconColor=it.cls==='risk'?'var(--red)':it.cls==='warn'?'var(--amber)':it.cls==='ok'?'var(--green)':'var(--blue-dark)';
+      return `<div style="display:flex;gap:10px;align-items:flex-start;padding:10px;border-radius:8px;background:var(--gray-xpale);margin-bottom:8px"><i class="ti ${it.icon}" style="font-size:15px;flex-shrink:0;margin-top:1px;color:${iconColor}"></i><div><p style="font-size:12.5px;font-weight:600;color:var(--navy);margin:0">${escHtml(it.title)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(it.sub)}</p></div></div>`;
+    }).join('');
+  }
 
   // ── 7b. TOP 5 PROPERTIES BY UNIT COUNT ───────────────────────────
   const top5Chart=document.getElementById('top5-units-chart');
@@ -22276,20 +22341,37 @@ function renderCharts(){
   const portCompleteChart=document.getElementById('portfolio-complete-chart');
   if(portCompleteChart){
     const activeUnitCount=_pcUnitBuckets.active+_pcUnitBuckets.onhold;
-    const pipelineUnitCount=_pcUnitBuckets.pipeline;
+    // v57i -- new "Unassigned" ring slice, per direct instruction: units
+    // with no scopeId, broken out of the Pipeline slice for THIS RING
+    // ONLY. Explicitly confirmed with Misty this must be ring-only --
+    // _pcUnitBuckets.pipeline itself (the shared getPortfolioClassification()
+    // value used by the Pipeline Units stat card above, Dashboard, Capital
+    // Plan, etc.) is NOT modified here. unassignedUnitCount is a separate,
+    // local-only count computed the same way _pcUnitBuckets is (scoped to
+    // non-Removed, visible properties), then subtracted from this ring's
+    // own pipelineUnitCount display variable so the ring's total (complete
+    // + active + pipeline + unassigned) still sums to totalPortUnitCount
+    // exactly -- no double-counting, no drift from the shared classifier.
+    const _visiblePropNamesForRing=new Set((window.PORTFOLIO||[]).filter(p=>p.st!=='Removed').map(p=>p.n));
+    const unassignedUnitCount=(window.UNIT_INVENTORY||[]).filter(u=>_visiblePropNamesForRing.has(u.property)&&!u.scopeId&&u.status!=='Complete').length;
+    const pipelineUnitCount=Math.max(0,_pcUnitBuckets.pipeline-unassignedUnitCount);
     const donutR=60,donutStroke=18;
     const cx=80,cy=80,r=donutR;
     const circumference=2*Math.PI*r;
     const completePct=totalPortUnitCount>0?completeUnitCount/totalPortUnitCount:0;
     const activePct=totalPortUnitCount>0?activeUnitCount/totalPortUnitCount:0;
+    const unassignedPct=totalPortUnitCount>0?unassignedUnitCount/totalPortUnitCount:0;
     const completeArc=circumference*completePct;
     const activeArc=circumference*activePct;
-    const pipelineArc=circumference*(1-completePct-activePct);
+    const unassignedArc=circumference*unassignedPct;
+    const pipelineArc=circumference*Math.max(0,1-completePct-activePct-unassignedPct);
     portCompleteChart.innerHTML=`
       <div style="display:flex;align-items:center;gap:24px;padding:8px 0">
         <svg width="160" height="160" viewBox="0 0 160 160">
           <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--gray-pale)" stroke-width="${donutStroke}"/>
           <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--gray-light)" stroke-width="${donutStroke}"
+            stroke-dasharray="${unassignedArc} ${circumference}" stroke-dashoffset="${-completeArc-activeArc-pipelineArc}" transform="rotate(-90 ${cx} ${cy})"/>
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--purple)" stroke-width="${donutStroke}"
             stroke-dasharray="${pipelineArc} ${circumference}" stroke-dashoffset="${-completeArc-activeArc}" transform="rotate(-90 ${cx} ${cy})"/>
           <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--blue-dark)" stroke-width="${donutStroke}"
             stroke-dasharray="${activeArc} ${circumference}" stroke-dashoffset="${-completeArc}" transform="rotate(-90 ${cx} ${cy})"/>
@@ -22301,7 +22383,8 @@ function renderCharts(){
         <div style="display:flex;flex-direction:column;gap:10px">
           <div style="cursor:pointer" onclick="showBarDrilldown('unit-status','complete')" title="Click to see Complete units"><div style="font-size:13px;font-weight:700;color:var(--green)">${completeUnitCount}</div><div style="font-size:10px;color:var(--gray-mid)">Complete units ↗</div></div>
           <div style="cursor:pointer" onclick="showBarDrilldown('unit-status','active')" title="Click to see Active units"><div style="font-size:13px;font-weight:700;color:var(--blue-dark)">${activeUnitCount}</div><div style="font-size:10px;color:var(--gray-mid)">Active units ↗</div></div>
-          <div style="cursor:pointer" onclick="showBarDrilldown('unit-status','pipeline')" title="Click to see Pipeline units"><div style="font-size:13px;font-weight:700;color:var(--gray-mid)">${pipelineUnitCount}</div><div style="font-size:10px;color:var(--gray-mid)">Pipeline units ↗</div></div>
+          <div style="cursor:pointer" onclick="showBarDrilldown('unit-status','pipeline')" title="Click to see Pipeline units"><div style="font-size:13px;font-weight:700;color:var(--purple)">${pipelineUnitCount}</div><div style="font-size:10px;color:var(--gray-mid)">Pipeline units ↗</div></div>
+          <div><div style="font-size:13px;font-weight:700;color:var(--gray-mid)">${unassignedUnitCount}</div><div style="font-size:10px;color:var(--gray-mid)">Unassigned units</div></div>
           <div style="margin-top:4px;padding-top:8px;border-top:1px solid var(--border)"><div style="font-size:13px;font-weight:700;color:var(--navy)">${totalPortUnitCount}</div><div style="font-size:10px;color:var(--gray-mid)">Total Portfolio Units</div></div>
         </div>
       </div>`;
