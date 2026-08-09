@@ -11959,7 +11959,13 @@ function renderActionBoard(){
   // above are fixed below -- every number and insight is still real,
   // computed data (this fix is about the STYLE gap, not reintroducing
   // any placeholder content).
-  const panelTitle=(text,extra)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><p style="font-size:14px;font-weight:700;color:var(--navy);margin:0;display:flex;align-items:center;gap:7px">${escHtml(text)}${extra||''}</p></div>`;
+  // v57d -- panelTitle now takes an optional {label, onclick} link so panel
+  // headers can carry the mockup's right-aligned "View all" affordance.
+  // Per Misty's explicit direction: Action items' link goes to Operations
+  // Center (gotoView('opscenter',null)), Priority properties' link goes to
+  // the Properties tab (gotoView('properties',null)) -- both real
+  // navigation, not placeholders.
+  const panelTitle=(text,extra,link)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><p style="font-size:14px;font-weight:700;color:var(--navy);margin:0;display:flex;align-items:center;gap:7px">${escHtml(text)}${extra||''}</p>${link?`<a style="font-size:11.5px;color:var(--blue-dark);font-weight:600;cursor:pointer;display:flex;align-items:center;gap:3px;white-space:nowrap" onclick="${link.onclick}">${escHtml(link.label)}<i class="ti ti-arrow-right" style="font-size:12px"></i></a>`:''}</div>`;
   const badge=(icon,bg,fg)=>`<div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${bg}"><i class="ti ${icon}" style="font-size:18px;color:${fg}"></i></div>`;
   // Insight bar content -- real, computed from the same data already
   // pulled above (not invented copy): the single overdue action item,
@@ -11968,13 +11974,44 @@ function renderActionBoard(){
   const worstHeatTile=[...constructionTiles].sort((a,b)=>b.daysLate-a.daysLate)[0];
   const ccBadgeEl=document.getElementById('cc-badge-admin')||document.getElementById('cc-badge-pm')||document.getElementById('cc-badge-consultant')||document.getElementById('cc-badge-client');
   const ccUnread=ccBadgeEl&&!ccBadgeEl.classList.contains('hidden')?parseInt(ccBadgeEl.textContent)||0:0;
+  // v57d -- fixed a duplication bug reported live: the description field
+  // on these Action Items already restates the full property name (e.g.
+  // "Enter Contract Rates for Royal Palm South Beach Miami, a Tribute
+  // Portfolio Resort"), so appending "'s {description} is overdue" produced
+  // "Royal Palm...'s enter contract rates for royal palm... is overdue" --
+  // the property name twice in one sentence. Now strips a leading "for
+  // {property}"/"for {property name}" clause off the description before
+  // composing the sentence, and truncates long property names using the
+  // same convention already used elsewhere in the app (name.length>20 ->
+  // slice+ellipsis, see groupScopesToTiles' shortName, ~line 23711) so the
+  // insight bar can't overflow on Park Hotels' long branded property names.
+  const abShortName=n=>(n||'').length>28?(n||'').slice(0,26)+'…':(n||'');
+  // v57d -- Due column was rendering the raw ISO 'YYYY-MM-DD' string (e.g.
+  // "2026-08-21"), which wraps to two lines in the table per the reported
+  // screenshot; mockup shows the compact "Aug 21" format already used
+  // elsewhere on this page (see actionboard-asof above). Display-only --
+  // a.due itself stays untouched so the isOverdue date math below keeps
+  // working off the real ISO value.
+  const abFmtDue=d=>{
+    if(!d||d==='TBD')return 'TBD';
+    const dt=new Date(d+'T12:00:00');
+    if(isNaN(dt))return d;
+    return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  };
   const insightItems=[];
   if(overdueActions.length>0){
     const a=overdueActions[0];
-    insightItems.push({cls:'warn',icon:'ti-alert-triangle',text:`${escHtml(a.property||'')}'s ${escHtml((a.description||'action').toLowerCase())} is overdue &mdash; was due ${escHtml(a.due||'')}.`});
+    const rawDesc=(a.description||'action').toLowerCase();
+    const propLower=(a.property||'').toLowerCase();
+    // Strip a trailing "for {property}" clause the description may already
+    // carry (e.g. "enter contract rates for royal palm south beach miami")
+    // so it isn't stated a second time right after the property name.
+    const forIdx=rawDesc.lastIndexOf(' for '+propLower);
+    const cleanDesc=forIdx>-1?rawDesc.slice(0,forIdx):rawDesc;
+    insightItems.push({cls:'warn',icon:'ti-alert-triangle',text:`${escHtml(abShortName(a.property))}'s ${escHtml(cleanDesc)} is overdue &mdash; was due ${escHtml(abFmtDue(a.due))}.`});
   }
   if(worstHeatTile&&worstHeatTile.daysLate>0){
-    insightItems.push({cls:'info',icon:'ti-info-circle',text:`${escHtml(worstHeatTile.property)} is ${worstHeatTile.daysLate} day${worstHeatTile.daysLate===1?'':'s'} behind schedule.`});
+    insightItems.push({cls:'info',icon:'ti-info-circle',text:`${escHtml(abShortName(worstHeatTile.property))} is ${worstHeatTile.daysLate} day${worstHeatTile.daysLate===1?'':'s'} behind schedule.`});
   }
   if(ccUnread>0){
     insightItems.push({cls:'ok',icon:'ti-circle-check',text:`${ccUnread} unread client comment${ccUnread===1?'':'s'} need${ccUnread===1?'s':''} a reply.`});
@@ -11988,11 +12025,11 @@ function renderActionBoard(){
   // card had one before; the other 4 were silently missing theirs.
   container.innerHTML=`
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:12px">
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-building','var(--blue-pale)','var(--blue-dark)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Active properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${cls.activeProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Status = In Progress</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-git-branch','var(--teal-pale)','var(--teal)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Pipeline properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${cls.pipelineProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Status = Capital Plan</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-alert-triangle','var(--amber-pale)','var(--amber)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Open action items</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${openActions.length}</p>${overdueActions.length>0?`<p style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px">${overdueActions.length} overdue</p>`:'<p style="font-size:11px;color:var(--gray-mid);margin-top:2px">None overdue</p>'}</div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-inbox','var(--purple-pale)','var(--purple)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Pending review</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${pendingReviewCount}</p><p style="font-size:11px;color:${pendingReviewCount===0?'var(--green)':'var(--gray-mid)'};font-weight:${pendingReviewCount===0?600:400};margin-top:2px">${pendingReviewCount===0?'Nothing waiting on approval':'Awaiting review'}</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:12px">${badge('ti-currency-dollar','var(--green-pale)','var(--green)')}<div><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px">Total estimated investment</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${totalEstDisplay}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Summed across ${(window.UNIT_INVENTORY||[]).length} units</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:10px;padding:12px 14px">${badge('ti-building','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><p style="font-size:11px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Active properties</p><p style="font-size:20px;font-weight:700;color:var(--navy);margin:0">${cls.activeProps.length}</p><p style="font-size:10.5px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Status = In Progress</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:10px;padding:12px 14px">${badge('ti-git-branch','var(--teal-pale)','var(--teal)')}<div style="min-width:0"><p style="font-size:11px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Pipeline properties</p><p style="font-size:20px;font-weight:700;color:var(--navy);margin:0">${cls.pipelineProps.length}</p><p style="font-size:10.5px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Status = Capital Plan</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:10px;padding:12px 14px">${badge('ti-alert-triangle','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><p style="font-size:11px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Open action items</p><p style="font-size:20px;font-weight:700;color:var(--navy);margin:0">${openActions.length}</p>${overdueActions.length>0?`<p style="font-size:10.5px;color:var(--red);font-weight:600;margin-top:2px;white-space:nowrap">${overdueActions.length} overdue</p>`:'<p style="font-size:10.5px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">None overdue</p>'}</div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:10px;padding:12px 14px">${badge('ti-inbox','var(--purple-pale)','var(--purple)')}<div style="min-width:0"><p style="font-size:11px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Pending review</p><p style="font-size:20px;font-weight:700;color:var(--navy);margin:0">${pendingReviewCount}</p><p style="font-size:10.5px;color:${pendingReviewCount===0?'var(--green)':'var(--gray-mid)'};font-weight:${pendingReviewCount===0?600:400};margin-top:2px">${pendingReviewCount===0?'Nothing waiting':'Awaiting review'}</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;gap:10px;padding:12px 14px">${badge('ti-currency-dollar','var(--green-pale)','var(--green)')}<div style="min-width:0"><p style="font-size:11px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Total investment</p><p style="font-size:20px;font-weight:700;color:var(--navy);margin:0">${totalEstDisplay}</p><p style="font-size:10.5px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">${(window.UNIT_INVENTORY||[]).length} units</p></div></div>
     </div>
     <div style="display:flex;align-items:center;background:var(--blue-xpale,#f0f7fe);border:1px solid var(--blue-pale);border-radius:12px;padding:12px 16px;margin-bottom:20px;gap:20px">
       ${insightItems.map((it,i)=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--gray-dark);flex:1;${i<insightItems.length-1?'padding-right:16px;border-right:1px solid var(--blue-pale)':''}"><i class="ti ${it.icon}" style="font-size:15px;flex-shrink:0;margin-top:1px;color:${it.cls==='warn'?'var(--amber)':it.cls==='info'?'var(--blue-dark)':'var(--green)'}"></i>${it.text}</div>`).join('')}
@@ -12000,28 +12037,65 @@ function renderActionBoard(){
     </div>
     <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:16px">
       <div class="card">
-        ${panelTitle('Action items',overdueActions.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${overdueActions.length} overdue</span>`:'')}
+        ${panelTitle('Action items',overdueActions.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${overdueActions.length} overdue</span>`:'',{label:'View all actions',onclick:"gotoView('opscenter',null)"})}
         <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead><tr><th style="text-align:left;padding:0 8px 8px 0"></th><th style="text-align:left;padding:0 8px 8px 0">Property</th><th style="text-align:left;padding:0 8px 8px 0">Action required</th><th style="text-align:left;padding:0 8px 8px 0">Due</th><th style="text-align:left;padding:0 8px 8px 0"></th></tr></thead>
+          <thead><tr><th style="text-align:left;padding:0 8px 8px 0"></th><th style="text-align:left;padding:0 8px 8px 0">Property</th><th style="text-align:left;padding:0 8px 8px 0">Action required</th><th style="text-align:left;padding:0 8px 8px 0;white-space:nowrap">Due</th><th style="text-align:left;padding:0 8px 8px 0"></th></tr></thead>
           <tbody>${openActions.slice(0,6).map(a=>{
             const isOverdue=a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today;
-            return `<tr><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;${isOverdue?'background:var(--red-pale,#FCEBEB);color:var(--red)':'background:var(--blue-pale,#E6F1FB);color:var(--blue-dark)'}">${isOverdue?'Overdue':'Open'}</span></td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border);font-weight:600">${escHtml(a.property||'')}</td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)">${escHtml(a.description||'')}</td><td style="padding:8px 8px 8px 0;border-top:1px solid var(--border)">${escHtml(a.due||'TBD')}</td><td style="padding:8px 0 8px 8px;border-top:1px solid var(--border);text-align:right"><a class="row-link" style="cursor:pointer;color:var(--blue-dark);font-weight:600;font-size:11.5px" onclick="openProperty('${escHtml(a.property||'').replace(/'/g,"\\'")}')">Open</a></td></tr>`;
+            return `<tr><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border)"><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap;${isOverdue?'background:var(--red-pale,#FCEBEB);color:var(--red)':'background:var(--blue-pale,#E6F1FB);color:var(--blue-dark)'}">${isOverdue?'Overdue':'Open'}</span></td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border);font-weight:600">${escHtml(a.property||'')}</td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border)">${escHtml(a.description||'')}</td><td style="padding:9px 8px 9px 0;border-top:1px solid var(--border);white-space:nowrap">${abFmtDue(a.due)}</td><td style="padding:9px 0 9px 8px;border-top:1px solid var(--border);text-align:right"><a class="row-link" style="cursor:pointer;color:var(--blue-dark);font-weight:600;font-size:11.5px;white-space:nowrap" onclick="openProperty('${escHtml(a.property||'').replace(/'/g,"\\'")}')">Open</a></td></tr>`;
           }).join('')||'<tr><td colspan="5" style="padding:12px 0;color:var(--gray-mid)">No open action items.</td></tr>'}</tbody>
         </table>
       </div>
       <div class="card">
-        ${panelTitle('Priority properties')}
+        ${panelTitle('Priority properties',null,{label:'View all',onclick:"gotoView('properties',null)"})}
         ${priorityProps.map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="width:28px;height:28px;border-radius:8px;background:var(--gray-xpale);color:var(--gray-mid);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0"><i class="ti ti-building-skyscraper"></i></div><div style="flex:1"><p style="font-size:12.5px;font-weight:600;margin:0">${escHtml(p.name)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 4px">${p.complete} of ${p.total} units complete${p.atRisk?' (At Risk milestone)':''}</p><div class="pct-track" style="height:5px;background:var(--gray-xpale);border-radius:3px;overflow:hidden"><div class="pct-fill" style="height:100%;width:${p.pct}%;border-radius:3px;background:${p.atRisk?'var(--amber)':'var(--blue-dark)'}"></div></div></div><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap;flex-shrink:0;${p.atRisk?'background:var(--amber-pale,#FAEEDA);color:var(--amber)':'background:var(--gray-pale,#F1EFE8);color:var(--gray-mid)'}">${p.pct}%</span></div>`).join('')||'<p style="color:var(--gray-mid);font-size:12px">No properties with unit data yet.</p>'}
       </div>
     </div>
     <div class="card" style="margin-bottom:16px">
-      ${panelTitle('Construction Heat Map')}
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <p style="font-size:14px;font-weight:700;color:var(--navy);margin:0">Construction Heat Map</p>
+        <div style="display:flex;gap:10px;align-items:center">
+          <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--blue-dark);margin-right:3px"></span>On Track</span>
+          <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--red);margin-right:3px"></span>At Risk</span>
+          <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--green);margin-right:3px"></span>Complete</span>
+        </div>
+      </div>
       <div style="display:flex;gap:4px;margin-bottom:12px">
         <button class="btn" style="${abHeatTab==='construction'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px" onclick="abSetHeatTab('construction')">Construction (${constructionTiles.length})</button>
         <button class="btn" style="${abHeatTab==='precon'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px" onclick="abSetHeatTab('precon')">Pre-Construction (${preconTiles.length})</button>
         <button class="btn" style="${abHeatTab==='complete'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px" onclick="abSetHeatTab('complete')">Complete (${completeTiles.length})</button>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:completeTiles).map(t=>`<div style="border:1.5px solid ${t.isRisk?'var(--red)':'var(--blue-dark)'};background:${t.isRisk?'var(--red-pale,#FCEBEB)':'#eff6ff'};border-radius:8px;padding:10px 12px;width:190px;display:flex;flex-direction:column" title="${t.daysLate>0?t.daysLate+' days behind schedule':''}"><div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:6px;min-height:32px;display:flex;align-items:flex-start">${escHtml(t.property)}</div><div style="display:flex;justify-content:space-between;margin-top:auto"><span style="font-size:10px;font-weight:700;color:${t.isRisk?'var(--red)':'var(--blue-dark)'}">${t.isRisk?'AT RISK':'ON TRACK'}</span><span style="font-size:10px;color:var(--gray-mid)">${t.pct}%</span></div>${t.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${t.daysLate}d overdue</div>`:''}</div>`).join('')||`<p style="color:var(--gray-mid);font-size:12px">No properties in ${abHeatTab==='construction'?'construction':abHeatTab==='precon'?'pre-construction':'complete'} status.</p>`}</div>
+      <!-- v57d -- tile markup now matches Dashboard's real heat tile
+      renderer exactly (groupScopesToTiles' tile HTML, ~line 23883), per
+      Misty's explicit direction: same border/bg per On Track/At Risk/
+      Complete state, thin progress bar under the label instead of just a
+      percentage, content-sized 200px tiles, clickable straight to the
+      property. Action Board keeps its own single-panel Construction/
+      Pre-Construction/Complete tab-pill structure (abHeatTab) rather than
+      Dashboard's two stacked always-visible cards -- only the tile look
+      itself is shared. -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:completeTiles).map(t=>{
+        const isComplete=abHeatTab==='complete';
+        const borderColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
+        const bgColor=isComplete?'var(--green-pale)':t.isRisk?'var(--red-pale)':'#eff6ff';
+        const lblColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
+        const lbl=isComplete?'<i class="ti ti-circle-check" style="font-size:11px;margin-right:2px"></i>COMPLETE':t.isRisk?'AT RISK':'ON TRACK';
+        const pct=isComplete?100:t.pct;
+        const overdueText=!isComplete&&t.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${t.daysLate}d overdue</div>`:'';
+        return `<div style="border:1.5px solid ${borderColor};border-radius:8px;padding:10px 12px;background:${bgColor};cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${escHtml(t.property).replace(/'/g,"\\'")}')">
+          <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(t.property)}</div>
+          <div style="margin-top:auto">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:10px;font-weight:700;color:${lblColor};letter-spacing:.04em">${lbl}</span>
+            <span style="font-size:10px;color:var(--gray-mid)">${pct}%</span>
+          </div>
+          <div style="margin-top:6px;height:4px;background:var(--gray-xpale);border-radius:2px">
+            <div style="height:100%;width:${pct}%;background:${lblColor};border-radius:2px;transition:width .4s"></div>
+          </div>
+          ${overdueText}
+          </div>
+        </div>`;
+      }).join('')||`<p style="color:var(--gray-mid);font-size:12px">No properties in ${abHeatTab==='construction'?'construction':abHeatTab==='precon'?'pre-construction':'complete'} status.</p>`}</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
       <div class="card">
