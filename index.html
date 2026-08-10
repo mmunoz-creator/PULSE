@@ -4515,7 +4515,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58q</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58r</div>
     </div>
   </nav>
 
@@ -5008,7 +5008,7 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
               <div style="display:flex;gap:8px;margin-top:12px">
                 <button class="btn btn-primary" id="save-new-phase-btn" onclick="saveNewPhase()"><i class="ti ti-check"></i>Finish &amp; Save</button>
-                <button class="btn" onclick="document.getElementById('add-phase-form').style.display='none'">Cancel</button>
+                <button class="btn" onclick="document.getElementById('add-phase-form').style.display='none';const p=document.getElementById('phase-units-picker');if(p)p.innerHTML='';">Cancel</button>
               </div>
             </div>
             <!-- Edit phase form -->
@@ -5058,7 +5058,7 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
               <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
                 <button class="btn btn-primary" id="save-edit-phase-btn" onclick="saveEditPhase()"><i class="ti ti-check"></i>Finish &amp; Save</button>
-                <button class="btn" onclick="document.getElementById('edit-phase-form').style.display='none'">Cancel</button>
+                <button class="btn" onclick="document.getElementById('edit-phase-form').style.display='none';const p=document.getElementById('edit-phase-units-picker');if(p)p.innerHTML='';">Cancel</button>
               </div>
             </div>
           </div>
@@ -16683,18 +16683,34 @@ function renderPhaseUnitsPicker(containerId,checkedIds,countInputId,excludePhase
     const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
     const claim=!checked&&claimedElsewhere[u.id]?`<span style="color:var(--amber);font-size:10px" title="Already in ${claimedElsewhere[u.id]}"><i class="ti ti-alert-triangle"></i> in ${claimedElsewhere[u.id]}</span>`:'';
     return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
-      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${escHtml(u.equipmentType||'')}" data-coarse-unit-type="${escHtml(u.unitType||'')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}')">
+      <input type="checkbox" class="phase-unit-check" data-unit-id="${u.id}" data-unit-type="${escHtml(u.equipmentType||'')}" data-coarse-unit-type="${escHtml(u.unitType||'')}" ${checked?'checked':''} onchange="phaseUnitsPickerChanged('${countInputId}','${containerId}')">
       <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
       ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
       ${claim}
     </label>`;
   }).join('');
-  phaseUnitsPickerChanged(countInputId);
+  phaseUnitsPickerChanged(countInputId,containerId);
 }
 window.renderPhaseUnitsPicker=renderPhaseUnitsPicker;
 
-function getCheckedPhaseUnitIds(){
-  return [...document.querySelectorAll('.phase-unit-check:checked')].map(c=>c.dataset.unitId);
+// v58r fix -- real bug reported live (Caribe Hilton): Add Phase and Edit
+// Phase each render their own unit-checkbox picker into separate
+// containers (phase-units-picker vs edit-phase-units-picker), but every
+// close handler for both forms only ever did style.display='none' -- never
+// cleared the picker's innerHTML/checkboxes. Both pickers use the same
+// global .phase-unit-check CSS class with no container scoping anywhere,
+// so a unit left checked in a previous Edit Phase session (e.g. Phase 6's
+// real members, still checked and hidden in the DOM) would silently get
+// counted alongside whatever was actually checked the next time Add/Edit
+// Phase ran, since this used a bare document-wide querySelectorAll. Now
+// requires a containerId and scopes the query to that picker's own DOM
+// subtree, so a hidden/stale picker elsewhere in the page can no longer
+// leak checked units into a different picker's read.
+function getCheckedPhaseUnitIds(containerId){
+  const root=containerId?document.getElementById(containerId):null;
+  if(containerId&&!root)return [];
+  const scope=root||document;
+  return [...scope.querySelectorAll('.phase-unit-check:checked')].map(c=>c.dataset.unitId);
 }
 window.getCheckedPhaseUnitIds=getCheckedPhaseUnitIds;
 
@@ -16744,16 +16760,31 @@ function derivePhaseProductType(checked,hiddenId,displayId){
 }
 window.derivePhaseProductType=derivePhaseProductType;
 
-function phaseUnitsPickerChanged(countInputId){
-  const checked=[...document.querySelectorAll('.phase-unit-check:checked')];
+// v58r -- containerId added (see getCheckedPhaseUnitIds comment above for
+// the full root-cause writeup). checked is now scoped to the picker that
+// actually changed, not every .phase-unit-check on the page, so Add
+// Phase's count/product-type derivation can no longer be polluted by
+// leftover checked boxes sitting hidden in Edit Phase's picker (or vice
+// versa). containerId also picks which single product-type field to
+// derive into, instead of unconditionally deriving into both every time.
+function phaseUnitsPickerChanged(countInputId,containerId){
+  const root=containerId?document.getElementById(containerId):null;
+  const scope=root||document;
+  const checked=[...scope.querySelectorAll('.phase-unit-check:checked')];
   if(countInputId){const ci=document.getElementById(countInputId);if(ci)ci.value=checked.length;}
   // v50b — Product Type is now derived live from each checked unit's real
   // Unit Type instead of being manually picked, so a mismatch can no
   // longer happen — the phase's type IS whatever the checked units are.
-  // Derive both forms' fields every time (whichever isn't in the DOM
-  // right now is just a no-op, same pattern as the old shared lookup).
-  derivePhaseProductType(checked,'phase-product-type','phase-product-type-display');
-  derivePhaseProductType(checked,'edit-phase-product-type','edit-phase-product-type-display');
+  if(containerId==='edit-phase-units-picker'){
+    derivePhaseProductType(checked,'edit-phase-product-type','edit-phase-product-type-display');
+  }else if(containerId==='phase-units-picker'){
+    derivePhaseProductType(checked,'phase-product-type','phase-product-type-display');
+  }else{
+    // No containerId supplied (old call shape) -- fall back to deriving
+    // both, same as before this fix, rather than silently deriving neither.
+    derivePhaseProductType(checked,'phase-product-type','phase-product-type-display');
+    derivePhaseProductType(checked,'edit-phase-product-type','edit-phase-product-type-display');
+  }
 }
 window.phaseUnitsPickerChanged=phaseUnitsPickerChanged;
 
@@ -16763,7 +16794,8 @@ function renderPhaseMilestoneSelector(){
   const checks=document.getElementById('phase-milestone-checks');
   // v36p — re-run the unit type-mismatch check whenever Product Type
   // changes, since it's now checked live against each unit's real Unit Type.
-  phaseUnitsPickerChanged('phase-units-input');
+  // v58r -- containerId added so this only reads Add Phase's own picker.
+  phaseUnitsPickerChanged('phase-units-input','phase-units-picker');
   if(!type){sel.style.display='none';return;}
   const steps=PHASE_MILESTONE_TEMPLATES[type]||[];
   const optional=(OPTIONAL_STEPS[type]||[]);
@@ -16819,7 +16851,10 @@ async function saveNewPhase(){
   // v36p — Unit Phase Picker. linkedUnitIds now the real source of truth;
   // unitNames is derived display text only (kept for anything still reading
   // the old field, e.g. printed reports), never typed directly again.
-  const linkedUnitIds=getCheckedPhaseUnitIds();
+  // v58r -- containerId added so this only reads Add Phase's own picker,
+  // not any stale checked boxes left in Edit Phase's picker elsewhere in
+  // the DOM (see getCheckedPhaseUnitIds comment for the full root cause).
+  const linkedUnitIds=getCheckedPhaseUnitIds('phase-units-picker');
   const pickedUnits=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id)));
   const unitNames=pickedUnits.map(u=>u.name).filter(Boolean).join(', ');
   const units=linkedUnitIds.length;
@@ -17035,6 +17070,12 @@ function openEditPhaseForm(id,propName){
   if(legacyWarn)legacyWarn.style.display=isLegacyUnpicked?'block':'none';
   if(legacyNamesEl)legacyNamesEl.textContent=ph.unitNames||'';
   document.getElementById('add-phase-form').style.display='none';
+  // v58r -- clear Add Phase's own picker whenever it's hidden here, so any
+  // units left checked from a previous Add Phase session can't leak into
+  // this (or a later) Edit Phase read. See getCheckedPhaseUnitIds comment
+  // for the full root cause this closes off.
+  const addPickerEl=document.getElementById('phase-units-picker');
+  if(addPickerEl)addPickerEl.innerHTML='';
   const form=document.getElementById('edit-phase-form');
   form.style.display='block';
   form.scrollIntoView({behavior:'smooth'});
@@ -17047,7 +17088,8 @@ function renderEditPhaseMilestoneSelector(ph,hasStarted){
   // v36p — re-run the unit type-mismatch check whenever Product Type
   // changes (works safely with ph undefined, since phaseUnitsPickerChanged
   // reads live from the DOM, not from ph).
-  phaseUnitsPickerChanged('edit-phase-units');
+  // v58r -- containerId added so this only reads Edit Phase's own picker.
+  phaseUnitsPickerChanged('edit-phase-units','edit-phase-units-picker');
   if(!type){sel.style.display='none';return;}
   const template=PHASE_MILESTONE_TEMPLATES[type]||[];
   const optional=(OPTIONAL_STEPS[type]||[]);
@@ -17089,7 +17131,10 @@ async function saveEditPhase(){
   // units count and unitNames display text both derive from the picker,
   // same as saveNewPhase. Required-field validation (v21a) still applies —
   // a phase with 0 checked units doesn't make sense.
-  const linkedUnitIds=getCheckedPhaseUnitIds();
+  // v58r -- containerId added so this only reads Edit Phase's own picker,
+  // not any stale checked boxes left in Add Phase's picker elsewhere in
+  // the DOM (see getCheckedPhaseUnitIds comment for the full root cause).
+  const linkedUnitIds=getCheckedPhaseUnitIds('edit-phase-units-picker');
   const pickedUnits=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>linkedUnitIds.includes(u.id)));
   const unitNames=pickedUnits.map(u=>u.name).filter(Boolean).join(', ');
   const units=linkedUnitIds.length;
@@ -17133,6 +17178,10 @@ async function _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNam
     if(editSaveBtn0)editSaveBtn0.disabled=false;
     showEditConflictModal(conflictCheck.liveTs,'Phase name',name,()=>{
       document.getElementById('edit-phase-form').style.display='none';
+      // v58r -- clear so a stale checked state from this abandoned edit
+      // can't leak into the next Add/Edit Phase read.
+      const editPickerEl=document.getElementById('edit-phase-units-picker');
+      if(editPickerEl)editPickerEl.innerHTML='';
       if(currentProp)renderPhasesTab(currentProp);
     });
     return;
@@ -17311,6 +17360,11 @@ async function _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNam
   // toast this function already shows, instead of being silently dropped.
   if(ph.scopeId&&!(await deriveAndWriteScopeDates(ph.scopeId)))editPhaseFailCount++;
   document.getElementById('edit-phase-form').style.display='none';
+  // v58r -- clear so a stale checked state from this now-saved edit can't
+  // leak into the next Add/Edit Phase read (see getCheckedPhaseUnitIds
+  // comment for the full root cause this closes off).
+  const editPickerEl2=document.getElementById('edit-phase-units-picker');
+  if(editPickerEl2)editPickerEl2.innerHTML='';
   renderPhasesTab(currentProp);
   renderPropertyView(currentProp);
   if(demoMode){
