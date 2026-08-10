@@ -4528,7 +4528,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58t</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58u</div>
     </div>
   </nav>
 
@@ -7271,6 +7271,24 @@ function uimUnitsFor(propName){
   return (window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
 }
 
+// v58u — Manage Unit Inventory's CapEx Year cell note (task #34). Mirrors
+// unitGroupYear()'s exact priority (Actual Start wins, else Planned Start,
+// same T12:00:00-noon timezone-safe year extraction — see v51g fix note
+// near unitGroupYear() itself) so this note always agrees with what
+// Budget Outlook is really using. Returns null when the unit isn't
+// covered by any dated Unit Group yet, in which case no note is shown
+// and CapEx Year is genuinely still the driving value.
+function uimPhaseDrivingYear(unitId){
+  const groups=(window.UNIT_GROUPS||[]).filter(g=>(g.linkedUnitIds||[]).includes(unitId));
+  for(const g of groups){
+    const d=g.actualStart||g.plannedStart;
+    if(!d)continue;
+    const y=new Date(d+'T12:00:00').getFullYear();
+    if(!isNaN(y))return y;
+  }
+  return null;
+}
+
 function renderUimTotalUnitsControl(propName){
   const el=document.getElementById('uim-total-units-control');
   if(!el)return;
@@ -7439,8 +7457,25 @@ function uimFieldFailed(inputEl,fieldLabel){
   showToast(`Could not save ${fieldLabel||'field'}. Check your connection and try again.`,'error');
 }
 
-async function uimSaveTextField(id,airtableField,localField,value){
+async function uimSaveTextField(id,airtableField,localField,value,inputEl){
   const u=(window.UNIT_INVENTORY||[]).find(x=>x.id===id);
+  // v58u fix — CapEx Year previously wrote to Airtable FIRST, then asked
+  // (via autoDeriveScopeForUnit's window.confirm) whether to also move the
+  // unit's Scope. Clicking Cancel on that confirm only skipped the scope
+  // move — the CapEx Year value had already saved, contradicting the old
+  // toast ("Capex year saved, scope assignment left unchanged") which
+  // implied nothing had happened. Reported live by Misty. Fix: for
+  // capexYear specifically, check BEFORE writing anything whether this
+  // change would trigger a scope-move confirm; if the user cancels that
+  // confirm, revert the input's displayed value and return with no write
+  // at all, matching what "Cancel" should mean everywhere in the app.
+  if(localField==='capexYear'&&u){
+    const proceed=await confirmScopeMoveForCapexYear(id,value);
+    if(!proceed){
+      if(inputEl)inputEl.value=u.capexYear||'';
+      return;
+    }
+  }
   if(u)u[localField]=value;
   // v52e fix — result was never checked at all (this field never even had
   // a save-confirmation flash to begin with, unlike its sibling number/
@@ -7450,7 +7485,9 @@ async function uimSaveTextField(id,airtableField,localField,value){
   // v34k — Client Capex Planning Year is the trigger for Scope
   // auto-derivation (Design Spec Section 4a, Option C — event-driven, not
   // page-load, not a separate "Generate Scopes" button). Runs only when
-  // this specific field changes.
+  // this specific field changes. The confirm itself now happens earlier
+  // (see confirmScopeMoveForCapexYear above); this call just performs the
+  // already-agreed-to move/assignment and is a no-op if nothing changed.
   if(localField==='capexYear'&&u)await autoDeriveScopeForUnit(id);
   // Bug fix — the past-year-not-Complete flag is computed at render time
   // in renderUimTable(), so it previously only appeared after closing and
@@ -7691,6 +7728,32 @@ async function unlinkUnitFromScope(unit,scope){
   return ok;
 }
 
+// v58u — Split out of autoDeriveScopeForUnit() as part of the CapEx Year
+// Cancel-doesn't-revert fix. This runs BEFORE uimSaveTextField writes
+// anything to Airtable, using the candidate (not-yet-saved) value, so a
+// user clicking Cancel here means genuinely nothing happened — no CapEx
+// Year write, no scope move. Mirrors autoDeriveScopeForUnit's own
+// oldScope/targetScope lookup and confirm wording exactly, just moved
+// earlier and fed the pending value instead of the unit's saved one.
+// Returns true if it's safe to proceed with the write (either no move is
+// needed, or the user confirmed one), false if the user cancelled.
+async function confirmScopeMoveForCapexYear(unitId,pendingCapexYear){
+  const unit=(window.UNIT_INVENTORY||[]).find(u=>u.id===unitId);
+  if(!unit)return true;
+  const candidateUnit={...unit,capexYear:pendingCapexYear};
+  const yearKey=scopeYearKeyFor(candidateUnit);
+  const targetScope=findScopeForYearKey(unit.property,yearKey);
+  const oldScope=unit.scopeId?(window.SCOPES||[]).find(s=>s.id===unit.scopeId):null;
+  if(oldScope&&targetScope&&oldScope.id===targetScope.id)return true; // no move, nothing to confirm
+  if(!oldScope)return true; // first assignment, no prior scope to warn about leaving
+  const targetName=targetScope?targetScope.name:(yearKey==='TBD'?'TBD Scope':`${yearKey} Scope`);
+  const msg=(oldScope.status&&oldScope.status!=='Capital Plan')
+    ? `You're moving this unit out of an active scope ("${oldScope.name}") into a planned scope ("${targetName}"). Do you wish to continue?`
+    : `This will move the unit from "${oldScope.name}" to "${targetName}". Continue?`;
+  return window.confirm(msg);
+}
+window.confirmScopeMoveForCapexYear=confirmScopeMoveForCapexYear;
+
 async function autoDeriveScopeForUnit(unitId){
   const unit=(window.UNIT_INVENTORY||[]).find(u=>u.id===unitId);
   if(!unit)return;
@@ -7704,16 +7767,11 @@ async function autoDeriveScopeForUnit(unitId){
   if(oldScope&&targetScope&&oldScope.id===targetScope.id)return; // already correct, nothing to do
 
   if(oldScope){
-    // Real move, not a first assignment — confirm, naming the consequence,
-    // per Design Spec Section 4a. Wording varies by direction: leaving an
-    // already-graduated (non-Capital-Plan) Scope reads differently than a
-    // Capital-Plan-to-Capital-Plan reshuffle.
+    // v58u — the confirm that used to live here now runs earlier, in
+    // confirmScopeMoveForCapexYear(), BEFORE the CapEx Year write. By the
+    // time this function runs, the user has already agreed to the move —
+    // this just carries it out. No confirm() call here anymore.
     const targetName=targetScope?targetScope.name:(yearKey==='TBD'?'TBD Scope':`${yearKey} Scope`);
-    const msg=(oldScope.status&&oldScope.status!=='Capital Plan')
-      ? `You're moving this unit out of an active scope ("${oldScope.name}") into a planned scope ("${targetName}"). Do you wish to continue?`
-      : `This will move the unit from "${oldScope.name}" to "${targetName}". Continue?`;
-    const confirmed=window.confirm(msg);
-    if(!confirmed){showToast('Capex year saved, scope assignment left unchanged','info');return;}
     if(!targetScope)targetScope=await createScopeForYearKey(unit.property,prop.id,yearKey);
     // v51k — createScopeForYearKey always returns an object (never null),
     // even when the underlying Airtable write fails, falling back to a
@@ -7788,7 +7846,16 @@ async function uimSaveSelectField(id,airtableField,localField,value,selectEl){
   // before the write result was known. Status in particular drives
   // downstream derivation logic elsewhere in the app, worth surfacing a
   // real failure rather than flashing green regardless.
-  const _res=await atUpdate('Unit Inventory List',id,{[airtableField]:localField==='priority'?(value?parseInt(value):null):value});
+  // v58u fix — Priority is a single-select field in Airtable whose choice
+  // names are the literal strings "1"/"2"/"3"/"4"/"N/A" (confirmed live
+  // against the base schema). This used to send parseInt(value) — a JS
+  // number — which Airtable rejects for a single-select with
+  // INVALID_VALUE_FOR_COLUMN ("Cannot parse value for field 'Priority'"),
+  // the exact 422 reported on both a Boston Marriott Newton unit and
+  // Hilton Denver City Center. Local state (u.priority) stays a parsed
+  // int for numeric comparisons elsewhere in the file; only the value
+  // actually sent to Airtable needs to stay the original string.
+  const _res=await atUpdate('Unit Inventory List',id,{[airtableField]:localField==='priority'?(value||null):value});
   if(selectEl){
     if(_res)uimFieldSaved(selectEl);
     else uimFieldFailed(selectEl,airtableField);
@@ -7880,7 +7947,12 @@ function renderUimTable(propName){
         <option value="Complete" ${u.status==='Complete'?'selected':''}>Complete</option>
         <option value="Dormant" ${u.status==='Dormant'?'selected':''}>Dormant</option>
       </select></td>
-      <td style="display:flex;align-items:center;gap:4px"><input class="form-input" style="width:80px" value="${escHtml(u.capexYear)}" onchange="uimSaveTextField('${u.id}','Client Capex Planning Year','capexYear',this.value)">${(()=>{const yr=parseInt(u.capexYear);return(yr&&yr<new Date().getFullYear()&&u.status!=='Complete')?'<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px;flex-shrink:0" title="Past CapEx year but not marked Complete — worth checking"></i>':'';})()}</td>
+      <td style="display:flex;flex-direction:column;gap:2px">
+        <div style="display:flex;align-items:center;gap:4px">
+          <input class="form-input" style="width:80px" value="${escHtml(u.capexYear)}" onchange="uimSaveTextField('${u.id}','Client Capex Planning Year','capexYear',this.value,this)">${(()=>{const yr=parseInt(u.capexYear);return(yr&&yr<new Date().getFullYear()&&u.status!=='Complete')?'<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px;flex-shrink:0" title="Past CapEx year but not marked Complete — worth checking"></i>':'';})()}
+        </div>
+        ${(()=>{const phaseYr=uimPhaseDrivingYear(u.id);return phaseYr?`<div style="font-size:11px;color:var(--text-accent,#185FA5);display:flex;align-items:center;gap:4px"><i class="ti ti-info-circle" style="font-size:13px"></i>Budget Outlook uses this unit's phase start (${phaseYr})</div>`:'';})()}
+      </td>
       <!-- v45q — VDA Recommended Year, plain text like Client Capex
       Planning Year above (typed year, no formula, no validation beyond
       what capexYear already has). -->
@@ -15791,10 +15863,21 @@ function renderUnitPhaseSuggestions(scopeId){
   container.innerHTML=open.map(s=>{
     const units=sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>s.linkedUnitIds.includes(u.id)));
     const names=units.map(u=>u.name).filter(Boolean).join(', ');
+    // v58u — MARLI's grouping year now comes from the Scope's own Planned
+    // Start when set (falling back to unit CapEx Year otherwise, see
+    // generateSuggestedUnitPhases() in worker_v44e_build.mjs). Label
+    // reflects whichever source actually drove this suggestion's
+    // grouping, per Misty's approved wording: "Planned {year}" when a
+    // real Scope Planned Start exists, "CapEx {year}" only in the
+    // fallback case — deliberately never shown side by side, since the
+    // two are expected to diverge normally and showing both would wrongly
+    // imply a mismatch needing action.
+    const sc=(window.SCOPES||[]).find(sc=>sc.id===s.scopeId);
+    const yearLabel=(sc&&sc.plannedStart)?`Planned ${s.capexYear}`:(s.capexYear?`CapEx ${s.capexYear}`:'');
     return `<div style="background:var(--amber-pale);border:0.5px solid #fac775;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
       <div style="font-size:12px;color:var(--amber)">
         <i class="ti ti-bulb" style="margin-right:5px"></i>
-        <strong>${units.length} unit${units.length===1?'':'s'}</strong> (${escHtml(s.equipmentType||'unspecified type')}${s.capexYear?', CapEx '+s.capexYear:''}) could become a phase: ${names}
+        <strong>${units.length} unit${units.length===1?'':'s'}</strong> (${escHtml(s.equipmentType||'unspecified type')}${yearLabel?', '+yearLabel:''}) could become a phase: ${names}
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
         <button class="btn" style="font-size:11px;padding:4px 10px" onclick="acceptSuggestedUnitPhase('${s.id}')"><i class="ti ti-check"></i>Accept</button>
@@ -17726,9 +17809,30 @@ async function deleteDraft(){
   const draftId=document.getElementById('editing-draft-id').value;
   if(!draftId){closePanel();return;}
   if(!confirm('Delete this draft? This cannot be undone.'))return;
+  // v58u fix — this bypassed atDelete() and called the endpoint directly,
+  // removing the draft from local state unconditionally BEFORE the
+  // request even completed, then only console.warn'd on failure while
+  // still showing the "Draft deleted" success toast either way. A failed
+  // delete looked identical to a successful one. Now checks the response
+  // and reverts local state + shows an error toast on failure, same
+  // checked-result pattern uimConfirmDelete() and the other real deletes
+  // in this file already use.
+  const removedDraft=meetings.find(m=>m.id===draftId);
   meetings=meetings.filter(m=>m.id!==draftId);
+  let deleteOk=true;
   if(!demoMode){
-    try{await workerFetch(`${WORKER_URL}?table=Meetings&recordId=${draftId}`,{method:'DELETE'});}catch(e){console.warn('Delete draft failed:',e);}
+    try{
+      const r=await workerFetch(`${WORKER_URL}?table=Meetings&recordId=${draftId}`,{method:'DELETE'});
+      deleteOk=!!(r&&r.ok);
+    }catch(e){
+      console.warn('Delete draft failed:',e);
+      deleteOk=false;
+    }
+  }
+  if(!deleteOk){
+    if(removedDraft)meetings.push(removedDraft);
+    showToast('Could not delete draft. Check your connection and try again.','error');
+    return;
   }
   closePanel();
   showToast('Draft deleted','success');
