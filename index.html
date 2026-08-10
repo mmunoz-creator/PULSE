@@ -4515,7 +4515,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58m</div>
     </div>
   </nav>
 
@@ -11872,8 +11872,25 @@ function getBillingBasis(p,scope){
 // recompute the denominator separately and risk it drifting from the
 // numerator (the exact class of bug getBillingBasis's own v42a fix
 // addressed for the single-Scope case).
+// v58-budget-stages -- basis now comes from rollupUnitsByStage() across
+// ALL of the property's units (any scope status), not just In Progress
+// scopes -- per Misty's explicit direction: Total Investment should
+// reflect the property's full pipeline (estimated + approved + awarded
+// dollars across every project on the property), not just active work.
+// billed-to-date and pctBilled stay scoped to In Progress scopes only,
+// unchanged -- you can't have real billing against work that hasn't
+// started, so narrowing billed to active scopes is still correct even
+// though basis is now portfolio-wide for this property. This replaces
+// the old getBillingBasis() two-tier (Contract Award Value -> Planned
+// Budget -> nothing) lookup, which is why properties with real Unit
+// Inventory estimates but no Scope-level dollar fields set were showing
+// "TBD of TBD" even though real budget data existed one level down.
 function getPropertyBilledAndBasis(p){
+  const allUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
+  const stages=rollupUnitsByStage(allUnits);
+  const basis=stages.total;
   const activeScopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status==='In Progress');
+  let billed=0;
   if(activeScopes.length===0){
     // No active Scope (pre-Scope legacy property, or everything
     // Complete/On Hold/Planned) — fall back to the old property-wide
@@ -11881,18 +11898,15 @@ function getPropertyBilledAndBasis(p){
     // In Progress Scope doesn't regress to showing nothing.
     const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n)
       .sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
-    const billed=propBilling[0]?Number(propBilling[0].billedYTD):0;
-    const basis=getBillingBasis(p).amount;
-    return{billed,basis,pctBilled:basis>0?Math.round((billed/basis)*100):0,scopeCount:0};
+    billed=propBilling[0]?Number(propBilling[0].billedYTD):0;
+  }else{
+    activeScopes.forEach(sc=>{
+      const scBilling=(window.BILLING_LOG||[]).filter(b=>b.scopeId===sc.id)
+        .sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+      if(scBilling[0])billed+=Number(scBilling[0].billedYTD)||0;
+    });
   }
-  let billed=0,basis=0;
-  activeScopes.forEach(sc=>{
-    const scBilling=(window.BILLING_LOG||[]).filter(b=>b.scopeId===sc.id)
-      .sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
-    if(scBilling[0])billed+=Number(scBilling[0].billedYTD)||0;
-    basis+=getBillingBasis(p,sc).amount;
-  });
-  return{billed,basis,pctBilled:basis>0?Math.round((billed/basis)*100):0,scopeCount:activeScopes.length};
+  return{billed,basis,pctBilled:basis>0?Math.round((billed/basis)*100):0,scopeCount:activeScopes.length,stages};
 }
 function fmtBudget(val){
   if(!val||isNaN(val))return 'TBD';
@@ -12480,7 +12494,7 @@ function getPropsRowData(p){
   // portfolio. Falls back to 0 for a property with no units recorded yet.
   const completeUnits=propUnits.filter(u=>u.status==='Complete').length;
   const pctComplete=propUnits.length>0?Math.round((completeUnits/propUnits.length)*100):0;
-  const {billed,basis}=getPropertyBilledAndBasis(p);
+  const {billed,basis,stages}=getPropertyBilledAndBasis(p);
   // Simplified blocker count, v56a: overdue open Action Items for this
   // property only. Same overdue definition already used everywhere else
   // in the app (due date passed, T12:00:00 anchor to avoid the v54a
@@ -12517,7 +12531,7 @@ function getPropsRowData(p){
   if(p.st==='Complete')statusBucket='complete';
   else if(anyAtRisk)statusBucket='atRisk';
   else if(p.st==='On Hold')statusBucket='delayed';
-  return{p,dots,totalUnits,pctComplete,completeUnits,unitsTotal:propUnits.length,billed,basis,blockers,statusBucket};
+  return{p,dots,totalUnits,pctComplete,completeUnits,unitsTotal:propUnits.length,billed,basis,stages,blockers,statusBucket};
 }
 function propsSetSort(field){
   if(propsSortField===field)propsSortDir=propsSortDir==='asc'?'desc':'asc';
@@ -12589,6 +12603,20 @@ function renderPropsKpiRow(){
   const rows=props.map(getPropsRowData);
   const totalBilled=rows.reduce((a,r)=>a+r.billed,0);
   const totalBasis=rows.reduce((a,r)=>a+r.basis,0);
+  // v58-budget-stages -- portfolio-wide stage totals, so the Total
+  // Investment card can show an "Est." marker when a meaningful share of
+  // the total is still Estimated-only (VDA's recommendation, not yet
+  // client-approved or awarded) rather than looking as certain as a real
+  // contract figure. Client Budget/Award Value are confirmed empty
+  // portfolio-wide as of this build, so today this will read ~100%
+  // Estimated everywhere -- expected, not a bug, and will self-correct as
+  // real Approved/Awarded dollars get entered.
+  const totalStages=rows.reduce((a,r)=>{
+    const s=r.stages||{estimated:0,approved:0,awarded:0};
+    a.estimated+=s.estimated;a.approved+=s.approved;a.awarded+=s.awarded;
+    return a;
+  },{estimated:0,approved:0,awarded:0});
+  const estimatedShare=totalBasis>0?totalStages.estimated/totalBasis:0;
   const totalUnitsAll=rows.reduce((a,r)=>a+r.unitsTotal,0);
   const completeUnitsAll=rows.reduce((a,r)=>a+r.completeUnits,0);
   const overallPct=totalUnitsAll>0?Math.round((completeUnitsAll/totalUnitsAll)*100):0;
@@ -12634,7 +12662,7 @@ function renderPropsKpiRow(){
     that there's almost no leftover space, so it happened to look
     correctly left-aligned already. flex-start pins every card's
     badge+text group to the left edge regardless of caption length. -->
-    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px;position:relative;min-width:0;width:100%;height:100px;box-sizing:border-box">${badge('ti-currency-dollar','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0;padding-right:36px"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Total investment</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${fmtBudget(totalBilled)}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">of ${fmtBudget(totalBasis)} budget</p></div>${whyBtn('Why is Total Investment at '+fmtBudget(totalBilled)+' this week?')}</div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px;position:relative;min-width:0;width:100%;height:100px;box-sizing:border-box">${badge('ti-currency-dollar','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0;padding-right:36px"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Total investment</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${fmtBudget(totalBilled)}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">of ${fmtBudget(totalBasis)} budget${estimatedShare>=0.5&&totalBasis>0?' <span style="color:var(--gray-mid);font-weight:600">(est.)</span>':''}</p></div>${whyBtn('Why is Total Investment at '+fmtBudget(totalBilled)+' this week?')}</div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px;position:relative;min-width:0;width:100%;height:100px;box-sizing:border-box">${badge('ti-checklist','var(--green-pale)','var(--green)')}<div style="min-width:0;padding-right:36px"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Units complete</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${overallPct}%</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">${completeUnitsAll.toLocaleString()} of ${totalUnitsAll.toLocaleString()} units</p></div>${whyBtn('Why is Units Complete at '+overallPct+' percent?')}</div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px;position:relative;min-width:0;width:100%;height:100px;box-sizing:border-box">${badge('ti-building','var(--green-pale)','var(--green)')}<div style="min-width:0;padding-right:36px"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Buildings complete</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${buildingsComplete}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">of ${props.length} properties</p></div>${whyBtn('Which buildings are complete and what changed recently?')}</div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px;position:relative;min-width:0;width:100%;height:100px;box-sizing:border-box">${badge('ti-alert-triangle','var(--red-pale)','var(--red)')}<div style="min-width:0;padding-right:36px"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Buildings at risk</p><p style="font-size:22px;font-weight:700;color:${buildingsAtRisk>0?'var(--red)':'var(--navy)'};line-height:1.15;margin:0">${buildingsAtRisk}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">${buildingsDelayed} delayed, ${buildingsOnTrack} on track, ${buildingsNotStarted} not started</p></div>${whyBtn('Why are '+buildingsAtRisk+' buildings currently at risk?')}</div>`;
@@ -18117,6 +18145,46 @@ window.scopeMonthlySpread=scopeMonthlySpread;
 // number on its own.
 function unitEffectiveValue(u){
   return(u.awardValue>0?u.awardValue:(u.totalWorkEst||0));
+}
+// v58-budget-stages -- unitBudgetStage(). Real 3-stage waterfall per
+// Misty's direct workflow description: VDA recommends a budget
+// (Total Work Est.), the client approves a budget (Client Budget) which
+// authorizes what work can actually be bid, and once bid the work gets a
+// real Contract/Award Value (Award Value). Each unit's dollar amount
+// lives in exactly ONE stage at a time -- never counted in more than one
+// bucket -- and moves forward as the project advances (a unit is very
+// unlikely to skip Approved and jump straight from Estimated to Awarded,
+// since the client's approval is what authorizes bidding out the work in
+// the first place, but the code doesn't assume that; it just checks
+// Award Value first, then Client Budget, then falls back to the
+// estimate, same "most advanced real number wins" pattern
+// unitEffectiveValue() already uses for Award vs. estimate).
+// Client Budget and Award Value are both confirmed EMPTY across the
+// entire portfolio as of this build (checked directly against Airtable),
+// so today every unit resolves to 'estimated' -- this is intentional and
+// correct, not a bug. The three-bucket rollups below will start
+// reflecting real Approved/Awarded dollars automatically the moment
+// those fields get populated in Airtable, no further code changes
+// needed.
+function unitBudgetStage(u){
+  if(u.awardValue>0)return{stage:'awarded',amount:u.awardValue};
+  if(u.clientBudget>0)return{stage:'approved',amount:u.clientBudget};
+  return{stage:'estimated',amount:u.totalWorkEst||0};
+}
+// v58-budget-stages -- rollupUnitsByStage(). Sums a list of units into
+// three separate stage totals (never double-counted -- each unit's
+// unitBudgetStage() amount lands in exactly one bucket) plus a combined
+// total for callers that just want "the current best number," same value
+// unitEffectiveValue() would already give per-unit, summed. Shared by
+// Budget Outlook and the Properties tab Total Investment card so both
+// read from one real source instead of two independently-evolving copies.
+function rollupUnitsByStage(units){
+  const r={estimated:0,approved:0,awarded:0};
+  (units||[]).forEach(u=>{
+    const{stage,amount}=unitBudgetStage(u);
+    r[stage]+=amount;
+  });
+  return{...r,total:r.estimated+r.approved+r.awarded};
 }
 // v42k — Shared natural-sort helper for unit names, used everywhere unit
 // names are listed (Project/Scope Card unit chips, Budget Outlook table
