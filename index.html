@@ -4571,7 +4571,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v60b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v61b</div>
     </div>
   </nav>
 
@@ -5462,12 +5462,15 @@ from unitEffectiveValue() onto each checkbox). -->
                   </div>
                 </div>
               </div>
+              <!-- v61a-3stage — 3-swatch legend replacing Award/Estimate,
+              same three colors as the chart bar segments and stat cards. -->
               <div style="display:flex;gap:14px;font-size:12px;color:var(--gray-mid)">
-                <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue-dark);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Award</span>
-                <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue-mid);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Estimate</span>
+                <span><span style="display:inline-block;width:10px;height:10px;background:var(--teal);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Total Work Est.</span>
+                <span><span style="display:inline-block;width:10px;height:10px;background:var(--indigo);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Client Budget</span>
+                <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue-dark);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Award Value</span>
               </div>
             </div>
-            <div id="bo-summary-cards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:64px;align-items:start"></div>
+            <div id="bo-summary-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-bottom:64px;align-items:start"></div>
             <!-- v49b — the mini Forecasted Spend card (v47a) was removed from
             here. It duplicated the Forecasted Spend chart on Analytics,
             same rolling 12-month proration logic, same Include VDA billing
@@ -5480,7 +5483,9 @@ from unitEffectiveValue() onto each checkbox). -->
                 <!-- v49p — header relabeled from "Unit names" to "Properties" to
                 match the collapsed row now showing a property count in that
                 column instead of a per-scope unit name list. -->
-                <thead><tr><th style="width:24px"></th><th style="text-align:left;width:22%">Year</th><th style="text-align:center;width:11%">Award</th><th style="text-align:center;width:11%">Estimate</th><th style="text-align:center;width:11%">Total</th><th style="text-align:center;width:7%">Units</th><th style="text-align:left;width:34%">Properties</th></tr></thead>
+                <!-- v61a-3stage — 3 stage columns replacing Award/Estimate,
+                widths narrowed proportionally to fit the extra column. -->
+                <thead><tr><th style="width:24px"></th><th style="text-align:left;width:18%">Year</th><th style="text-align:center;width:10%">Total Work Est.</th><th style="text-align:center;width:10%">Client Budget</th><th style="text-align:center;width:10%">Award Value</th><th style="text-align:center;width:9%">Total</th><th style="text-align:center;width:7%">Units</th><th style="text-align:left;width:26%">Properties</th></tr></thead>
                 <tbody id="bo-tbody"></tbody>
               </table>
             </div>
@@ -7873,7 +7878,12 @@ async function linkUnitToScope(unit,scope,oldScope){
   // scope, or a unit that was already Planned/Active moving around).
   // oldScope is undefined on first assignment (see autoDeriveScopeForUnit's
   // "else" branch), so this only ever fires on a real move.
-  if(unit.status==='Complete'&&oldScope&&oldScope.status==='Complete'&&scope.status==='In Progress'){
+  // v61b-status — 'In Progress' replaced with the 3 new middle-stage
+  // values (task #11); this is a genuinely active/non-Complete/non-On-
+  // Hold target scope check, same intent as before, just checking the
+  // real values Scope.status can now hold instead of the retired flat
+  // 'In Progress'.
+  if(unit.status==='Complete'&&oldScope&&oldScope.status==='Complete'&&(scope.status==='Pre-Construction'||scope.status==='Construction'||scope.status==='Project Closeout')){
     unit.status='Planned';
   }
   let statusFields={};
@@ -9048,14 +9058,30 @@ function calcScopeScheduleRisk(propName,scopeId){
   return {daysLate,overdueCount,atRiskCount,aheadCount,riskLevel,projectedEnd};
 }
 
-// Returns projected completion date from latest phase planned completion
+// v60c — Fixed (task #26). Was reading the latest Unit Group/phase
+// Planned Completion, which silently dropped any Scope that has a real
+// Target Completion date but no phase created yet — confirmed live on
+// Casa Marina Key West: its "2028 Project" Scope has Target Completion
+// 2028-12-29, but the property's Properties-table Est. Completion showed
+// Oct 2026 (a different Scope's phase date), since the 2028 Scope has no
+// Unit Group yet and so never entered the old calculation at all. Now
+// reads the Scope's own Target Completion field directly (window.SCOPES,
+// loaded from Airtable's Target Completion field, see the Scopes load
+// around line 3190) and takes the furthest-out one across every Scope on
+// the property, matching what "latest project completion date" actually
+// means. Single caller (Properties table row builder, getPropsRowData);
+// no change needed anywhere else.
 function getProjectedCompletion(propName){
-  const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===propName);
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===propName);
   let latest=null;
-  phases.forEach(ph=>{
-    if(ph.plannedCompletion){
-      const d=new Date(ph.plannedCompletion);
-      if(!latest||d>latest)latest=d;
+  scopes.forEach(s=>{
+    if(s.targetCompletion){
+      // v60c — T12:00:00 noon anchor, same timezone-safe pattern used
+      // elsewhere in the app (see uimPhaseDrivingYear and others) so a
+      // plain YYYY-MM-DD date string never shifts a day earlier in a
+      // negative-UTC-offset timezone.
+      const d=new Date(s.targetCompletion+'T12:00:00');
+      if(!isNaN(d)&&(!latest||d>latest))latest=d;
     }
   });
   return latest;
@@ -9252,9 +9278,30 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // Actual Start fields were removed, see the Milestones row render);
   // ms1.completionDate is now the single "has the survey happened" signal
   // this graduation check needs.
-  let newStatus=scope.status==='Capital Plan'?'Capital Plan':'Planned';
+  // v61b-status — Rewritten (task #11) for the new 5-stage vocabulary
+  // (Capital Plan/Pre-Construction/Construction/Project Closeout/
+  // Complete, plus On Hold as a separate exclusive state handled by the
+  // guard above, not by this ladder). The Capital Plan graduation gate
+  // and the msFinal-completionDate Complete check are UNCHANGED from
+  // before — both are trusted, tested signals this function already
+  // relied on. Once graduated and not yet Complete, the middle stage
+  // (previously always flattened to a single "In Progress") now comes
+  // from the corrected getMilestoneCategoryForScope(), so Scope.status
+  // and Properties' stage dots / Action Board's heat map always agree on
+  // which of the 3 middle stages a Scope is actually in.
+  let newStatus=scope.status==='Capital Plan'?'Capital Plan':'Pre-Construction';
   if(msFinal&&(msFinal.completionDate||msFinal.actualDate))newStatus='Complete';
-  else if(ms1&&ms1.completionDate)newStatus='In Progress';
+  else if(ms1&&ms1.completionDate){
+    const category=getMilestoneCategoryForScope(scope);
+    // getMilestoneCategoryForScope can return 'Complete' too (all 14
+    // milestones' Status fields say Complete even without msFinal's
+    // completionDate/actualDate populated) — honor that here rather than
+    // forcing Project Closeout, since Status=Complete on every milestone
+    // is itself a legitimate, already-supported way historical/backfilled
+    // scopes get marked done (see the msFinal comment in the drift-check
+    // below for the same convention).
+    newStatus=category;
+  }
   // v37d — Units-Complete override takes priority over whatever Milestones
   // alone would have derived, since real completed-unit data is more
   // trustworthy than an untouched Milestones list for pre-existing work.
@@ -9398,9 +9445,19 @@ async function deriveAndWritePropertyStatus(propName){
     }
     return;
   }
+  // v61b-status — Property status is deliberately NOT part of the new
+  // 5-stage Scope vocabulary (Misty's explicit direction: Properties tab
+  // status stays as-is for now, revisited separately later). This rollup
+  // keeps writing only its existing 5 values (Capital Plan/Planned/In
+  // Progress/Complete/On Hold above), but Scope.status can now be any of
+  // Capital Plan/Pre-Construction/Construction/Project Closeout/Complete
+  // (plus On Hold, already excluded from activeStatuses above) — so the
+  // three new middle values all need to count as "In Progress" here,
+  // same as the old flat 'In Progress' used to, or this rollup would
+  // silently stop recognizing any graduated-but-not-closeout Scope.
+  const isMidStage=s=>s==='Pre-Construction'||s==='Construction'||s==='Project Closeout';
   let newStatus='Capital Plan';
-  if(activeStatuses.some(s=>s==='In Progress'))newStatus='In Progress';
-  else if(activeStatuses.some(s=>s==='Planned'))newStatus='Planned';
+  if(activeStatuses.some(isMidStage))newStatus='In Progress';
   else if(activeStatuses.every(s=>s==='Complete'))newStatus='Complete';
   const prop=(window.PORTFOLIO||[]).find(p=>p.n===propName);
   if(!prop)return;
@@ -9664,8 +9721,13 @@ function renderScopeCards(p){
   // v39a — relabeled "Manage projects" → "Manage Projects" and switched to
   // the same green btn-success style used elsewhere (e.g. CO Approve).
   const manageBtn=canEdit?`<button class="btn btn-success" onclick="openSplitIntoScopes('${(p.id||p.n).replace(/'/g,"\\'")}')"><i class="ti ti-git-fork"></i>Manage Projects</button>`:'';
+  // v61b-status — 3 new stage values (Pre-Construction/Construction/
+  // Project Closeout) replace the old flat 'Planned'/'In Progress' pair.
+  // Colors progress light-to-dark blue across the 3 stages so a PM can
+  // read relative progress at a glance even before reading the label
+  // text; Complete/On Hold/Capital Plan colors unchanged from before.
   const statusBadge=st=>{
-    const cfg={'Capital Plan':{bg:'var(--gray-pale)',c:'var(--gray-mid)'},'Planned':{bg:'var(--blue-xpale)',c:'var(--blue-dark)'},'In Progress':{bg:'#dcfce7',c:'#15803d'},'Complete':{bg:'var(--green-pale)',c:'var(--green)'},'On Hold':{bg:'#fff7ed',c:'#b45309'}};
+    const cfg={'Capital Plan':{bg:'var(--gray-pale)',c:'var(--gray-mid)'},'Pre-Construction':{bg:'var(--blue-xpale)',c:'var(--blue-dark)'},'Construction':{bg:'#dcfce7',c:'#15803d'},'Project Closeout':{bg:'#dbeafe',c:'#1e40af'},'Complete':{bg:'var(--green-pale)',c:'var(--green)'},'On Hold':{bg:'#fff7ed',c:'#b45309'}};
     const s=cfg[st]||cfg['Capital Plan'];
     return `<span style="font-size:10px;font-weight:600;background:${s.bg};color:${s.c};border-radius:6px;padding:2px 8px">${st}</span>`;
   };
@@ -9741,9 +9803,14 @@ function renderScopeCards(p){
       // v55c -- mirrors the same completionDate repointing as
       // deriveAndWriteScopeStatus above, so this read-only drift check
       // keeps agreeing with what actually derives the real status.
+      // v61b-status — mirrors the same 5-stage rewrite as
+      // deriveAndWriteScopeStatus() above, so this read-only comparison
+      // keeps agreeing with what the real derivation would produce
+      // instead of permanently flagging drift against the old 'In
+      // Progress'/'Planned' pair now that those values are never written.
       const milestonesJustify=(msFinal&&(msFinal.completionDate||msFinal.actualDate||msFinal.status==='Complete'))?'Complete'
-        :(ms1Real&&ms1Real.completionDate)?'In Progress'
-        :(s.status==='Capital Plan'?'Capital Plan':'Planned');
+        :(ms1Real&&ms1Real.completionDate)?getMilestoneCategoryForScope(s)
+        :(s.status==='Capital Plan'?'Capital Plan':'Pre-Construction');
       if(milestonesJustify!==s.status&&!(s.status==='On Hold')){
         driftMsg=`Status says <strong>${escHtml(s.status)}</strong>, but milestones show <strong>${milestonesJustify}</strong>`;
       }
@@ -9762,13 +9829,39 @@ function renderScopeCards(p){
     const ratesHtml=rateItems.length
       ?rateItems.map(r=>`<span style="font-size:11px;color:var(--gray-mid)">${r}</span>`).join('')
       :`<span style="font-size:11px;color:var(--gray-light)">Not set</span>`;
-    const awardVal=s.contractAwardValue>0?fmtCurrency(s.contractAwardValue):null;
-    // v35a — was reading the stale typed s.plannedBudget; every other
-    // budget figure in the app derives from Unit Inventory List now
-    // (scopeUnitBudgetTotal), this was the one spot on the Scope card
-    // still left on the old field.
-    const scopeBudgetVal=scopeUnitBudgetTotal(s.id);
-    const budgetVal=scopeBudgetVal>0?fmtCurrency(scopeBudgetVal):'TBD';
+    // v61a-3stage — awardVal/budgetVal (the old single-figure Contract
+    // Award/Planned Budget display) retired in favor of the real 3-stage
+    // breakdown below. scopeUnitBudgetTotal() is still used elsewhere on
+    // this card (the spread-note calc further down), so it stays, just
+    // not aliased to budgetVal anymore.
+    // Real 3-stage breakdown for this project's card, same
+    // rollupUnitsByStage() Budget Outlook and Properties' Total Investment
+    // card use, summed across this Scope's own units. Per Misty's direct
+    // instruction: show all three real figures (Total Work Est./Client
+    // Budget/Award Value), with the one Budget Outlook is actually
+    // plotting for this project shown in blue and the other two in gray,
+    // so a PM can see at a glance which number is driving the chart
+    // without the other two being hidden. "In use" follows the same
+    // awarded > approved > estimated waterfall unitBudgetStage() already
+    // applies per-unit — whichever is the most-advanced nonzero stage.
+    // Falls back to Contract Award Value on the Scope itself (same
+    // Scope-level special case Budget Outlook's own rebuild uses) when no
+    // individual unit carries its own Award Value yet.
+    const scopeStageUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===s.id);
+    const scopeStages=rollupUnitsByStage(scopeStageUnits);
+    if(s.contractAwardValue>0&&!scopeStageUnits.some(u=>u.awardValue>0)){
+      scopeStages.awarded=s.contractAwardValue;
+    }
+    const scopeInUseStage=scopeStages.awarded>0?'awarded':scopeStages.approved>0?'approved':'estimated';
+    const stageFigure=(label,val,stageKey)=>{
+      const isInUse=scopeInUseStage===stageKey;
+      const color=isInUse?'var(--blue-dark)':'var(--gray-mid)';
+      const weight=isInUse?600:500;
+      return `<div>
+        <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${label}</div>
+        <div style="font-size:13px;font-weight:${weight};color:${color}">${val>0?fmtCurrency(val):'—'}</div>
+      </div>`;
+    };
     const onHoldToggle=(canEdit&&s.status!=='Complete'&&s.status!=='Capital Plan')
       ?(s.status==='On Hold'
         ?`<button onclick="event.stopPropagation();setScopeOnHold('${s.id}',false).then(()=>renderScopeCards(currentProp));" style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;white-space:nowrap">Resume</button>`
@@ -9844,14 +9937,14 @@ function renderScopeCards(p){
             <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Client Project #</div>
             <div style="font-size:13px;font-weight:500;color:var(--navy)">${escHtml(s.clientProjectNum||'—')}</div>
           </div>
-          <div>
-            <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">${awardVal?'Contract Award':'Planned Budget'}</div>
-            <div style="font-size:13px;font-weight:500;color:var(--navy)">${awardVal||budgetVal}</div>
+          <!-- v61a-3stage — replaces the old single Contract Award/
+          Planned Budget cell with all three real stage figures, the
+          in-use one in blue per Misty's direct instruction. -->
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 12px">
+            ${stageFigure('Total Work Est.',scopeStages.estimated,'estimated')}
+            ${stageFigure('Client Budget',scopeStages.approved,'approved')}
+            ${stageFigure('Award Value',scopeStages.awarded,'awarded')}
           </div>
-          ${awardVal?`<div style="grid-column:1/-1">
-            <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Planned Budget</div>
-            <div style="font-size:12px;color:var(--gray-mid)">${budgetVal}</div>
-          </div>`:''}
         </div>
         <!-- v50b — Planned Start / Target Completion. Read-only on the
         card; edited only via Edit Project (openScopeEditModal), never a
@@ -12379,7 +12472,11 @@ function getPropertyBilledAndBasis(p){
   const allUnits=(window.UNIT_INVENTORY||[]).filter(u=>u.property===p.n);
   const stages=rollupUnitsByStage(allUnits);
   const basis=stages.total;
-  const activeScopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status==='In Progress');
+  // v61b-status — 'In Progress' replaced with the 3 new middle-stage
+  // values (task #11), matching every other "genuinely active Scope"
+  // check updated this round. Real billing math consumer flagged
+  // explicitly in the status-redesign audit.
+  const activeScopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&(s.status==='Pre-Construction'||s.status==='Construction'||s.status==='Project Closeout'));
   let billed=0;
   if(activeScopes.length===0){
     // No active Scope (pre-Scope legacy property, or everything
@@ -12556,15 +12653,27 @@ function renderActionBoard(){
     const atRisk=(window.MILESTONES||[]).some(m=>m.property===p.n&&m.status==='At Risk');
     return {name:p.n,complete,total:units.length,pct,atRisk};
   }).filter(Boolean).sort((a,b)=>a.pct-b.pct).slice(0,4);
-  // Heat map -- reimplemented here against the same real Scopes/Milestones
-  // data and the same v56i Removed-property join, since groupScopesToTiles
-  // itself lives inside renderDashboard's closure.
-  const abActiveScopes=(window.SCOPES||[]).filter(s=>s.status==='In Progress'&&!removedNames.has(s.property));
+  // v61b-status — Heat map rebucketed onto the new 5-stage Scope
+  // vocabulary (task #11). Was filtering on the old flat s.status==='In
+  // Progress', which no longer matches anything once
+  // deriveAndWriteScopeStatus() started writing Pre-Construction/
+  // Construction/Project Closeout instead. Now includes any Scope in one
+  // of those 3 middle stages, and buckets each into its own real category
+  // via the same corrected getMilestoneCategoryForScope() Properties'
+  // stage dots use — replacing the old inline M5-completion 2-bucket
+  // toggle — so Action Board's tiles and Properties' dots always agree on
+  // which stage a Scope is in. 4 real tabs now (was 3: Construction/Pre-
+  // construction/Complete): Pre-Construction/Construction/Project
+  // Closeout/Complete.
+  const abActiveScopes=(window.SCOPES||[]).filter(s=>(s.status==='Pre-Construction'||s.status==='Construction'||s.status==='Project Closeout')&&!removedNames.has(s.property));
   const abScopeData=abActiveScopes.map(s=>{
     const ms=(window.MILESTONES||[]).filter(m=>m.property===s.property&&m.scopeId===s.id);
     const complete=ms.filter(m=>m.status==='Complete').length;
-    const m5=ms.find(m=>m.milestoneNumber===5);
-    const category=(m5&&m5.status==='Complete')?'construction':'precon';
+    // v61b-status — category now comes from getMilestoneCategoryForScope
+    // (Pre-Construction/Construction/Project Closeout), not the old
+    // inline M5-only 2-bucket check. Lowercased+hyphen-stripped to match
+    // the existing abGroupTiles(category) call convention below.
+    const category=getMilestoneCategoryForScope(s).toLowerCase().replace(/\s+/g,'');
     const risk=typeof calcScopeScheduleRisk==='function'?calcScopeScheduleRisk(s.property,s.id):{atRiskCount:0,daysLate:0};
     const isRisk=risk.atRiskCount>0||risk.daysLate>0;
     const expected=(typeof MILESTONES_DEF!=='undefined'&&MILESTONES_DEF.length)||14;
@@ -12586,8 +12695,13 @@ function renderActionBoard(){
     });
     return Object.values(byProp).map(t=>({...t,pct:t.expected>0?Math.round((t.complete/t.expected)*100):0}));
   }
+  const preconTiles=abGroupTiles('pre-construction');
   const constructionTiles=abGroupTiles('construction');
-  const preconTiles=abGroupTiles('precon');
+  // v61b-status — new 4th tab (task #11), same abGroupTiles() pattern as
+  // Construction/Pre-Construction above, filtered to the real Project
+  // Closeout category instead of being invisible/lumped into Construction
+  // the way the old 2-bucket toggle left it.
+  const closeoutTiles=abGroupTiles('projectcloseout');
   // Complete tiles -- same real source Dashboard's own heat map uses
   // (groupScopesToTiles' sibling logic, line ~23707): properties with
   // Property Status = Complete, Removed-excluded. Misty asked for this
@@ -12856,8 +12970,9 @@ function renderActionBoard(){
         describes it.
         -->
         <div>
-          <p style="font-size:14px;font-weight:700;color:var(--navy);margin:0">${abHeatTab==='construction'?'Construction Heat Map':abHeatTab==='precon'?'Pre-Construction Heat Map':'Complete Heat Map'}</p>
-          <p style="font-size:11.5px;color:var(--gray-mid);margin:2px 0 0">${abHeatTab==='construction'?'Lead-Time Progress by Property, M5-M14':abHeatTab==='precon'?'Properties with Projects in M1-M4 Stage':'Properties with a completed project'}</p>
+          <!-- v61b-status — 4th tab (Project Closeout) added, task #11. -->
+          <p style="font-size:14px;font-weight:700;color:var(--navy);margin:0">${abHeatTab==='construction'?'Construction Heat Map':abHeatTab==='precon'?'Pre-Construction Heat Map':abHeatTab==='closeout'?'Project Closeout Heat Map':'Complete Heat Map'}</p>
+          <p style="font-size:11.5px;color:var(--gray-mid);margin:2px 0 0">${abHeatTab==='construction'?'Lead-Time Progress by Property, M5-M9':abHeatTab==='precon'?'Properties with Projects in M1-M4 Stage':abHeatTab==='closeout'?'Properties with Projects in M10-M13 Stage':'Properties with a completed project'}</p>
         </div>
         <div style="display:flex;gap:10px;align-items:center">
           <span style="font-size:10px;color:var(--gray-mid)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--blue-dark);margin-right:3px"></span>On Track</span>
@@ -12869,8 +12984,11 @@ function renderActionBoard(){
       class these tab pills inherit from is 500-weight -- overridden to
       match exactly. -->
       <div style="display:flex;gap:4px;margin-bottom:12px">
-        <button class="btn" style="${abHeatTab==='construction'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('construction')">Construction (${constructionTiles.length})</button>
         <button class="btn" style="${abHeatTab==='precon'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('precon')">Pre-Construction (${preconTiles.length})</button>
+        <button class="btn" style="${abHeatTab==='construction'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('construction')">Construction (${constructionTiles.length})</button>
+        <!-- v61b-status — 4th tab (task #11), same abGroupTiles() pattern
+        as Construction/Pre-Construction. -->
+        <button class="btn" style="${abHeatTab==='closeout'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('closeout')">Project Closeout (${closeoutTiles.length})</button>
         <button class="btn" style="${abHeatTab==='complete'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('complete')">Complete (${completeTiles.length})</button>
       </div>
       <!-- v57d -- tile markup now matches Dashboard's real heat tile
@@ -12890,7 +13008,8 @@ function renderActionBoard(){
       as Dashboard's own dashHeatDataComplete, which also has no counter,
       so Complete tiles correctly show no count here either, matching
       Dashboard's own behavior exactly rather than inventing one. -->
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:completeTiles).map(t=>{
+      <!-- v61b-status — 4th tab wired into tile selection, task #11. -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:abHeatTab==='closeout'?closeoutTiles:completeTiles).map(t=>{
         const isComplete=abHeatTab==='complete';
         const borderColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
         const bgColor=isComplete?'var(--green-pale)':t.isRisk?'var(--red-pale)':'#eff6ff';
@@ -12912,7 +13031,7 @@ function renderActionBoard(){
           ${overdueText}
           </div>
         </div>`;
-      }).join('')||`<p style="color:var(--gray-mid);font-size:12px">No properties in ${abHeatTab==='construction'?'construction':abHeatTab==='precon'?'pre-construction':'complete'} status.</p>`}</div>
+      }).join('')||`<p style="color:var(--gray-mid);font-size:12px">No properties in ${abHeatTab==='construction'?'construction':abHeatTab==='precon'?'pre-construction':abHeatTab==='closeout'?'project closeout':'complete'} status.</p>`}</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
       <div class="card" style="border-radius:12px">
@@ -18535,6 +18654,20 @@ function getMilestoneCategoryForProp(propName){
 // multiplication is needed here. Used by the Analytics stage/elevator-
 // company charts and Portfolio View's Current Phase column, all of which
 // need genuine per-project granularity, not the property-wide blend.
+// v61b-status — Fixed (task #11). Previously used stale fractions (12/18,
+// 4/18) left over from an 18-milestone version of the app; against the
+// real 14-milestone MILESTONES_DEF those resolved to Pre-Construction=
+// M1-3/Construction=M4-9/Project Closeout=M10-13, one milestone off the
+// agreed clean split. Now a direct milestone-count boundary matching the
+// real 14: M1-4 complete = Pre-Construction, M5-9 = Construction, M10-13
+// = Project Closeout, M14 (all 14) = Complete. This is now the single
+// source of truth for Scope lifecycle stage — deriveAndWriteScopeStatus()
+// (the real Scope.status writer) and Action Board's heat map
+// (abGroupTiles()) both call this instead of keeping their own separate
+// boundary logic. Capital Plan and On Hold are NOT part of this function
+// — they're handled one level up, since neither is a milestone-count
+// derived state (Capital Plan = not yet graduated, On Hold = manual
+// override that suspends derivation entirely).
 function getMilestoneCategoryForScope(scope){
   if(!scope)return'Pre-Construction';
   if(scope.status==='Complete')return'Complete';
@@ -18542,8 +18675,8 @@ function getMilestoneCategoryForScope(scope){
   const complete=ms.filter(m=>m.status==='Complete').length;
   const expectedTotal=MILESTONES_DEF.length;
   if(complete>=expectedTotal)return'Complete';
-  if(complete>=Math.ceil((12/18)*expectedTotal))return'Project Closeout';
-  if(complete>=Math.ceil((4/18)*expectedTotal))return'Construction';
+  if(complete>=10)return'Project Closeout';
+  if(complete>=5)return'Construction';
   return'Pre-Construction';
 }
 
@@ -18888,8 +19021,18 @@ function getCompletedScopes(){
 // M14 graduation or through the Completed-band backfill: either way the
 // work isn't currently in progress, so it shouldn't make a property look
 // "split" between active construction and pending pipeline work.
+// v61b-status — updated for the new 5-stage vocabulary (task #11). Per
+// Misty's decision to keep unit-count/active-status granularity
+// collapsed this round, this function's PURPOSE is unchanged (one
+// collapsed "is this scope genuinely active" check) — only the literal
+// string values it checks needed updating, since 'Planned'/'In Progress'
+// are no longer written to Scope.status at all (replaced by Pre-
+// Construction/Construction/Project Closeout). No live callers found in
+// this file as of this build, but fixed rather than left silently broken
+// in case something calls it dynamically or a future feature reaches for
+// it expecting it to still work.
 function isRealActiveScopeStatus(status){
-  return status==='Planned'||status==='In Progress'||status==='On Hold';
+  return status==='Pre-Construction'||status==='Construction'||status==='Project Closeout'||status==='On Hold';
 }
 // v51k — getCurrentProjectForProperty(). A property can carry several
 // Scopes at once (a mod survey/CapEx plan spawns all of them together,
@@ -18949,14 +19092,25 @@ function getCurrentProjectForProperty(propName){
 //                   active scope" is pipeline, so unscoped units are
 //                   pipeline too, not invisible/uncounted as they were
 //                   in both the old Dashboard and Capital Plan logic.
+// v61b-status — updated for the new 5-stage Scope vocabulary (task #11).
+// Per Misty's explicit decision, unit-count granularity STAYS COLLAPSED
+// this round — Pre-Construction/Construction/Project Closeout all still
+// collapse into the single 'active' bucket exactly like the old flat 'In
+// Progress' did, so every Dashboard/Capital Plan/Analytics/Portfolio View
+// number this function feeds is unchanged in shape. Only the literal
+// string check needed fixing — 'In Progress' is never written to
+// Scope.status anymore, so leaving this unfixed would have silently
+// pushed every unit under a graduated, active Scope into 'pipeline'
+// instead of 'active', a real regression across every screen that reads
+// this classifier.
 function unitLifecycleBucket(unit){
   if(unit.status==='Complete')return'complete';
   const scope=unit.scopeId?(window.SCOPES||[]).find(s=>s.id===unit.scopeId):null;
   if(!scope)return'pipeline';
   if(scope.status==='Complete')return'complete';
-  if(scope.status==='In Progress')return'active';
+  if(scope.status==='Pre-Construction'||scope.status==='Construction'||scope.status==='Project Closeout')return'active';
   if(scope.status==='On Hold')return'onhold';
-  return'pipeline'; // Capital Plan, Planned, or any other/unrecognized status
+  return'pipeline'; // Capital Plan, or any other/unrecognized status
 }
 // Back-compat alias retained in case any other call site still expects
 // property-level Capital Plan rows — none found in v27j trace, but kept
@@ -20439,6 +20593,16 @@ function renderBudgetOutlook(){
     if(sc.year==null)return;
     const units=(window.UNIT_INVENTORY||[]).filter(u=>u.scopeId===sc.id);
     const unitNames=units.map(u=>u.name).filter(Boolean);
+    // v61a-3stage — isCommitted (Award-vs-not binary) retired from Budget
+    // Outlook's own bucketing math in favor of the same 3-stage waterfall
+    // (unitBudgetStage/rollupUnitsByStage) already used by Properties'
+    // Total Investment card, per Misty's direct instruction that the
+    // three stages (Total Work Est., Client Budget, Award Value) can each
+    // independently be represented by different projects in the same
+    // year — a flat committed/planned split couldn't show that. isCommitted
+    // is kept ONLY for the Scope-level "did this project get a real
+    // Contract Award Value" fallback proration below (unchanged from
+    // before), not for per-item stage classification anymore.
     const isCommitted=sc.contractAwardValue>0;
     const anyUnitAwarded=units.some(u=>u.awardValue>0);
     const scopeGroups=(window.UNIT_GROUPS||[]).filter(ug=>ug.scopeId===sc.id);
@@ -20472,18 +20636,31 @@ function renderBudgetOutlook(){
     });
     if(units.length===0)byYear.set(sc.year,[]);
     byYear.forEach((yearUnits,yr)=>{
-      let yearAmount;
-      if(isCommitted){
-        yearAmount=(!anyUnitAwarded&&units.length>0)
-          ?sc.contractAwardValue*(yearUnits.length/units.length)
-          :yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
+      // v61a-3stage — per-unit 3-stage split for this year's units,
+      // reusing unitBudgetStage() so a unit lands in exactly the same
+      // stage here as it does on Properties' Total Investment card. The
+      // old Scope-level "isCommitted, so prorate the whole Contract
+      // Award Value across years by unit-count share" special case is
+      // preserved for the awarded amount specifically (a Scope's real
+      // signed contract is one number, not summed per-unit Award Value,
+      // when no individual unit carries its own Award Value) — every
+      // other stage still sums straight from each unit's own number.
+      let yearEstimated=0,yearApproved=0,yearAwarded=0;
+      if(isCommitted&&!anyUnitAwarded&&units.length>0){
+        yearAwarded=sc.contractAwardValue*(yearUnits.length/units.length);
       }else{
-        yearAmount=yearUnits.reduce((a,u)=>a+unitEffectiveValue(u),0);
+        yearUnits.forEach(u=>{
+          const{stage,amount}=unitBudgetStage(u);
+          if(stage==='awarded')yearAwarded+=amount;
+          else if(stage==='approved')yearApproved+=amount;
+          else yearEstimated+=amount;
+        });
       }
+      const yearAmount=yearEstimated+yearApproved+yearAwarded;
       if(yearAmount<=0)return;
       // v42k — sortUnitNames so the table/tooltip's unit list reads in
       // natural order (PE1, PE2 ... PE10) instead of raw bucket order.
-      items.push({year:yr,amount:yearAmount,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted,source:isCommitted?'scope':'estimate',unitCount:yearUnits.length,unitNames:sortUnitNames(yearUnits.map(u=>u.name).filter(Boolean))});
+      items.push({year:yr,amount:yearAmount,estimated:yearEstimated,approved:yearApproved,awarded:yearAwarded,property:sc.property,scopeName:sc.name||'Untitled scope',isCommitted,source:isCommitted?'scope':'estimate',unitCount:yearUnits.length,unitNames:sortUnitNames(yearUnits.map(u=>u.name).filter(Boolean))});
       // v41a — carries the field set both Budget Outlook exports need:
       // Unit Type/Equipment Type/Priority/Consultant/Device Location/cost
       // estimates/Target Completion straight off the real Unit Inventory
@@ -20498,9 +20675,15 @@ function renderBudgetOutlook(){
       const elevatorCoResolved=sc.ec||propForEc?.ec||'';
       yearUnits.forEach(u=>{
         const amt=(isCommitted&&!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
+        // v61a-3stage — real per-unit stage (estimated/approved/awarded),
+        // same unitBudgetStage() classification as the year totals above,
+        // carried per-unit for anything downstream that needs it (kept
+        // separate from the isCommitted/amt proration above, which is
+        // specifically about the whole-Scope Award Value special case).
+        const unitStage=(isCommitted&&!anyUnitAwarded&&units.length>0)?'awarded':unitBudgetStage(u).stage;
         unitItems.push({
           year:yr,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',
-          amount:amt,isCommitted,status:unitLifecycleBucket(u),
+          amount:amt,isCommitted,stage:unitStage,status:unitLifecycleBucket(u),
           unitId:u.id,
           unitType:u.unitType||'',
           equipmentType:u.equipmentType||'',
@@ -20566,9 +20749,13 @@ function renderBudgetOutlook(){
     units.forEach(u=>{
       const yr=unitToYear.has(u.id)?unitToYear.get(u.id):lastYearOnRecordAll;
       const amt=(isCommitted&&!anyUnitAwarded&&units.length>0)?sc.contractAwardValue/units.length:unitEffectiveValue(u);
+      // v61a-3stage — same real per-unit stage as the main unitItems
+      // loop above, so both exports can render a real Client Budget
+      // column instead of the old 2-column Award/Estimate split.
+      const unitStageAll=(isCommitted&&!anyUnitAwarded&&units.length>0)?'awarded':unitBudgetStage(u).stage;
       allUnitItems.push({
         year:yr,property:sc.property,scopeName:sc.name||'Untitled scope',unitName:u.name||'(unnamed unit)',
-        amount:amt,isCommitted,status:unitLifecycleBucket(u),
+        amount:amt,isCommitted,stage:unitStageAll,status:unitLifecycleBucket(u),
         unitId:u.id,
         unitType:u.unitType||'',
         equipmentType:u.equipmentType||'',
@@ -20599,16 +20786,23 @@ function renderBudgetOutlook(){
   // matching what "active" means everywhere else in the app (Dashboard,
   // Capital Plan, Portfolio View).
   const _activePropNames=new Set(getPortfolioClassification().activeProps.map(p=>p.n));
+  // v61a-3stage — 'capital' pill ("Capital plan only") used to mean
+  // "not yet Awarded" (!isCommitted), which is still roughly right but
+  // now more precisely means "hasn't reached Award stage yet" — an item
+  // with real awarded dollars in a given year no longer belongs here even
+  // if the Scope also has estimated/approved dollars in other years.
   const allocs=items.filter(a=>a.year!=null).filter(a=>{
-    if(boFilter==='capital')return !a.isCommitted;
+    if(boFilter==='capital')return a.awarded<=0;
     if(boFilter==='active')return _activePropNames.has(a.property);
     return true;
   });
 
   const byYearAll={};
   allocs.forEach(a=>{
-    if(!byYearAll[a.year])byYearAll[a.year]={committed:0,planned:0,items:[],unitTotal:0,propSet:new Set()};
-    if(a.isCommitted)byYearAll[a.year].committed+=a.amount;else byYearAll[a.year].planned+=a.amount;
+    if(!byYearAll[a.year])byYearAll[a.year]={estimated:0,approved:0,awarded:0,items:[],unitTotal:0,propSet:new Set()};
+    byYearAll[a.year].estimated+=(a.estimated||0);
+    byYearAll[a.year].approved+=(a.approved||0);
+    byYearAll[a.year].awarded+=(a.awarded||0);
     byYearAll[a.year].items.push(a);
     byYearAll[a.year].unitTotal+=(a.unitCount||0);
     if(a.property)byYearAll[a.year].propSet.add(a.property);
@@ -20625,8 +20819,14 @@ function renderBudgetOutlook(){
   // full allocs list, so "Total outlook"/"Committed"/"Planned"/"Properties"
   // match what the chart and table below are actually showing.
   const allocsInYears=boYearSelection?allocs.filter(a=>boYearSelection.has(a.year)):allocs;
-  const totalCommitted=allocsInYears.filter(a=>a.isCommitted).reduce((s,a)=>s+a.amount,0);
-  const totalPlanned=allocsInYears.filter(a=>!a.isCommitted).reduce((s,a)=>s+a.amount,0);
+  // v61a-3stage — three real totals (Total Work Est./Client Budget/Award
+  // Value) replacing the old committed/planned binary. Field names kept
+  // as totalEstimated/totalApproved/totalAwarded internally; on-screen
+  // labels use the exact Unit Inventory column names per Misty's direct
+  // instruction (see stat cards and table header below).
+  const totalEstimated=allocsInYears.reduce((s,a)=>s+(a.estimated||0),0);
+  const totalApproved=allocsInYears.reduce((s,a)=>s+(a.approved||0),0);
+  const totalAwarded=allocsInYears.reduce((s,a)=>s+(a.awarded||0),0);
   // v36j — "Properties" under "All scheduled" was undercounting (22 vs the
   // real 31-property active+pipeline portfolio) because it only counted
   // properties that happened to have a scope contributing a nonzero dollar
@@ -20709,9 +20909,17 @@ function renderBudgetOutlook(){
   // Capital Plan's cards above, per Misty's explicit direction: "Budget
   // outlook stat cards should all be same size as units."
   document.getElementById('bo-summary-cards').innerHTML=`
-    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-currency-dollar','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Total outlook</div><div class="stat-value" style="font-size:22px">${fmtBudget(totalCommitted+totalPlanned)}</div></div></div>
-    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-file-dollar','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Award</div><div class="stat-value" style="font-size:22px;color:var(--blue-dark)">${fmtBudget(totalCommitted)}</div></div></div>
-    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-chart-bar','var(--teal-pale)','var(--teal)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Estimate</div><div class="stat-value" style="font-size:22px;color:var(--blue-mid)">${fmtBudget(totalPlanned)}</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-currency-dollar','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Total outlook</div><div class="stat-value" style="font-size:22px">${fmtBudget(totalEstimated+totalApproved+totalAwarded)}</div></div></div>
+    <!-- v61a-3stage — three real stage totals replacing the old
+    Award/Estimate 2-card pair, labeled with Unit Inventory's exact
+    field names (Total Work Est./Client Budget/Award Value) per Misty's
+    direct instruction, so a PM sees the same names here as the columns
+    they'd actually edit in Manage Unit Inventory. Row is now 6-across
+    (was 5) to fit the extra card; same fixed-height/equal-width pattern
+    as before. -->
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-chart-bar','var(--teal-pale)','var(--teal)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Total Work Est.</div><div class="stat-value" style="font-size:22px;color:var(--blue-mid)">${fmtBudget(totalEstimated)}</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-clipboard-check','var(--indigo-pale)','var(--indigo)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Client Budget</div><div class="stat-value" style="font-size:22px;color:var(--indigo)">${fmtBudget(totalApproved)}</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-file-dollar','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Award Value</div><div class="stat-value" style="font-size:22px;color:var(--blue-dark)">${fmtBudget(totalAwarded)}</div></div></div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-building','var(--indigo-pale)','var(--indigo)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Properties</div><div class="stat-value" style="font-size:22px">${propCount}</div></div></div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-list-details','var(--purple-pale)','var(--purple)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Units</div><div class="stat-value" style="font-size:22px">${totalUnitsCard}</div>${_boUnaccountedNote}</div></div>`;
 
@@ -20719,19 +20927,27 @@ function renderBudgetOutlook(){
   if(years.length===0){
     chartEl.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-chart-bar-off"></i><div class="empty-state-title">No budget data yet</div><div class="empty-state-sub">Estimates appear once units are linked to a Project with a real year, or once a Project has a Contract Award Value entered.</div></div>`;
   }else{
-    const maxTotal=Math.max(...years.map(y=>byYear[y].committed+byYear[y].planned));
+    // v61a-3stage — 3-segment stacked bar (was 2: committed/planned),
+    // stacking order bottom-to-top Award/Client Budget/Total Work Est. so
+    // the most-certain dollars anchor the bar, same visual convention the
+    // old committed-on-bottom layout used. Colors match the stat cards
+    // above (teal=Est., indigo=Approved, blue-dark=Awarded) and the
+    // legend below.
+    const maxTotal=Math.max(...years.map(y=>byYear[y].estimated+byYear[y].approved+byYear[y].awarded));
     chartEl.innerHTML=`<div style="display:flex;align-items:flex-end;gap:20px;height:200px;padding:0 8px;border-bottom:0.5px solid var(--border)">
       ${years.map(y=>{
         const d=byYear[y];
-        const total=d.committed+d.planned;
+        const total=d.estimated+d.approved+d.awarded;
         const h=maxTotal>0?Math.round((total/maxTotal)*180):0;
-        const hc=total>0?Math.round((d.committed/total)*h):0;
-        const hp=h-hc;
+        const hAwarded=total>0?Math.round((d.awarded/total)*h):0;
+        const hApproved=total>0?Math.round((d.approved/total)*h):0;
+        const hEstimated=Math.max(0,h-hAwarded-hApproved);
         return `<div style="display:flex;flex-direction:column;align-items:center;flex:1">
           <div style="font-size:11px;color:var(--gray-mid);margin-bottom:4px">${fmtBudget(total)}</div>
           <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:180px">
-            <div style="width:100%;background:var(--blue-mid);height:${hp}px;border-radius:3px 3px 0 0"></div>
-            <div style="width:100%;background:var(--blue-dark);height:${hc}px"></div>
+            <div style="width:100%;background:var(--teal);height:${hEstimated}px;border-radius:3px 3px 0 0"></div>
+            <div style="width:100%;background:var(--indigo);height:${hApproved}px"></div>
+            <div style="width:100%;background:var(--blue-dark);height:${hAwarded}px"></div>
           </div>
         </div>`;
       }).join('')}
@@ -20748,14 +20964,21 @@ function renderBudgetOutlook(){
     // v51g — alphabetical by property (then scope name as a tiebreaker for
     // multiple projects on the same property), replacing the old sort-by-
     // dollar-amount-descending order, per Misty's direct request.
+    // v61a-3stage — detail row and year row now show all three stage
+    // amounts (Total Work Est./Client Budget/Award Value) instead of the
+    // old Award/Estimate pair, each column dash-blanked when that item
+    // has $0 in that stage (matches the old blank-when-not-applicable
+    // convention exactly, just extended to a 3rd column).
+    const stageCell=v=>v>0?fmtCurrency(v):'<span style="color:var(--gray-light)">—</span>';
     const detailRows=isOpen?d.items.slice().sort((a,b)=>(a.property||'').localeCompare(b.property||'')||(a.scopeName||'').localeCompare(b.scopeName||'')).map(it=>{
       const namesText=it.unitNames&&it.unitNames.length>0?it.unitNames.join(', '):'<span style="color:var(--gray-light)">—</span>';
       return `
       <tr style="background:var(--gray-pale)">
         <td></td>
         <td style="text-align:left;font-size:12px;color:var(--gray-mid);padding-left:20px">${it.property} — ${it.scopeName}</td>
-        <td style="text-align:center;font-size:12px;color:var(--blue-dark)">${it.isCommitted?fmtCurrency(it.amount):'<span style="color:var(--gray-light)">—</span>'}</td>
-        <td style="text-align:center;font-size:12px;color:var(--blue-mid)">${!it.isCommitted?fmtCurrency(it.amount):'<span style="color:var(--gray-light)">—</span>'}</td>
+        <td style="text-align:center;font-size:12px;color:var(--teal)">${stageCell(it.estimated)}</td>
+        <td style="text-align:center;font-size:12px;color:var(--indigo)">${stageCell(it.approved)}</td>
+        <td style="text-align:center;font-size:12px;color:var(--blue-dark)">${stageCell(it.awarded)}</td>
         <td style="text-align:center;font-size:12px;font-weight:500">${fmtCurrency(it.amount)}</td>
         <td style="text-align:center;font-size:12px;color:var(--gray-mid)">${it.unitCount||'—'}</td>
         <td style="text-align:left;font-size:12px;color:var(--gray-mid)">${namesText}</td>
@@ -20763,9 +20986,10 @@ function renderBudgetOutlook(){
     return `<tr style="cursor:pointer" onclick="toggleBoYear(${y})">
       <td class="no-print"><i class="ti ti-chevron-${isOpen?'down':'right'}" style="font-size:14px;color:var(--gray-mid)"></i></td>
       <td style="text-align:left;font-weight:600">${y}</td>
-      <td style="text-align:center;color:var(--blue-dark)">${cell(d.committed)}</td>
-      <td style="text-align:center;color:var(--blue-mid)">${cell(d.planned)}</td>
-      <td style="text-align:center;font-weight:600">${fmtCurrency(d.committed+d.planned)}</td>
+      <td style="text-align:center;color:var(--teal)">${cell(d.estimated)}</td>
+      <td style="text-align:center;color:var(--indigo)">${cell(d.approved)}</td>
+      <td style="text-align:center;color:var(--blue-dark)">${cell(d.awarded)}</td>
+      <td style="text-align:center;font-weight:600">${fmtCurrency(d.estimated+d.approved+d.awarded)}</td>
       <td style="text-align:center;color:var(--gray-mid)">${d.unitTotal||'—'}</td>
       <!-- v49p — the Unit Names column previously showed nothing at all
       on the collapsed year row (only the click-expanded per-scope detail
@@ -20777,11 +21001,11 @@ function renderBudgetOutlook(){
       since that only makes sense per-scope in the expanded detail rows). -->
       <td style="text-align:left;color:var(--gray-mid)">${d.propSet&&d.propSet.size?d.propSet.size+' propert'+(d.propSet.size===1?'y':'ies'):'<span style="color:var(--gray-light)">—</span>'}</td>
     </tr>${detailRows}`;
-  }).join('')||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--gray-mid)">No allocations for this filter</td></tr>`;
+  }).join('')||`<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--gray-mid)">No allocations for this filter</td></tr>`;
   // v34i — cache what was just rendered so Export to Excel reads the exact
   // same numbers on screen, rather than recomputing (and risking drift from)
   // the aggregation logic a second time.
-  window._boData={years,byYear,totalCommitted,totalPlanned,propCount,filter:boFilter};
+  window._boData={years,byYear,totalEstimated,totalApproved,totalAwarded,propCount,filter:boFilter};
   // v36l — per-unit rows for the Excel export, filtered to the same
   // selected years the on-screen chart/table are currently showing.
   window._boUnitItems=boYearSelection?unitItems.filter(u=>boYearSelection.has(u.year)):unitItems;
@@ -20838,6 +21062,10 @@ function exportBudgetOutlookClientReport(){
   const sorted=_boSortedAllUnitItems();
   if(!d||!sorted.length){showToast('No budget data to export','error');return;}
   const milestoneLabels=MILESTONES_DEF.map((name,i)=>`M${i+1} - ${name}`);
+  // v61a-3stage — Client Budget added as a NEW LAST column (not inserted
+  // mid-list) specifically so the Summary tab's existing column-letter
+  // formulas (K/L/I below) never shift — appending after Unit ID keeps
+  // every existing reference correct with zero re-pointing needed.
   const detailRows=sorted.map(u=>({
     'Year':u.year==null?'':u.year,
     'Property':u.property||'',
@@ -20860,14 +21088,15 @@ function exportBudgetOutlookClientReport(){
     'Contingency Fee Est.':u.contingencyEst||0,
     'Target Completion':u.targetCompletion||'',
     'Unit ID':u.unitId||'',
+    'Client Budget':u.stage==='approved'?(u.amount||0):0,
   }));
   const wb=XLSX.utils.book_new();
   const wsDetail=XLSX.utils.json_to_sheet(detailRows);
   const lastRow=detailRows.length+1;
   for(let r=2;r<=lastRow;r++){
-    ['K','L','P','Q','R','S'].forEach(col=>_boSetCurrencyCell(wsDetail,`${col}${r}`));
+    ['K','L','P','Q','R','S','V'].forEach(col=>_boSetCurrencyCell(wsDetail,`${col}${r}`));
   }
-  wsDetail['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0}];
+  wsDetail['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0},{wch:13}];
   XLSX.utils.book_append_sheet(wb,wsDetail,'Unit detail');
   const summaryRows=[
     ['Key portfolio metrics',''],
@@ -20913,6 +21142,11 @@ function exportBudgetOutlookDataEntry(){
   if(!sorted.length){showToast('No budget data to export','error');return;}
   const milestoneLabels=MILESTONES_DEF.map((name,i)=>`M${i+1} - ${name}`);
   const statusLabels=['Active','On Hold','Pipeline','Complete'];
+  // v61a-3stage — Client Budget added as a new last column, same
+  // position as Client Report's matching column, per Misty's direct
+  // instruction that these two exports are meant to be the same
+  // structure — whatever changes on one applies identically to the
+  // other.
   const rows=sorted.map(u=>({
     'Year':u.year==null?'':u.year,
     'Property':u.property||'',
@@ -20935,14 +21169,15 @@ function exportBudgetOutlookDataEntry(){
     'Contingency Fee Est.':u.contingencyEst||0,
     'Target Completion':u.targetCompletion||'',
     'Unit ID':u.unitId||'',
+    'Client Budget':u.stage==='approved'?(u.amount||0):0,
   }));
   const wb=XLSX.utils.book_new();
   const ws=XLSX.utils.json_to_sheet(rows);
   const lastRow=rows.length+1;
   for(let r=2;r<=lastRow;r++){
-    ['K','L','P','Q','R','S'].forEach(col=>_boSetCurrencyCell(ws,`${col}${r}`));
+    ['K','L','P','Q','R','S','V'].forEach(col=>_boSetCurrencyCell(ws,`${col}${r}`));
   }
-  ws['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0}];
+  ws['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0},{wch:13}];
   XLSX.utils.book_append_sheet(wb,ws,'Data entry');
   // v41c — no real dropdown enforcement available (see comment above
   // _boSetCurrencyCell), so a reference sheet lists the allowed values for
@@ -22394,17 +22629,20 @@ async function saveSplitIntoScopes(){
       // circuits on Capital Plan status, which would block graduation for
       // scopes created fresh in this same modal session (their status is
       // 'Capital Plan' until the first derive runs, but derive won't run
-      // because of the guard). Setting 'Planned' here is correct: M1 date
-      // entered = scope has graduated minimum to Planned; derive will
-      // immediately advance to In Progress if M1 actual date also exists.
+      // because of the guard). Setting 'Pre-Construction' here is correct:
+      // M1 date entered = scope has graduated minimum to Pre-Construction;
+      // derive will immediately advance further (Construction/Project
+      // Closeout/Complete) if later milestones are also already complete.
+      // v61b-status — was 'Planned', updated to the new vocabulary's
+      // equivalent first-graduated stage.
       const scToGraduate=(window.SCOPES||[]).find(s=>s.id===scopeId);
       if(scToGraduate&&scToGraduate.status==='Capital Plan'){
-        scToGraduate.status='Planned';
+        scToGraduate.status='Pre-Construction';
         // v30d: explicitly write graduated status to Airtable so it persists across login.
         // deriveAndWriteScopeStatus skips the write when newStatus matches scope.status,
         // which would leave Airtable still showing 'Capital Plan'.
         if(!demoMode&&scToGraduate.id){
-          const updRes=await atUpdate('Scopes',scToGraduate.id,{'Status':'Planned'});
+          const updRes=await atUpdate('Scopes',scToGraduate.id,{'Status':'Pre-Construction'});
           if(!updRes)scopeCreateFailCount++;
         }
       }
@@ -22722,12 +22960,13 @@ function renderCharts(){
     return null;
   }
   window.resolveUnitTimelineMonth=resolveUnitTimelineMonth;
-  // Active-only units: linked Scope status === 'In Progress', matching
-  // unitLifecycleBucket()'s 'active' bucket exactly.
+  // Active-only units: linked Scope status is Pre-Construction/
+  // Construction/Project Closeout, matching unitLifecycleBucket()'s
+  // 'active' bucket exactly.
   const _fcfsActiveUnits=(window.UNIT_INVENTORY||[]).filter(u=>{
     if(!u.scopeId)return false;
     const sc=(window.SCOPES||[]).find(s=>s.id===u.scopeId);
-    return sc&&sc.status==='In Progress';
+    return sc&&(sc.status==='Pre-Construction'||sc.status==='Construction'||sc.status==='Project Closeout');
   });
   // 4. Forecasted Completion — rolling 12 months, active projects only.
   const fcByMonth={};
@@ -25087,12 +25326,11 @@ function renderDashboard(){
   // visibly broken -- but the join-back was missing structurally, so
   // fixing it now rather than relying on that coincidence holding.
   const _removedProps=new Set((window.PORTFOLIO||[]).filter(p=>p.st==='Removed').map(p=>p.n));
-  const activeScopes=(window.SCOPES||[]).filter(s=>s.status==='In Progress'&&!_removedProps.has(s.property));
+  const activeScopes=(window.SCOPES||[]).filter(s=>(s.status==='Pre-Construction'||s.status==='Construction'||s.status==='Project Closeout')&&!_removedProps.has(s.property));
   const dashScopeData=activeScopes.map(s=>{
     const ms=getMilestonesForProp(s.property,s.id);
     const complete=ms.filter(m=>m.status==='Complete').length;
-    const m5=ms.find(m=>m.milestoneNumber===5);
-    const category=(m5&&m5.status==='Complete')?'construction':'precon';
+    const category=getMilestoneCategoryForScope(s)==='Construction'?'construction':'precon';
     const risk=calcScopeScheduleRisk(s.property,s.id);
     const isRisk=risk.atRiskCount>0||risk.daysLate>0;
     return {property:s.property,scopeId:s.id,scopeName:s.name||'',complete,expected:MILESTONES_DEF.length,category,daysLate:risk.daysLate,isRisk};
@@ -35114,7 +35352,7 @@ function renderBoForecastSpendChart_REMOVED(){
   const activeUnits=(window.UNIT_INVENTORY||[]).filter(u=>{
     if(!u.scopeId)return false;
     const sc=(window.SCOPES||[]).find(s=>s.id===u.scopeId);
-    return sc&&sc.status==='In Progress';
+    return sc&&(sc.status==='Pre-Construction'||sc.status==='Construction'||sc.status==='Project Closeout');
   });
   const fsByMonth={};
   const fsDetailByMonth={};
