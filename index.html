@@ -3086,10 +3086,11 @@ async function loadAllData() {
       // v62i — task #44: this field now holds a single invoice's amount
       // (Invoice Amount), not a typed running total. Kept as billedYTD in
       // the in-memory shape so every existing render site that already
-      // reads b.billedYTD keeps working — renderBudgetTab now sums these
-      // per-invoice amounts across the year instead of trusting the most
-      // recent one as a running total. Falls back to the old Billed YTD
-      // field name for pre-rebuild historical entries that only have that.
+      // reads b.billedYTD keeps working — renderBudgetTab sums these
+      // per-invoice amounts (v62k: lifetime, all years) instead of
+      // trusting the most recent one as a running total. Falls back to
+      // the old Billed YTD field name for pre-rebuild historical entries
+      // that only have that.
       billedYTD: r.fields['Invoice Amount']!=null?r.fields['Invoice Amount']:(r.fields['Billed YTD']||r.fields['$ Amount']||0),
       entryDate: r.fields['Entry Date']||r.fields['Billing date']||'',
       invoiceMonth: r.fields['Invoice Month']||'',
@@ -4613,7 +4614,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62k</div>
     </div>
   </nav>
 
@@ -5014,7 +5015,12 @@ from unitEffectiveValue() onto each checkbox). -->
           <!-- BUDGET PERFORMANCE TAB -->
           <div id="prop-tab-budget" class="tab-content">
             <div id="budget-scope-tabs"></div>
-            <div class="two-col">
+            <!-- v62k — task #48: was a plain .two-col (1fr 1fr), which
+            squeezed Billing History enough that its Date column wrapped.
+            Scoped override here (not a .two-col change) so this stays
+            local to this one tab instead of affecting every other
+            .two-col layout in the app. -->
+            <div class="two-col" style="grid-template-columns:2fr 3fr">
               <div>
                 <div class="card" id="budget-perf-card">
                   <div class="card-header"><div><div class="card-title">Budget Performance</div><div class="card-sub" id="budget-perf-sub">Project Budget vs Billed YTD</div></div></div>
@@ -10227,18 +10233,17 @@ function renderScopeCards(p){
   // collide with any other stage color in this legend.
   // v62a — milestone number ranges added after each stage name, per direct
   // instruction ("dot + Pre-Construction (M1-M4)" format). Ranges taken
-  // directly from getMilestoneCategoryForScope()'s real boundaries
-  // (~line 18855: complete>=10->Project Closeout, complete>=5->
-  // Construction, else Pre-Construction, out of 14 total) rather than
-  // guessed — Pre-Construction=M1-M4 (complete<5), Construction=M5-M9
-  // (5<=complete<10), Project Closeout=M10-M13 (10<=complete<14),
-  // Complete=M14 (all 14). Capital Plan intentionally has no range: it's
-  // "before M1 is ever dated," not a milestone-count bucket, confirmed
-  // with Misty it stays unlabeled.
+  // directly from getMilestoneCategoryForScope()'s real boundaries.
+  // v62k — task #46: Pre-Construction now represents M1-M5 (was M1-M4),
+  // Construction begins at M6. Ranges: Pre-Construction=M1-M5
+  // (complete<6), Construction=M6-M9 (6<=complete<10), Project
+  // Closeout=M10-M13 (10<=complete<14), Complete=M14 (all 14). Capital
+  // Plan intentionally has no range: it's "before M1 is ever dated," not
+  // a milestone-count bucket, confirmed with Misty it stays unlabeled.
   const stageLegend=`<span style="display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;font-size:11px">
     <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:var(--purple);display:inline-block"></span><span style="color:var(--gray-mid)">Capital Plan</span></span>
-    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Pre-Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Pre-Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Pre-Construction (M1-M4)</span></span>
-    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Construction (M5-M9)</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Pre-Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Pre-Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Pre-Construction (M1-M5)</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Construction (M6-M9)</span></span>
     <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Project Closeout'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Project Closeout'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Project Closeout (M10-M13)</span></span>
     <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Complete'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Complete'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Complete (M14)</span></span>
   </span>`;
@@ -13887,7 +13892,15 @@ function renderChangeOrdersTab(p){
   }
   list.innerHTML=cos.map(co=>{
     const statusClass=co.status==='Approved'||co.status==='Client Approved'?'co-approved':co.status==='Rejected'?'co-rejected':'co-pending';
-    const statusBadgeClass=co.status==='Approved'||co.status==='Client Approved'?'co-status-approved':co.status==='Rejected'?'co-status-rejected':co.status==='Client Approved'?'co-status-client':'co-status-pending';
+    // v62j — task #45 fix. The old ternary checked
+    // (status==='Approved'||status==='Client Approved') FIRST, so the
+    // later status==='Client Approved'?'co-status-client' branch could
+    // never fire — Client Approved always rendered the same green
+    // co-status-approved badge as a plain Approved CO. co-status-client
+    // (a distinct blue badge) existed in CSS but had never actually
+    // displayed. Client Approved is now checked before the combined
+    // Approved/Client Approved condition.
+    const statusBadgeClass=co.status==='Client Approved'?'co-status-client':co.status==='Approved'?'co-status-approved':co.status==='Rejected'?'co-status-rejected':'co-status-pending';
     const isLocked=co.status==='Rejected';
     const canNotify=co.status==='Approved';
     return `<div class="co-row ${statusClass}">
@@ -16029,13 +16042,16 @@ function renderBudgetTab(p){
   // separate contract with its own billing history)
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n&&(!scopeId||b.scopeId===scopeId)).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const latest=propBilling[0]||null;
-  // v62i — task #44: Billed YTD is no longer a typed running total taken
-  // from the single latest entry. Each Billing Log entry is now one
-  // invoice (billedYTD holds that invoice's own Invoice Amount), so YTD
-  // is derived here as the sum of this calendar year's invoice amounts —
-  // matching the field's actual name for the first time.
-  const currentYear=new Date().getFullYear();
-  const billedYTD=propBilling.filter(b=>b.entryDate&&new Date(b.entryDate).getFullYear()===currentYear).reduce((sum,b)=>sum+(Number(b.billedYTD)||0),0);
+  // v62k — task #44 follow-up: Billed YTD is no longer a typed running
+  // total taken from the single latest entry. Each Billing Log entry is
+  // now one invoice (billedYTD holds that invoice's own Invoice Amount).
+  // v62i first derived this as a current-calendar-year-only sum, but that
+  // excluded real historical invoices (e.g. a 2024-dated invoice) from
+  // the total, making it look like logging a bill did nothing. Per
+  // Misty's direction, this is now a lifetime sum across all years —
+  // "Billed YTD" here means total billed to date on the contract, not a
+  // strict calendar-year figure.
+  const billedYTD=propBilling.reduce((sum,b)=>sum+(Number(b.billedYTD)||0),0);
   const billingBasis=getBillingBasis(p);
   const budget=billingBasis.amount;
   const budgetLabel=billingBasis.source==='award'?'Contract Award Value':'Project Budget';
@@ -18937,7 +18953,7 @@ function cfClearAll(){
 }
 
 // ── MILESTONE CATEGORY HELPER ─────────────────────────────────────────
-// Pre-Construction: milestones 1-4, Construction: 5-12, Project Closeout: 13-17, Complete: 18
+// Pre-Construction: milestones 1-5, Construction: 6-9, Project Closeout: 10-13, Complete: 14
 function getMilestoneCategoryForProp(propName){
   // v38c — properties manually flagged Complete at program launch (no real
   // milestone data behind them yet) now short-circuit to Complete here too,
@@ -18952,8 +18968,14 @@ function getMilestoneCategoryForProp(propName){
   const complete=ms.filter(m=>m.status==='Complete').length;
   const expectedTotal=getMsExpectedTotal(propName);
   if(complete>=expectedTotal)return'Complete';
-  if(complete>=Math.ceil((12/18)*expectedTotal))return'Project Closeout';
-  if(complete>=Math.ceil((4/18)*expectedTotal))return'Construction';
+  // v62k — task #46: Pre-Construction now represents M1-M5 (was M1-M4),
+  // matching getMilestoneCategoryForScope's boundary (6 complete out of 14
+  // tips to Construction). Fraction updated from 4/18 to 5/14 to keep this
+  // property-wide blended version (multi-scope properties pool several
+  // scopes' milestones into one expectedTotal) consistent with the
+  // per-scope source of truth above.
+  if(complete>=Math.ceil((10/14)*expectedTotal))return'Project Closeout';
+  if(complete>=Math.ceil((6/14)*expectedTotal))return'Construction';
   return'Pre-Construction';
 }
 // v51k — per-Scope version of getMilestoneCategoryForProp above. That
@@ -18971,16 +18993,20 @@ function getMilestoneCategoryForProp(propName){
 // 4/18) left over from an 18-milestone version of the app; against the
 // real 14-milestone MILESTONES_DEF those resolved to Pre-Construction=
 // M1-3/Construction=M4-9/Project Closeout=M10-13, one milestone off the
-// agreed clean split. Now a direct milestone-count boundary matching the
-// real 14: M1-4 complete = Pre-Construction, M5-9 = Construction, M10-13
-// = Project Closeout, M14 (all 14) = Complete. This is now the single
-// source of truth for Scope lifecycle stage — deriveAndWriteScopeStatus()
-// (the real Scope.status writer) and Action Board's heat map
-// (abGroupTiles()) both call this instead of keeping their own separate
-// boundary logic. Capital Plan and On Hold are NOT part of this function
-// — they're handled one level up, since neither is a milestone-count
-// derived state (Capital Plan = not yet graduated, On Hold = manual
-// override that suspends derivation entirely).
+// agreed clean split. Then set to a direct milestone-count boundary:
+// M1-4 complete = Pre-Construction, M5-9 = Construction, M10-13 =
+// Project Closeout, M14 (all 14) = Complete.
+// v62k — task #46 (Misty's second request this round): Pre-Construction
+// now represents M1-M5, not M1-M4. A scope stays Pre-Construction through
+// M5 complete; Construction begins once M6 is done. Project Closeout and
+// Complete boundaries are unchanged. This is still the single source of
+// truth for Scope lifecycle stage — deriveAndWriteScopeStatus() (the real
+// Scope.status writer) and Action Board's heat map (abGroupTiles()) both
+// call this instead of keeping their own separate boundary logic. Capital
+// Plan and On Hold are NOT part of this function — they're handled one
+// level up, since neither is a milestone-count derived state (Capital
+// Plan = not yet graduated, On Hold = manual override that suspends
+// derivation entirely).
 function getMilestoneCategoryForScope(scope){
   if(!scope)return'Pre-Construction';
   if(scope.status==='Complete')return'Complete';
@@ -18989,7 +19015,7 @@ function getMilestoneCategoryForScope(scope){
   const expectedTotal=MILESTONES_DEF.length;
   if(complete>=expectedTotal)return'Complete';
   if(complete>=10)return'Project Closeout';
-  if(complete>=5)return'Construction';
+  if(complete>=6)return'Construction';
   return'Pre-Construction';
 }
 
@@ -25812,7 +25838,7 @@ function renderDashboard(){
     </div>
     <div class="card custom-report-subsection" id="dashboard-precon-heatmap-card" style="margin-bottom:16px">
       <div class="card-header">
-        <div><div class="card-title">Pre-Construction Heat Map</div><div class="card-sub">Properties with Projects in M1-M4 Stage</div></div>
+        <div><div class="card-title">Pre-Construction Heat Map</div><div class="card-sub">Properties with Projects in M1-M5 Stage</div></div>
       </div>
       <!-- v55g — handoff caption, mirrored from the Construction card
            above so the relationship reads in either direction. -->
@@ -32109,9 +32135,18 @@ async function pollBudget(){
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
-      billedYTD: r.fields['Billed YTD']||r.fields['$ Amount']||0,
+      // v62k — task #49 fix. This poll-path mapping was never updated
+      // alongside loadAllData()'s v62i invoice-model rebuild, so every
+      // ~45s this was overwriting correctly-loaded invoice data with
+      // billedYTD:0 (Invoice Amount didn't exist here yet) and no
+      // invoiceNumber/includedCOs at all — the real cause of invoices
+      // going blank shortly after being logged, confirmed live. Now
+      // matches loadAllData()'s mapping exactly.
+      billedYTD: r.fields['Invoice Amount']!=null?r.fields['Invoice Amount']:(r.fields['Billed YTD']||r.fields['$ Amount']||0),
       entryDate: r.fields['Entry Date']||r.fields['Billing date']||'',
       invoiceMonth: r.fields['Invoice Month']||'',
+      invoiceNumber: r.fields['Invoice #']||'',
+      includedCOs: (r.fields['Included Change Orders']||[]).map(x=>x.id||x),
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
       // v55o — optimistic-locking conflict detection (task #90). Must stay
