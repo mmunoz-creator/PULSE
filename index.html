@@ -4571,7 +4571,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v61c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v61e</div>
     </div>
   </nav>
 
@@ -5158,24 +5158,6 @@ from unitEffectiveValue() onto each checkbox). -->
           </div>
           <!-- OVERVIEW TAB -->
           <div id="prop-tab-overview" class="tab-content active">
-            <!-- v61c — Project status legend, approved in Continuity Brief
-            v58o (item 0) for the old 2-stage Planned/Active model, which
-            never shipped. Rebuilt here with the real 5-stage vocabulary
-            that landed in v61b (Capital Plan/Pre-Construction/
-            Construction/Project Closeout/Complete). On Hold intentionally
-            excluded per direct instruction — it's a manual override, not
-            a milestone-derived stage, so it doesn't belong in a legend
-            keyed by milestone ranges. Colors match renderScopeCards()'s
-            own badge cfg object exactly (~line 9730) so this never drifts
-            from the actual card badges below it. -->
-            <div style="display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;padding:10px 14px;margin-bottom:12px;background:var(--surface,#fff);border:0.5px solid var(--border);border-radius:10px;font-size:12px">
-              <span style="font-weight:600;color:var(--gray-mid);white-space:nowrap">Project stages:</span>
-              <span style="display:flex;align-items:center;gap:6px;white-space:nowrap"><span style="width:9px;height:9px;border-radius:3px;background:var(--gray-pale);border:0.5px solid var(--border-strong);display:inline-block"></span><span style="color:var(--gray-mid)">Capital Plan</span></span>
-              <span style="display:flex;align-items:center;gap:6px;white-space:nowrap"><span style="width:9px;height:9px;border-radius:3px;background:var(--blue-xpale);display:inline-block"></span><span style="color:var(--gray-mid)">Pre-Construction <span style="color:var(--gray-light)">(M1-M4)</span></span></span>
-              <span style="display:flex;align-items:center;gap:6px;white-space:nowrap"><span style="width:9px;height:9px;border-radius:3px;background:#dcfce7;display:inline-block"></span><span style="color:var(--gray-mid)">Construction <span style="color:var(--gray-light)">(M5-M9)</span></span></span>
-              <span style="display:flex;align-items:center;gap:6px;white-space:nowrap"><span style="width:9px;height:9px;border-radius:3px;background:#dbeafe;display:inline-block"></span><span style="color:var(--gray-mid)">Project Closeout <span style="color:var(--gray-light)">(M10-M13)</span></span></span>
-              <span style="display:flex;align-items:center;gap:6px;white-space:nowrap"><span style="width:9px;height:9px;border-radius:3px;background:var(--green-pale);display:inline-block"></span><span style="color:var(--gray-mid)">Complete <span style="color:var(--gray-light)">(M14)</span></span></span>
-            </div>
             <div id="prop-scope-cards" style="margin-bottom:16px"></div>
           </div>
           <div id="prop-tab-changeorders" class="tab-content">
@@ -7380,6 +7362,7 @@ function renderUimBulkCapexRow(propName){
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="font-size:12px;font-weight:600;color:var(--gray-mid)">Set CapEx Year to</span>
         <input id="uim-bulk-capex-year-input" class="form-input" style="width:90px" placeholder="e.g. 2027">
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-mid);cursor:pointer;white-space:nowrap"><input type="checkbox" id="uim-bulk-capex-keep-scope"> Keep unit(s) in current project</label>
         <button class="btn btn-primary" onclick="uimApplyBulkCapexYear('${escP}')">Apply to selected</button>
         <button class="btn" onclick="uimCancelBulkCapexMode('${escP}')">Cancel</button>
       </div>`;
@@ -7434,25 +7417,35 @@ async function uimApplyBulkCapexYear(propName){
   if(!newYear){showToast('Enter a CapEx Year first','error');return;}
   if(uimBulkCapexIds.length===0){showToast('Select at least one unit first','error');return;}
   const units=uimBulkCapexIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)).filter(Boolean);
+  // v61e — "Keep unit(s) in current project" checkbox. Checked, this skips
+  // the move-detection/confirm below and the autoDeriveScopeForUnit call
+  // in the write loop entirely, so a year edit never reassigns Scope —
+  // useful when a unit's CapEx Year needs correcting but it's meant to
+  // stay tied to the project it's already linked to (e.g. a data-entry
+  // fix, not a real replan). Unchecked (default) is byte-identical to the
+  // pre-existing behavior below.
+  const keepScope=document.getElementById('uim-bulk-capex-keep-scope')?.checked||false;
 
-  // Work out which selected units would actually move Scopes, reusing
-  // the exact same yearKey/target-scope logic confirmScopeMoveForCapexYear
-  // uses for a single unit, just without popping a confirm per unit.
-  const moves=[];
-  for(const u of units){
-    const candidateUnit={...u,capexYear:newYear};
-    const yearKey=scopeYearKeyFor(candidateUnit);
-    const targetScope=findScopeForYearKey(u.property,yearKey);
-    const oldScope=u.scopeId?(window.SCOPES||[]).find(s=>s.id===u.scopeId):null;
-    const sameScope=oldScope&&targetScope&&oldScope.id===targetScope.id;
-    if(!sameScope&&oldScope){
-      const targetName=targetScope?targetScope.name:(yearKey==='TBD'?'TBD Scope':`${yearKey} Scope`);
-      moves.push(`${u.name||'(unnamed)'}: "${oldScope.name}" → "${targetName}"`);
+  if(!keepScope){
+    // Work out which selected units would actually move Scopes, reusing
+    // the exact same yearKey/target-scope logic confirmScopeMoveForCapexYear
+    // uses for a single unit, just without popping a confirm per unit.
+    const moves=[];
+    for(const u of units){
+      const candidateUnit={...u,capexYear:newYear};
+      const yearKey=scopeYearKeyFor(candidateUnit);
+      const targetScope=findScopeForYearKey(u.property,yearKey);
+      const oldScope=u.scopeId?(window.SCOPES||[]).find(s=>s.id===u.scopeId):null;
+      const sameScope=oldScope&&targetScope&&oldScope.id===targetScope.id;
+      if(!sameScope&&oldScope){
+        const targetName=targetScope?targetScope.name:(yearKey==='TBD'?'TBD Scope':`${yearKey} Scope`);
+        moves.push(`${u.name||'(unnamed)'}: "${oldScope.name}" → "${targetName}"`);
+      }
     }
-  }
-  if(moves.length>0){
-    const msg=`Setting CapEx Year to ${newYear} will move ${moves.length} unit${moves.length===1?'':'s'} to a different Scope:\n\n${moves.join('\n')}\n\nContinue?`;
-    if(!window.confirm(msg))return;
+    if(moves.length>0){
+      const msg=`Setting CapEx Year to ${newYear} will move ${moves.length} unit${moves.length===1?'':'s'} to a different Scope:\n\n${moves.join('\n')}\n\nContinue?`;
+      if(!window.confirm(msg))return;
+    }
   }
 
   showToast(`Updating ${units.length} unit(s)...`,'info');
@@ -7461,7 +7454,7 @@ async function uimApplyBulkCapexYear(propName){
     u.capexYear=newYear;
     const res=await atUpdate('Unit Inventory List',u.id,{'Client Capex Planning Year':newYear});
     if(!res){failCount++;continue;}
-    await autoDeriveScopeForUnit(u.id);
+    if(!keepScope)await autoDeriveScopeForUnit(u.id);
   }
   uimBulkCapexMode=false;
   uimBulkCapexIds=[];
@@ -10061,8 +10054,27 @@ function renderScopeCards(p){
   // the full note from here anyway (Edit Property is the real place to
   // view/change it), so it was pure clutter on this bar. Priority stays,
   // it's still a quick-glance field worth surfacing here.
+  // v61d — Project stage legend added inline on this same bar (moved out
+  // of its own standalone row per direct feedback), sitting between
+  // Priority and the Edit Property/Manage Projects buttons. Colors are
+  // the real PROPS_DOT_COLORS solid-fill palette (~line 12551) already
+  // used for the stage dots on the Properties table's Projects column —
+  // reusing that exact palette instead of the pale badge tints so this
+  // legend and the dots elsewhere in the app never show two different
+  // color languages for the same 4 stages. Capital Plan and On Hold
+  // omitted: Capital Plan has no dot color in PROPS_DOT_COLORS (it isn't
+  // a graduated stage), and On Hold is a manual override, not a
+  // milestone-derived stage — doesn't belong in a legend keyed by
+  // milestone ranges.
+  const stageLegend=`<span style="display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;font-size:11px">
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Pre-Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Pre-Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Pre-Construction</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Construction</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Project Closeout'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Project Closeout'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Project Closeout</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Complete'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Complete'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Complete</span></span>
+  </span>`;
   const headerBar=`<div style="display:flex;align-items:center;gap:20px;padding:8px 14px;background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px;flex-wrap:wrap">
     <span class="prop-overview-priority-line" style="font-size:12px;color:var(--gray-mid)">Priority <span style="font-weight:600;color:var(--navy)">${(p.priority||'—').split(':')[1]?.trim()||p.priority||'—'}</span></span>
+    ${stageLegend}
     <span style="margin-left:auto;display:flex;gap:8px">
       ${canEdit?`<button class="btn btn-edit" onclick="openEditPropertyPanel()" style="font-size:12px"><i class="ti ti-pencil"></i>Edit Property</button>`:''}
       ${manageBtn}
