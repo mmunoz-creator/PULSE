@@ -2810,6 +2810,9 @@ async function loadAllData() {
         email:r.fields['Email']||'',
         role:r.fields['Role']||'Other',
         rsvpStatus:r.fields['RSVP Status']||'Pending',
+        // v58v — task #38, needed to know whether a response is "new since
+        // the organizer last looked" for the Meetings & Actions tab badge.
+        respondedAt:r.fields['Responded At']||'',
       });
     });
     if (props.length > 0) {
@@ -2944,6 +2947,14 @@ async function loadAllData() {
       // own record ID so Edit/Cancel/Reschedule can act on real rows
       // instead of the retired plain-text attVDA/attElev/attClient fields.
       attendees: meetingAttendeesByEvent[r.id]||[],
+      // v58u — task #41: cancelled meetings should drop out of the
+      // Meeting Log 5 days after cancellation. There's no dedicated
+      // "cancelled on" field on Meetings, so this reuses the existing
+      // auto-updating Meetings Last Modified field as a proxy — since
+      // cancelling is itself a write to the record, this reflects the
+      // cancellation time as long as nothing else touches the record
+      // afterward (the same assumption Misty confirmed is fine).
+      lastModified: r.fields['Meetings Last Modified']||'',
     }));
     actionItems = actions.map(r => ({
       id: r.id,
@@ -4904,7 +4915,7 @@ from unitEffectiveValue() onto each checkbox). -->
             <button class="tab-btn" onclick="switchPropTab('phases',this)">Unit Phases</button>
             <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget Performance</button>
             <button class="tab-btn" onclick="switchPropTab('changeorders',this)">Change Orders</button>
-            <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions<span id="prop-fieldops-tab-badge" class="nav-badge hidden" style="background:var(--red);margin-left:6px">0</span></button>
+            <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions<span id="prop-fieldops-tab-badge" class="nav-badge hidden" style="background:var(--red);margin-left:6px">0</span><span id="prop-fieldops-rsvp-badge" class="nav-badge hidden" title="New RSVP responses" style="background:var(--green);margin-left:4px">0</span></button>
             <button class="tab-btn" onclick="switchPropTab('updates',this)">Field Updates</button>
             <button class="tab-btn" onclick="switchPropTab('docs',this)">Documents</button>
           </div>
@@ -7983,7 +7994,7 @@ function switchPropTab(tab,btn){
   document.getElementById('prop-tab-'+tab)?.classList.add('active');
   if(btn)btn.classList.add('active');
   if(tab==='milestones'&&currentProp)renderMilestones(currentProp);
-  if(tab==='fieldops'&&currentProp)renderPropMeetings(currentProp);
+  if(tab==='fieldops'&&currentProp){renderPropMeetings(currentProp);markPropRsvpResponsesViewed(currentProp.n);}
   if(tab==='updates'&&currentProp)renderPropUpdates(currentProp);
   if(tab==='docs'&&currentProp)renderPropDocFolder(currentProp);
   if(tab==='budget'&&currentProp)renderBudgetTab(currentProp);
@@ -8223,7 +8234,46 @@ function renderPropertyView(p){
     fieldopsTabBadge.textContent=fieldopsOverdueCount;
     fieldopsTabBadge.classList.toggle('hidden',fieldopsOverdueCount===0);
   }
+  // v58v — task #38. Separate green badge (distinct from the red overdue
+  // one above, different meaning entirely) counting RSVP responses the
+  // organizer hasn't seen yet for this property's meetings. "Seen" is
+  // tracked as a per-property last-viewed timestamp in localStorage,
+  // stamped by markPropRsvpResponsesViewed() when the PM opens the
+  // Meetings & Actions tab — see switchPropTab().
+  const rsvpBadge=document.getElementById('prop-fieldops-rsvp-badge');
+  if(rsvpBadge){
+    const newRsvpCount=countUnviewedRsvpResponses(p.n);
+    rsvpBadge.textContent=newRsvpCount;
+    rsvpBadge.classList.toggle('hidden',newRsvpCount===0);
+  }
 
+}
+// v58v — task #38. Counts attendee responses (Accepted/Declined, dated via
+// Responded At) recorded after the organizer last viewed this property's
+// Meetings & Actions tab. Pending (never-responded) attendees never count,
+// only real new responses do.
+function countUnviewedRsvpResponses(propName){
+  const lastViewed=localStorage.getItem('pulse-rsvp-viewed-'+propName);
+  const lastViewedMs=lastViewed?new Date(lastViewed).getTime():0;
+  let count=0;
+  (meetings||[]).filter(m=>m.property===propName).forEach(m=>{
+    (m.attendees||[]).forEach(a=>{
+      if((a.rsvpStatus==='Accepted'||a.rsvpStatus==='Declined')&&a.respondedAt){
+        const respondedMs=new Date(a.respondedAt).getTime();
+        if(!isNaN(respondedMs)&&respondedMs>lastViewedMs)count++;
+      }
+    });
+  });
+  return count;
+}
+// v58v — call when the PM actually opens the Meetings & Actions tab, marks
+// all current responses as seen so the badge clears. Re-renders the badge
+// immediately after so it doesn't wait for the next full property render.
+function markPropRsvpResponsesViewed(propName){
+  if(!propName)return;
+  localStorage.setItem('pulse-rsvp-viewed-'+propName,new Date().toISOString());
+  const rsvpBadge=document.getElementById('prop-fieldops-rsvp-badge');
+  if(rsvpBadge)rsvpBadge.classList.add('hidden');
 }
 
 // Get milestones for a property from live data (or seed p.ms as fallback)
@@ -11557,8 +11607,24 @@ async function saveMeeting(){
   if(draftBtn)draftBtn.disabled=false;
 }
 
+// v58v — task #41. A cancelled meeting should drop out of the Meeting Log
+// view 5 days after it was cancelled (a pure display filter — the Airtable
+// record itself is untouched, so it's still there for reporting/history).
+// The 5-day clock starts at cancellation, not the meeting's original
+// scheduled date, using the existing Meetings Last Modified field as a
+// proxy for "when was this cancelled" (set locally in
+// executeCancelCalEvent() too, so this take effect immediately without a
+// reload). Non-cancelled meetings are never filtered by this function.
+function isMeetingHiddenByCancelAge(m){
+  if(m.status!=='Cancelled')return false;
+  if(!m.lastModified)return false;
+  const cancelledAt=new Date(m.lastModified);
+  if(isNaN(cancelledAt))return false;
+  const fiveDaysMs=5*24*60*60*1000;
+  return (Date.now()-cancelledAt.getTime())>fiveDaysMs;
+}
 function renderPropMeetings(p){
-  const propMeetings=meetings.filter(m=>m.property===p.n);
+  const propMeetings=meetings.filter(m=>p.n===m.property&&!isMeetingHiddenByCancelAge(m));
   const propActions=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
   const aCount=document.getElementById('prop-action-count');if(aCount)aCount.textContent=propActions.length+' open';
   const visible=role==='client'?propMeetings.filter(m=>m.published):propMeetings;
@@ -11583,7 +11649,8 @@ function renderPropMeetings(p){
               <button class="btn btn-icon" onclick="confirmCancelCalEvent('meeting','${m.id}')" title="Mark this meeting cancelled — it will no longer count as overdue" style="color:var(--red);border-color:var(--red)"><i class="ti ti-x" style="font-size:13px"></i></button>`
             :m.status==='Scheduled'
             ?`<span class="badge" style="background:#e8f4ff;color:var(--indigo);border:1px solid #c5d9f5">Scheduled</span>
-              <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>`
+              <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>
+              <button class="btn btn-icon" onclick="confirmCancelCalEvent('meeting','${m.id}')" title="Cancel this meeting" style="color:var(--red);border-color:var(--red)"><i class="ti ti-x" style="font-size:13px"></i></button>`
             :`<span class="badge ${m.published?'b-public':m.isDraft||m.visibility==='Draft'?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft||m.visibility==='Draft'?'Draft':'Internal'}</span>
               ${m.isDraft||m.visibility==='Draft'
                 ?`<button class="btn btn-icon" onclick="openDraft('${m.id}')" title="Continue draft"><i class="ti ti-pencil" style="font-size:14px"></i></button>`
@@ -11593,7 +11660,11 @@ function renderPropMeetings(p){
         </div>
       </div>
       ${m.attVDA||m.attElev||m.attClient?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6">${m.attVDA?`Team: ${escHtml(m.attVDA)} `:''}${m.attElev?`· Elev: ${escHtml(m.attElev)} `:''}${m.attClient?`· Client: ${escHtml(m.attClient)}`:''}</div>`:''}
-      ${(m.attendees||[]).length?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.6"><strong style="color:var(--navy)">Invited:</strong> ${m.attendees.map(a=>`${escHtml(a.name||a.email||'Unnamed')}${a.role?` (${escHtml(a.role)})`:''}`).join(', ')}</div>`:''}
+      ${(m.attendees||[]).length?`<div style="font-size:11px;color:var(--gray-mid);margin-top:4px;line-height:1.8"><strong style="color:var(--navy)">Invited:</strong> ${m.attendees.map(a=>{
+        const rsvp=a.rsvpStatus||'Pending';
+        const rsvpStyle=rsvp==='Accepted'?'background:#EAF3DE;color:#27500A':rsvp==='Declined'?'background:#FCEBEB;color:#791F1F':'background:#F1EFE8;color:#5F5E5A';
+        return `${escHtml(a.name||a.email||'Unnamed')}${a.role?` (${escHtml(a.role)})`:''} <span style="${rsvpStyle};border-radius:4px;padding:1px 6px;font-size:9px;font-weight:600;margin-left:2px">${rsvp}</span>`;
+      }).join(', ')}</div>`:''}
       ${m.agenda?(()=>{
         const topics=m.agenda.split('\n').filter(Boolean);
         if(m.status==='Scheduled'&&topics.length){
@@ -11916,8 +11987,11 @@ function renderAllMeetings(){
   const loadingEl=document.getElementById('schedule-loading');
   if(loadingEl)loadingEl.style.display='none';
   const mList=document.getElementById('all-meetings-list');
-  const recentMeetings=meetings.slice().reverse().slice(0,3);
-  const totalMeetings=meetings.length;
+  // v58v — task #41, same 5-day-after-cancel display filter as the
+  // property-scoped Meeting Log (renderPropMeetings).
+  const visibleMeetings=meetings.filter(m=>!isMeetingHiddenByCancelAge(m));
+  const recentMeetings=visibleMeetings.slice().reverse().slice(0,3);
+  const totalMeetings=visibleMeetings.length;
   if(mList)mList.innerHTML=meetings.length===0?
     `<div class="empty-state" style="padding:1rem"><i class="ti ti-notes-off"></i><div class="empty-state-title">${AT_CONNECTED?'No meetings logged yet':'Loading from database...'}</div><div class="empty-state-sub">${AT_CONNECTED?'Log meetings from a property page or the button above':'Live meetings will appear here shortly'}</div></div>`:
     recentMeetings.map(m=>`<div class="meeting-card">
@@ -11931,7 +12005,8 @@ function renderAllMeetings(){
             <button class="btn btn-icon" onclick="confirmCancelCalEvent('meeting','${m.id}')" title="Mark this meeting cancelled — it will no longer count as overdue" style="color:var(--red);border-color:var(--red)"><i class="ti ti-x" style="font-size:13px"></i></button>`
           :m.status==='Scheduled'
           ?`<span class="badge" style="background:#e8f4ff;color:var(--indigo);border:1px solid #c5d9f5">Scheduled</span>
-            <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>`
+            <button class="btn btn-icon" onclick="openLogMinutesFromScheduled('${m.id}')" title="Log minutes" style="color:var(--indigo);border-color:var(--indigo)"><i class="ti ti-notes" style="font-size:13px"></i></button>
+            <button class="btn btn-icon" onclick="confirmCancelCalEvent('meeting','${m.id}')" title="Cancel this meeting" style="color:var(--red);border-color:var(--red)"><i class="ti ti-x" style="font-size:13px"></i></button>`
           :`<span class="badge ${m.published?'b-public':m.isDraft||m.visibility==='Draft'?'b-draft':'b-internal'}">${m.published?'Published':m.isDraft||m.visibility==='Draft'?'Draft':'Internal'}</span>
             ${m.isDraft||m.visibility==='Draft'
               ?`<button class="btn btn-icon" onclick="openDraft('${m.id}')" title="Continue draft"><i class="ti ti-pencil" style="font-size:14px"></i></button>`
@@ -24072,6 +24147,11 @@ async function executeCancelCalEvent(type,id){
       showToast(`Could not cancel this ${isVisit?'site visit':'meeting'}. Please try again.`,'error');
       return;
     }
+    // v58u — task #41: set locally too, right after a successful cancel,
+    // so the 5-days-after-cancellation Meeting Log filter applies
+    // immediately in this same session rather than only after a reload
+    // re-fetches the real Meetings Last Modified value from Airtable.
+    if(!isVisit)record.lastModified=new Date().toISOString();
   }
   const attendees=(record.attendees||[]).filter(a=>a.email);
   let sentCount=0;
@@ -26864,6 +26944,16 @@ async function saveScheduledMeeting(){
       // written, /send-meeting-invites (Worker) fans out one invite email
       // per attendee, generating and storing each Response Token itself —
       // the client only needs to hand over the record IDs.
+      // v58u fix — real bug found live: a Meeting Attendees record had a
+      // malformed Email ("misty.munoz@vdassoc,com" — comma instead of a
+      // period), so its invite silently failed to send. The Worker
+      // already tracked this (sent/failed/failures in its response), but
+      // this call never read the response at all, so the person
+      // scheduling the meeting saw "Meeting scheduled and invites sent"
+      // regardless of whether every invite actually went out. Now reads
+      // the response and surfaces a specific "invalid email" warning per
+      // Misty's direct instruction, rather than a generic failure count.
+      let inviteFailures=[];
       if(atId&&attendees.length){
         const attendeeRecordIds=[];
         for(const a of attendees){
@@ -26879,11 +26969,13 @@ async function saveScheduledMeeting(){
         }
         if(attendeeRecordIds.length){
           try{
-            await workerFetch(`${WORKER_URL}/send-meeting-invites`,{
+            const inviteRes=await workerFetch(`${WORKER_URL}/send-meeting-invites`,{
               method:'POST',
               headers:{'Content-Type':'application/json'},
               body:JSON.stringify({eventTable:'Meetings',eventRecordId:atId,attendeeRecordIds}),
             });
+            const inviteData=await inviteRes.json().catch(()=>null);
+            if(inviteData?.failures?.length)inviteFailures=inviteData.failures;
           }catch(e){console.error('send-meeting-invites failed:',e);}
         }
       }
@@ -26907,7 +26999,17 @@ async function saveScheduledMeeting(){
     // a documented follow-up rather than folded into this round, since it
     // needs a UI decision (which attendees failed, retry affordance) rather
     // than a one-line guard like the rest of this pass.
-    showToast(attendees.length?'Meeting scheduled and invites sent':'Meeting scheduled','success');
+    if(inviteFailures.length){
+      const invalidEmailFailures=inviteFailures.filter(f=>f.reason==='invalid_email');
+      if(invalidEmailFailures.length){
+        const who=invalidEmailFailures.map(f=>f.name||f.email||'an attendee').join(', ');
+        showToast(`Meeting scheduled, but invite failed — invalid email for ${who}. Check their address and resend.`,'error');
+      }else{
+        showToast(`Meeting scheduled, but ${inviteFailures.length} invite${inviteFailures.length>1?'s':''} failed to send. Check your connection and try again.`,'error');
+      }
+    }else{
+      showToast(attendees.length?'Meeting scheduled and invites sent':'Meeting scheduled','success');
+    }
   }catch(e){
     console.error('saveScheduledMeeting failed:',e);
     showToast('Something went wrong scheduling this meeting. Please try again.','error');
