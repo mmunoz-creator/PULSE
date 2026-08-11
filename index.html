@@ -4599,7 +4599,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62e</div>
     </div>
   </nav>
 
@@ -9706,8 +9706,11 @@ function renderScopeTabs(containerId, propName, accentTargets){
     const isCP=s.status==='Capital Plan';
     const isActive=s.id===activeId;
     const msData=getMilestonesForProp(propName,s.id);
-    const msComplete=msData.filter(m=>m.status==='Complete').length;
-    const msPct=msData.length?Math.round(msComplete/MILESTONES_DEF.length*100):0;
+    // v62e — scope tab pill's own % badge was flat msComplete/14, same
+    // unweighted-math bug found in the scope card itself (task #40). Now
+    // uses the weighted pair, matching every other VDA Milestones %
+    // display in the app.
+    const msPct=msData.length?Math.round(getMsCompleteWeighted(propName,s.id)/getMsExpectedTotalWeighted(propName,s.id)*100):0;
     const pos=isCP?null:getScopePositionColor(posIdx++);
     const bg=isActive?(pos?pos.color:'var(--navy)'):isCP?'var(--gray-pale)':'var(--blue-xpale)';
     const color=isActive?'#fff':isCP?'var(--gray-mid)':'var(--blue-dark)';
@@ -9875,7 +9878,14 @@ function renderScopeCards(p){
   const scopeCard=s=>{
     const msData=getMilestonesForProp(p.n,s.id);
     const msComplete=msData.filter(m=>m.status==='Complete').length;
-    const msPct=msData.length?Math.round(msComplete/MILESTONES_DEF.length*100):0;
+    // v62e — msPct now weighted (getMsCompleteWeighted/
+    // getMsExpectedTotalWeighted), matching every other VDA Milestones %
+    // display in the app. msComplete stays the real flat count, unchanged
+    // below — it still feeds the "X of 14" text (line ~10113), same
+    // weighted-%-paired-with-real-count convention used elsewhere this
+    // round (task #40, found live on Casa Marina's PE6 & PE7 card: showed
+    // "64% · 9 of 14" when 9 of 14 = M1-M9 complete should weight to 72%).
+    const msPct=msData.length?Math.round(getMsCompleteWeighted(p.n,s.id)/getMsExpectedTotalWeighted(p.n,s.id)*100):0;
     const msColor=msPct===100?'#15803d':msPct>0?'var(--blue-dark)':'var(--gray-mid)';
     const msBarColor=msPct===100?'#16a34a':msPct>0?'var(--blue-dark)':'var(--border-strong)';
     // Current milestone label
@@ -16203,7 +16213,20 @@ function derivePropertyStatusFromPhases(propName){
 function deriveScopeHealth(scope){
   if(!scope)return'Not Started';
   if(scope.status==='Complete')return'Complete';
-  if(scope.status!=='In Progress'&&scope.status!=='On Hold')return'Not Started';
+  // v62d — was checking scope.status!=='In Progress', a single status
+  // value retired by the 5-stage Scope status model redesign (task #9/#11,
+  // earlier this session) and replaced with three granular active
+  // statuses: Pre-Construction/Construction/Project Closeout. Since none
+  // of those three ever equaled the old 'In Progress' string, every scope
+  // that graduated out of Capital Plan under the new model fell through to
+  // 'Not Started' here regardless of real progress — root cause of
+  // Analytics' Elevator Company Performance chart showing 18 of 32 scopes
+  // as Not Started under "TBD" despite several being actively under
+  // construction. Now checks all three active statuses, matching the
+  // no shared constant for this exact set exists elsewhere in the file —
+  // kept inline here.
+  const activeStatuses=['Pre-Construction','Construction','Project Closeout'];
+  if(!activeStatuses.includes(scope.status)&&scope.status!=='On Hold')return'Not Started';
   const scopeMilestones=(window.MILESTONES||[]).filter(m=>m.property===scope.property&&m.scopeId===scope.id);
   const anyMilestoneAtRisk=scopeMilestones.some(m=>m.status==='At Risk');
   const phases=(window.UNIT_GROUPS||[]).filter(u=>u.property===scope.property&&u.scopeId===scope.id);
