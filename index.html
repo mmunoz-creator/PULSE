@@ -4571,7 +4571,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v59f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v60b</div>
     </div>
   </nav>
 
@@ -4746,6 +4746,10 @@ from unitEffectiveValue() onto each checkbox). -->
         <div class="page-header">
           <div class="page-header-left"><h1>Properties</h1><p id="properties-sub">Loading properties...</p></div>
           <div class="header-actions">
+            <!-- v60b — "+ Create Property" moved here from Capital Plan's
+            header-actions row, per direct instruction. Same handler
+            (openCapitalPlanEntry), same behavior, new location only. -->
+            <button class="btn btn-add no-print" id="props-add-property-btn" onclick="openCapitalPlanEntry()"><i class="ti ti-building-skyscraper" style="font-size:14px"></i>+ Create Property</button>
             <div class="no-print" style="position:relative;display:flex;align-items:center">
               <i class="ti ti-search" style="position:absolute;left:10px;font-size:14px;color:var(--gray-mid);pointer-events:none"></i>
               <input type="text" id="props-search" placeholder="Search properties..." oninput="propsApply()" style="font-size:12px;padding:7px 10px 7px 30px;border:1px solid var(--border);border-radius:6px;color:var(--navy);outline:none;width:180px">
@@ -5226,14 +5230,11 @@ from unitEffectiveValue() onto each checkbox). -->
           <div class="page-header no-print">
             <div class="page-header-left"><h1>Capital Plan</h1><p>Lifecycle Pipeline &amp; Multi-Year Budget Outlook</p></div>
             <div class="header-actions" id="capital-header-actions">
-              <!-- v45q — renamed "+ Capital Plan" to "+ Create Property" per
-              direct instruction: this button creates a Property record, and
-              the old label described the pipeline stage it starts at, not
-              what the form actually does. Same button, same handler. -->
-              <!-- v45q — moved to lead the header-actions row (listed first
-              on every profile), ahead of Print/PDF, Bulk Import, and Delete
-              Property, per direct instruction. -->
-              <button class="btn btn-add no-print" id="capital-add-btn" onclick="openCapitalPlanEntry()"><i class="ti ti-building-skyscraper" style="font-size:14px"></i>+ Create Property</button>
+              <!-- v60b — "+ Create Property" moved off Capital Plan
+              entirely, onto the Properties tab's header-actions row (see
+              view-properties above), per direct instruction. Capital Plan
+              no longer has its own copy of this button; Print/PDF now
+              leads this row instead. -->
               <button class="btn btn-primary no-print" onclick="printCapitalPlan()"><i class="ti ti-printer"></i>Print / PDF</button>
               <!-- v42a — Bulk Import Units, Admin-only. Creates new Units,
               and where needed new Projects/Unit Groups, from an uploaded
@@ -7255,10 +7256,20 @@ const EQUIPMENT_TYPE_OPTIONS=['MRL Elevator','Geared Elevator','Gearless Elevato
 // not selectable from a fixed list; see computeDerivedUnitStatus().
 let uimPendingDeleteIds=[];
 let uimDeleteMode=false;
+// v60b — Bulk CapEx Year update (task #23). Same select-then-confirm
+// pattern as the existing delete mode above: check rows in the table,
+// then apply one CapEx Year to all of them via a toolbar control. Kept
+// as its own mode/array rather than reusing the delete-mode ones since a
+// user could otherwise end up with a row checked for two different bulk
+// actions at once.
+let uimBulkCapexMode=false;
+let uimBulkCapexIds=[];
 
 function openUnitInventoryManager(propName){
   uimPendingDeleteIds=[];
   uimDeleteMode=false;
+  uimBulkCapexMode=false;
+  uimBulkCapexIds=[];
   renderUnitInventoryManagerModal(propName);
 }
 window.openUnitInventoryManager=openUnitInventoryManager;
@@ -7300,6 +7311,11 @@ function renderUnitInventoryManagerModal(propName){
     <div style="padding:20px 22px">
       <div id="uim-total-units-control" style="display:flex;align-items:center;gap:10px;margin-bottom:16px"></div>
       <div id="uim-delete-banner"></div>
+      <!-- v60b — Bulk CapEx Year (task #23). Own row/banner, separate
+      from the delete banner above, so entering one bulk mode doesn't
+      visually collide with the other. -->
+      <div id="uim-bulk-capex-row" style="margin-bottom:12px"></div>
+      <div id="uim-bulk-capex-banner"></div>
       <div class="table-wrap" style="max-height:55vh;overflow-y:auto">
         <table class="data-table" style="table-layout:auto">
           <thead><tr>
@@ -7321,8 +7337,122 @@ function renderUnitInventoryManagerModal(propName){
   </div>`;
   document.body.appendChild(overlay);
   renderUimTotalUnitsControl(propName);
+  renderUimBulkCapexRow(propName);
   renderUimTable(propName);
 }
+
+// v60b — Bulk CapEx Year toolbar row (task #23). "Bulk Update CapEx Year"
+// button enters select mode; while active it's replaced by a Cancel and
+// an inline year input + Apply. Mirrors the delete-mode toolbar pattern
+// (uimApplyTotalUnits/uimCancelDeleteMode) but lives in its own row since
+// it isn't triggered by the Total Units control.
+function renderUimBulkCapexRow(propName){
+  const el=document.getElementById('uim-bulk-capex-row');
+  if(!el)return;
+  const escP=propName.replace(/'/g,"\'");
+  if(!uimBulkCapexMode){
+    el.innerHTML=`<button class="btn" onclick="uimEnterBulkCapexMode('${escP}')"><i class="ti ti-calendar-stats" style="font-size:14px"></i>Bulk Update CapEx Year</button>`;
+  }else{
+    el.innerHTML=`
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:600;color:var(--gray-mid)">Set CapEx Year to</span>
+        <input id="uim-bulk-capex-year-input" class="form-input" style="width:90px" placeholder="e.g. 2027">
+        <button class="btn btn-primary" onclick="uimApplyBulkCapexYear('${escP}')">Apply to selected</button>
+        <button class="btn" onclick="uimCancelBulkCapexMode('${escP}')">Cancel</button>
+      </div>`;
+  }
+}
+
+function uimEnterBulkCapexMode(propName){
+  // Bulk CapEx and delete are mutually exclusive so a row's checkbox
+  // column never has to represent two different pending actions at once.
+  uimDeleteMode=false;
+  uimPendingDeleteIds=[];
+  document.getElementById('uim-delete-banner').innerHTML='';
+  uimBulkCapexMode=true;
+  uimBulkCapexIds=[];
+  document.getElementById('uim-bulk-capex-banner').innerHTML='';
+  renderUimBulkCapexRow(propName);
+  renderUimTable(propName);
+}
+window.uimEnterBulkCapexMode=uimEnterBulkCapexMode;
+
+function uimCancelBulkCapexMode(propName){
+  uimBulkCapexMode=false;
+  uimBulkCapexIds=[];
+  document.getElementById('uim-bulk-capex-banner').innerHTML='';
+  renderUimBulkCapexRow(propName);
+  renderUimTable(propName);
+}
+window.uimCancelBulkCapexMode=uimCancelBulkCapexMode;
+
+function uimToggleBulkCapexSelect(id){
+  const idx=uimBulkCapexIds.indexOf(id);
+  if(idx>=0)uimBulkCapexIds.splice(idx,1);else uimBulkCapexIds.push(id);
+  const banner=document.getElementById('uim-bulk-capex-banner');
+  if(banner)banner.innerHTML=uimBulkCapexIds.length?`<div class="alert alert-warn" style="margin-bottom:12px">${uimBulkCapexIds.length} unit${uimBulkCapexIds.length===1?'':'s'} selected.</div>`:'';
+}
+window.uimToggleBulkCapexSelect=uimToggleBulkCapexSelect;
+
+// v60b — Apply CapEx Year to every selected unit. Per Misty's explicit
+// direction: setting CapEx Year can trigger a Scope move (see
+// confirmScopeMoveForCapexYear/autoDeriveScopeForUnit, the same per-unit
+// logic Manage Unit Inventory's single-row CapEx Year field already
+// uses), and popping one confirm() per selected unit would be unusable
+// for a bulk action. Instead this computes every move up front and shows
+// ONE summary confirm listing exactly which units will move Scopes and
+// where, before anything is written. Units with no resulting Scope move
+// still get the new CapEx Year applied directly, no confirm needed for
+// those (matches the single-row path, which also only confirms when a
+// real move is involved).
+async function uimApplyBulkCapexYear(propName){
+  const input=document.getElementById('uim-bulk-capex-year-input');
+  const newYear=(input?.value||'').trim();
+  if(!newYear){showToast('Enter a CapEx Year first','error');return;}
+  if(uimBulkCapexIds.length===0){showToast('Select at least one unit first','error');return;}
+  const units=uimBulkCapexIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)).filter(Boolean);
+
+  // Work out which selected units would actually move Scopes, reusing
+  // the exact same yearKey/target-scope logic confirmScopeMoveForCapexYear
+  // uses for a single unit, just without popping a confirm per unit.
+  const moves=[];
+  for(const u of units){
+    const candidateUnit={...u,capexYear:newYear};
+    const yearKey=scopeYearKeyFor(candidateUnit);
+    const targetScope=findScopeForYearKey(u.property,yearKey);
+    const oldScope=u.scopeId?(window.SCOPES||[]).find(s=>s.id===u.scopeId):null;
+    const sameScope=oldScope&&targetScope&&oldScope.id===targetScope.id;
+    if(!sameScope&&oldScope){
+      const targetName=targetScope?targetScope.name:(yearKey==='TBD'?'TBD Scope':`${yearKey} Scope`);
+      moves.push(`${u.name||'(unnamed)'}: "${oldScope.name}" → "${targetName}"`);
+    }
+  }
+  if(moves.length>0){
+    const msg=`Setting CapEx Year to ${newYear} will move ${moves.length} unit${moves.length===1?'':'s'} to a different Scope:\n\n${moves.join('\n')}\n\nContinue?`;
+    if(!window.confirm(msg))return;
+  }
+
+  showToast(`Updating ${units.length} unit(s)...`,'info');
+  let failCount=0;
+  for(const u of units){
+    u.capexYear=newYear;
+    const res=await atUpdate('Unit Inventory List',u.id,{'Client Capex Planning Year':newYear});
+    if(!res){failCount++;continue;}
+    await autoDeriveScopeForUnit(u.id);
+  }
+  uimBulkCapexMode=false;
+  uimBulkCapexIds=[];
+  document.getElementById('uim-bulk-capex-banner').innerHTML='';
+  renderUimBulkCapexRow(propName);
+  if(failCount>0){
+    showToast(`${units.length-failCount} of ${units.length} units updated, ${failCount} failed. Check your connection and try again.`,'error');
+  }else{
+    showToast('CapEx Year updated','success');
+  }
+  renderUimTable(propName);
+  if(currentProp&&currentProp.n===propName){renderPropertyView(currentProp);renderUnitsTab(currentProp);renderEditPropertyUnitStats(currentProp);}
+}
+window.uimApplyBulkCapexYear=uimApplyBulkCapexYear;
 
 function uimUnitsFor(propName){
   return (window.UNIT_INVENTORY||[]).filter(u=>u.property===propName).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
@@ -7422,6 +7552,12 @@ async function uimApplyTotalUnits(propName){
   }else{
     // Decreasing — never silently delete. Switch the table into a
     // check-to-delete mode; the person picks exactly which rows go.
+    // v60b — also exits bulk-CapEx mode if it was active, same mutual-
+    // exclusion reasoning as uimEnterBulkCapexMode above.
+    uimBulkCapexMode=false;
+    uimBulkCapexIds=[];
+    document.getElementById('uim-bulk-capex-banner').innerHTML='';
+    renderUimBulkCapexRow(propName);
     uimDeleteMode=true;
     uimPendingDeleteIds=[];
     const toRemove=current-newTotal;
@@ -7981,7 +8117,9 @@ function renderUimTable(propName){
   }
   const esc=s=>String(s==null?'':s).replace(/'/g,"\\'");
   tbody.innerHTML=units.map(u=>{
-    const checkCell=uimDeleteMode?`<td><input type="checkbox" ${uimPendingDeleteIds.includes(u.id)?'checked':''} onchange="uimToggleDeleteSelect('${u.id}')"></td>`:'<td></td>';
+    // v60b — checkbox column now serves either delete mode or bulk-
+    // CapEx mode (never both, see mutual-exclusion notes above).
+    const checkCell=uimDeleteMode?`<td><input type="checkbox" ${uimPendingDeleteIds.includes(u.id)?'checked':''} onchange="uimToggleDeleteSelect('${u.id}')"></td>`:uimBulkCapexMode?`<td><input type="checkbox" ${uimBulkCapexIds.includes(u.id)?'checked':''} onchange="uimToggleBulkCapexSelect('${u.id}')"></td>`:'<td></td>';
     const typeOpts=UNIT_TYPE_OPTIONS.map(t=>`<option value="${t}" ${u.unitType===t?'selected':''}>${t}</option>`).join('');
     const equipTypeOpts=EQUIPMENT_TYPE_OPTIONS.map(t=>`<option value="${t}" ${u.equipmentType===t?'selected':''}>${t}</option>`).join('');
     // v34l — Status Model Reconciliation. Active/Planned are auto-derived
@@ -8159,8 +8297,10 @@ function renderPropertyView(p){
      `;
 
   const propUpdates=submissions.filter(s=>s.property===p.n);
-  const msCompleteCount=getMsComplete(p.n);
-  const msExpectedTotal=getMsExpectedTotal(p.n);
+  // v60b — VDA Milestones tile now weighted (see MS_WEIGHTS/
+  // getMsCompleteWeighted above), not a flat 1-of-14 count.
+  const msCompleteCount=getMsCompleteWeighted(p.n);
+  const msExpectedTotal=getMsExpectedTotalWeighted(p.n);
   const msCompletePct=Math.round(msCompleteCount/msExpectedTotal*100);
   const propVisits=siteVisits.filter(v=>v.property===p.n);
   const openAIs=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
@@ -8658,9 +8798,50 @@ function getMilestonesForProp(propName,scopeId){
   }));
 }
 
+// v60b — Weighted milestone percent complete. Previously all 14
+// milestones counted equally (1/14 each). Per Misty's explicit direction
+// (2026-08-10), later-stage milestones now carry more weight than early
+// planning ones, reflecting how much of the real project is actually done
+// at each checkpoint rather than a flat headcount. Weights are indexed by
+// milestoneNumber (1-14, matching MILESTONES_DEF order) and sum to 100.
+// getMsComplete/getMsExpectedTotal (flat-count) are kept as-is for any
+// other caller that still wants a raw count; the weighted pair below is
+// what feeds "VDA Milestones" stat tiles and the Performance Report's %
+// Complete column. Locked-in table, per Misty:
+//   M1  Modernization Survey          3
+//   M2  Technical Specification       4
+//   M3  RFP / Bid Process             4
+//   M4  Contract Award                4
+//   M5  Submittal Drawing Review      5
+//   M6  First Phase Start             5
+//   M7  25% Construction              16
+//   M8  50% Construction              16
+//   M9  75% Construction              15
+//   M10 Final Phase Complete          10
+//   M11 Punch Lists Complete          5
+//   M12 Inspections Complete (AHJ)    5
+//   M13 Owner Acceptance              5
+//   M14 Closeout Documentation        3
+const MS_WEIGHTS=[3,4,4,4,5,5,16,16,15,10,5,5,5,3];
+
 // Get ms % complete from live data
 function getMsComplete(propName){
   const ms=getMilestonesForProp(propName);  return ms.filter(m=>m.status==='Complete').length;
+}
+// v60b — weighted complete "points" for a property: sums each completed
+// milestone's weight instead of counting 1 per milestone. Multi-Scope
+// properties sum every Scope's own set of 14, same as getMsComplete does
+// for the flat count, so the weighted and flat totals stay comparable in
+// shape (both scale with scope count).
+function getMsCompleteWeighted(propName){
+  const ms=getMilestonesForProp(propName);
+  return ms.filter(m=>m.status==='Complete').reduce((sum,m)=>sum+(MS_WEIGHTS[(m.milestoneNumber||1)-1]||0),0);
+}
+// v60b — weighted expected total: 100 points per Scope (weights already
+// sum to 100), matching getMsExpectedTotal's flat-count×scopeCount shape.
+function getMsExpectedTotalWeighted(propName){
+  const scopeCount=(window.SCOPES||[]).filter(s=>s.property===propName).length;
+  return 100*(scopeCount>0?scopeCount:1);
 }
 // v32b — property-wide milestone totals must account for every Scope on
 // that property, not a flat 14. A property with 5 Scopes has 5*14=70
@@ -8982,10 +9163,11 @@ async function updateMilestone(msId,fields,propName){
     if(typeof _msFreshConflictTs!=='undefined'&&_msFreshConflictTs)ms.conflictTs=_msFreshConflictTs;
   }
   if(currentProp&&currentProp.n===propName){
-    const msCompleteCount=getMsComplete(propName);
+    // v60b — weighted, matching the initial render in renderPropertyView.
+    const msCompleteCount=getMsCompleteWeighted(propName);
     // v29d Bug 4 fix: was nth-child(3) which targets Active Phases card, not VDA Milestones.
     const msCard=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
-    if(msCard)msCard.textContent=Math.round(msCompleteCount/getMsExpectedTotal(propName)*100)+'%';
+    if(msCard)msCard.textContent=Math.round(msCompleteCount/getMsExpectedTotalWeighted(propName)*100)+'%';
   }
   // Auto-derive and write Scope status (which rolls up to Property status)
   // from milestone data — v28b, was deriveAndWritePropertyStatus(propName)
@@ -10429,8 +10611,9 @@ function renderMilestones(p){
         // Refresh the top stat card — it rendered before milestones existed
         // in demo mode, so it showed 0%. Now that milestones are populated
         // update it to reflect the real count.
-        const msCompleteCount=getMsComplete(p.n);
-        const msExpectedTotal=getMsExpectedTotal(p.n);
+        // v60b — weighted, matching the initial render in renderPropertyView.
+        const msCompleteCount=getMsCompleteWeighted(p.n);
+        const msExpectedTotal=getMsExpectedTotalWeighted(p.n);
         const pct=Math.round(msCompleteCount/msExpectedTotal*100);
         const statVal=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
         const statSub=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-sub');
@@ -20644,11 +20827,19 @@ function _boSetCurrencyCell(ws,addr){
 function exportBudgetOutlookClientReport(){
   if(typeof XLSX==='undefined'){showToast('Excel export library failed to load — check your connection and try again','error');return;}
   const d=window._boData;
-  const sorted=_boSortedUnitItems();
+  // v60a — detail tab now sources the same unfiltered
+  // _boSortedAllUnitItems() and 21-column layout as
+  // exportBudgetOutlookDataEntry(), so Client Report shows every unit
+  // (including $0/no-data ones) with the full cost-breakdown columns
+  // instead of the older filtered/12-column set. Summary tab is
+  // unchanged — its formulas still point at columns B/I/K/L, which did
+  // not move since the extra columns were appended after L, not inserted
+  // before it.
+  const sorted=_boSortedAllUnitItems();
   if(!d||!sorted.length){showToast('No budget data to export','error');return;}
   const milestoneLabels=MILESTONES_DEF.map((name,i)=>`M${i+1} - ${name}`);
   const detailRows=sorted.map(u=>({
-    'Year':u.year,
+    'Year':u.year==null?'':u.year,
     'Property':u.property||'',
     'Unit':u.unitName||'',
     'Unit Type':u.unitType||'',
@@ -20658,14 +20849,25 @@ function exportBudgetOutlookClientReport(){
     'Elevator Company':u.elevatorCo||'',
     'Milestone':u.milestone||'',
     'Status':_boStatusLabel[u.status]||u.status||'',
-    'Award Value':u.isCommitted?(u.amount||0):0,
+    'Award Value':u.awardValue||0,
     'Estimate Value':u.isCommitted?0:(u.amount||0),
+    'Consultant':u.consultant||'',
+    'Device Location':u.deviceLocation||'',
+    'Equipment Type':u.equipmentType||'',
+    'Elevator Mod Est.':u.elevEst||0,
+    'Related Work Est.':u.relatedEst||0,
+    'Cab Interior Est.':u.cabEst||0,
+    'Contingency Fee Est.':u.contingencyEst||0,
+    'Target Completion':u.targetCompletion||'',
+    'Unit ID':u.unitId||'',
   }));
   const wb=XLSX.utils.book_new();
   const wsDetail=XLSX.utils.json_to_sheet(detailRows);
   const lastRow=detailRows.length+1;
-  for(let r=2;r<=lastRow;r++){_boSetCurrencyCell(wsDetail,`K${r}`);_boSetCurrencyCell(wsDetail,`L${r}`);}
-  wsDetail['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13}];
+  for(let r=2;r<=lastRow;r++){
+    ['K','L','P','Q','R','S'].forEach(col=>_boSetCurrencyCell(wsDetail,`${col}${r}`));
+  }
+  wsDetail['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0}];
   XLSX.utils.book_append_sheet(wb,wsDetail,'Unit detail');
   const summaryRows=[
     ['Key portfolio metrics',''],
@@ -32375,13 +32577,17 @@ function buildReportHTML(filter,periodDays,isWeekly){
             <thead><tr><th style="width:20%">${isDemo?'Store':'Property'}</th><th style="width:8%">Type</th><th style="width:13%">Elev. Company</th><th style="width:6%">Units</th><th style="width:11%">Property Status</th><th style="width:11%">Property Health</th><th style="width:9%">Budget</th><th style="width:9%">% Spent</th><th style="width:9%">% Complete</th></tr></thead>
             <tbody>
               ${activeProps.map(p=>{
-                const msC=getMsComplete(p.n);
+                // v60b — weighted, matching the numerator swap below.
+                const msC=getMsCompleteWeighted(p.n);
                 const health=derivePropertyStatusFromPhases(p.n);
                 const healthBadge=health==='At Risk'?'<span class="badge b-behind">At Risk</span>':health==='Ahead'?'<span class="badge b-health-ahead">Ahead</span>':health==='Complete'?'<span class="badge b-done">Complete</span>':'<span class="badge b-nip">On Track</span>';
                 const billedYTD=p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((a,b)=>Math.max(a,b.billedYTD||0),0);
                 const rowBillingBasis=getBillingBasis(p);
                 const pctSpent=rowBillingBasis.amount&&billedYTD?Math.round(billedYTD/rowBillingBasis.amount*100):null;
-                const pctComplete=Math.round(msC/getMsExpectedTotal(p.n)*100);
+                // v60b — weighted, same MS_WEIGHTS table as the VDA
+                // Milestones stat tile, so the Performance Report's %
+                // Complete column agrees with what's shown in-app.
+                const pctComplete=Math.round(msC/getMsExpectedTotalWeighted(p.n)*100);
                 return `<tr>
                   <td style="font-weight:500;color:var(--blue-dark)">${escHtml(p.n)}</td>
                   <td><span class="badge ${p.type==='Core'?'b-core':'b-noncore'}" style="font-size:9px">${escHtml(p.type)}</span></td>
