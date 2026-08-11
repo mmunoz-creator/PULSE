@@ -3083,9 +3083,18 @@ async function loadAllData() {
       id: r.id,
       property: resolvePropertyLink(r.fields['Property Name']),
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
-      billedYTD: r.fields['Billed YTD']||r.fields['$ Amount']||0,
+      // v62i — task #44: this field now holds a single invoice's amount
+      // (Invoice Amount), not a typed running total. Kept as billedYTD in
+      // the in-memory shape so every existing render site that already
+      // reads b.billedYTD keeps working — renderBudgetTab now sums these
+      // per-invoice amounts across the year instead of trusting the most
+      // recent one as a running total. Falls back to the old Billed YTD
+      // field name for pre-rebuild historical entries that only have that.
+      billedYTD: r.fields['Invoice Amount']!=null?r.fields['Invoice Amount']:(r.fields['Billed YTD']||r.fields['$ Amount']||0),
       entryDate: r.fields['Entry Date']||r.fields['Billing date']||'',
       invoiceMonth: r.fields['Invoice Month']||'',
+      invoiceNumber: r.fields['Invoice #']||'',
+      includedCOs: (r.fields['Included Change Orders']||[]).map(x=>x.id||x),
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
       // v55o — optimistic-locking conflict detection (task #90).
@@ -4059,24 +4068,29 @@ window.PROPERTIES_SEED = [
     <button onclick="closeBillingModal()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:20px"><i class="ti ti-x"></i></button>
   </div>
   <div class="form-group">
-    <label class="form-label">Project Budget</label>
-    <input class="form-input" type="text" inputmode="numeric" id="bm-budget" placeholder="e.g. 1,800,000">
+    <label class="form-label">Contract Value</label>
+    <input class="form-input" type="text" id="bm-contract-value" disabled style="background:var(--gray-bg,#f4f5f7);color:var(--gray-mid)">
+    <div style="font-size:11px;color:var(--gray-mid);margin-top:4px">Set on the project's own Edit panel (Contract Award Value), not here.</div>
   </div>
   <div class="form-group">
-    <label class="form-label">Billing current through</label>
-    <input class="form-input" type="text" id="bm-invoice-month" placeholder="e.g. Through May 2026, Q1 2026">
-  </div>
-  <div class="form-group">
-    <label class="form-label">Billed YTD (running total)</label>
-    <input class="form-input" type="text" inputmode="numeric" id="bm-ytd" placeholder="e.g. 50,000">
-  </div>
-  <div class="form-group">
-    <label class="form-label">Entry date</label>
+    <label class="form-label">Invoice Date</label>
     <input class="form-input" type="date" id="bm-date">
   </div>
   <div class="form-group">
+    <label class="form-label">Invoice #</label>
+    <input class="form-input" type="text" id="bm-invoice-number" placeholder="e.g. 7401622864">
+  </div>
+  <div class="form-group">
+    <label class="form-label">Invoice Amount</label>
+    <input class="form-input" type="text" inputmode="numeric" id="bm-ytd" placeholder="e.g. 50,000">
+  </div>
+  <div class="form-group" id="bm-co-group">
+    <label class="form-label">Included Change Orders</label>
+    <div id="bm-co-list" style="max-height:120px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--gray-mid)">No change orders logged for this project yet.</div>
+  </div>
+  <div class="form-group">
     <label class="form-label">Notes (optional)</label>
-    <input class="form-input" type="text" id="bm-notes" placeholder="e.g. Invoice #003, Q2 billing cycle">
+    <input class="form-input" type="text" id="bm-notes" placeholder="e.g. Progress billing, punch list items">
   </div>
   <input type="hidden" id="bm-editing-id" value="">
   <div style="display:flex;gap:8px;margin-top:4px;justify-content:flex-end">
@@ -4599,7 +4613,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62i</div>
     </div>
   </nav>
 
@@ -8895,22 +8909,34 @@ function getMilestonesForProp(propName,scopeId){
 // getMsComplete/getMsExpectedTotal (flat-count) are kept as-is for any
 // other caller that still wants a raw count; the weighted pair below is
 // what feeds "VDA Milestones" stat tiles and the Performance Report's %
-// Complete column. Locked-in table, per Misty:
-//   M1  Modernization Survey          3
-//   M2  Technical Specification       4
-//   M3  RFP / Bid Process             4
-//   M4  Contract Award                4
-//   M5  Submittal Drawing Review      5
-//   M6  First Phase Start             5
-//   M7  25% Construction              16
-//   M8  50% Construction              16
-//   M9  75% Construction              15
-//   M10 Final Phase Complete          10
-//   M11 Punch Lists Complete          5
-//   M12 Inspections Complete (AHJ)    5
-//   M13 Owner Acceptance              5
-//   M14 Closeout Documentation        3
-const MS_WEIGHTS=[3,4,4,4,5,5,16,16,15,10,5,5,5,3];
+// Complete column.
+// v62h — task #43 retune, per Misty (2026-08-11): the original table
+// undervalued early setup/procurement work (M1-M6 only summed to 25 of
+// 100), so a scope that had cleared everything up through First Phase
+// Start still read as low as 25% before any construction milestone
+// landed. M1-M6 raised from 25 to 32. To keep the table summing to 100,
+// M7-M9 (Construction) trimmed slightly (47 -> 42) and M13/M14 (Owner
+// Acceptance/Closeout Documentation) cut hard, per Misty's explicit cap
+// ("M13 & M14 should be no more than 8 point cumulatively" -> landed at
+// 5) since those two are paperwork/sign-off, not real remaining work.
+// The points freed from M13/M14 went into M10-M12 (Final Phase Complete/
+// Punch Lists/Inspections) instead of back into M7-M9, since M10-M12 are
+// still real closeout work on site, not just paperwork. Locked-in table:
+//   M1  Modernization Survey          4
+//   M2  Technical Specification       5
+//   M3  RFP / Bid Process             5
+//   M4  Contract Award                5
+//   M5  Submittal Drawing Review      6
+//   M6  First Phase Start             7
+//   M7  25% Construction              15
+//   M8  50% Construction              14
+//   M9  75% Construction              13
+//   M10 Final Phase Complete          9
+//   M11 Punch Lists Complete          6
+//   M12 Inspections Complete (AHJ)    6
+//   M13 Owner Acceptance              3
+//   M14 Closeout Documentation        2
+const MS_WEIGHTS=[4,5,5,5,6,7,15,14,13,9,6,6,3,2];
 
 // Get ms % complete from live data
 function getMsComplete(propName){
@@ -15871,7 +15897,7 @@ function openBillingHistoryPopout(propName){
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const rows=propBilling.map(b=>`<tr id="billing-row-${b.id}">
         <td style="font-size:12px">${b.entryDate}</td>
-        <td style="font-size:12px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
+        <td style="font-size:12px;color:var(--gray-mid)">${b.invoiceNumber||'—'}</td>
         <td style="font-size:12px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
         <td style="font-size:12px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
         <td style="font-size:12px;color:var(--gray-mid)">${escHtml(b.notes||'—')}</td>
@@ -15892,7 +15918,7 @@ function openBillingHistoryPopout(propName){
     </div>
     <div style="overflow-y:auto;padding:20px 24px;flex:1">
       <table class="data-table" style="width:100%">
-        <thead><tr><th>Date</th><th>Current Through</th><th>Billed YTD</th><th>%</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
+        <thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>%</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -15941,13 +15967,13 @@ function printBillingHistory(propName){
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const generated=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
   const esc=escHtml;
-  const rows=propBilling.map(b=>`<tr><td>${esc(b.entryDate)}</td><td>${esc(b.invoiceMonth||'—')}</td><td>${esc(fmtCurrencyFull(b.billedYTD))}</td><td>${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td><td>${esc(b.notes||'—')}</td></tr>`).join('');
+  const rows=propBilling.map(b=>`<tr><td>${esc(b.entryDate)}</td><td>${esc(b.invoiceNumber||'—')}</td><td>${esc(fmtCurrencyFull(b.billedYTD))}</td><td>${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td><td>${esc(b.notes||'—')}</td></tr>`).join('');
   const html=`<!DOCTYPE html><html><head><title>Billing History — ${esc(propName)}</title>
   <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{font-size:18px;margin:0 0 4px;border-bottom:2px solid #185a9d;padding-bottom:8px}p.sub{font-size:12px;color:#888;margin:8px 0 20px}table{border-collapse:collapse;width:100%;font-size:12px}th{text-align:left;border-bottom:1px solid #ccc;padding:6px 8px;color:#5f6368}td{padding:6px 8px;border-bottom:1px solid #eee}</style>
   </head><body>
   <h1>${esc(propName)} — Billing History</h1>
   <p class="sub">${propBilling.length} entries · Generated ${esc(generated)}</p>
-  <table><thead><tr><th>Date</th><th>Current Through</th><th>Billed YTD</th><th>%</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>%</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>
   <hr style="margin-top:32px;border:none;border-top:1px solid #e0e0e0">
   <div style="text-align:center;padding-top:12px">
     <p style="font-size:11px;color:#666;margin:0 0 3px">PULSE Portal, Park Hotels and Resorts Modernization Program</p>
@@ -16003,7 +16029,13 @@ function renderBudgetTab(p){
   // separate contract with its own billing history)
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n&&(!scopeId||b.scopeId===scopeId)).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const latest=propBilling[0]||null;
-  const billedYTD=latest?Number(latest.billedYTD):0;
+  // v62i — task #44: Billed YTD is no longer a typed running total taken
+  // from the single latest entry. Each Billing Log entry is now one
+  // invoice (billedYTD holds that invoice's own Invoice Amount), so YTD
+  // is derived here as the sum of this calendar year's invoice amounts —
+  // matching the field's actual name for the first time.
+  const currentYear=new Date().getFullYear();
+  const billedYTD=propBilling.filter(b=>b.entryDate&&new Date(b.entryDate).getFullYear()===currentYear).reduce((sum,b)=>sum+(Number(b.billedYTD)||0),0);
   const billingBasis=getBillingBasis(p);
   const budget=billingBasis.amount;
   const budgetLabel=billingBasis.source==='award'?'Contract Award Value':'Project Budget';
@@ -16045,9 +16077,13 @@ function renderBudgetTab(p){
   // popout (also printable), so the card never grows unbounded over a
   // multi-year project (v21d).
   const histEl=document.getElementById('billing-history-list');
+  // v62i — task #44: "Current Through" (Invoice Month) column replaced
+  // with Invoice # now that each row is a discrete invoice, not a running
+  // total checkpoint. "Billed YTD" header changed to "Amount" for the
+  // same reason — the column shows a single invoice's amount now.
   const billingRow=(b,showActions)=>`<tr id="billing-row-${b.id}">
         <td style="font-size:11px">${b.entryDate}</td>
-        <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceMonth||'—'}</td>
+        <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceNumber||'—'}</td>
         <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
         <td style="font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
         <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(b.notes||'—')}</td>
@@ -16061,8 +16097,8 @@ function renderBudgetTab(p){
     `<table class="data-table" style="margin-top:0;table-layout:fixed;width:100%">
       <thead><tr>
         <th style="width:12%">Date</th>
-        <th style="width:18%;white-space:normal;line-height:1.3">Current<br>Through</th>
-        <th style="width:18%">Billed YTD</th>
+        <th style="width:18%">Invoice #</th>
+        <th style="width:18%">Amount</th>
         <th style="width:10%">%</th>
         <th style="width:20%">Notes</th>
         ${canPM?'<th style="width:22%"></th>':''}
@@ -17157,13 +17193,14 @@ function editBillingEntry(id,propName){
   // Pre-fill the billing modal with this entry's values for editing
   document.getElementById('billing-modal-prop').textContent=propName;
   document.getElementById('billing-modal-title').textContent='Edit Billing Entry';
-  initCurrencyInput('bm-budget');
   initCurrencyInput('bm-ytd');
-  document.getElementById('bm-budget').value=currentProp.budget?Number(currentProp.budget).toLocaleString('en-US'):'';
-  document.getElementById('bm-invoice-month').value=b.invoiceMonth||'';
+  const basis=getBillingBasis(currentProp);
+  document.getElementById('bm-contract-value').value=basis.amount?fmtCurrency(basis.amount):'Not set';
+  document.getElementById('bm-invoice-number').value=b.invoiceNumber||'';
   document.getElementById('bm-ytd').value=b.billedYTD?Number(b.billedYTD).toLocaleString('en-US'):'';
   document.getElementById('bm-date').value=b.entryDate||new Date().toISOString().split('T')[0];
   document.getElementById('bm-notes').value=b.notes||'';
+  bmRenderCOChecklist(b.scopeId,b.includedCOs||[]);
   // Store the id being edited so saveBillingModal knows to update not create
   document.getElementById('bm-editing-id').value=id;
   document.getElementById('billing-modal-overlay').style.display='block';
@@ -18547,19 +18584,44 @@ async function deleteDraft(){
 }
 
 // Billing modal
+// v62i — task #44 rebuild (Misty, 2026-08-11). Modal reworked from a
+// property-wide "Project Budget + running-total Billed YTD" form into a
+// real per-invoice entry tied to the current Scope: Contract Value is now
+// a read-only display sourced from the Scope's own Contract Award Value
+// (edited on the project's Edit panel, not here — avoids two places that
+// can drift), "Billing current through" is removed, and Invoice Date/
+// Invoice #/Invoice Amount/Included Change Orders replace the old single
+// Entry Date + running-total Billed YTD fields. Billed YTD itself is no
+// longer typed anywhere — see renderBudgetTab, which now sums Invoice
+// Amount across the current calendar year's entries for the Scope.
+function bmRenderCOChecklist(scopeId,checkedIds){
+  const listEl=document.getElementById('bm-co-list');
+  if(!listEl)return;
+  const cos=(window.CO_SAVINGS||[]).filter(c=>c.property===currentProp?.n&&(!scopeId||c.scopeId===scopeId));
+  if(cos.length===0){
+    listEl.innerHTML='No change orders logged for this project yet.';
+    return;
+  }
+  const checked=new Set(checkedIds||[]);
+  listEl.innerHTML=cos.map(c=>`<label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer">
+    <input type="checkbox" value="${c.id}" class="bm-co-check" ${checked.has(c.id)?'checked':''}>
+    <span style="font-size:12px;color:var(--navy)">${escHtml(c.description||c.item||'Change Order')} — ${fmtCurrency(c.negotiatedAmount||0)}</span>
+  </label>`).join('');
+}
 function openBillingModal(){
   if(!currentProp)return;
+  const scopeId=currentScope?.id;
   document.getElementById('billing-modal-prop').textContent=currentProp.n;
   document.getElementById('billing-modal-title').textContent='+ Billing Entry';
   document.getElementById('bm-editing-id').value='';
-  initCurrencyInput('bm-budget');
   initCurrencyInput('bm-ytd');
-  const budgetInput=document.getElementById('bm-budget');
-  budgetInput.value=currentProp.budget?Number(currentProp.budget).toLocaleString('en-US'):'';
+  const basis=getBillingBasis(currentProp);
+  document.getElementById('bm-contract-value').value=basis.amount?fmtCurrency(basis.amount):'Not set';
   document.getElementById('bm-ytd').value='';
-  document.getElementById('bm-invoice-month').value='';
+  document.getElementById('bm-invoice-number').value='';
   document.getElementById('bm-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('bm-notes').value='';
+  bmRenderCOChecklist(scopeId,[]);
   document.getElementById('billing-modal-overlay').style.display='block';
   document.getElementById('billing-modal').style.display='block';
 }
@@ -18572,121 +18634,91 @@ async function saveBillingModal(){
   if(_savingBillingModal)return;
   if(!currentProp)return;
   const editingId=document.getElementById('bm-editing-id').value;
-  const budgetRaw=String(getCurrencyValue('bm-budget')||'');
-  const budget=budgetRaw!==''?parseFloat(budgetRaw):null;
+  const scopeId=currentScope?.id||'';
   const ytdRaw=String(getCurrencyValue('bm-ytd')||'');
-  const ytd=ytdRaw!==''&&ytdRaw!=='0'?parseFloat(ytdRaw):null;
+  const invoiceAmount=ytdRaw!==''&&ytdRaw!=='0'?parseFloat(ytdRaw):null;
   const date=document.getElementById('bm-date').value;
-  const invoiceMonth=document.getElementById('bm-invoice-month').value.trim();
+  const invoiceNumber=document.getElementById('bm-invoice-number').value.trim();
   const notes=document.getElementById('bm-notes').value.trim();
-  // Allow budget update without a billing entry
-  if(budget===null&&ytd===null){showToast('Please enter a Project Budget or Billed YTD amount','warn');return;}
-  if(ytd!==null&&!date){showToast('Please enter an entry date for the billing entry','warn');return;}
+  const includedCOs=Array.from(document.querySelectorAll('.bm-co-check:checked')).map(el=>el.value);
+  if(invoiceAmount===null){showToast('Please enter an Invoice Amount','warn');return;}
+  if(!date){showToast('Please enter an Invoice Date','warn');return;}
   // v55o — optimistic-locking conflict check (task #90). Only meaningful
   // when editing an existing Billing Log entry — a brand new entry
-  // (editingId blank) has nothing in Airtable yet to conflict with. Only
-  // covers the Billing Log record itself, not the Properties.Project
-  // Budget write below (that field's own conflict coverage lives in
-  // saveEditProperty).
-  if(ytd!==null&&editingId){
+  // (editingId blank) has nothing in Airtable yet to conflict with.
+  if(editingId){
     const billForConflict=(window.BILLING_LOG||[]).find(b=>b.id===editingId);
     const conflictCheck=await checkForEditConflict('Billing Log',editingId,billForConflict?.conflictTs||'');
     if(conflictCheck.conflict){
-      showEditConflictModal(conflictCheck.liveTs,'Billed YTD',fmtCurrency(ytd),()=>{
+      showEditConflictModal(conflictCheck.liveTs,'Invoice Amount',fmtCurrency(invoiceAmount),()=>{
         closeBillingModal();
         if(currentProp){renderPropertyView(currentProp);switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));}
       });
       return;
     }
   }
-  // v54c — this form had no double-submit guard, and can fire up to two
-  // writes per call (Project Budget + a Billing Log entry). Guard set here
-  // after validation, before either write begins.
   _savingBillingModal=true;
   const saveBtn=document.getElementById('save-billing-modal-btn');
   if(saveBtn)saveBtn.disabled=true;
-  // v52g — Project Budget write result was only console.log'd, no
-  // user-facing signal at all if it failed; local currentProp.budget stayed
-  // updated regardless, so a failed budget save was invisible in the UI.
-  // Now rolls the local value back and shows an error toast on failure.
-  let budgetSaveFailed=false;
-  if(budget!==null&&budget!==currentProp.budget){
-    const priorBudget=currentProp.budget;
-    currentProp.budget=budget;
-    if(!demoMode){
-      const budRes=await atUpdate('Properties',currentProp.id,{'Project Budget':budget});
-      if(!budRes){
-        currentProp.budget=priorBudget;
-        budgetSaveFailed=true;
-        showToast('Could not save the Project Budget change. Please try again.','error');
-      }
-    }
-  }
-  // Only log a billing entry if YTD was provided
-  if(ytd!==null){
-    if(editingId){
-      // Edit mode — update existing entry
-      const existing=(window.BILLING_LOG||[]).find(b=>b.id===editingId);
-      if(existing){
-        // v52g — atUpdate's result was discarded here; the local edit and
-        // "updated" toast fired unconditionally regardless of whether the
-        // write reached Airtable. Now rolls the local edit back on failure.
-        const priorVals={billedYTD:existing.billedYTD,entryDate:existing.entryDate,invoiceMonth:existing.invoiceMonth,notes:existing.notes};
-        existing.billedYTD=ytd;existing.entryDate=date;existing.invoiceMonth=invoiceMonth;existing.notes=notes;
-        if(!demoMode){
-          const updRes=await atUpdate('Billing Log',editingId,{
-            'Billed YTD':ytd,'Entry Date':date,'Invoice Month':invoiceMonth||'','Notes':notes||'',
-          });
-          // v55o — capture the fresh Last Modified timestamp on a
-          // successful save so the next edit's conflict check compares
-          // against a current baseline.
-          if(updRes&&updRes.fields?.['Billing Log Last Modified'])existing.conflictTs=updRes.fields['Billing Log Last Modified'];
-          if(!updRes){
-            Object.assign(existing,priorVals);
-            showToast('Could not save changes to this billing entry. Please try again.','error');
-            closeBillingModal();
-            renderPropertyView(currentProp);
-            switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));
-            _savingBillingModal=false;
-            if(saveBtn)saveBtn.disabled=false;
-            return;
-          }
-        }
-        showToast('Billing entry updated','success');
-      }
-    } else {
-      // New entry
-      const newEntry={id:'bl-'+Date.now(),property:currentProp.n,billedYTD:ytd,entryDate:date,invoiceMonth,notes,loggedBy:'PM User'};
+  // v62i — task #44 rebuild. Project Budget write path removed entirely —
+  // Contract Value is now a read-only display sourced from the Scope's own
+  // Contract Award Value (edited on the project's Edit panel), so this
+  // modal no longer writes to Properties.Project Budget at all. Every
+  // save is now a single Billing Log invoice entry.
+  if(editingId){
+    // Edit mode — update existing entry
+    const existing=(window.BILLING_LOG||[]).find(b=>b.id===editingId);
+    if(existing){
+      const priorVals={billedYTD:existing.billedYTD,entryDate:existing.entryDate,invoiceNumber:existing.invoiceNumber,notes:existing.notes,includedCOs:existing.includedCOs};
+      existing.billedYTD=invoiceAmount;existing.entryDate=date;existing.invoiceNumber=invoiceNumber;existing.notes=notes;existing.includedCOs=includedCOs;
       if(!demoMode){
-        const res=await atCreate('Billing Log',{
-          'Property Name':propertyNameToLink(currentProp.n),
-          'Billed YTD':ytd,
-          'Entry Date':date,
-          'Invoice Month':invoiceMonth||'',
-          'Notes':notes||'',
-          'Logged By':'PM User',
+        const updRes=await atUpdate('Billing Log',editingId,{
+          'Invoice Amount':invoiceAmount,'Entry Date':date,'Invoice #':invoiceNumber||'','Notes':notes||'',
+          'Included Change Orders':includedCOs,
         });
-        console.log('Billing Log create result:',JSON.stringify(res)?.slice(0,200));
-        // v51j — this logged the result but never actually checked it, the
-        // fallback newEntry.id (a fabricated bl- id) let the function push a
-        // local entry and show "Billing entry saved" even if the Airtable
-        // write failed. Now aborts here instead of continuing on a fake id.
-        if(!res?.records?.[0]?.id){
-          showToast('Could not save billing entry to Airtable. Check your connection and try again.','error');
+        if(updRes&&updRes.fields?.['Billing Log Last Modified'])existing.conflictTs=updRes.fields['Billing Log Last Modified'];
+        if(!updRes){
+          Object.assign(existing,priorVals);
+          showToast('Could not save changes to this billing entry. Please try again.','error');
+          closeBillingModal();
+          renderPropertyView(currentProp);
+          switchPropTab('budget',document.querySelector('.tab-btn[onclick*="budget"]'));
           _savingBillingModal=false;
           if(saveBtn)saveBtn.disabled=false;
           return;
         }
-        newEntry.id=res.records[0].id;
       }
-      window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
-      showToast('Billing entry saved','success');
+      showToast('Billing entry updated','success');
     }
-  } else if(!budgetSaveFailed){
-    // v52g — only show this success toast if the budget write above (the
-    // only write that happens on this branch) actually succeeded; the
-    // failure toast was already shown at the point of failure otherwise.
-    showToast('Project budget updated','success');
+  } else {
+    // New entry
+    // v62i — task #41/#44: Linked Scope is now written on create so this
+    // entry shows up on the per-project Budget Performance tab (which
+    // filters by scopeId) instead of only ever appearing on property-wide
+    // views. Confirmed live this was silently missing before.
+    const newEntry={id:'bl-'+Date.now(),property:currentProp.n,scopeId,billedYTD:invoiceAmount,entryDate:date,invoiceNumber,notes,includedCOs,loggedBy:'PM User'};
+    if(!demoMode){
+      const fields={
+        'Property Name':propertyNameToLink(currentProp.n),
+        'Invoice Amount':invoiceAmount,
+        'Entry Date':date,
+        'Invoice #':invoiceNumber||'',
+        'Notes':notes||'',
+        'Logged By':'PM User',
+      };
+      if(scopeId)fields['Linked Scope']=[scopeId];
+      if(includedCOs.length>0)fields['Included Change Orders']=includedCOs;
+      const res=await atCreate('Billing Log',fields);
+      if(!res?.records?.[0]?.id){
+        showToast('Could not save billing entry to Airtable. Check your connection and try again.','error');
+        _savingBillingModal=false;
+        if(saveBtn)saveBtn.disabled=false;
+        return;
+      }
+      newEntry.id=res.records[0].id;
+    }
+    window.BILLING_LOG=(window.BILLING_LOG||[]).concat([newEntry]);
+    showToast('Billing entry saved','success');
   }
   closeBillingModal();
   renderPropertyView(currentProp);
