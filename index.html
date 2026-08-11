@@ -4310,6 +4310,26 @@ entry with the reason and the resulting Project Value change. -->
   </div>
 </div>
 
+<!-- v63a — task #56 fix. VDA TASK LINE PANEL. "Show task lines" on a VDA
+Project card used to expand the table inline inside the card, which only
+has ~1/3 of screen width in the 3-across card grid — task names wrapped
+to 2 lines, dates wrapped awkwardly, generally hard to read. Same
+slide-out mechanism as Edit Project/Edit Property (translateX panel +
+dimmed overlay), just wider (900px vs the usual 640px) since this holds a
+6-column table, not a form. Same left-edge conventions kept: dark header
+bar, X to close, overlay click also closes. -->
+<div id="vdatl-overlay" onclick="closeVdaTaskLinePanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="vdatl-panel" style="display:none;position:fixed;top:0;right:0;width:900px;max-width:96vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div>
+      <div style="font-size:16px;font-weight:700;color:#85B7EB" id="vdatl-title">Task Lines</div>
+      <div style="font-size:12px;color:rgba(133,183,235,0.7)" id="vdatl-subtitle"></div>
+    </div>
+    <button onclick="closeVdaTaskLinePanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px" id="vdatl-body"></div>
+</div>
+
 <!-- v45q — NEW PROPERTY PANEL. Replaces the old centered "Add to Capital
 Plan" overlay (openCapitalPlanEntry/saveCapitalPlanEntry previously built
 a modal from scratch in JS — see the removed function bodies). Same
@@ -4634,7 +4654,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62m</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63a</div>
     </div>
   </nav>
 
@@ -34643,10 +34663,16 @@ function renderVdaProjects(){
       <div style="font-size:12px;color:var(--gray-dark);margin-bottom:4px">${myTasks.length} task line${myTasks.length===1?'':'s'} &middot; ${fullyBilled} fully billed</div>
       ${lastAmend?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:4px">Last amendment: ${lastAmend.date} — ${fmtCurrency(lastAmend.priorPrice)} &rarr; ${fmtCurrency(lastAmend.newPrice)}</div>`:''}
 
-      <button type="button" onclick="toggleVdaCardExpand('${p.id}')" style="width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--gray-pale,#F1EFE8);padding:8px 0 0;margin-top:4px;cursor:pointer;color:var(--blue-dark);font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px">
-        <i class="ti ti-chevron-${isExpanded?'down':'right'}"></i> ${isExpanded?'Hide':'Show'} task lines
+      <!-- v63a — task #56 fix. Was toggleVdaCardExpand(), which rendered
+      vdaTaskLineTableHtml() inline inside this card (only ~1/3 of screen
+      width in the 3-across grid — cramped, wrapping text). Now opens a
+      900px full-height slide panel instead, same mechanism as Edit
+      Project. isExpanded/_vdaExpandedCards/toggleVdaCardExpand are left
+      in place (unused by this button now) rather than torn out, in case
+      anything else still references that state. -->
+      <button type="button" onclick="openVdaTaskLinePanel('${p.id}')" style="width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--gray-pale,#F1EFE8);padding:8px 0 0;margin-top:4px;cursor:pointer;color:var(--blue-dark);font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px">
+        <i class="ti ti-arrows-diagonal"></i> View task lines
       </button>
-      ${isExpanded?vdaTaskLineTableHtml(myTasks):''}
     </div>`;
   }).join('');
 }
@@ -34667,29 +34693,64 @@ window.toggleVdaCardExpand=toggleVdaCardExpand;
 // string) per Misty's direct correction during mockup review.
 function vdaTaskLineTableHtml(taskRows){
   if(!taskRows.length)return `<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No task lines on this agreement yet.</div>`;
-  const rows=taskRows.map(t=>`<tr>
-      <td style="padding:6px 8px;font-size:12px;color:var(--navy)">${escHtml(t.description||'—')}${t.service?`<div style="font-size:11px;color:var(--gray-mid)">${escHtml(t.service)}</div>`:''}</td>
-      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark)">${escHtml(t.owner||'—')}</td>
-      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark)">${t.startDate?fmtShortDate(t.startDate):'—'}</td>
-      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark)">${t.endDate?fmtShortDate(t.endDate):'—'}</td>
-      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark);text-align:right">${fmtCurrency(t.amountInvoiced||0)}</td>
-      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark);text-align:right">${fmtCurrency(t.contractBalance||0)}</td>
+  // v63a — task #56 fix. Font sizes/padding bumped up from the old
+  // in-card compact values (was 12px/11px text, 4-6px padding) now that
+  // this renders inside a 900px panel instead of a ~1/3-width card
+  // column — plenty of room, no need to stay this dense. Columns/data
+  // unchanged, Start and End still deliberately separate (see comment
+  // above this function).
+  const rows=taskRows.map(t=>`<tr style="border-bottom:1px solid var(--gray-pale,#F1EFE8)">
+      <td style="padding:10px 12px;font-size:13px;color:var(--navy)">${escHtml(t.description||'—')}${t.service?`<div style="font-size:12px;color:var(--gray-mid)">${escHtml(t.service)}</div>`:''}</td>
+      <td style="padding:10px 12px;font-size:13px;color:var(--gray-dark)">${escHtml(t.owner||'—')}</td>
+      <td style="padding:10px 12px;font-size:13px;color:var(--gray-dark);white-space:nowrap">${t.startDate?fmtShortDate(t.startDate):'—'}</td>
+      <td style="padding:10px 12px;font-size:13px;color:var(--gray-dark);white-space:nowrap">${t.endDate?fmtShortDate(t.endDate):'—'}</td>
+      <td style="padding:10px 12px;font-size:13px;color:var(--gray-dark);text-align:right;white-space:nowrap">${fmtCurrency(t.amountInvoiced||0)}</td>
+      <td style="padding:10px 12px;font-size:13px;color:var(--gray-dark);text-align:right;white-space:nowrap">${fmtCurrency(t.contractBalance||0)}</td>
     </tr>`).join('');
-  return `<div style="overflow-x:auto;margin-top:8px">
+  return `<div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse">
-      <thead><tr style="border-bottom:1px solid var(--gray-pale,#F1EFE8)">
-        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">Task / Service</th>
-        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">Owner</th>
-        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">Start</th>
-        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">End</th>
-        <th style="padding:4px 8px;text-align:right;font-size:11px;color:var(--gray-mid);font-weight:600">Invoiced</th>
-        <th style="padding:4px 8px;text-align:right;font-size:11px;color:var(--gray-mid);font-weight:600">Balance</th>
+      <thead><tr style="border-bottom:2px solid var(--gray-pale,#F1EFE8)">
+        <th style="padding:8px 12px;text-align:left;font-size:12px;color:var(--gray-mid);font-weight:600">Task / Service</th>
+        <th style="padding:8px 12px;text-align:left;font-size:12px;color:var(--gray-mid);font-weight:600">Owner</th>
+        <th style="padding:8px 12px;text-align:left;font-size:12px;color:var(--gray-mid);font-weight:600">Start</th>
+        <th style="padding:8px 12px;text-align:left;font-size:12px;color:var(--gray-mid);font-weight:600">End</th>
+        <th style="padding:8px 12px;text-align:right;font-size:12px;color:var(--gray-mid);font-weight:600">Invoiced</th>
+        <th style="padding:8px 12px;text-align:right;font-size:12px;color:var(--gray-mid);font-weight:600">Balance</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
 }
 window.vdaTaskLineTableHtml=vdaTaskLineTableHtml;
+
+// v63a — task #56 fix. Full-width task-line panel, replacing the old
+// inline in-card expand (vdaTaskLineTableHtml() itself is unchanged and
+// still does the actual table rendering — just called from here now,
+// into the wide panel body instead of into the card). Same slide-out
+// mechanism as openEditVdaPanel/closeEditVdaPanel above.
+function openVdaTaskLinePanel(vdaId){
+  const p=(window.VDA_PROJECTS||[]).find(x=>x.id===vdaId);
+  if(!p)return;
+  const myTasks=(window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId);
+  const propNames=propNamesFor(p);
+  document.getElementById('vdatl-title').textContent=p.number?'VDA Project #'+p.number+' — Task Lines':'Task Lines';
+  document.getElementById('vdatl-subtitle').textContent=(p.nickname?p.nickname+' — ':'')+(propNames.length?propNames.join(', '):'No properties linked');
+  document.getElementById('vdatl-body').innerHTML=vdaTaskLineTableHtml(myTasks);
+
+  const panel=document.getElementById('vdatl-panel');
+  const overlay=document.getElementById('vdatl-overlay');
+  overlay.style.display='block';panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
+}
+window.openVdaTaskLinePanel=openVdaTaskLinePanel;
+function closeVdaTaskLinePanel(){
+  const panel=document.getElementById('vdatl-panel');
+  const overlay=document.getElementById('vdatl-overlay');
+  panel.style.transform='translateX(100%)';
+  overlay.style.display='none';
+  setTimeout(()=>{panel.style.display='none';},300);
+}
+window.closeVdaTaskLinePanel=closeVdaTaskLinePanel;
 
 // v58x — task #45/#46. Monthly VDA Project Excel import. Client-side
 // only, following the exact pattern already established by "Import Unit
@@ -35078,7 +35139,14 @@ async function confirmVdaImport(){
           'VDA Project':[p.id],'Description':nt.taskName,'Amount':0,
           'Billing Split':'100% on completion','Trigger Type':'Milestone Linked','Status':'Not Started',
           'Contract Balance':nt.contractBalance,'Amount Invoiced':nt.amountInvoiced,
-          'Start Date':nt.startDate,'End Date':nt.endDate,'Owner':nt.owner,'Service':nt.service,
+          // v63a — task #55 fix. nt.startDate/nt.endDate come from excelDate(),
+          // which correctly returns '' for a blank source cell, but Airtable's
+          // API rejects an empty string for a date field (422
+          // INVALID_VALUE_FOR_COLUMN) — it needs null, not ''. Confirmed live:
+          // every "General Consulting" row (no task-level dates in the source
+          // file) failed this create. ||null matches the pattern already used
+          // correctly elsewhere in this file (see addVdaTaskLineRow save paths).
+          'Start Date':nt.startDate||null,'End Date':nt.endDate||null,'Owner':nt.owner,'Service':nt.service,
         };
         let newId=null;
         if(!demoMode){
@@ -35096,7 +35164,12 @@ async function confirmVdaImport(){
       }
       if(pd.projectFieldsChanged){
         if(!demoMode){
-          const res=await vdaImportAtCall('PATCH','VDA Project',p.id,{'Total Invoiced for Project':pd.newTotalInvoiced,'Last Invoice Date':pd.newLastInvoiceDate});
+          // v63a — task #55 fix, same class of bug as the Task Line create
+          // above. pd.newLastInvoiceDate can legitimately be '' (no row for
+          // this project had a nonzero Amount Invoiced, per the comment on
+          // newLastInvoiceDate's computation above) — Airtable rejects ''
+          // for a date field, needs null.
+          const res=await vdaImportAtCall('PATCH','VDA Project',p.id,{'Total Invoiced for Project':pd.newTotalInvoiced,'Last Invoice Date':pd.newLastInvoiceDate||null});
           if(!res.ok){failCount++;failDetails.push(`VDA Project #${p.number} totals update: ${res.errorText}`);continue;}
         }
         p.totalInvoiced=pd.newTotalInvoiced;
