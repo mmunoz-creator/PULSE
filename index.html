@@ -4599,7 +4599,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62g</div>
     </div>
   </nav>
 
@@ -9379,7 +9379,21 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // from the corrected getMilestoneCategoryForScope(), so Scope.status
   // and Properties' stage dots / Action Board's heat map always agree on
   // which of the 3 middle stages a Scope is actually in.
-  let newStatus=scope.status==='Capital Plan'?'Capital Plan':'Pre-Construction';
+  // v62g — task #42 fix. This used to be `scope.status==='Capital Plan'
+  // ? 'Capital Plan' : 'Pre-Construction'`, which only preserved Capital
+  // Plan when the CURRENT in-memory status already read exactly that
+  // string. Any other value (a stale status, a manual Airtable edit, or
+  // any bug anywhere else) fell straight through to 'Pre-Construction'
+  // with zero evidence of real progress, and there was nothing here to
+  // ever pull it back. Confirmed live: Casa Marina's "2028 Project" and
+  // Hilton Chicago's "2030 Project" both had 0 of 14 Milestones complete
+  // (all "Not Started", M1 never completed) yet were reading
+  // Pre-Construction after reconcileAllScopeStatuses() (runs on every
+  // load) walked every Scope. Gate is now evidence-based, matching the
+  // same M1-completionDate signal already used one branch below to
+  // advance out of the middle stages — no real progress means Capital
+  // Plan, full stop, regardless of what the status field said coming in.
+  let newStatus=(ms1&&ms1.completionDate)?'Pre-Construction':'Capital Plan';
   if(msFinal&&(msFinal.completionDate||msFinal.actualDate))newStatus='Complete';
   else if(ms1&&ms1.completionDate){
     const category=getMilestoneCategoryForScope(scope);
@@ -10872,7 +10886,17 @@ function renderMilestones(p){
   // rows existed).
   const liveMsCount=(window.MILESTONES||[]).filter(m=>m.property===p.n&&(!scopeId||m.scopeId===scopeId)).length;
   if(liveMsCount===0){
-    if((canEdit)&&!demoMode&&scopeId&&!currentScope?.isCompleteBucket){
+    // v62f — race fix (task #41). AT_CONNECTED only flips true once the
+    // initial loadAllData() Promise.all has resolved and window.MILESTONES
+    // holds real data. Before that, window.MILESTONES starts as [] at parse
+    // time, so a render firing during that gap saw liveMsCount===0 for a
+    // scope that actually has milestones, and autoPopulateMilestones() would
+    // create a full second blank set on top of the real one once the fetch
+    // landed a moment later (confirmed live in Airtable: Casa Marina's PE6 &
+    // PE7 scope had 28 Milestone records instead of 14). Gating on
+    // AT_CONNECTED means we only trust an empty result once we know the
+    // real data has actually arrived.
+    if(AT_CONNECTED&&(canEdit)&&!demoMode&&scopeId&&!currentScope?.isCompleteBucket){
       autoPopulateMilestones(p.n,scopeId).then(()=>{
         renderMilestones(p);
         // Refresh the top stat card — it rendered before milestones existed
@@ -13689,6 +13713,16 @@ function renderPropertiesTab(){
   const sub=document.getElementById('properties-sub');
   const livePropCount=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed').length;
   if(sub)sub.textContent=`Real-time view of your elevator modernization program across ${livePropCount} properties`;
+  // v62f — Client role does not see "+ Create Property" here, per direct
+  // instruction (logged earlier this session, deferred to this build).
+  // Creating a property is a Capital Plan intake action (openCapitalPlanEntry
+  // -- see the button's own v60b comment) that Client was never meant to
+  // trigger; the button just had no role gate at all since this "+ Create
+  // Property" shortcut was added to the Properties tab. Toggled here (every
+  // Properties view entry) rather than a one-time render, same pattern as
+  // this file's other role-conditional nav-badge/element toggles.
+  const addBtn=document.getElementById('props-add-property-btn');
+  if(addBtn)addBtn.classList.toggle('hidden',role==='client');
   renderPropsKpiRow();
   renderPropsStatusTabs();
   renderPropertiesTable();
