@@ -4614,7 +4614,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62l</div>
     </div>
   </nav>
 
@@ -9010,6 +9010,29 @@ function getConstructionMsComplete(propName){
 function getConstructionMsExpectedTotal(propName){
   const scopeCount=(window.SCOPES||[]).filter(s=>s.property===propName).length;
   return 8*(scopeCount>0?scopeCount:1); // M6-M13 inclusive = 8 milestones
+}
+
+// v62l — task #51: vendor-billing-scoped weighted milestone aggregate
+// (M4-M14), used by Budget Performance's "% Complete" only. Per direct
+// instruction: M1-M3 (Survey/Award/Submittal-type early milestones) are
+// not elevator vendor work, so comparing Billed % against all 14
+// milestones understated real vendor progress relative to what's
+// actually being billed. M4-M14 weights sum to 86 (out of MS_WEIGHTS'
+// full 100), so that 86 is this function's 100%-equivalent denominator,
+// not the shared getMsExpectedTotalWeighted's 100. Kept fully separate
+// from getMsCompleteWeighted/getMsExpectedTotalWeighted (the M1-M14
+// source of truth used by the Milestones tab, VDA tile, and everywhere
+// else lifecycle stage is computed) so this narrower billing-specific
+// view never leaks into those.
+const MS_BILLING_WEIGHT_TOTAL=MS_WEIGHTS.slice(3,14).reduce((a,w)=>a+w,0); // M4-M14, =86
+function getBillingMsCompleteWeighted(propName,scopeId){
+  const ms=getMilestonesForProp(propName,scopeId).filter(m=>m.milestoneNumber>=4&&m.milestoneNumber<=14);
+  return ms.filter(m=>m.status==='Complete').reduce((sum,m)=>sum+(MS_WEIGHTS[(m.milestoneNumber||1)-1]||0),0);
+}
+function getBillingMsExpectedTotalWeighted(propName,scopeId){
+  if(scopeId)return MS_BILLING_WEIGHT_TOTAL;
+  const scopeCount=(window.SCOPES||[]).filter(s=>s.property===propName).length;
+  return MS_BILLING_WEIGHT_TOTAL*(scopeCount>0?scopeCount:1);
 }
 
 // SCHEDULE RISK ENGINE
@@ -15908,11 +15931,12 @@ function openBillingHistoryPopout(propName){
   const canPM=role==='pm'||role==='admin';
   const budget=getBillingBasis(p).amount;
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
+  // v62l — task #51: "%" column removed here too, matching the inline
+  // card table (see renderBudgetTab's billingRow for rationale).
   const rows=propBilling.map(b=>`<tr id="billing-row-${b.id}">
         <td style="font-size:12px">${b.entryDate}</td>
         <td style="font-size:12px;color:var(--gray-mid)">${b.invoiceNumber||'—'}</td>
         <td style="font-size:12px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
-        <td style="font-size:12px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
         <td style="font-size:12px;color:var(--gray-mid)">${escHtml(b.notes||'—')}</td>
         ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
           <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="closeHistoryPopout();editBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}');openBillingHistoryPopout('${propName.replace(/'/g,"\\'")}')">Remove</button>
@@ -15931,7 +15955,7 @@ function openBillingHistoryPopout(propName){
     </div>
     <div style="overflow-y:auto;padding:20px 24px;flex:1">
       <table class="data-table" style="width:100%">
-        <thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>%</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
+        <thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -15980,13 +16004,15 @@ function printBillingHistory(propName){
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   const generated=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
   const esc=escHtml;
-  const rows=propBilling.map(b=>`<tr><td>${esc(b.entryDate)}</td><td>${esc(b.invoiceNumber||'—')}</td><td>${esc(fmtCurrencyFull(b.billedYTD))}</td><td>${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td><td>${esc(b.notes||'—')}</td></tr>`).join('');
+  // v62l — task #51: "%" column removed here too, matching the inline
+  // card table and popout (see renderBudgetTab's billingRow for rationale).
+  const rows=propBilling.map(b=>`<tr><td>${esc(b.entryDate)}</td><td>${esc(b.invoiceNumber||'—')}</td><td>${esc(fmtCurrencyFull(b.billedYTD))}</td><td>${esc(b.notes||'—')}</td></tr>`).join('');
   const html=`<!DOCTYPE html><html><head><title>Billing History — ${esc(propName)}</title>
   <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{font-size:18px;margin:0 0 4px;border-bottom:2px solid #185a9d;padding-bottom:8px}p.sub{font-size:12px;color:#888;margin:8px 0 20px}table{border-collapse:collapse;width:100%;font-size:12px}th{text-align:left;border-bottom:1px solid #ccc;padding:6px 8px;color:#5f6368}td{padding:6px 8px;border-bottom:1px solid #eee}</style>
   </head><body>
   <h1>${esc(propName)} — Billing History</h1>
   <p class="sub">${propBilling.length} entries · Generated ${esc(generated)}</p>
-  <table><thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>%</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>
   <hr style="margin-top:32px;border:none;border-top:1px solid #e0e0e0">
   <div style="text-align:center;padding-top:12px">
     <p style="font-size:11px;color:#666;margin:0 0 3px">PULSE Portal, Park Hotels and Resorts Modernization Program</p>
@@ -16063,7 +16089,27 @@ function renderBudgetTab(p){
   const unitsComplete=phases.filter(u=>u.status==='Complete').reduce((a,u)=>a+u.units,0);
   const unitsInProg=phases.filter(u=>u.status==='In Progress').reduce((a,u)=>a+u.units,0);
   const unitsRemaining=Math.max(0,totalUnits-unitsComplete-unitsInProg);
-  const pctComplete=totalUnits>0?Math.round((unitsComplete/totalUnits)*100):0;
+  // v62k — task #50: Budget Performance's "% Complete" used to be unit
+  // completion (unitsComplete/totalUnits), which showed 0% for properties
+  // with no Unit Phases marked Complete yet even when real milestone
+  // progress existed — misleading next to Billed YTD, and inconsistent
+  // with the weighted milestone % shown everywhere else (Milestones tab,
+  // VDA tile, Overview mini-card). Now uses weighted milestone math,
+  // scoped to currentScope like the rest of this tab, so Billed vs
+  // Complete compares billing against real progress, not unit installs.
+  // unitsComplete/unitsRemaining are kept as-is — still used by the Unit
+  // Phases section of this same tab.
+  // v62l — task #51: switched from the full M1-M14 aggregate to the
+  // M4-M14-only aggregate (getBillingMsCompleteWeighted/
+  // getBillingMsExpectedTotalWeighted). Per direct instruction: M1-M3
+  // aren't elevator vendor work, so measuring billing progress against
+  // all 14 milestones understated real vendor completion relative to
+  // what's actually being invoiced. This is specific to this billing
+  // comparison — the Milestones tab, VDA tile, and lifecycle stage
+  // derivation elsewhere still correctly use the full M1-M14 range.
+  const msCompleteWeighted=getBillingMsCompleteWeighted(p.n,scopeId);
+  const msExpectedWeighted=getBillingMsExpectedTotalWeighted(p.n,scopeId);
+  const pctComplete=msExpectedWeighted>0?Math.round((msCompleteWeighted/msExpectedWeighted)*100):0;
   const variance=pctBilled-pctComplete;
 
   // Phase duration rendered by renderPhasesTab
@@ -16081,7 +16127,7 @@ function renderBudgetTab(p){
     <div style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-mid);margin-bottom:4px"><span>% Billed</span><span style="font-weight:600;color:${pctBilled>pctComplete+10?'var(--amber)':'var(--navy)'}">${pctBilled}%</span></div>
       <div class="prog-bar" style="height:8px;margin-bottom:8px"><div class="prog-fill ${pctBilled>pctComplete+10?'amber':''}" style="width:${Math.min(pctBilled,100)}%"></div></div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-mid);margin-bottom:4px"><span>% Complete (units)</span><span style="font-weight:600;color:var(--navy)">${pctComplete}%</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-mid);margin-bottom:4px"><span>% Complete (M4-M14)</span><span style="font-weight:600;color:var(--navy)">${pctComplete}%</span></div>
       <div class="prog-bar" style="height:8px"><div class="prog-fill" style="width:${Math.min(pctComplete,100)}%"></div></div>
     </div>
     <div class="alert alert-${variance>30?'danger':variance>10?'warn':variance<-10?'info':'success'}" style="margin-bottom:0">
@@ -16097,11 +16143,16 @@ function renderBudgetTab(p){
   // with Invoice # now that each row is a discrete invoice, not a running
   // total checkpoint. "Billed YTD" header changed to "Amount" for the
   // same reason — the column shows a single invoice's amount now.
+  // v62l — task #51: removed the per-row "%" column (each invoice's
+  // amount as a % of Contract Award Value). Reported as not useful —
+  // on a large contract every individual invoice rounds to 1-2%, and the
+  // cumulative "% Billed" figure already shown above the table (from
+  // Billed YTD/budget) is the number that actually matters. Column
+  // widths redistributed across the remaining four columns.
   const billingRow=(b,showActions)=>`<tr id="billing-row-${b.id}">
         <td style="font-size:11px">${b.entryDate}</td>
         <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceNumber||'—'}</td>
         <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
-        <td style="font-size:11px">${budget?Math.round((b.billedYTD/budget)*100)+'%':'—'}</td>
         <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(b.notes||'—')}</td>
         ${showActions&&canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
           <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
@@ -16112,11 +16163,10 @@ function renderBudgetTab(p){
     `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Billing Entries Yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
     `<table class="data-table" style="margin-top:0;table-layout:fixed;width:100%">
       <thead><tr>
-        <th style="width:12%">Date</th>
-        <th style="width:18%">Invoice #</th>
-        <th style="width:18%">Amount</th>
-        <th style="width:10%">%</th>
-        <th style="width:20%">Notes</th>
+        <th style="width:14%">Date</th>
+        <th style="width:20%">Invoice #</th>
+        <th style="width:20%">Amount</th>
+        <th style="width:24%">Notes</th>
         ${canPM?'<th style="width:22%"></th>':''}
       </tr></thead>
       <tbody>${propBilling.slice(0,BILLING_PREVIEW_COUNT).map(b=>billingRow(b,true)).join('')}</tbody>
