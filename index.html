@@ -4539,7 +4539,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58u</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58w</div>
     </div>
   </nav>
 
@@ -9717,9 +9717,13 @@ function renderScopeCards(p){
     </div>
   </div>`:'';
   // Header bar — property-level fields always shown above cards
+  // v58w — task #19. Notes span removed per direct instruction. It only
+  // ever showed a truncated 60-char preview with no way to read or edit
+  // the full note from here anyway (Edit Property is the real place to
+  // view/change it), so it was pure clutter on this bar. Priority stays,
+  // it's still a quick-glance field worth surfacing here.
   const headerBar=`<div style="display:flex;align-items:center;gap:20px;padding:8px 14px;background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px;flex-wrap:wrap">
     <span class="prop-overview-priority-line" style="font-size:12px;color:var(--gray-mid)">Priority <span style="font-weight:600;color:var(--navy)">${(p.priority||'—').split(':')[1]?.trim()||p.priority||'—'}</span></span>
-    <span style="font-size:12px;color:var(--gray-mid)">Notes ${p.comment?`<span style="color:var(--navy)">${escHtml(p.comment.slice(0,60))}${p.comment.length>60?'…':''}</span>`:'<span style="color:var(--gray-light)">—</span>'}</span>
     <span style="margin-left:auto;display:flex;gap:8px">
       ${canEdit?`<button class="btn btn-edit" onclick="openEditPropertyPanel()" style="font-size:12px"><i class="ti ti-pencil"></i>Edit Property</button>`:''}
       ${manageBtn}
@@ -26313,18 +26317,33 @@ async function updateAssetType(propId, propName, isCore){
 }
 
 // SITE VISITS
+// v58v — task #40. Site Visits already had a real Status field
+// (Scheduled/Cancelled, same shape as Meetings) and a working
+// confirmCancelCalEvent('visit', id)/executeCancelCalEvent() pair (both
+// already handle isVisit branching correctly, Airtable write to Site
+// Visits.Status, and cancellation emails) — the only missing piece was a
+// Cancel button actually wired into this card. Also fixes a related
+// display gap: the isPast split below is purely date-based, so a
+// cancelled visit with a future date used to still render as a normal
+// upcoming visit with full Edit/Delete/Cancel controls and no visual cue
+// it was cancelled. isCancelled now overrides the date-based styling and
+// controls entirely, regardless of which list (upcoming/past) the card
+// happens to be rendered into.
 function visitCardHtml(v, isPast){
+  const isCancelled=v.status==='Cancelled';
   const d=new Date(v.date);const day=d.getDate();const mon=d.toLocaleDateString('en-US',{month:'short'});
-  const bgColor=isPast?'#F3F4F6':'white';
-  const dateBoxBg=isPast?'#9CA3AF':'var(--green)';
-  const titleColor=isPast?'#6B7280':'var(--navy)';
-  const editBtns=isPast?'':`<div style="display:flex;gap:4px;flex-shrink:0">
+  const bgColor=isCancelled?'#F3F4F6':isPast?'#F3F4F6':'white';
+  const dateBoxBg=isCancelled?'#9CA3AF':isPast?'#9CA3AF':'var(--green)';
+  const titleColor=isCancelled?'#6B7280':isPast?'#6B7280':'var(--navy)';
+  const cancelledBadge=isCancelled?`<span class="badge" style="background:#F1EFE8;color:#5F5E5A;margin-right:6px"><i class="ti ti-ban" style="font-size:11px;margin-right:3px"></i>Cancelled</span>`:'';
+  const editBtns=isCancelled?'':isPast?'':`<div style="display:flex;gap:4px;flex-shrink:0">
     <button class="btn btn-icon" onclick="showEditCalEvent('visit','${v.id}')" title="Edit"><i class="ti ti-edit" style="font-size:13px"></i></button>
+    <button class="btn btn-icon" style="color:var(--red)" onclick="confirmCancelCalEvent('visit','${v.id}')" title="Cancel this site visit"><i class="ti ti-x" style="font-size:13px"></i></button>
     <button class="btn btn-icon" style="color:var(--red)" onclick="confirmDeleteCalEvent('visit','${v.id}')" title="Delete"><i class="ti ti-trash" style="font-size:13px"></i></button>
   </div>`;
-  return `<div class="site-visit-card" style="background:${bgColor};opacity:${isPast?'0.85':'1'}">
+  return `<div class="site-visit-card" style="background:${bgColor};opacity:${isCancelled?'0.85':isPast?'0.85':'1'}">
     <div class="site-visit-date" style="background:${dateBoxBg}"><div class="site-visit-day" style="color:white">${day}</div><div class="site-visit-month" style="color:rgba(255,255,255,.85)">${mon}</div></div>
-    <div style="flex:1"><div style="font-size:13px;font-weight:500;color:${titleColor}">${escHtml(v.property)}</div><div style="font-size:11px;color:#9CA3AF;margin-top:2px">${escHtml(v.consultant)} · ${escHtml(v.purpose)}</div></div>
+    <div style="flex:1"><div style="font-size:13px;font-weight:500;color:${titleColor}">${cancelledBadge}${escHtml(v.property)}</div><div style="font-size:11px;color:#9CA3AF;margin-top:2px">${escHtml(v.consultant)} · ${escHtml(v.purpose)}</div></div>
     ${editBtns}
   </div>`;
 }
