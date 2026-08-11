@@ -4634,7 +4634,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62m</div>
     </div>
   </nav>
 
@@ -34744,6 +34744,37 @@ const VDA_IMPORT_COL={
   totalInvoicedForProject:'Project Task : Project : Total Invoiced for Project',
   lastInvoiceDate:'Project Task : Project : Last Invoice Date',
 };
+// v62m — task #53. A second, simpler monthly export format is now also
+// accepted, per direct instruction ("don't overcomplicate this — just
+// accept the file as structured, saved as .xlsx"). This format's headers:
+//   Project_Number, Project_Name, Task_Name, Start_Date, End_Date,
+//   Responsible, Amount_Invoiced, Contract_Balance
+// Every column maps 1:1 to an existing VDA_IMPORT_COL field except
+// Service (this format has none — left blank, same as any other blank
+// Service value) and Total Invoiced for Project / Last Invoice Date
+// (this format has neither as a standalone column — both are computed
+// from the file itself in matchAndDiffVdaImportRows() below rather than
+// read directly, so a re-import never overwrites real Airtable values
+// with 0/blank just because the source column doesn't exist).
+const VDA_IMPORT_COL_SIMPLE={
+  projectNumber:'Project_Number',
+  taskName:'Task_Name',
+  contractBalance:'Contract_Balance',
+  amountInvoiced:'Amount_Invoiced',
+  startDate:'Start_Date',
+  endDate:'End_Date',
+  owner:'Responsible',
+};
+// Detects which column set a parsed row set uses by checking for the
+// simple format's distinguishing header (Project_Number, with an
+// underscore — the Salesforce format never has this). Falls back to the
+// original VDA_IMPORT_COL set otherwise, so existing monthly Salesforce
+// exports keep working unchanged.
+function detectVdaImportColumns(rows){
+  const firstRow=rows&&rows[0];
+  if(firstRow&&Object.prototype.hasOwnProperty.call(firstRow,'Project_Number'))return VDA_IMPORT_COL_SIMPLE;
+  return VDA_IMPORT_COL;
+}
 let vdaImportStaged=null; // {projectDiffs, unmatchedProjectRows} while review screen is open
 function openVdaImportModal(){
   if(!vdaCanEdit())return;
@@ -34807,9 +34838,14 @@ async function handleVdaImportFile(){
 function matchAndDiffVdaImportRows(rows){
   const projects=window.VDA_PROJECTS||[];
   const taskLines=window.VDA_TASK_LINES||[];
+  // v62m — task #53/#54. Two source formats are now accepted (see
+  // VDA_IMPORT_COL_SIMPLE's own comment above). Detected once per import
+  // from the parsed rows' own headers.
+  const COL=detectVdaImportColumns(rows);
+  const isSimpleFormat=COL===VDA_IMPORT_COL_SIMPLE;
   const byProjectNumber={};
   rows.forEach(row=>{
-    const num=(row[VDA_IMPORT_COL.projectNumber]||'').toString().trim();
+    const num=(row[COL.projectNumber]||'').toString().trim();
     if(!num)return;
     (byProjectNumber[num]=byProjectNumber[num]||[]).push(row);
   });
@@ -34825,7 +34861,7 @@ function matchAndDiffVdaImportRows(rows){
     const rowsForProject=byProjectNumber[num];
     const project=projects.find(p=>(p.number||'').toString().trim().toLowerCase()===num.toLowerCase());
     if(!project){
-      rowsForProject.forEach(r=>unmatchedProjectRows.push({projectNumber:num,taskName:r[VDA_IMPORT_COL.taskName]||''}));
+      rowsForProject.forEach(r=>unmatchedProjectRows.push({projectNumber:num,taskName:r[COL.taskName]||''}));
       return;
     }
     const existingTasks=taskLines.filter(t=>t.vdaId===project.id);
@@ -34843,9 +34879,9 @@ function matchAndDiffVdaImportRows(rows){
     // Number + Task Name (a source-data duplicate, not a re-import), the
     // second row is skipped rather than queued as a second new task line.
     rowsForProject.forEach(row=>{
-      const taskName=(row[VDA_IMPORT_COL.taskName]||'').toString().trim();
-      const newBalance=Number(row[VDA_IMPORT_COL.contractBalance])||0;
-      const newInvoiced=Number(row[VDA_IMPORT_COL.amountInvoiced])||0;
+      const taskName=(row[COL.taskName]||'').toString().trim();
+      const newBalance=Number(row[COL.contractBalance])||0;
+      const newInvoiced=Number(row[COL.amountInvoiced])||0;
       const existing=existingTasks.find(t=>(t.description||'').trim().toLowerCase()===taskName.toLowerCase());
       const alreadyStagedAsNew=newTasks.find(t=>t.taskName.toLowerCase()===taskName.toLowerCase());
       if(alreadyStagedAsNew){
@@ -34868,19 +34904,45 @@ function matchAndDiffVdaImportRows(rows){
           taskName,
           contractBalance:newBalance,
           amountInvoiced:newInvoiced,
-          startDate:excelDate(row[VDA_IMPORT_COL.startDate]),
-          endDate:excelDate(row[VDA_IMPORT_COL.endDate]),
-          owner:(row[VDA_IMPORT_COL.owner]||'').toString().trim(),
-          service:(row[VDA_IMPORT_COL.service]||'').toString().trim(),
+          startDate:excelDate(row[COL.startDate]),
+          endDate:excelDate(row[COL.endDate]),
+          owner:(row[COL.owner]||'').toString().trim(),
+          service:isSimpleFormat?'':(row[COL.service]||'').toString().trim(),
         });
       }
     });
-    // Total Invoiced for Project / Last Invoice Date repeat identically on
-    // every row for the same project in the source file, so the first
-    // row's value is authoritative -- read once, not summed or averaged.
-    const firstRow=rowsForProject[0];
-    const newTotalInvoiced=Number(firstRow[VDA_IMPORT_COL.totalInvoicedForProject])||0;
-    const newLastInvoiceDate=excelDate(firstRow[VDA_IMPORT_COL.lastInvoiceDate]);
+    // v62m — task #53/#54. The simple format has no Total Invoiced for
+    // Project / Last Invoice Date columns at all (the original Salesforce
+    // format repeats one value identically on every row for a project,
+    // read once below). For the simple format these are computed here
+    // instead, straight from this project's own rows in the uploaded
+    // file, so a monthly re-import never overwrites a real stored value
+    // with 0/blank just because the source file doesn't carry the column:
+    //   Total Invoiced for Project = sum of Amount_Invoiced across every
+    //     row for this project in the file.
+    //   Last Invoice Date = latest End_Date among this project's rows
+    //     that have a nonzero Amount_Invoiced (a row with nothing
+    //     invoiced isn't really an "invoice date").
+    let newTotalInvoiced,newLastInvoiceDate;
+    if(isSimpleFormat){
+      newTotalInvoiced=rowsForProject.reduce((sum,r)=>sum+(Number(r[COL.amountInvoiced])||0),0);
+      let latestDate='';
+      rowsForProject.forEach(r=>{
+        const invoiced=Number(r[COL.amountInvoiced])||0;
+        if(invoiced<=0)return;
+        const d=excelDate(r[COL.endDate]);
+        if(d&&(!latestDate||d>latestDate))latestDate=d;
+      });
+      newLastInvoiceDate=latestDate;
+    }else{
+      // Total Invoiced for Project / Last Invoice Date repeat identically
+      // on every row for the same project in the source file, so the
+      // first row's value is authoritative -- read once, not summed or
+      // averaged.
+      const firstRow=rowsForProject[0];
+      newTotalInvoiced=Number(firstRow[COL.totalInvoicedForProject])||0;
+      newLastInvoiceDate=excelDate(firstRow[COL.lastInvoiceDate]);
+    }
     const projectFieldsChanged=newTotalInvoiced!==(project.totalInvoiced||0)||newLastInvoiceDate!==(project.lastInvoiceDate||'');
     if(newTasks.length||updatedTasks.length||projectFieldsChanged){
       projectDiffs.push({
