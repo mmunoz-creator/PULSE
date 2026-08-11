@@ -4558,7 +4558,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v59d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v59e</div>
     </div>
   </nav>
 
@@ -27861,6 +27861,14 @@ function fmtShortDate(dateStr){
   const d=new Date(dateStr+'T12:00:00');
   return d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
 }
+// v59e — full MM/DD/YYYY date, for spots like the VDA Project card's Last
+// Invoice line where Misty asked for the actual day, not just month/year.
+function fmtFullDate(dateStr){
+  if(!dateStr)return'—';
+  const d=new Date(dateStr+'T12:00:00');
+  if(isNaN(d))return'—';
+  return d.toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'});
+}
 // v55e — shared date-order validation, used everywhere a form has a
 // start/end (or planned/completion) date pair. Per direct instruction:
 // an end date before its start date should be flagged and blocked
@@ -33613,7 +33621,7 @@ function renderVdaProjects(){
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;font-size:12px;margin-bottom:10px">
         <div><div style="color:var(--gray-mid)">Contract Balance</div><div style="font-weight:600;color:var(--navy)">${fmtCurrency(totalBalanceForProject)}</div></div>
-        <div><div style="color:var(--gray-mid)">Last Invoice</div><div style="font-weight:600;color:var(--navy)">${lastInvoiceDate?fmtShortDate(lastInvoiceDate):'—'}</div></div>
+        <div><div style="color:var(--gray-mid)">Last Invoice</div><div style="font-weight:600;color:var(--navy)">${lastInvoiceDate?fmtFullDate(lastInvoiceDate):'—'}</div></div>
         <div style="grid-column:1/-1"><div style="color:var(--gray-mid)">Task Owner(s)</div><div style="font-weight:600;color:var(--navy)">${ownersForProject.length?ownersForProject.map(o=>escHtml(o)).join(', '):'—'}</div></div>
       </div>
 
@@ -33745,6 +33753,24 @@ async function handleVdaImportFile(){
   const file=input&&input.files&&input.files[0];
   if(!file){showToast('Choose an .xlsx file first','warn');return;}
   try{
+    // v59e — real duplicate-creation bug found live: window.VDA_TASK_LINES
+    // is only populated once, at initial page load (loadVdaProjectData()
+    // is called exactly once in the whole app, not on every visit to the
+    // VDA Project view). If an import runs, then a second import runs
+    // later in the SAME browser session without a hard page reload in
+    // between, matching was comparing against a stale in-memory snapshot
+    // instead of what's actually in Airtable -- confirmed live via direct
+    // Airtable query: 100 Task Line records existed (2 full duplicate
+    // batches of the same 50 rows) after two import attempts, because the
+    // second attempt's matching logic didn't see the first attempt's
+    // writes and created a fresh "new" row for every single one instead
+    // of recognizing them as already-existing and skipping/updating them.
+    // Fixed by force-refreshing VDA_PROJECTS/VDA_TASK_LINES straight from
+    // Airtable right before matching runs, every single time the import
+    // flow is used, so it can never match against anything but the real
+    // current state.
+    showToast('Refreshing current data before matching...','info');
+    await loadVdaProjectData();
     const rows=await parseImportFile(file);
     const staged=matchAndDiffVdaImportRows(rows);
     document.getElementById('vda-import-overlay')?.remove();
@@ -33790,11 +33816,29 @@ function matchAndDiffVdaImportRows(rows){
     const existingTasks=taskLines.filter(t=>t.vdaId===project.id);
     const newTasks=[];
     const updatedTasks=[];
+    // v59e — duplicate guard, two layers. (1) existingTasks is refreshed
+    // straight from Airtable right before this function runs (see the
+    // loadVdaProjectData() call added to handleVdaImportFile()), so a
+    // second import in the same session sees what the first one actually
+    // wrote instead of a stale in-memory snapshot -- this was the real
+    // cause of a live duplicate-creation incident (50 Task Lines created
+    // twice, confirmed via direct Airtable query). (2) within THIS single
+    // run, also check newTasks staged so far in the same loop -- if the
+    // uploaded Excel file itself has two rows with the same Project
+    // Number + Task Name (a source-data duplicate, not a re-import), the
+    // second row is skipped rather than queued as a second new task line.
     rowsForProject.forEach(row=>{
       const taskName=(row[VDA_IMPORT_COL.taskName]||'').toString().trim();
       const newBalance=Number(row[VDA_IMPORT_COL.contractBalance])||0;
       const newInvoiced=Number(row[VDA_IMPORT_COL.amountInvoiced])||0;
       const existing=existingTasks.find(t=>(t.description||'').trim().toLowerCase()===taskName.toLowerCase());
+      const alreadyStagedAsNew=newTasks.find(t=>t.taskName.toLowerCase()===taskName.toLowerCase());
+      if(alreadyStagedAsNew){
+        // Same task name appears more than once in the uploaded file for
+        // this project. Keep the first occurrence's values, skip the
+        // rest, rather than creating multiple Task Lines for one task.
+        return;
+      }
       if(existing){
         const changed=newBalance!==(existing.contractBalance||0)||newInvoiced!==(existing.amountInvoiced||0);
         if(changed){
@@ -33908,62 +33952,145 @@ function renderVdaImportReviewScreen(staged){
         <span style="font-size:13px;color:var(--gray-mid)">${totalUpdated} updated, ${totalNew} new, across ${projectDiffs.length} project${projectDiffs.length===1?'':'s'}</span>
         <div style="display:flex;gap:8px">
           <button class="btn" onclick="document.getElementById('vda-import-review-overlay').remove();vdaImportStaged=null">Cancel</button>
-          <button class="btn btn-primary" ${projectDiffs.length===0?'disabled':''} onclick="confirmVdaImport()">Confirm and import</button>
+          <button class="btn btn-primary" id="vda-import-confirm-btn" ${projectDiffs.length===0?'disabled':''} onclick="confirmVdaImport()">Confirm and import</button>
         </div>
       </div>
     </div>`;
   document.body.appendChild(overlay);
 }
+// v59e — real duplicate-batch incident, confirmed live: an import that
+// looked like it failed (misleading/stale toast) was retried by clicking
+// Confirm and import again while the first run's writes were still
+// landing, producing two full sets of the same 50 Task Lines. Two
+// independent guards now prevent this: the button disables itself the
+// instant it's clicked (before any await), and _vdaImportInFlight blocks
+// a second concurrent call to confirmVdaImport() from any path, not just
+// this specific button.
+let _vdaImportInFlight=false;
 async function confirmVdaImport(){
   if(!vdaImportStaged)return;
-  const{projectDiffs}=vdaImportStaged;
-  showToast('Saving VDA import...','info');
-  let failCount=0;
-  for(const pd of projectDiffs){
-    const p=pd.project;
-    for(const t of pd.updatedTasks){
-      if(!demoMode){
-        const res=await atUpdate('Task Line',t.taskLineId,{'Contract Balance':t.newBalance,'Amount Invoiced':t.newInvoiced});
-        if(res===null){failCount++;continue;}
-      }
-      const localTask=(window.VDA_TASK_LINES||[]).find(x=>x.id===t.taskLineId);
-      if(localTask){localTask.contractBalance=t.newBalance;localTask.amountInvoiced=t.newInvoiced;}
-    }
-    for(const nt of pd.newTasks){
-      const fields={
-        'VDA Project':[p.id],'Description':nt.taskName,'Amount':0,
-        'Billing Split':'100% on completion','Trigger Type':'Milestone Linked','Status':'Not Started',
-        'Contract Balance':nt.contractBalance,'Amount Invoiced':nt.amountInvoiced,
-        'Start Date':nt.startDate,'End Date':nt.endDate,'Owner':nt.owner,'Service':nt.service,
-      };
-      let newId=null;
-      if(!demoMode){
-        const res=await atCreate('Task Line',fields);
-        if(!res||!res.id){failCount++;continue;}
-        newId=res.id;
-      }else{newId='demo-'+Math.random().toString(36).slice(2);}
-      window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat([{
-        id:newId,vdaId:p.id,description:nt.taskName,amount:0,
-        billingSplit:'100% on completion',triggerType:'Milestone Linked',status:'Not Started',
-        monthlyForecastEstimate:0,createdTime:new Date().toISOString(),
-        contractBalance:nt.contractBalance,amountInvoiced:nt.amountInvoiced,
-        startDate:nt.startDate,endDate:nt.endDate,owner:nt.owner,service:nt.service,
-      }]);
-    }
-    if(pd.projectFieldsChanged){
-      if(!demoMode){
-        const res=await atUpdate('VDA Project',p.id,{'Total Invoiced for Project':pd.newTotalInvoiced,'Last Invoice Date':pd.newLastInvoiceDate});
-        if(res===null){failCount++;continue;}
-      }
-      p.totalInvoiced=pd.newTotalInvoiced;
-      p.lastInvoiceDate=pd.newLastInvoiceDate;
-    }
+  if(_vdaImportInFlight){
+    showToast('Import is already running — please wait for it to finish','warn');
+    return;
   }
-  document.getElementById('vda-import-review-overlay')?.remove();
-  vdaImportStaged=null;
-  renderVdaProjects();
-  if(failCount>0)showToast(`${failCount} write(s) failed to save — check connection and retry`,'warn');
-  else showToast('VDA import complete','success');
+  _vdaImportInFlight=true;
+  const confirmBtn=document.getElementById('vda-import-confirm-btn');
+  if(confirmBtn){confirmBtn.disabled=true;confirmBtn.textContent='Importing...';}
+  try{
+    const{projectDiffs}=vdaImportStaged;
+    showToast('Saving VDA import...','info');
+    let failCount=0;
+    // v59e — real error text captured per failed write (not just a count),
+    // so a repeat failure shows the actual Airtable rejection reason to the
+    // user directly instead of relying on someone catching the right
+    // console.error at the right moment. Surfaced in an on-screen panel
+    // below, not just the toast.
+    const failDetails=[];
+    for(const pd of projectDiffs){
+      const p=pd.project;
+      for(const t of pd.updatedTasks){
+        if(!demoMode){
+          const res=await vdaImportAtCall('PATCH','Task Line',t.taskLineId,{'Contract Balance':t.newBalance,'Amount Invoiced':t.newInvoiced});
+          if(!res.ok){failCount++;failDetails.push(`Task Line "${t.taskName}" update: ${res.errorText}`);continue;}
+        }
+        const localTask=(window.VDA_TASK_LINES||[]).find(x=>x.id===t.taskLineId);
+        if(localTask){localTask.contractBalance=t.newBalance;localTask.amountInvoiced=t.newInvoiced;}
+      }
+      for(const nt of pd.newTasks){
+        const fields={
+          'VDA Project':[p.id],'Description':nt.taskName,'Amount':0,
+          'Billing Split':'100% on completion','Trigger Type':'Milestone Linked','Status':'Not Started',
+          'Contract Balance':nt.contractBalance,'Amount Invoiced':nt.amountInvoiced,
+          'Start Date':nt.startDate,'End Date':nt.endDate,'Owner':nt.owner,'Service':nt.service,
+        };
+        let newId=null;
+        if(!demoMode){
+          const res=await vdaImportAtCall('POST','Task Line',null,fields);
+          if(!res.ok){failCount++;failDetails.push(`Task Line "${nt.taskName}" create: ${res.errorText}`);continue;}
+          newId=res.id;
+        }else{newId='demo-'+Math.random().toString(36).slice(2);}
+        window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat([{
+          id:newId,vdaId:p.id,description:nt.taskName,amount:0,
+          billingSplit:'100% on completion',triggerType:'Milestone Linked',status:'Not Started',
+          monthlyForecastEstimate:0,createdTime:new Date().toISOString(),
+          contractBalance:nt.contractBalance,amountInvoiced:nt.amountInvoiced,
+          startDate:nt.startDate,endDate:nt.endDate,owner:nt.owner,service:nt.service,
+        }]);
+      }
+      if(pd.projectFieldsChanged){
+        if(!demoMode){
+          const res=await vdaImportAtCall('PATCH','VDA Project',p.id,{'Total Invoiced for Project':pd.newTotalInvoiced,'Last Invoice Date':pd.newLastInvoiceDate});
+          if(!res.ok){failCount++;failDetails.push(`VDA Project #${p.number} totals update: ${res.errorText}`);continue;}
+        }
+        p.totalInvoiced=pd.newTotalInvoiced;
+        p.lastInvoiceDate=pd.newLastInvoiceDate;
+      }
+    }
+    document.getElementById('vda-import-review-overlay')?.remove();
+    vdaImportStaged=null;
+    renderVdaProjects();
+    if(failCount>0){
+      console.error('[VDA Import] failures:',failDetails);
+      showToast(`${failCount} write(s) failed to save — see details below`,'warn');
+      renderVdaImportErrorPanel(failDetails);
+    }else{
+      showToast('VDA import complete','success');
+    }
+  }finally{
+    // v59e — always release the in-flight lock, even if something above
+    // throws unexpectedly, so a real subsequent import isn't permanently
+    // blocked by one bad run.
+    _vdaImportInFlight=false;
+  }
+}
+// v59e — on-screen error panel, not just a console.error someone has to
+// catch at the right moment. Shows the real Airtable rejection text per
+// failed write so a repeat failure is diagnosable from the screenshot
+// alone. Dismissible; doesn't block the page.
+function renderVdaImportErrorPanel(failDetails){
+  document.getElementById('vda-import-error-overlay')?.remove();
+  const overlay=document.createElement('div');
+  overlay.id='vda-import-error-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:2100';
+  const esc=escHtml;
+  overlay.innerHTML=`
+    <div style="background:var(--surface,#fff);border-radius:12px;padding:1.5rem;width:600px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column">
+      <div style="font-weight:600;font-size:16px;margin-bottom:4px;color:var(--red-dark,#791F1F)">${failDetails.length} write${failDetails.length===1?'':'s'} failed to save</div>
+      <div style="font-size:13px;color:var(--gray-mid);margin-bottom:12px">Everything else in this import that succeeded has already been saved. These specific items did not — copy this list to share when troubleshooting.</div>
+      <div style="overflow-y:auto;flex:1;background:var(--red-pale,#FCEBEB);border-radius:8px;padding:12px;font-family:monospace;font-size:12px;color:var(--red-dark,#791F1F);white-space:pre-wrap">${failDetails.map(esc).join('\n\n')}</div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px">
+        <button class="btn btn-primary" onclick="document.getElementById('vda-import-error-overlay').remove()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+window.renderVdaImportErrorPanel=renderVdaImportErrorPanel;
+// v59e — thin direct-fetch wrapper used only by the VDA import, so a
+// failure returns the real Airtable error text instead of atCreate/
+// atUpdate's null (those two are shared by many other features and
+// changing their return contract now risks breaking callers elsewhere
+// that already depend on null-on-failure).
+async function vdaImportAtCall(method,table,recordId,fields){
+  try{
+    let url=`${WORKER_URL}?table=${encodeURIComponent(table)}`;
+    if(recordId)url+=`&recordId=${recordId}`;
+    const body=method==='POST'?JSON.stringify({records:[{fields}]}):JSON.stringify({fields});
+    const r=await workerFetch(url,{method,headers:{'Content-Type':'application/json'},body});
+    const text=await r.text();
+    if(!r.ok){
+      return{ok:false,errorText:`(${r.status}) ${text.slice(0,300)}`};
+    }
+    let parsed;
+    try{parsed=JSON.parse(text);}catch(e){return{ok:false,errorText:'Response was not valid JSON: '+text.slice(0,200)};}
+    if(method==='POST'){
+      const rec=(parsed.records||[])[0];
+      if(!rec||!rec.id)return{ok:false,errorText:'Create succeeded but no record id was returned'};
+      return{ok:true,id:rec.id};
+    }
+    return{ok:true,id:recordId};
+  }catch(e){
+    return{ok:false,errorText:'Network/fetch error: '+(e&&e.message?e.message:String(e))};
+  }
 }
 window.openVdaImportModal=openVdaImportModal;
 window.handleVdaImportFile=handleVdaImportFile;
