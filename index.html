@@ -4599,7 +4599,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62c</div>
     </div>
   </nav>
 
@@ -8372,9 +8372,20 @@ function renderPropertyView(p){
   const propUpdates=submissions.filter(s=>s.property===p.n);
   // v60b — VDA Milestones tile now weighted (see MS_WEIGHTS/
   // getMsCompleteWeighted above), not a flat 1-of-14 count.
+  // v62c — the % stays weighted (msCompleteCount/msExpectedTotal, both
+  // weighted-points values), but the sub-line "X of Y complete" now shows
+  // the real flat milestone tally instead of the same weighted points —
+  // was showing e.g. "25 of 400 complete" on a 4-scope property, which
+  // reads as broken math since 400 looks like a milestone count but is
+  // actually 4 scopes x 100 weighted points. msFlatComplete/msFlatExpected
+  // give the honest "X of Y milestones," same pairing already used on the
+  // Milestones tab tracker badge (see task #37) — real % combined with a
+  // real count, instead of one number wearing two different units.
   const msCompleteCount=getMsCompleteWeighted(p.n);
   const msExpectedTotal=getMsExpectedTotalWeighted(p.n);
   const msCompletePct=Math.round(msCompleteCount/msExpectedTotal*100);
+  const msFlatComplete=getMsComplete(p.n);
+  const msFlatExpected=getMsExpectedTotal(p.n);
   const propVisits=siteVisits.filter(v=>v.property===p.n);
   const openAIs=actionItems.filter(a=>a.property===p.n&&a.status==='Open');
 
@@ -8433,15 +8444,19 @@ function renderPropertyView(p){
     :p.budget||0;
   const budgetTileLabel='Property Program Value';
   const budgetTileValue=programValue?fmtCurrency(programValue):'TBD';
+  // v62c — "scope"/"scopes" wording changed to "project"/"projects" to
+  // match the rest of the app's terminology (Scope cards were already
+  // renamed to "Project" cards in UI copy elsewhere — this subline was the
+  // one place still using the old internal name).
   const budgetTileSub=awardTotal>0
     ?(pendingScopeCount>0
-      ?(billedYTD?pctBilled+'% billed · ':'')+pendingScopeCount+' scope'+(pendingScopeCount>1?'s':'')+' est., '+awardedScopes.length+' awarded'
+      ?(billedYTD?pctBilled+'% billed · ':'')+pendingScopeCount+' project'+(pendingScopeCount>1?'s':'')+' est., '+awardedScopes.length+' awarded'
       :(billedYTD?pctBilled+'% billed':'Fully contracted'))
     :(billedYTD?pctBilled+'% billed':'No billing logged');
 
   document.getElementById('prop-mini-grid').innerHTML=`
     <div class="prop-mini-card"><div class="prop-mini-label">VT Units</div><div class="prop-mini-val">${totalUnits||'—'}</div><div class="prop-mini-sub">${unitsComplete} of ${totalUnits} complete</div></div>
-    <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msCompleteCount} of ${msExpectedTotal} complete</div></div>
+    <div class="prop-mini-card"><div class="prop-mini-label">VDA Milestones</div><div class="prop-mini-val" style="color:var(--blue-dark)">${msCompletePct}%</div><div class="prop-mini-sub">${msFlatComplete} of ${msFlatExpected} complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Active Phases</div><div class="prop-mini-val" style="color:var(--blue-dark)">${phasesTotal>0?Math.round((phasesComplete/phasesTotal)*100)+'%':'0%'}</div><div class="prop-mini-sub">${phasesComplete} of ${phasesTotal||0} phases complete</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">Open Actions</div><div class="prop-mini-val" style="color:${openAIs.length>0?'var(--red)':'var(--green)'}">${openAIs.length}</div><div class="prop-mini-sub">Action items</div></div>
     <div class="prop-mini-card"><div class="prop-mini-label">${budgetTileLabel}</div><div class="prop-mini-val">${budgetTileValue}</div><div class="prop-mini-sub">${budgetTileSub}</div></div>
@@ -10854,13 +10869,21 @@ function renderMilestones(p){
         // in demo mode, so it showed 0%. Now that milestones are populated
         // update it to reflect the real count.
         // v60b — weighted, matching the initial render in renderPropertyView.
+        // v62c — sub-text now uses the real flat count (getMsComplete/
+        // getMsExpectedTotal), not the weighted points, same fix as the
+        // initial render and the same reasoning as task #37's Milestones
+        // tab badge — see renderPropertyView's v62c note for the full
+        // explanation of why weighted points formatted as "X of Y" reads
+        // as broken math.
         const msCompleteCount=getMsCompleteWeighted(p.n);
         const msExpectedTotal=getMsExpectedTotalWeighted(p.n);
         const pct=Math.round(msCompleteCount/msExpectedTotal*100);
+        const msFlatComplete=getMsComplete(p.n);
+        const msFlatExpected=getMsExpectedTotal(p.n);
         const statVal=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
         const statSub=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-sub');
         if(statVal)statVal.textContent=pct+'%';
-        if(statSub)statSub.textContent=`${msCompleteCount} of ${msExpectedTotal} complete`;
+        if(statSub)statSub.textContent=`${msFlatComplete} of ${msFlatExpected} complete`;
       });
       msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:12px"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> Initializing milestones...</div>`;
       return;
@@ -11417,13 +11440,20 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId,i
   const badge=document.getElementById('ms-progress-badge');
   if(badge)badge.textContent=`${pct}% · ${complete} / ${MILESTONES_DEF.length}`;
   // Update mini card — nth-child(2) = VDA Milestones (not 3 which is Active Phases)
+  // v62c — sub-text now shows the real flat count (getMsComplete/
+  // getMsExpectedTotal), not weighted points, matching the fix applied to
+  // renderPropertyView's initial render and its auto-populate refresh path
+  // (task #33) — propMsComplete/propMsExpected stay weighted for the %
+  // only, same pairing convention used everywhere else this round.
   const propMsComplete=getMsCompleteWeighted(propName);
   const propMsExpected=getMsExpectedTotalWeighted(propName);
   const propMsPct=Math.round(propMsComplete/propMsExpected*100);
+  const propMsFlatComplete=getMsComplete(propName);
+  const propMsFlatExpected=getMsExpectedTotal(propName);
   const miniVal=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
   const miniSub=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-sub');
   if(miniVal)miniVal.textContent=propMsPct+'%';
-  if(miniSub)miniSub.textContent=`${propMsComplete} of ${propMsExpected} complete`;
+  if(miniSub)miniSub.textContent=`${propMsFlatComplete} of ${propMsFlatExpected} complete`;
 }
 
 function populateMilestonesTable(){
