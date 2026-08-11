@@ -4599,7 +4599,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v62b</div>
     </div>
   </nav>
 
@@ -8906,13 +8906,25 @@ function getMsComplete(propName){
 // properties sum every Scope's own set of 14, same as getMsComplete does
 // for the flat count, so the weighted and flat totals stay comparable in
 // shape (both scale with scope count).
-function getMsCompleteWeighted(propName){
-  const ms=getMilestonesForProp(propName);
+// v62a — optional scopeId param added, mirroring getMilestonesForProp's own
+// signature, so a single-Scope caller (the Milestones tab tracker badge)
+// can get that one Scope's weighted points instead of always summing every
+// Scope on the property. Found live: the Milestones tab badge was still
+// doing a flat 12/14=86% count while this same weighted math already
+// (correctly) drove the Overview mini-card and Performance Report — see
+// continuity notes, task #37.
+function getMsCompleteWeighted(propName,scopeId){
+  const ms=getMilestonesForProp(propName,scopeId);
   return ms.filter(m=>m.status==='Complete').reduce((sum,m)=>sum+(MS_WEIGHTS[(m.milestoneNumber||1)-1]||0),0);
 }
 // v60b — weighted expected total: 100 points per Scope (weights already
 // sum to 100), matching getMsExpectedTotal's flat-count×scopeCount shape.
-function getMsExpectedTotalWeighted(propName){
+// v62a — optional scopeId param: when passed, this is exactly one Scope's
+// 100 points, no scopeCount multiplication (a single Scope is always worth
+// 100, never more) — same reasoning as getMilestonesForProp's own scopeId
+// branch always returning one Scope's 14 slots, not scopeCount×14.
+function getMsExpectedTotalWeighted(propName,scopeId){
+  if(scopeId)return 100;
   const scopeCount=(window.SCOPES||[]).filter(s=>s.property===propName).length;
   return 100*(scopeCount>0?scopeCount:1);
 }
@@ -10148,12 +10160,22 @@ function renderScopeCards(p){
   // indistinguishable from Pre-Construction's own pale gray/tan fill,
   // reported live via screenshot. No border needed now; purple doesn't
   // collide with any other stage color in this legend.
+  // v62a — milestone number ranges added after each stage name, per direct
+  // instruction ("dot + Pre-Construction (M1-M4)" format). Ranges taken
+  // directly from getMilestoneCategoryForScope()'s real boundaries
+  // (~line 18855: complete>=10->Project Closeout, complete>=5->
+  // Construction, else Pre-Construction, out of 14 total) rather than
+  // guessed — Pre-Construction=M1-M4 (complete<5), Construction=M5-M9
+  // (5<=complete<10), Project Closeout=M10-M13 (10<=complete<14),
+  // Complete=M14 (all 14). Capital Plan intentionally has no range: it's
+  // "before M1 is ever dated," not a milestone-count bucket, confirmed
+  // with Misty it stays unlabeled.
   const stageLegend=`<span style="display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;font-size:11px">
     <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:var(--purple);display:inline-block"></span><span style="color:var(--gray-mid)">Capital Plan</span></span>
-    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Pre-Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Pre-Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Pre-Construction</span></span>
-    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Construction</span></span>
-    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Project Closeout'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Project Closeout'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Project Closeout</span></span>
-    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Complete'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Complete'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Complete</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Pre-Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Pre-Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Pre-Construction (M1-M4)</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Construction'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Construction'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Construction (M5-M9)</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Project Closeout'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Project Closeout'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Project Closeout (M10-M13)</span></span>
+    <span style="display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:10px;height:10px;border-radius:50%;background:${PROPS_DOT_COLORS['Complete'].fill};border:1.5px solid ${PROPS_DOT_COLORS['Complete'].border};display:inline-block"></span><span style="color:var(--gray-mid)">Complete (M14)</span></span>
   </span>`;
   const headerBar=`<div style="display:flex;align-items:center;gap:20px;padding:8px 14px;background:var(--gray-xpale);border-radius:8px;border:0.5px solid var(--border);margin-bottom:10px;flex-wrap:wrap">
     <span class="prop-overview-priority-line" style="font-size:12px;color:var(--gray-mid)">Priority <span style="font-weight:600;color:var(--navy)">${(p.priority||'—').split(':')[1]?.trim()||p.priority||'—'}</span></span>
@@ -10760,7 +10782,21 @@ function renderMilestones(p){
   const scopeId=currentScope?.id;
   const msData=getMilestonesForProp(p.n,scopeId);
   const complete=msData.filter(m=>m.status==='Complete').length;
-  const pct=Math.round(complete/MILESTONES_DEF.length*100);
+  // v62a — badge now uses weighted points (see MS_WEIGHTS/
+  // getMsCompleteWeighted), not a flat complete/14 count. Found live on
+  // Hilton Denver: 12 of 14 milestones complete, missing only M13+M14 (5+3
+  // = 8 of 100 points), showed "86% · 12/14" here when the weighted
+  // percentage is ~92% — the same weighting already driving the Overview
+  // mini-card and Performance Report never reached this specific badge.
+  // complete/MILESTONES_DEF.length (flat) is kept only for the "X / 14"
+  // count portion of the label below, which is intentionally still a
+  // literal milestone tally, not a points fraction — see task #33's
+  // reasoning for why a weighted-points count dressed up as "X of Y" reads
+  // as broken math; this label pairs a real weighted % with a real flat
+  // count instead of mixing the two into one misleading fraction.
+  const msWeightedComplete=getMsCompleteWeighted(p.n,scopeId);
+  const msWeightedExpected=getMsExpectedTotalWeighted(p.n,scopeId);
+  const pct=Math.round(msWeightedComplete/msWeightedExpected*100);
 
   // v35c fix — a Scope already in Complete status was still rendering the
   // full percentage badge + per-milestone tracker (individual M1-M14 rows
@@ -11199,6 +11235,20 @@ async function toggleMilestoneManualCompletion(msId,propName,newVal,idx,circleId
   }
   // Roll up Scope/Property status same as any other milestone status change.
   if(ms.scopeId)await deriveAndWriteScopeStatus(ms.scopeId);
+  // v62a — M1/M14 fast-tracked via this toggle previously left the Scope's
+  // own Planned Start/Target Completion permanently blank: this toggle
+  // never called deriveAndWriteScopeDates (only updateMilestone's normal
+  // date-edit path did), and that function had no fallback to
+  // manuallyCompletedOn anyway (now fixed, see its own v62a note). Both
+  // halves needed fixing together — the fallback alone wouldn't show up
+  // until something else happened to re-run the derivation; this call is
+  // what makes the Scope card update the instant a PM fast-tracks M1 or
+  // M14, not just eventually. Only these two milestone numbers feed
+  // Scope-level dates at all (deriveAndWriteScopeDates ignores M2-M13
+  // entirely), so this only fires for the two numbers where it matters.
+  if(ms.scopeId&&(ms.milestoneNumber===1||ms.milestoneNumber===14)){
+    await deriveAndWriteScopeDates(ms.scopeId);
+  }
 }
 
 // v39g — fixed a real race-condition bug: editing a date field fires an
@@ -11343,18 +11393,32 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId,i
       }
     }
   }
-  // Refresh progress badge — scope-tab badge is scope-specific (denominator
-  // is always a flat 14 for one scope); the Overview mini card is
-  // property-wide and must divide by every scope's 14, via getMsExpectedTotal.
+  // Refresh progress badge — scope-tab badge is scope-specific (100
+  // weighted points for one scope, via getMsExpectedTotalWeighted's
+  // scopeId branch); the Overview mini card is property-wide and must sum
+  // every scope's own 100 points, via the same functions with no scopeId.
+  // v62a — both now use the weighted MS_WEIGHTS math, matching the initial
+  // (page-load) render of these same two elements (renderMilestones()
+  // above for the badge, the Overview mini-grid render for the mini card).
+  // Previously this refresh path used flat getMsComplete/getMsExpectedTotal
+  // for the mini card while the initial render used the weighted pair —
+  // two different formulas landing in the same DOM node depending on
+  // whether the page had just loaded or an inline edit had just fired.
+  // The scope badge itself had the same bug in a different shape: flat
+  // complete/14 with no weighting at all, on either render path. See task
+  // #37 continuity notes for how this was found (Hilton Denver, 12/14
+  // complete showing 86% when weighted should read ~92%).
   const scopeIdForBadge=currentScope?.id;
   const msData=getMilestonesForProp(propName,scopeIdForBadge);
   const complete=msData.filter(m=>m.status==='Complete').length;
-  const pct=Math.round(complete/MILESTONES_DEF.length*100);
+  const msWeightedComplete=getMsCompleteWeighted(propName,scopeIdForBadge);
+  const msWeightedExpected=getMsExpectedTotalWeighted(propName,scopeIdForBadge);
+  const pct=Math.round(msWeightedComplete/msWeightedExpected*100);
   const badge=document.getElementById('ms-progress-badge');
   if(badge)badge.textContent=`${pct}% · ${complete} / ${MILESTONES_DEF.length}`;
   // Update mini card — nth-child(2) = VDA Milestones (not 3 which is Active Phases)
-  const propMsComplete=getMsComplete(propName);
-  const propMsExpected=getMsExpectedTotal(propName);
+  const propMsComplete=getMsCompleteWeighted(propName);
+  const propMsExpected=getMsExpectedTotalWeighted(propName);
   const propMsPct=Math.round(propMsComplete/propMsExpected*100);
   const miniVal=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-val');
   const miniSub=document.querySelector('.prop-mini-card:nth-child(2) .prop-mini-sub');
@@ -16270,11 +16334,28 @@ async function deriveAndWriteScopeDates(scopeId){
   // Start and Actual Start below now read that same completionDate --
   // there is no longer a separate "planned" vs "actual" survey date to
   // distinguish, matching how the field is actually used going forward.
-  const newPlannedStart=m1?.completionDate||sc.plannedStart||null;
+  // v62a — fallback to manuallyCompletedOn added for both M1 and M14, for
+  // when either was fast-tracked via the Manual Completion Override toggle
+  // (toggleMilestoneManualCompletion) instead of dated normally. That
+  // toggle sets Status=Complete and manuallyCompletedOn=today, but
+  // deliberately never touches the milestone's own Completion/Planned Date
+  // fields (see v52f design notes) — so m1.completionDate/m14.plannedDate
+  // stay blank forever on a fast-tracked milestone, and this function had
+  // no fallback for that case at all, leaving the Scope's own Planned
+  // Start/Target Completion permanently blank too. Found live on Hilton
+  // Denver City Center (task #35). manuallyCompletedOn is checked after
+  // the real date fields, so a milestone that later gets a real historical
+  // date backfilled (override turned back off, real date entered) still
+  // takes priority the next time this runs.
+  const newPlannedStart=m1?.completionDate||(m1?.manuallyCompleted?m1.manuallyCompletedOn:null)||sc.plannedStart||null;
   const newTargetCompletion=m14?.plannedDate
+    ||(m14?.manuallyCompleted?m14.manuallyCompletedOn:null)
     ||(phasePlannedEnds.length>0?toIso(Math.max(...phasePlannedEnds)):sc.targetCompletion||null);
-  const newActualStart=(m1?.status==='Complete'&&m1?.completionDate)?m1.completionDate:(sc.actualStart||null);
+  const newActualStart=(m1?.status==='Complete'&&m1?.completionDate)?m1.completionDate
+    :(m1?.status==='Complete'&&m1?.manuallyCompleted&&m1?.manuallyCompletedOn)?m1.manuallyCompletedOn
+    :(sc.actualStart||null);
   const newActualCompletion=(m14?.status==='Complete'&&m14?.actualDate)?m14.actualDate
+    :(m14?.status==='Complete'&&m14?.manuallyCompleted&&m14?.manuallyCompletedOn)?m14.manuallyCompletedOn
     :(phaseActualEnds.length>0?toIso(Math.max(...phaseActualEnds)):sc.actualCompletion||null);
   const nothingChanged=newPlannedStart===(sc.plannedStart||null)
     &&newTargetCompletion===(sc.targetCompletion||null)
