@@ -3404,6 +3404,11 @@ async function loadAllData() {
       otHours: r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
       materialCost: r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
       opClaimed: r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
+      // v62l — task #52: Payment Responsibility (free text) + Fast Track
+      // (documentation only once saved — the checkbox itself only affects
+      // Status at save time, see saveCO()).
+      paymentResp: r.fields['Payment Responsibility']||'',
+      fastTrack: !!r.fields['Fast Track'],
       // v55o — optimistic-locking conflict detection (task #90).
       conflictTs: r.fields['Change Order Last Modified']||'',
     })).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -4035,6 +4040,21 @@ window.PROPERTIES_SEED = [
   <div class="form-group">
     <label class="form-label">Elevator Company</label>
     <input class="form-input" type="text" id="co-ec" placeholder="e.g. Otis">
+  </div>
+  <div class="form-group">
+    <label class="form-label">Payment Responsibility</label>
+    <input class="form-input" type="text" id="co-payment-resp" placeholder="e.g. Park Hotels, Hilton, Schindler/Park">
+  </div>
+  <!-- v62l — task #52: Fast Track. Per direct instruction, some COs are
+  already approved outside PULSE (external tracker) and don't need the
+  full in-app Pending → Approve workflow. Checking this at save time
+  writes Status straight to Approved and skips the "note to client"
+  confirmation modal that the normal Approve button triggers. -->
+  <div class="form-group">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
+      <input type="checkbox" id="co-fast-track">
+      Fast Track <span style="font-weight:400;color:var(--gray-mid)">(already approved outside PULSE — save directly as Approved)</span>
+    </label>
   </div>
   <!-- v38d — Linked Units + Applies to Whole Project. Documentation/
   traceability only (per direct instruction: savings still roll up at
@@ -13930,9 +13950,12 @@ function renderChangeOrdersTab(p){
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
         <div style="flex:1">
           <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(co.description)}</div>
-          <div style="font-size:11px;color:var(--gray-mid)">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date?new Date(co.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</div>
+          <div style="font-size:11px;color:var(--gray-mid)">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date?new Date(co.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}${co.paymentResp?` · Payment: ${escHtml(co.paymentResp)}`:''}</div>
         </div>
-        <span class="${statusBadgeClass}">${co.status}</span>
+        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+          ${co.fastTrack?'<span class="co-status-client" style="background:#EDE9FE;color:#5B21B6">Fast Track</span>':''}
+          <span class="${statusBadgeClass}">${co.status}</span>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
         <div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px">
@@ -15414,6 +15437,8 @@ function openCOModal(editId){
     document.getElementById('co-date').value=today;
     document.getElementById('co-notes').value='';
     document.getElementById('co-ec').value=currentProp?.ec||'';
+    document.getElementById('co-payment-resp').value='';
+    document.getElementById('co-fast-track').checked=false;
     document.getElementById('co-st-hours').value='';
     document.getElementById('co-ot-hours').value='';
     document.getElementById('co-material-cost').value='';
@@ -15482,6 +15507,8 @@ function editCO(coId){
   document.getElementById('co-date').value=co.date||'';
   document.getElementById('co-notes').value=co.notes||'';
   document.getElementById('co-ec').value=co.ec||'';
+  document.getElementById('co-payment-resp').value=co.paymentResp||'';
+  document.getElementById('co-fast-track').checked=!!co.fastTrack;
   document.getElementById('co-st-hours').value=co.stHours!=null?co.stHours:'';
   document.getElementById('co-ot-hours').value=co.otHours!=null?co.otHours:'';
   document.getElementById('co-material-cost').value=co.materialCost!=null?co.materialCost:'';
@@ -15512,10 +15539,18 @@ async function saveCO(){
   // against the raw input string before parsing, not the parsed number.
   const negRaw=document.getElementById('co-negotiated').value;
   const neg=parseFloat(negRaw)||0;
-  const status=document.getElementById('co-status').value;
+  // v62l — task #52: Fast Track. When checked, this CO was already
+  // approved outside PULSE, so save writes Status straight to 'Approved'
+  // regardless of whatever the Status dropdown was left on — bypassing
+  // the Pending step and the separate Approve button's note-to-client
+  // confirmation modal entirely (this is a direct save, not a workflow
+  // transition through updateCOStatus()).
+  const fastTrack=document.getElementById('co-fast-track').checked;
+  const status=fastTrack?'Approved':document.getElementById('co-status').value;
   const date=document.getElementById('co-date').value;
   const notes=document.getElementById('co-notes').value.trim();
   const ec=document.getElementById('co-ec').value.trim();
+  const paymentResp=document.getElementById('co-payment-resp').value.trim();
   const editId=document.getElementById('co-edit-id').value;
   // Build 4a — additive line item fields. All optional; omit from the
   // Airtable payload entirely when blank (never send empty string/NaN).
@@ -15558,9 +15593,9 @@ async function saveCO(){
   if(demoMode){
     if(editId){
       const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject});}
+      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack});}
     }else{
-      const newCO={id:'co_'+Date.now(),property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject};
+      const newCO={id:'co_'+Date.now(),property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
       window.CO_SAVINGS.push(newCO);
       if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
     }
@@ -15576,6 +15611,8 @@ async function saveCO(){
       'Logged By':loggedBy,
       'Notes':notes||undefined,
       'Applies to Whole Project':appliesToWholeProject,
+      'Payment Responsibility':paymentResp||undefined,
+      'Fast Track':fastTrack,
     };
     if(date)fields['Date']=date;
     if(scopeId)fields['Linked Scope']=[scopeId];
@@ -15595,11 +15632,11 @@ async function saveCO(){
         const updRes=await atUpdate('Change Order Savings Log',editId,fields);
         if(!updRes){showToast('Could not save changes to this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
         const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject});
+        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack});
       }else{
         const rec=await atCreate('Change Order Savings Log',fields);
         if(!rec?.id){showToast('Could not save this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
-        const newCO={id:rec.id,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject};
+        const newCO={id:rec.id,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
         if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
         window.CO_SAVINGS.push(newCO);
         if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
@@ -15621,6 +15658,8 @@ async function saveCO(){
           opClaimed:r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
           linkedUnitIds:r.fields['Linked Units']||[],
           appliesToWholeProject:!!r.fields['Applies to Whole Project'],
+          paymentResp:r.fields['Payment Responsibility']||'',
+          fastTrack:!!r.fields['Fast Track'],
           conflictTs:r.fields['Change Order Last Modified']||'',
         })).sort((a,b)=>new Date(b.date)-new Date(a.date));
       }
@@ -32106,6 +32145,14 @@ async function pollChangeOrders(){
       otHours: r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
       materialCost: r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
       opClaimed: r.fields['O&P Claimed']!=null?Number(r.fields['O&P Claimed']):null,
+      // v62l — task #52: Payment Responsibility + Fast Track. Added here
+      // too, matching the initial-load mapping — this poll-path mapping
+      // is exactly the kind of site that went stale and caused the
+      // Billing Log blank-invoice bug (task #49) when new fields were
+      // added to that modal but not to its poller. Not skipping that
+      // step here.
+      paymentResp: r.fields['Payment Responsibility']||'',
+      fastTrack: !!r.fields['Fast Track'],
       // v55o — optimistic-locking conflict detection (task #90). Must
       // stay current here too -- pollChangeOrders() reassigns
       // window.CO_SAVINGS wholesale every ~45s.
