@@ -3462,6 +3462,12 @@ async function loadVdaProjectData(){
       // screen computes Project Value live via vdaProjectValue(p.id),
       // the sum of that agreement's Task Line amounts.
       price:r.fields['Current Price']!=null?Number(r.fields['Current Price']):0,
+      // v58x — task #22. Project-level rollups written by the monthly
+      // Excel import (or the same auto-derive logic could recompute these
+      // live in the future — for now they're written directly since
+      // that's what the source file provides at the project level).
+      totalInvoiced:r.fields['Total Invoiced for Project']!=null?Number(r.fields['Total Invoiced for Project']):0,
+      lastInvoiceDate:r.fields['Last Invoice Date']||'',
       createdTime:r.createdTime||'',
     }));
     window.VDA_TASK_LINES=(taskRecs||[]).map(r=>({
@@ -3474,6 +3480,19 @@ async function loadVdaProjectData(){
       status:r.fields['Status']||'Not Started',
       monthlyForecastEstimate:r.fields['Monthly Forecast Estimate']!=null?Number(r.fields['Monthly Forecast Estimate']):0,
       createdTime:r.createdTime||'',
+      // v58x — task #22/#49. Salesforce-sourced fields, populated by the
+      // monthly Excel import (see importVdaProjectExcel worker route) or
+      // entered manually here in Configure/Edit Project. contractBalance
+      // and amountInvoiced are the two fields the monthly import actually
+      // refreshes on an existing row; owner/service/startDate/endDate are
+      // set once (on create) and left alone by re-imports per Misty's
+      // 'minimal monthly updates' direction.
+      contractBalance:r.fields['Contract Balance']!=null?Number(r.fields['Contract Balance']):0,
+      amountInvoiced:r.fields['Amount Invoiced']!=null?Number(r.fields['Amount Invoiced']):0,
+      startDate:r.fields['Start Date']||'',
+      endDate:r.fields['End Date']||'',
+      owner:r.fields['Owner']||'',
+      service:r.fields['Service']||'',
     }));
     window.VDA_AMENDMENTS=(amendRecs||[]).map(r=>({
       id:r.id,
@@ -4539,7 +4558,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v58w</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v59a</div>
     </div>
   </nav>
 
@@ -4633,6 +4652,13 @@ from unitEffectiveValue() onto each checkbox). -->
         <div class="page-header">
           <div class="page-header-left"><h1>VDA Project</h1><p>Billing agreements, task lines, and amendment history across the portfolio</p></div>
           <div class="header-actions">
+            <!-- v58x — task #45/#46. Monthly Excel import, PM/Admin (same
+            gate as Configure Project — vdaCanEdit()). Client-side only:
+            parses the .xlsx with the SheetJS library already loaded for
+            the other two import features, matches rows to existing VDA
+            Project/Task Line records, stages a review screen, writes on
+            explicit confirm via the normal atCreate/atUpdate calls. -->
+            <button class="btn no-print" id="vda-import-btn" onclick="openVdaImportModal()" style="display:none"><i class="ti ti-file-import"></i>Import</button>
             <button class="btn btn-primary no-print" id="vda-configure-btn" onclick="openConfigureVdaPanel()" style="display:none"><i class="ti ti-plus"></i>Configure Project</button>
           </div>
         </div>
@@ -4647,9 +4673,16 @@ from unitEffectiveValue() onto each checkbox). -->
             hardcoded amber color regardless of value, unchanged from
             before -- not something in scope for this pass. -->
             <div class="card" style="padding:14px 16px;border-radius:12px;display:flex;align-items:flex-start;gap:12px"><div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--blue-pale)"><i class="ti ti-file-invoice" style="font-size:18px;color:var(--blue-dark)"></i></div><div style="min-width:0"><div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total Agreements</div><div id="vda-stat-total" style="font-size:20px;font-weight:600;color:var(--navy);letter-spacing:-1px">0</div></div></div>
-            <div class="card" style="padding:14px 16px;border-radius:12px;display:flex;align-items:flex-start;gap:12px"><div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--green-pale)"><i class="ti ti-report-money" style="font-size:18px;color:var(--green)"></i></div><div style="min-width:0"><div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total Current Price</div><div id="vda-stat-price" style="font-size:20px;font-weight:600;color:var(--navy);letter-spacing:-1px">$0</div></div></div>
-            <div class="card" style="padding:14px 16px;border-radius:12px;display:flex;align-items:flex-start;gap:12px"><div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--teal-pale)"><i class="ti ti-progress" style="font-size:18px;color:var(--teal)"></i></div><div style="min-width:0"><div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Active</div><div id="vda-stat-active" style="font-size:20px;font-weight:600;color:var(--blue-dark);letter-spacing:-1px">0</div></div></div>
-            <div class="card" style="padding:14px 16px;border-radius:12px;display:flex;align-items:flex-start;gap:12px"><div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--amber-pale)"><i class="ti ti-alert-circle" style="font-size:18px;color:var(--amber)"></i></div><div style="min-width:0"><div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">With Unstarted Task Lines</div><div id="vda-stat-unstarted" style="font-size:20px;font-weight:600;color:var(--amber);letter-spacing:-1px">0</div></div></div>
+            <!-- v58x -- task #47. Stat row rebuilt per Misty's approved
+            mockup: Total Current Price / Active swapped for Total Contract
+            Balance and Total Invoiced YTD (the two numbers the monthly
+            import actually keeps fresh), and "With Unstarted Task Lines"
+            swapped for "Last Project Completing" (furthest-out End Date
+            across every Task Line in the portfolio, per Misty's explicit
+            call -- see renderVdaProjects() for the computation). -->
+            <div class="card" style="padding:14px 16px;border-radius:12px;display:flex;align-items:flex-start;gap:12px"><div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--green-pale)"><i class="ti ti-report-money" style="font-size:18px;color:var(--green)"></i></div><div style="min-width:0"><div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total Contract Balance</div><div id="vda-stat-balance" style="font-size:20px;font-weight:600;color:var(--navy);letter-spacing:-1px">$0</div></div></div>
+            <div class="card" style="padding:14px 16px;border-radius:12px;display:flex;align-items:flex-start;gap:12px"><div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--teal-pale)"><i class="ti ti-progress" style="font-size:18px;color:var(--teal)"></i></div><div style="min-width:0"><div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Total Invoiced YTD</div><div id="vda-stat-invoiced" style="font-size:20px;font-weight:600;color:var(--blue-dark);letter-spacing:-1px">$0</div></div></div>
+            <div class="card" style="padding:14px 16px;border-radius:12px;display:flex;align-items:flex-start;gap:12px"><div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--amber-pale)"><i class="ti ti-calendar-due" style="font-size:18px;color:var(--amber)"></i></div><div style="min-width:0"><div style="font-size:11px;font-weight:500;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Last Project Completing</div><div id="vda-stat-lastcompleting" style="font-size:20px;font-weight:600;color:var(--amber);letter-spacing:-1px">&mdash;</div><div id="vda-stat-lastcompleting-sub" style="font-size:11px;color:var(--gray-mid);margin-top:2px"></div></div></div>
           </div>
           <input class="form-input no-print" type="text" id="vda-search" placeholder="Search by VDA Project #, nickname, or property..." oninput="renderVdaProjects()" style="max-width:400px;margin-bottom:16px">
           <div id="vda-card-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px"></div>
@@ -33394,25 +33427,83 @@ function vdaProjectValue(vdaId){
 }
 window.vdaProjectValue=vdaProjectValue;
 
+// v58x — task #47. Same live-sum pattern as vdaProjectValue() above, for
+// the two new money fields the monthly Excel import keeps fresh
+// (Contract Balance = remaining to bill, Amount Invoiced = billed to
+// date, both per Task Line — confirmed directly with Misty these are
+// genuinely separate numbers per task, not derived from each other).
+function vdaProjectBalance(vdaId){
+  return (window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId).reduce((a,t)=>a+(t.contractBalance||0),0);
+}
+window.vdaProjectBalance=vdaProjectBalance;
+function vdaProjectInvoiced(vdaId){
+  return (window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId).reduce((a,t)=>a+(t.amountInvoiced||0),0);
+}
+window.vdaProjectInvoiced=vdaProjectInvoiced;
+// Task owner(s) — every distinct, non-blank Owner across a project's
+// Task Lines, per Misty's direct instruction (owner genuinely varies per
+// task, confirmed in the real Salesforce export — no single "the" owner).
+function vdaProjectOwners(vdaId){
+  const owners=(window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId).map(t=>(t.owner||'').trim()).filter(Boolean);
+  return [...new Set(owners)];
+}
+window.vdaProjectOwners=vdaProjectOwners;
+// Project-level Last Invoice Date, written once per project by the
+// monthly import from any one of that project's rows, since it's a
+// project-level rollup in the source data, not a real per-task value.
+function vdaProjectLastInvoiceDate(vdaId){
+  const p=(window.VDA_PROJECTS||[]).find(x=>x.id===vdaId);
+  return p?p.lastInvoiceDate||'':'';
+}
+window.vdaProjectLastInvoiceDate=vdaProjectLastInvoiceDate;
+
 function renderVdaProjects(){
   const list=document.getElementById('vda-card-list');
   if(!list)return;
   const canEdit=vdaCanEdit();
   const cfgBtn=document.getElementById('vda-configure-btn');
   if(cfgBtn)cfgBtn.style.display=canEdit?'':'none';
+  const importBtn=document.getElementById('vda-import-btn');
+  if(importBtn)importBtn.style.display=canEdit?'':'none';
 
   const projects=window.VDA_PROJECTS||[];
   const taskLines=window.VDA_TASK_LINES||[];
   const amendments=window.VDA_AMENDMENTS||[];
 
   const totalAgreements=projects.length;
-  const totalPrice=projects.reduce((a,p)=>a+vdaProjectValue(p.id),0);
-  const activeCount=projects.filter(p=>p.status==='Active').length;
-  const unstartedCount=projects.filter(p=>taskLines.some(t=>t.vdaId===p.id&&t.status==='Not Started')).length;
   const elTotal=document.getElementById('vda-stat-total');if(elTotal)elTotal.textContent=totalAgreements;
-  const elPrice=document.getElementById('vda-stat-price');if(elPrice)elPrice.textContent=fmtCurrency(totalPrice);
-  const elActive=document.getElementById('vda-stat-active');if(elActive)elActive.textContent=activeCount;
-  const elUnstarted=document.getElementById('vda-stat-unstarted');if(elUnstarted)elUnstarted.textContent=unstartedCount;
+
+  // v58x — task #47. Stat row rebuilt per Misty's approved mockup.
+  // Total Contract Balance / Total Invoiced YTD are portfolio-wide sums
+  // of the same per-task money fields vdaProjectBalance()/
+  // vdaProjectInvoiced() compute per-project, so a single project card's
+  // numbers always add up into these totals — no separate math path.
+  const totalBalance=taskLines.reduce((a,t)=>a+(t.contractBalance||0),0);
+  const totalInvoiced=taskLines.reduce((a,t)=>a+(t.amountInvoiced||0),0);
+  const elBalance=document.getElementById('vda-stat-balance');if(elBalance)elBalance.textContent=fmtCurrency(totalBalance);
+  const elInvoiced=document.getElementById('vda-stat-invoiced');if(elInvoiced)elInvoiced.textContent=fmtCurrency(totalInvoiced);
+
+  // "Last Project Completing" — per Misty's explicit call, this is the
+  // single Task Line with the furthest-out End Date across the entire
+  // portfolio (not the soonest-completing one). Skips task lines with no
+  // End Date set (older records, or manually-entered lines that never
+  // filled it in) rather than treating a blank as "furthest out".
+  let latestEndTask=null,latestEndDate=null;
+  taskLines.forEach(t=>{
+    if(!t.endDate)return;
+    const d=new Date(t.endDate);
+    if(isNaN(d))return;
+    if(!latestEndDate||d>latestEndDate){latestEndDate=d;latestEndTask=t;}
+  });
+  const elLastCompleting=document.getElementById('vda-stat-lastcompleting');
+  const elLastCompletingSub=document.getElementById('vda-stat-lastcompleting-sub');
+  if(elLastCompleting){
+    elLastCompleting.textContent=latestEndDate?fmtShortDate(latestEndTask.endDate):'—';
+  }
+  if(elLastCompletingSub){
+    const owningProject=latestEndTask?projects.find(p=>p.id===latestEndTask.vdaId):null;
+    elLastCompletingSub.textContent=owningProject&&owningProject.number?`VDA Project ${owningProject.number}`:'';
+  }
 
   if(projects.length===0){
     list.innerHTML=`<div class="empty-state" style="grid-column:1/-1"><i class="ti ti-file-invoice"></i><div class="empty-state-title">No VDA Project agreements yet</div><div class="empty-state-sub">${canEdit?'Use + Configure Project to add the first one':'No agreements have been configured yet'}</div></div>`;
@@ -33459,9 +33550,19 @@ function renderVdaProjects(){
     const fullyBilled=myTasks.filter(t=>t.status==='Fully Billed').length;
     const myAmendments=amendments.filter(a=>a.vdaId===p.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
     const lastAmend=myAmendments.length?myAmendments[0]:null;
-    const myTaskIds=new Set(myTasks.map(t=>t.id));
-    const myInvoices=(window.VDA_INVOICES||[]).filter(inv=>myTaskIds.has(inv.taskLineId)).sort((a,b)=>new Date(b.date)-new Date(a.date));
-    const lastInvoiceDate=myInvoices.length?myInvoices[0].date:'';
+
+    // v58x — task #47/#48. Billed-progress line, stat grid, and the
+    // expandable task-line table all read from the same per-project
+    // helper functions used by the portfolio stat row above, so a
+    // project's own numbers always reconcile with the portfolio totals.
+    const totalValue=vdaProjectValue(p.id);
+    const totalInvoicedForProject=vdaProjectInvoiced(p.id);
+    const totalBalanceForProject=vdaProjectBalance(p.id);
+    const ownersForProject=vdaProjectOwners(p.id);
+    const lastInvoiceDate=vdaProjectLastInvoiceDate(p.id);
+    const billedPct=totalValue>0?Math.min(100,Math.round((totalInvoicedForProject/totalValue)*100)):0;
+    const isExpanded=(window._vdaExpandedCards||(window._vdaExpandedCards=new Set())).has(p.id);
+
     // v58a -- icon-badge added to each project card, per the approved
     // polish mockup. `badge` here is vdaStatusBadgeColor(p.status)'s
     // {bg,fg} pair (status pill coloring, a pre-existing local var) --
@@ -33483,15 +33584,366 @@ function renderVdaProjects(){
         </div>
         ${canEdit?`<button class="btn-icon" onclick="openEditVdaPanel('${p.id}')" title="Edit Project" style="border:none;background:none;cursor:pointer;color:var(--blue-dark);font-size:16px"><i class="ti ti-pencil"></i></button>`:''}
       </div>
-      <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:8px">${fmtCurrency(vdaProjectValue(p.id))}</div>
-      <div style="font-size:12px;color:var(--gray-mid);margin-bottom:6px">${propNames.length?propNames.join(', '):'No properties linked'}</div>
+      <div style="font-size:12px;color:var(--gray-mid);margin-bottom:10px">${propNames.length?propNames.join(', '):'No properties linked'}</div>
+
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--gray-dark);margin-bottom:4px">
+          <span>${fmtCurrency(totalInvoicedForProject)} of ${fmtCurrency(totalValue)} billed to date</span>
+          <span style="font-weight:600">${billedPct}%</span>
+        </div>
+        <div style="height:6px;border-radius:3px;background:var(--gray-pale,#F1EFE8);overflow:hidden">
+          <div style="height:100%;width:${billedPct}%;background:var(--blue-dark)"></div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;font-size:12px;margin-bottom:10px">
+        <div><div style="color:var(--gray-mid)">Contract Balance</div><div style="font-weight:600;color:var(--navy)">${fmtCurrency(totalBalanceForProject)}</div></div>
+        <div><div style="color:var(--gray-mid)">Last Invoice</div><div style="font-weight:600;color:var(--navy)">${lastInvoiceDate?fmtShortDate(lastInvoiceDate):'—'}</div></div>
+        <div style="grid-column:1/-1"><div style="color:var(--gray-mid)">Task Owner(s)</div><div style="font-weight:600;color:var(--navy)">${ownersForProject.length?ownersForProject.map(o=>escHtml(o)).join(', '):'—'}</div></div>
+      </div>
+
       <div style="font-size:12px;color:var(--gray-dark);margin-bottom:4px">${myTasks.length} task line${myTasks.length===1?'':'s'} &middot; ${fullyBilled} fully billed</div>
-      ${lastAmend?`<div style="font-size:11px;color:var(--gray-mid)">Last amendment: ${lastAmend.date} — ${fmtCurrency(lastAmend.priorPrice)} &rarr; ${fmtCurrency(lastAmend.newPrice)}</div>`:''}
-      ${lastInvoiceDate?`<div style="font-size:11px;color:var(--gray-mid)">Last invoice: ${lastInvoiceDate}</div>`:''}
+      ${lastAmend?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:4px">Last amendment: ${lastAmend.date} — ${fmtCurrency(lastAmend.priorPrice)} &rarr; ${fmtCurrency(lastAmend.newPrice)}</div>`:''}
+
+      <button type="button" onclick="toggleVdaCardExpand('${p.id}')" style="width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--gray-pale,#F1EFE8);padding:8px 0 0;margin-top:4px;cursor:pointer;color:var(--blue-dark);font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px">
+        <i class="ti ti-chevron-${isExpanded?'down':'right'}"></i> ${isExpanded?'Hide':'Show'} task lines
+      </button>
+      ${isExpanded?vdaTaskLineTableHtml(myTasks):''}
     </div>`;
   }).join('');
 }
 window.renderVdaProjects=renderVdaProjects;
+
+// v58x — task #48. Per-card expand/collapse state, keyed by VDA Project
+// record id, held on window so it survives the innerHTML re-render that
+// happens every time renderVdaProjects() runs (e.g. after any edit save).
+function toggleVdaCardExpand(vdaId){
+  const st=(window._vdaExpandedCards||(window._vdaExpandedCards=new Set()));
+  if(st.has(vdaId))st.delete(vdaId);else st.add(vdaId);
+  renderVdaProjects();
+}
+window.toggleVdaCardExpand=toggleVdaCardExpand;
+
+// v58x — task #48. Expandable per-project task-line table. Start and End
+// are deliberately separate columns (not combined into one date-range
+// string) per Misty's direct correction during mockup review.
+function vdaTaskLineTableHtml(taskRows){
+  if(!taskRows.length)return `<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No task lines on this agreement yet.</div>`;
+  const rows=taskRows.map(t=>`<tr>
+      <td style="padding:6px 8px;font-size:12px;color:var(--navy)">${escHtml(t.description||'—')}${t.service?`<div style="font-size:11px;color:var(--gray-mid)">${escHtml(t.service)}</div>`:''}</td>
+      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark)">${escHtml(t.owner||'—')}</td>
+      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark)">${t.startDate?fmtShortDate(t.startDate):'—'}</td>
+      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark)">${t.endDate?fmtShortDate(t.endDate):'—'}</td>
+      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark);text-align:right">${fmtCurrency(t.amountInvoiced||0)}</td>
+      <td style="padding:6px 8px;font-size:12px;color:var(--gray-dark);text-align:right">${fmtCurrency(t.contractBalance||0)}</td>
+    </tr>`).join('');
+  return `<div style="overflow-x:auto;margin-top:8px">
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid var(--gray-pale,#F1EFE8)">
+        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">Task / Service</th>
+        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">Owner</th>
+        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">Start</th>
+        <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--gray-mid);font-weight:600">End</th>
+        <th style="padding:4px 8px;text-align:right;font-size:11px;color:var(--gray-mid);font-weight:600">Invoiced</th>
+        <th style="padding:4px 8px;text-align:right;font-size:11px;color:var(--gray-mid);font-weight:600">Balance</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+window.vdaTaskLineTableHtml=vdaTaskLineTableHtml;
+
+// v58x — task #45/#46. Monthly VDA Project Excel import. Client-side
+// only, following the exact pattern already established by "Import Unit
+// Updates" (parse in-browser with SheetJS, match to existing records,
+// stage a review screen, write on explicit confirm via atCreate/atUpdate)
+// rather than a dedicated Worker route.
+//
+// Column mapping confirmed against a real Salesforce export
+// (2026-08-10 Contract Balance (Park v2).xlsx):
+//   Project Task : Project : Project Number  -> matches VDA Project Number
+//   Project Task Name                        -> matches existing Task Line
+//                                                Description, or names a
+//                                                new one
+//   Contract Balance / Amount Invoiced       -> Task Line money fields
+//   Start Date / End Date                    -> Task Line date fields
+//   Responsibility Name                      -> Task Line Owner (the field
+//                                                that actually varies per
+//                                                task row -- confirmed live
+//                                                against the Hilton Chicago
+//                                                example, where "Project
+//                                                Task : Project : Owner"
+//                                                repeats one name across
+//                                                every task on a project,
+//                                                so that column is NOT used
+//                                                here even though its name
+//                                                looks more obviously right)
+//   Service                                  -> Task Line Service
+//   Project Task : Project : Total Invoiced for Project -> VDA Project
+//                                                Total Invoiced (once per
+//                                                project, same value
+//                                                repeats on every row)
+//   Project Task : Project : Last Invoice Date -> VDA Project Last
+//                                                Invoice Date (same as above)
+//
+// "Minimal monthly updates" rule per Misty's direct instruction: a row
+// that matches an EXISTING Task Line only ever refreshes Contract
+// Balance / Amount Invoiced (the money fields) -- Owner/Service/
+// Start Date/End Date are left untouched on a re-import even if the
+// file's value differs, since those are considered set-once-at-creation.
+// A row with no existing match creates a brand new Task Line with every
+// field populated, same as a manually-added row would get in Configure/
+// Edit Project.
+const VDA_IMPORT_COL={
+  projectNumber:'Project Task : Project : Project Number',
+  taskName:'Project Task Name',
+  contractBalance:'Contract Balance',
+  amountInvoiced:'Amount Invoiced',
+  startDate:'Start Date',
+  endDate:'End Date',
+  owner:'Responsibility Name',
+  service:'Service',
+  totalInvoicedForProject:'Project Task : Project : Total Invoiced for Project',
+  lastInvoiceDate:'Project Task : Project : Last Invoice Date',
+};
+let vdaImportStaged=null; // {projectDiffs, unmatchedProjectRows} while review screen is open
+function openVdaImportModal(){
+  if(!vdaCanEdit())return;
+  if(typeof XLSX==='undefined'){showToast('Excel import library failed to load — check your connection and try again','error');return;}
+  const overlay=document.createElement('div');
+  overlay.id='vda-import-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:2000';
+  overlay.innerHTML=`
+    <div style="background:var(--surface,#fff);border-radius:12px;padding:1.5rem;width:440px;max-width:90vw">
+      <div style="font-weight:600;font-size:16px;margin-bottom:4px">Import VDA Project data</div>
+      <div style="font-size:13px;color:var(--gray-mid);margin-bottom:16px">Upload the monthly Salesforce Contract Balance export. Existing task lines only get their Contract Balance and Amount Invoiced refreshed; new task lines are created with all fields filled in. Nothing is written until you confirm on the next screen.</div>
+      <input type="file" id="vda-import-file-input" accept=".xlsx" style="margin-bottom:16px;width:100%">
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn" onclick="document.getElementById('vda-import-overlay').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="handleVdaImportFile()">Continue</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+async function handleVdaImportFile(){
+  const input=document.getElementById('vda-import-file-input');
+  const file=input&&input.files&&input.files[0];
+  if(!file){showToast('Choose an .xlsx file first','warn');return;}
+  try{
+    const rows=await parseImportFile(file);
+    const staged=matchAndDiffVdaImportRows(rows);
+    document.getElementById('vda-import-overlay')?.remove();
+    vdaImportStaged=staged;
+    renderVdaImportReviewScreen(staged);
+  }catch(e){
+    console.error('[VDA Import] parse failed',e);
+    showToast('Could not read that file — confirm it is a valid .xlsx export','error');
+  }
+}
+// Groups rows by Project Number, matches each group to an existing VDA
+// Project by VDA Project Number, then matches each row within the group
+// to an existing Task Line by Description (exact, case-insensitive/
+// trimmed match against Project Task Name). Rows whose Project Number
+// doesn't match any existing VDA Project are skipped and reported —
+// this import never creates new VDA Project agreements, only task lines
+// on ones that already exist (mirrors Import Unit Updates never
+// creating new units).
+function matchAndDiffVdaImportRows(rows){
+  const projects=window.VDA_PROJECTS||[];
+  const taskLines=window.VDA_TASK_LINES||[];
+  const byProjectNumber={};
+  rows.forEach(row=>{
+    const num=(row[VDA_IMPORT_COL.projectNumber]||'').toString().trim();
+    if(!num)return;
+    (byProjectNumber[num]=byProjectNumber[num]||[]).push(row);
+  });
+  const projectDiffs=[];
+  const unmatchedProjectRows=[];
+  const excelDate=(v)=>{
+    if(v==null||v==='')return '';
+    if(v instanceof Date)return v.toISOString().slice(0,10);
+    const d=new Date(v);
+    return isNaN(d)?'':d.toISOString().slice(0,10);
+  };
+  Object.keys(byProjectNumber).forEach(num=>{
+    const rowsForProject=byProjectNumber[num];
+    const project=projects.find(p=>(p.number||'').toString().trim().toLowerCase()===num.toLowerCase());
+    if(!project){
+      rowsForProject.forEach(r=>unmatchedProjectRows.push({projectNumber:num,taskName:r[VDA_IMPORT_COL.taskName]||''}));
+      return;
+    }
+    const existingTasks=taskLines.filter(t=>t.vdaId===project.id);
+    const newTasks=[];
+    const updatedTasks=[];
+    rowsForProject.forEach(row=>{
+      const taskName=(row[VDA_IMPORT_COL.taskName]||'').toString().trim();
+      const newBalance=Number(row[VDA_IMPORT_COL.contractBalance])||0;
+      const newInvoiced=Number(row[VDA_IMPORT_COL.amountInvoiced])||0;
+      const existing=existingTasks.find(t=>(t.description||'').trim().toLowerCase()===taskName.toLowerCase());
+      if(existing){
+        const changed=newBalance!==(existing.contractBalance||0)||newInvoiced!==(existing.amountInvoiced||0);
+        if(changed){
+          updatedTasks.push({
+            taskLineId:existing.id,taskName,
+            oldBalance:existing.contractBalance||0,newBalance,
+            oldInvoiced:existing.amountInvoiced||0,newInvoiced,
+          });
+        }
+      }else{
+        newTasks.push({
+          taskName,
+          contractBalance:newBalance,
+          amountInvoiced:newInvoiced,
+          startDate:excelDate(row[VDA_IMPORT_COL.startDate]),
+          endDate:excelDate(row[VDA_IMPORT_COL.endDate]),
+          owner:(row[VDA_IMPORT_COL.owner]||'').toString().trim(),
+          service:(row[VDA_IMPORT_COL.service]||'').toString().trim(),
+        });
+      }
+    });
+    // Total Invoiced for Project / Last Invoice Date repeat identically on
+    // every row for the same project in the source file, so the first
+    // row's value is authoritative -- read once, not summed or averaged.
+    const firstRow=rowsForProject[0];
+    const newTotalInvoiced=Number(firstRow[VDA_IMPORT_COL.totalInvoicedForProject])||0;
+    const newLastInvoiceDate=excelDate(firstRow[VDA_IMPORT_COL.lastInvoiceDate]);
+    const projectFieldsChanged=newTotalInvoiced!==(project.totalInvoiced||0)||newLastInvoiceDate!==(project.lastInvoiceDate||'');
+    if(newTasks.length||updatedTasks.length||projectFieldsChanged){
+      projectDiffs.push({
+        project,newTasks,updatedTasks,
+        oldTotalInvoiced:project.totalInvoiced||0,newTotalInvoiced,
+        oldLastInvoiceDate:project.lastInvoiceDate||'',newLastInvoiceDate,
+        projectFieldsChanged,
+      });
+    }
+  });
+  return{projectDiffs,unmatchedProjectRows};
+}
+function renderVdaImportReviewScreen(staged){
+  const{projectDiffs,unmatchedProjectRows}=staged;
+  const totalNew=projectDiffs.reduce((a,pd)=>a+pd.newTasks.length,0);
+  const totalUpdated=projectDiffs.reduce((a,pd)=>a+pd.updatedTasks.length,0);
+  const overlay=document.createElement('div');
+  overlay.id='vda-import-review-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:2000';
+  const esc=escHtml;
+  const fmtVal=(v)=>(v===''||v==null)?'<span style="color:var(--gray-light)">—</span>':esc(String(v));
+  const projectCards=projectDiffs.map(pd=>{
+    const p=pd.project;
+    const rows=[];
+    pd.updatedTasks.forEach(t=>{
+      rows.push(`<tr>
+        <td style="padding:3px 0;color:var(--gray-mid)">${esc(t.taskName)} — Contract Balance</td>
+        <td style="padding:3px 0">${fmtVal(fmtCurrency(t.oldBalance))}</td>
+        <td style="padding:3px 0;width:20px;text-align:center;color:var(--gray-light)"><i class="ti ti-arrow-right" style="font-size:12px"></i></td>
+        <td style="padding:3px 0;color:var(--green);font-weight:600">${fmtVal(fmtCurrency(t.newBalance))}</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 0;color:var(--gray-mid)">${esc(t.taskName)} — Amount Invoiced</td>
+        <td style="padding:3px 0">${fmtVal(fmtCurrency(t.oldInvoiced))}</td>
+        <td style="padding:3px 0;width:20px;text-align:center;color:var(--gray-light)"><i class="ti ti-arrow-right" style="font-size:12px"></i></td>
+        <td style="padding:3px 0;color:var(--green);font-weight:600">${fmtVal(fmtCurrency(t.newInvoiced))}</td>
+      </tr>`);
+    });
+    if(pd.projectFieldsChanged){
+      rows.push(`<tr>
+        <td style="padding:3px 0;color:var(--gray-mid)">Total Invoiced for Project</td>
+        <td style="padding:3px 0">${fmtVal(fmtCurrency(pd.oldTotalInvoiced))}</td>
+        <td style="padding:3px 0;width:20px;text-align:center;color:var(--gray-light)"><i class="ti ti-arrow-right" style="font-size:12px"></i></td>
+        <td style="padding:3px 0;color:var(--green);font-weight:600">${fmtVal(fmtCurrency(pd.newTotalInvoiced))}</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 0;color:var(--gray-mid)">Last Invoice Date</td>
+        <td style="padding:3px 0">${fmtVal(pd.oldLastInvoiceDate)}</td>
+        <td style="padding:3px 0;width:20px;text-align:center;color:var(--gray-light)"><i class="ti ti-arrow-right" style="font-size:12px"></i></td>
+        <td style="padding:3px 0;color:var(--green);font-weight:600">${fmtVal(pd.newLastInvoiceDate)}</td>
+      </tr>`);
+    }
+    const newTaskList=pd.newTasks.length?`<div style="font-size:12px;color:var(--blue-dark);margin-top:8px"><i class="ti ti-plus" style="font-size:11px"></i> ${pd.newTasks.length} new task line${pd.newTasks.length===1?'':'s'}: ${pd.newTasks.map(t=>esc(t.taskName)).join(', ')}</div>`:'';
+    return `<div style="background:var(--surface,#fff);border-radius:12px;border:1px solid var(--border);padding:1rem 1.25rem;margin-bottom:12px">
+      <div style="font-weight:600;font-size:15px">${p.number?'VDA Project #'+esc(p.number):'(no number)'}</div>
+      ${p.nickname?`<div style="font-size:12px;color:var(--gray-mid);font-style:italic;margin-bottom:6px">${esc(p.nickname)}</div>`:''}
+      ${rows.length?`<table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:6px">${rows.join('')}</table>`:''}
+      ${newTaskList}
+    </div>`;
+  }).join('');
+  const unmatchedSection=unmatchedProjectRows.length>0?`
+    <div style="background:var(--amber-pale,#fff4e0);border-radius:8px;padding:12px 16px;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--amber-dark,#8a5a00)"><i class="ti ti-alert-triangle" style="font-size:14px;vertical-align:-2px;margin-right:6px"></i>${unmatchedProjectRows.length} row${unmatchedProjectRows.length===1?'':'s'} didn't match an existing VDA Project and ${unmatchedProjectRows.length===1?'was':'were'} skipped. This import never creates new VDA Project agreements — configure the project first, then re-import.</div>
+      <div style="font-size:12px;color:var(--gray-mid);margin-top:6px">${unmatchedProjectRows.map(r=>'Project #'+esc(r.projectNumber||'(blank)')+' — '+esc(r.taskName||'(no task name)')).join('<br>')}</div>
+    </div>`:'';
+  overlay.innerHTML=`
+    <div style="background:var(--gray-pale,#f7f7f8);border-radius:12px;padding:1.5rem;width:640px;max-width:92vw;max-height:85vh;display:flex;flex-direction:column">
+      <div style="font-weight:600;font-size:16px;margin-bottom:4px">Review VDA import</div>
+      <div style="font-size:13px;color:var(--gray-mid);margin-bottom:16px">Nothing is written until you confirm below.</div>
+      <div style="overflow-y:auto;flex:1;margin-bottom:16px">
+        ${projectDiffs.length===0?'<div class="empty-state" style="padding:2rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No changes found</div></div>':projectCards}
+        ${unmatchedSection}
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding-top:12px">
+        <span style="font-size:13px;color:var(--gray-mid)">${totalUpdated} updated, ${totalNew} new, across ${projectDiffs.length} project${projectDiffs.length===1?'':'s'}</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn" onclick="document.getElementById('vda-import-review-overlay').remove();vdaImportStaged=null">Cancel</button>
+          <button class="btn btn-primary" ${projectDiffs.length===0?'disabled':''} onclick="confirmVdaImport()">Confirm and import</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+async function confirmVdaImport(){
+  if(!vdaImportStaged)return;
+  const{projectDiffs}=vdaImportStaged;
+  showToast('Saving VDA import...','info');
+  let failCount=0;
+  for(const pd of projectDiffs){
+    const p=pd.project;
+    for(const t of pd.updatedTasks){
+      if(!demoMode){
+        const res=await atUpdate('Task Line',t.taskLineId,{'Contract Balance':t.newBalance,'Amount Invoiced':t.newInvoiced});
+        if(res===null){failCount++;continue;}
+      }
+      const localTask=(window.VDA_TASK_LINES||[]).find(x=>x.id===t.taskLineId);
+      if(localTask){localTask.contractBalance=t.newBalance;localTask.amountInvoiced=t.newInvoiced;}
+    }
+    for(const nt of pd.newTasks){
+      const fields={
+        'VDA Project':[p.id],'Description':nt.taskName,'Amount':0,
+        'Billing Split':'100% on completion','Trigger Type':'Milestone-linked','Status':'Not Started',
+        'Contract Balance':nt.contractBalance,'Amount Invoiced':nt.amountInvoiced,
+        'Start Date':nt.startDate,'End Date':nt.endDate,'Owner':nt.owner,'Service':nt.service,
+      };
+      let newId=null;
+      if(!demoMode){
+        const res=await atCreate('Task Line',fields);
+        if(!res||!res.id){failCount++;continue;}
+        newId=res.id;
+      }else{newId='demo-'+Math.random().toString(36).slice(2);}
+      window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat([{
+        id:newId,vdaId:p.id,description:nt.taskName,amount:0,
+        billingSplit:'100% on completion',triggerType:'Milestone-linked',status:'Not Started',
+        monthlyForecastEstimate:0,createdTime:new Date().toISOString(),
+        contractBalance:nt.contractBalance,amountInvoiced:nt.amountInvoiced,
+        startDate:nt.startDate,endDate:nt.endDate,owner:nt.owner,service:nt.service,
+      }]);
+    }
+    if(pd.projectFieldsChanged){
+      if(!demoMode){
+        const res=await atUpdate('VDA Project',p.id,{'Total Invoiced for Project':pd.newTotalInvoiced,'Last Invoice Date':pd.newLastInvoiceDate});
+        if(res===null){failCount++;continue;}
+      }
+      p.totalInvoiced=pd.newTotalInvoiced;
+      p.lastInvoiceDate=pd.newLastInvoiceDate;
+    }
+  }
+  document.getElementById('vda-import-review-overlay')?.remove();
+  vdaImportStaged=null;
+  renderVdaProjects();
+  if(failCount>0)showToast(`${failCount} write(s) failed to save — check connection and retry`,'warn');
+  else showToast('VDA import complete','success');
+}
+window.openVdaImportModal=openVdaImportModal;
+window.handleVdaImportFile=handleVdaImportFile;
+window.confirmVdaImport=confirmVdaImport;
 
 // ── Two-level Property + Unit tree picker, shared by both panels ──────
 // state[prefix] holds the working set of checked property ids and unit ids
@@ -33612,6 +34064,12 @@ function addVdaTaskLineRow(containerId,existing){
         <option value="Completed" ${existing&&existing.status==='Completed'?'selected':''}>Completed</option>
         <option value="Fully Billed" ${existing&&existing.status==='Fully Billed'?'selected':''}>Fully Billed</option>
       </select></div>`:''}
+      <div class="form-group"><label class="form-label">Owner</label><input class="form-input vdatl-owner" type="text" placeholder="Task owner" value="${existing&&existing.owner?escHtml(existing.owner):''}" ${disabled}></div>
+      <div class="form-group"><label class="form-label">Service</label><input class="form-input vdatl-service" type="text" placeholder="e.g. Submittal Review" value="${existing&&existing.service?escHtml(existing.service):''}" ${disabled}></div>
+      <div class="form-group"><label class="form-label">Start Date</label><input class="form-input vdatl-start" type="date" value="${existing&&existing.startDate?existing.startDate:''}" ${disabled}></div>
+      <div class="form-group"><label class="form-label">End Date</label><input class="form-input vdatl-end" type="date" value="${existing&&existing.endDate?existing.endDate:''}" ${disabled}></div>
+      <div class="form-group"><label class="form-label">Contract Balance</label><input class="form-input vdatl-balance" type="number" min="0" placeholder="Remaining to bill" value="${existing&&existing.contractBalance?existing.contractBalance:''}" ${disabled}></div>
+      <div class="form-group"><label class="form-label">Amount Invoiced</label><input class="form-input vdatl-invoiced" type="number" min="0" placeholder="Billed to date" value="${existing&&existing.amountInvoiced?existing.amountInvoiced:''}" ${disabled}></div>
     </div>`;
   container.appendChild(row);
 }
@@ -33633,6 +34091,12 @@ function readVdaTaskLineRows(containerId){
     const descOther=row.querySelector('.vdatl-desc-other');
     const description=descSel.value==='__custom__'?(descOther.value||'').trim():descSel.value;
     const statusSel=row.querySelector('.vdatl-status');
+    const ownerEl=row.querySelector('.vdatl-owner');
+    const serviceEl=row.querySelector('.vdatl-service');
+    const startEl=row.querySelector('.vdatl-start');
+    const endEl=row.querySelector('.vdatl-end');
+    const balanceEl=row.querySelector('.vdatl-balance');
+    const invoicedEl=row.querySelector('.vdatl-invoiced');
     return {
       existingId:row.dataset.existingId||'',
       description,
@@ -33641,6 +34105,15 @@ function readVdaTaskLineRows(containerId){
       triggerType:row.querySelector('.vdatl-trigger').value,
       monthlyForecastEstimate:Number(row.querySelector('.vdatl-monthly').value)||0,
       status:statusSel?statusSel.value:'Not Started',
+      // v58x — task #49. Manual counterpart to the monthly Excel import;
+      // a PM filling these in by hand goes through the same fields the
+      // import writes, so Configure/Edit and the import stay consistent.
+      owner:ownerEl?(ownerEl.value||'').trim():'',
+      service:serviceEl?(serviceEl.value||'').trim():'',
+      startDate:startEl?(startEl.value||''):'',
+      endDate:endEl?(endEl.value||''):'',
+      contractBalance:balanceEl?Number(balanceEl.value)||0:0,
+      amountInvoiced:invoicedEl?Number(invoicedEl.value)||0:0,
     };
   }).filter(r=>r.description||r.amount);
 }
@@ -33735,10 +34208,16 @@ async function saveConfigureVdaProject(){
       'Status':'Not Started',
       'Monthly Forecast Estimate':row.monthlyForecastEstimate,
       'VDA Project':[newId],
+      'Owner':row.owner,
+      'Service':row.service,
+      'Start Date':row.startDate||null,
+      'End Date':row.endDate||null,
+      'Contract Balance':row.contractBalance,
+      'Amount Invoiced':row.amountInvoiced,
     });
     if(tlRes&&tlRes.records&&tlRes.records[0]){
       const r=tlRes.records[0];
-      newTaskLines.push({id:r.id,vdaId:newId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()});
+      newTaskLines.push({id:r.id,vdaId:newId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString(),owner:row.owner,service:row.service,startDate:row.startDate,endDate:row.endDate,contractBalance:row.contractBalance,amountInvoiced:row.amountInvoiced});
     }else{
       taskLineFailCount++;
     }
@@ -33928,10 +34407,16 @@ async function submitAddAmendment(){
       'Status':'Not Started',
       'Monthly Forecast Estimate':row.monthlyForecastEstimate,
       'VDA Project':[_evpCurrentId],
+      'Owner':row.owner,
+      'Service':row.service,
+      'Start Date':row.startDate||null,
+      'End Date':row.endDate||null,
+      'Contract Balance':row.contractBalance,
+      'Amount Invoiced':row.amountInvoiced,
     });
     if(tlRes&&tlRes.records&&tlRes.records[0]){
       const r=tlRes.records[0];
-      newTaskLines.push({id:r.id,vdaId:_evpCurrentId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()});
+      newTaskLines.push({id:r.id,vdaId:_evpCurrentId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString(),owner:row.owner,service:row.service,startDate:row.startDate,endDate:row.endDate,contractBalance:row.contractBalance,amountInvoiced:row.amountInvoiced});
     }
   }
   if(newTaskLines.length===0){
@@ -34049,6 +34534,16 @@ async function saveEditVdaProject(){
         'Trigger Type':row.triggerType,
         'Status':row.status,
         'Monthly Forecast Estimate':row.monthlyForecastEstimate,
+        // v58x — task #49. Edit Project is the "localized PM update"
+        // surface Misty asked for, so unlike the monthly import (which
+        // deliberately leaves Owner/Service/Start/End alone on repeat
+        // runs), a manual edit here writes every field the PM changed.
+        'Owner':row.owner,
+        'Service':row.service,
+        'Start Date':row.startDate||null,
+        'End Date':row.endDate||null,
+        'Contract Balance':row.contractBalance,
+        'Amount Invoiced':row.amountInvoiced,
       });
       if(!tlUpdRes){
         taskLineFailCount++;
@@ -34058,6 +34553,8 @@ async function saveEditVdaProject(){
       if(existingObj){
         existingObj.description=row.description;existingObj.amount=row.amount;existingObj.billingSplit=row.billingSplit;
         existingObj.triggerType=row.triggerType;existingObj.status=row.status;existingObj.monthlyForecastEstimate=row.monthlyForecastEstimate;
+        existingObj.owner=row.owner;existingObj.service=row.service;existingObj.startDate=row.startDate;existingObj.endDate=row.endDate;
+        existingObj.contractBalance=row.contractBalance;existingObj.amountInvoiced=row.amountInvoiced;
       }
     }else{
       const tlRes=await atCreate('Task Line',{
@@ -34068,10 +34565,16 @@ async function saveEditVdaProject(){
         'Status':row.status||'Not Started',
         'Monthly Forecast Estimate':row.monthlyForecastEstimate,
         'VDA Project':[_evpCurrentId],
+        'Owner':row.owner,
+        'Service':row.service,
+        'Start Date':row.startDate||null,
+        'End Date':row.endDate||null,
+        'Contract Balance':row.contractBalance,
+        'Amount Invoiced':row.amountInvoiced,
       });
       if(tlRes&&tlRes.records&&tlRes.records[0]){
         const r=tlRes.records[0];
-        window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat([{id:r.id,vdaId:_evpCurrentId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:row.status||'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString()}]);
+        window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).concat([{id:r.id,vdaId:_evpCurrentId,description:row.description,amount:row.amount,billingSplit:row.billingSplit,triggerType:row.triggerType,status:row.status||'Not Started',monthlyForecastEstimate:row.monthlyForecastEstimate,createdTime:r.createdTime||new Date().toISOString(),owner:row.owner,service:row.service,startDate:row.startDate,endDate:row.endDate,contractBalance:row.contractBalance,amountInvoiced:row.amountInvoiced}]);
       }else{
         taskLineFailCount++;
       }
