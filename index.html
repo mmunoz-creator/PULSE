@@ -4660,7 +4660,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63m</div>
     </div>
   </nav>
 
@@ -10993,7 +10993,26 @@ function renderMilestones(p){
   // v28b — scoped to currentScope when the property has one selected
   // (always true except the demo-mode zero-Scope fallback case).
   const scopeId=currentScope?.id;
-  const msData=getMilestonesForProp(p.n,scopeId);
+  let msData=getMilestonesForProp(p.n,scopeId);
+  // v63m — task #12 follow-on fix. A fast-tracked scope with zero real
+  // Milestone records (e.g. PE6 & PE7) gets all 14 slots back from
+  // getMilestonesForProp() as synthetic {status:'Not Started', id:null}
+  // placeholders (see that function's v32b comment) -- correct behavior
+  // for a normal in-progress scope, but wrong here now that the retired
+  // short-circuit card no longer hides this tracker. Since the new banner
+  // above the tracker states the project is complete, showing 14 "Not
+  // Started" rows underneath it would visibly contradict the banner.
+  // DISPLAY-ONLY override: when fastTrackedComplete is true, every row's
+  // status is shown as Complete regardless of the synthetic placeholder's
+  // real value. This does NOT call atUpdate or touch Airtable in any way
+  // -- msData here is a local render-time array, not window.MILESTONES
+  // itself, so this can never create real Milestone records or trigger
+  // the #34 bug class (that bug was specifically about autoPopulateMilestones
+  // writing real rows + deriveAndWriteScopeStatus writing a real Status
+  // change; this is purely what gets drawn on screen this render pass).
+  if(currentScope?.fastTrackedComplete){
+    msData=msData.map(m=>m.status==='Complete'?m:{...m,status:'Complete'});
+  }
   const complete=msData.filter(m=>m.status==='Complete').length;
   // v62a — badge now uses weighted points (see MS_WEIGHTS/
   // getMsCompleteWeighted), not a flat complete/14 count. Found live on
@@ -11092,16 +11111,35 @@ function renderMilestones(p){
       <span style="position:absolute;top:2px;${currentScope.fastTrackedComplete?'right':'left'}:2px;width:16px;height:16px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
     </label>
   </div>`:'';
-  const msShortCircuitOk=currentScope&&currentScope.fastTrackedComplete;
-  if(currentScope&&(currentScope.status==='Complete'||currentScope.isCompleteBucket)&&msShortCircuitOk){
-    document.getElementById('ms-progress-badge').textContent='Completed';
-    msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:13px">
-      <i class="ti ti-circle-check" style="font-size:28px;color:#15803d;display:block;margin-bottom:8px"></i>
-      <div style="font-weight:600;color:var(--navy);margin-bottom:4px">Project Completed</div>
-      <div>All ${MILESTONES_DEF.length} milestones finished.${canEdit?' Use the pencil icon on this Project\'s card (Overview tab) to correct this if it was marked Complete in error.':''}</div>
-    </div>
-    ${fastTrackToggle}`;
-    return;
+  // v63m -- task #12. RETIRED the short-circuit "Project Completed" card
+  // that used to render here instead of the full 14-row tracker whenever
+  // fastTrackedComplete was true. Root problem it caused, reported live by
+  // Misty: two scopes on the same property (Casa Marina's "PE6 & PE7" and
+  // "Completed Project") both show 100% Complete but rendered two visibly
+  // different screens -- one the short-circuit card, one the full tracker
+  // -- with nothing explaining why they differed. Fixed by ALWAYS showing
+  // the full per-milestone tracker below (all 14 rows will correctly show
+  // Complete for either a fast-tracked or backfilled scope, since msData's
+  // own Status values already say Complete regardless of which mechanism
+  // got them there), and instead surfacing a banner ABOVE the tracker for
+  // either category -- fast-tracked (uses Fast Tracked Complete On) or
+  // backfilled (see isBackfilledComplete() above; uses the scope's own
+  // Status Changed Date as the best available real timestamp, confirmed
+  // acceptable to Misty even though it's not a perfect historical record
+  // for old bulk imports) -- stating plainly that the team indicated
+  // completion, rather than implying a full milestone-by-milestone record
+  // exists when it may not. fastTrackToggle (PM/Admin-only, unchanged)
+  // still renders separately above this banner, same as before.
+  const scopeIsBackfilled=isBackfilledComplete(currentScope,msData);
+  if((currentScope&&currentScope.fastTrackedComplete)||scopeIsBackfilled){
+    const bannerDate=currentScope.fastTrackedComplete?currentScope.fastTrackedCompleteOn:currentScope.statusChangedDate;
+    const bannerDateFmt=bannerDate?new Date(bannerDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+    var completeBanner=bannerDateFmt?`<div style="display:flex;align-items:center;gap:10px;background:var(--green-pale);border:1px solid var(--green);border-radius:8px;padding:10px 14px;margin-bottom:14px">
+      <i class="ti ti-circle-check" style="font-size:18px;color:var(--green)"></i>
+      <div style="font-size:12px;font-weight:600;color:var(--navy)">Project Team indicated all milestones complete, project complete on ${bannerDateFmt}.</div>
+    </div>`:'';
+  }else{
+    var completeBanner='';
   }
 
   document.getElementById('ms-progress-badge').textContent=`${pct}% · ${complete} / ${MILESTONES_DEF.length}`;
@@ -11129,7 +11167,21 @@ function renderMilestones(p){
     // PE7 scope had 28 Milestone records instead of 14). Gating on
     // AT_CONNECTED means we only trust an empty result once we know the
     // real data has actually arrived.
-    if(AT_CONNECTED&&(canEdit)&&!demoMode&&scopeId&&!currentScope?.isCompleteBucket){
+    // v63m — task #12 follow-on guard. Removing the short-circuit's early
+    // `return` above (see the retired-card comment) means this block can
+    // now be reached for a fast-tracked scope with zero real Milestone
+    // records (e.g. PE6 & PE7), which previously never got this far.
+    // Without an explicit guard here, that would call
+    // autoPopulateMilestones() and silently create 14 real Not-Started
+    // Milestone rows in Airtable underneath a scope that's supposed to
+    // stay fast-tracked-complete -- data pollution, even though the v63l
+    // fastTrackedComplete guard inside deriveAndWriteScopeStatus() already
+    // prevents the Status field itself from being overwritten. Added
+    // !currentScope?.fastTrackedComplete alongside the existing
+    // isCompleteBucket check so a fast-tracked scope never gets real
+    // Milestone records auto-created just because its Milestones tab was
+    // opened.
+    if(AT_CONNECTED&&(canEdit)&&!demoMode&&scopeId&&!currentScope?.isCompleteBucket&&!currentScope?.fastTrackedComplete){
       autoPopulateMilestones(p.n,scopeId).then(()=>{
         renderMilestones(p);
         // Refresh the top stat card — it rendered before milestones existed
@@ -11188,7 +11240,7 @@ function renderMilestones(p){
   // per-milestone tracker (not just the short-circuit "Project Completed"
   // card above), same fastTrackToggle HTML built once near the top of this
   // function. See that comment block for the full explanation.
-  msList.innerHTML=fastTrackToggle+msData.map((m,idx)=>{
+  msList.innerHTML=fastTrackToggle+completeBanner+msData.map((m,idx)=>{
     const circleColor=statusColors[m.status]||statusColors['Not Started'];
     const textColor=statusTextColor[m.status]||'var(--gray-mid)';
     const circleId=`ms-circle-${m.id||idx}`;
@@ -11339,14 +11391,23 @@ function renderMilestones(p){
           // Complete Today" manual-override toggle (m.manuallyCompleted)
           // intentionally never get Planned Date/Actual Date written (see
           // the v52f design comment near the top of this file) — so this
-          // Client-visible read-only line showed a bare status pill with no
-          // date text at all, which read as broken/missing data even though
-          // it was working as designed. Now shows "Project Team confirmed
-          // completion on MM/DD/YYYY" (using m.manuallyCompletedOn) for
-          // that case specifically, instead of falling through to the
-          // normal Planned/Actual line which has nothing to show here.
+          // read-only line showed a bare status pill with no date text at
+          // all, which read as broken/missing data even though it was
+          // working as designed.
+          // v63m — task #13 correction. The v63d fix above put its new
+          // string ("Project Team confirmed completion on MM/DD/YYYY") in
+          // the branch that renders for anyone without edit rights during
+          // override mode -- which is BOTH Consultant and Client together,
+          // not Client alone. Misty's direct instruction this round: only
+          // Client should see the softer "Project Team indicated..."
+          // phrasing; Consultant should keep seeing the same
+          // internal-style wording PM/Admin see (just without the edit
+          // toggle, since Consultant can't edit here). Split into three
+          // branches instead of two.
           m.manuallyCompleted&&m.manuallyCompletedOn?
-            'Project Team confirmed completion on '+new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}):
+            (role==='client'?
+              'Project Team indicated milestone complete on '+new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+'.':
+              'Marked complete today ('+new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+') by '+escHtml(m.manuallyCompletedBy||'')):
             `${m.plannedDate?'Planned: '+m.plannedDate:''}${m.actualDate?' · Actual: '+m.actualDate:''}`
         }</span></div>`}
       </div>
@@ -13111,6 +13172,14 @@ const PROPS_STAGE_COLORS={'Pre-Construction':'var(--gray-mid)','Construction':'v
 // color, so propsDotColor() returns an object and the border is no
 // longer a flat rgba(0,0,0,0.35) applied to every dot.
 const PROPS_DOT_COLORS={
+  // v63m -- task #36. Capital Plan added, matching the solid-purple swatch
+  // already used for Capital Plan in stageLegend (line ~10387) rather than
+  // inventing a new color -- same var(--purple) token, no border, mirroring
+  // that legend's existing no-border treatment for this stage. Filled in as
+  // a real hex value (not var()) since dots render via propsDotColor()'s
+  // {fill,border} object, not inline CSS custom-property resolution --
+  // confirmed directly against the :root declaration, --purple is #534AB7.
+  'Capital Plan':{fill:'#534AB7',border:'#534AB7'},
   'Pre-Construction':{fill:'#EFEDE5',border:'#6B6A63'},
   'Construction':{fill:'#1C7ED6',border:'rgba(0,0,0,0.35)'},
   'Project Closeout':{fill:'#F3B15A',border:'#7A4808'},
@@ -13678,10 +13747,31 @@ let propsSortField='name',propsSortDir='asc',propsStatusFilter='all',propsSearch
 // explicit request: always Pre-Construction, Construction, Project
 // Closeout, Complete, left to right, regardless of the order Scopes
 // happen to come back from Airtable.
-const PROPS_DOT_SORT_ORDER=['Pre-Construction','Construction','Project Closeout','Complete'];
+// v63m -- task #36. Capital Plan added to the front of this order, per
+// Misty's direction: Capital Plan scopes should be represented in a
+// property's dot summary for an accurate real project count (confirmed
+// live on Casa Marina Key West -- "2028 Project" is Capital Plan and was
+// invisible in this row's dots before this fix, showing only 2 of 3 real
+// scopes). Positioned first since it's the earliest lifecycle stage,
+// before Pre-Construction -- the other 4 stages' left-to-right order is
+// unchanged from v57b.
+const PROPS_DOT_SORT_ORDER=['Capital Plan','Pre-Construction','Construction','Project Closeout','Complete'];
 function getPropsRowData(p){
-  const scopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&s.status!=='Capital Plan');
-  const dots=scopes.map(s=>({stage:getMilestoneCategoryForScope(s),id:s.id}))
+  // v63m -- task #36. Previously filtered out every Capital Plan scope
+  // before building the dots array, so a property with a real Capital
+  // Plan-stage project undercounted its own scopes in this summary.
+  // IMPORTANT -- getMilestoneCategoryForScope() does NOT know about
+  // Capital Plan at all (confirmed by reading it directly: its own header
+  // comment says Capital Plan is "handled one level up," and its actual
+  // fallback return is 'Pre-Construction', not 'Capital Plan'). Passing a
+  // Capital Plan scope into it unchanged would have mis-rendered it as a
+  // Pre-Construction dot -- wrong color, wrong bucket. So the Capital Plan
+  // check has to happen HERE, before calling that function, exactly
+  // mirroring the same status-first pattern getMilestoneCategoryForScope
+  // itself already uses for Complete (scope.status==='Complete') one line
+  // into its own body.
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===p.n);
+  const dots=scopes.map(s=>({stage:s.status==='Capital Plan'?'Capital Plan':getMilestoneCategoryForScope(s),id:s.id}))
     .sort((a,b)=>PROPS_DOT_SORT_ORDER.indexOf(a.stage)-PROPS_DOT_SORT_ORDER.indexOf(b.stage));
   // v56b fix -- Total Units previously read p.units (Properties table's
   // own typed Unit Count field) first, falling back to Scope unit-type
@@ -19380,6 +19470,25 @@ function getMilestoneCategoryForProp(propName){
 // elsewhere in the app: M10 "Final Phase Complete" done -> at least
 // Project Closeout; M6 "First Phase Start" done -> at least Construction;
 // regardless of what earlier milestones in between are still open.
+// v63m -- task #12. Detects a scope that reached Status=Complete through
+// bulk-imported/backfilled Milestone data rather than through the
+// Fast Tracked Complete toggle or genuine date-by-date completion.
+// Confirmed live on Casa Marina's "Completed Project" scope: all 14
+// Milestone records show Status=Complete, created within the same
+// minute (a data-migration signature), with NO Planned/Actual/
+// Completion date on any of them and Manually Completed never set --
+// i.e. Complete with zero evidence trail, a third category distinct
+// from both fast-tracked (has Fast Tracked Complete On) and normally-
+// tracked (has real dates or Manually Completed On per milestone).
+// Auto-detected by data shape rather than requiring Misty to flip a
+// flag on every scope like this across the portfolio -- confirmed with
+// Misty this is the preferred approach over a manual data cleanup pass.
+function isBackfilledComplete(scope,msData){
+  if(!scope||scope.status!=='Complete')return false;
+  if(scope.fastTrackedComplete)return false; // that's the OTHER category, handled separately
+  if(!msData||msData.length<MILESTONES_DEF.length)return false;
+  return msData.every(m=>m.status==='Complete'&&!m.completionDate&&!m.actualDate&&!m.plannedDate&&!m.manuallyCompleted);
+}
 function getMilestoneCategoryForScope(scope){
   if(!scope)return'Pre-Construction';
   if(scope.status==='Complete')return'Complete';
