@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64e</div>
     </div>
   </nav>
 
@@ -15666,7 +15666,16 @@ function renderAllLineItemRows(){
   ['RelatedWork','Alternate','Allowance','Equipment','Clarification','Reference','AdditionalConsideration'].forEach(type=>{
     const container=document.getElementById(LINE_ITEM_ROW_CONFIG[type].container);
     if(container)container.innerHTML='';
-    let items=bidFormLineItems.filter(li=>li['Line Item Type']===type);
+    // v64e — task from live incident: saved records use the Airtable
+    // option string "Additional Consideration" (with a space — matching
+    // what Misty added to the Line Item Type select), while every other
+    // type's internal key matches its own Airtable value exactly. This
+    // filter compared against the no-space internal key, so a saved
+    // AdditionalConsideration item would never match here and silently
+    // vanish from the form on reload/edit. See the matching fix in
+    // collectLineItemsFromForm (the write side) for the full incident.
+    const airtableTypeValue=type==='AdditionalConsideration'?'Additional Consideration':type;
+    let items=bidFormLineItems.filter(li=>li['Line Item Type']===airtableTypeValue);
     // v64c — AdditionalConsideration stores Label/Value under the real
     // Description/Component columns (see LINE_ITEM_ROW_CONFIG comment).
     // Remap back to Label/Value here so editing an existing entry
@@ -15706,6 +15715,19 @@ function collectLineItemsFromForm(){
         if(item['Value']!=null)item['Component']=item['Value'];
         delete item['Label'];
         delete item['Value'];
+        // v64e — task from live incident: Airtable's Line Item Type select
+        // rejected the internal key "AdditionalConsideration" (422
+        // INVALID_MULTIPLE_CHOICE_OPTIONS — the API token can't create new
+        // select options, and no option by that exact string existed).
+        // Misty added the option in Airtable herself as "Additional
+        // Consideration" (with a space) — matching that exact string here,
+        // at the point of writing to Airtable only. The no-space form stays
+        // the internal type key everywhere else (container IDs, the
+        // LINE_ITEM_ROW_CONFIG lookup, the type-loop arrays) since changing
+        // that would be a much wider, unnecessary edit — this is the one
+        // place the value actually leaves the app and has to match
+        // Airtable's real option string exactly.
+        item['Line Item Type']='Additional Consideration';
       }
       items.push(item);
     });
