@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64m</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64n</div>
     </div>
   </nav>
 
@@ -13442,14 +13442,21 @@ function renderActionBoard(){
   // which stage a Scope is in. 4 real tabs now (was 3: Construction/Pre-
   // construction/Complete): Pre-Construction/Construction/Project
   // Closeout/Complete.
-  const abActiveScopes=(window.SCOPES||[]).filter(s=>(s.status==='Pre-Construction'||s.status==='Construction'||s.status==='Project Closeout')&&!removedNames.has(s.property));
-  const abScopeData=abActiveScopes.map(s=>{
+  // v64n -- task #26. Root-caused live against Analytics: this used to
+  // filter Scopes by their raw status field BEFORE computing category,
+  // which silently dropped any Scope whose raw status didn't literally
+  // match (e.g. a real Scope at Hilton Hawaiian Village Waikiki Beach
+  // Resort with raw status "On Hold" whose milestones show it's genuinely
+  // in Pre-Construction -- Analytics' msCatCounts counted it there,
+  // Heat Map excluded it entirely). Now classifies every non-Capital-Plan,
+  // non-Removed Scope purely by getMilestoneCategoryForScope() -- the
+  // exact same computed-from-milestones method Analytics uses -- with NO
+  // raw-status pre-filter, so the two screens can never structurally
+  // disagree on which stage a Scope is in again.
+  const abAllScopes=(window.SCOPES||[]).filter(s=>s.status!=='Capital Plan'&&!removedNames.has(s.property));
+  const abScopeData=abAllScopes.map(s=>{
     const ms=(window.MILESTONES||[]).filter(m=>m.property===s.property&&m.scopeId===s.id);
     const complete=ms.filter(m=>m.status==='Complete').length;
-    // v61b-status — category now comes from getMilestoneCategoryForScope
-    // (Pre-Construction/Construction/Project Closeout), not the old
-    // inline M5-only 2-bucket check. Lowercased+hyphen-stripped to match
-    // the existing abGroupTiles(category) call convention below.
     const category=getMilestoneCategoryForScope(s).toLowerCase().replace(/\s+/g,'');
     const risk=typeof calcScopeScheduleRisk==='function'?calcScopeScheduleRisk(s.property,s.id):{atRiskCount:0,daysLate:0};
     const isRisk=risk.atRiskCount>0||risk.daysLate>0;
@@ -13502,16 +13509,16 @@ function renderActionBoard(){
   // regardless of what the property's other Scopes are doing, same
   // reasoning already applied to Pre-Construction/Construction/Project
   // Closeout tiles never requiring property.status to match either.
-  const abCompleteScopeData=(window.SCOPES||[]).filter(s=>s.status==='Complete'&&!removedNames.has(s.property)).map(s=>({property:s.property,complete:1,expected:1,category:'complete',daysLate:0,isRisk:false}));
-  function abGroupCompleteTiles(){
-    const byProp={};
-    abCompleteScopeData.forEach(d=>{
-      if(!byProp[d.property])byProp[d.property]={property:d.property,scopeCount:0};
-      byProp[d.property].scopeCount+=1;
-    });
-    return Object.values(byProp).map(t=>({...t,pct:100,isRisk:false,daysLate:0}));
-  }
-  const completeTiles=abGroupCompleteTiles();
+  // v64n -- task #26. Folded into the unified abScopeData source above
+  // (was a separate raw-status-based abCompleteScopeData query, which
+  // disagreed with Analytics for the same reason the other 3 tabs did --
+  // confirmed live: raw status found 5 "Complete" Scopes, but Analytics'
+  // milestone-computed count is 3, meaning 2 Scopes have a raw Complete
+  // status that their own milestone data doesn't actually support yet.
+  // Now uses the exact same abGroupTiles() call as the other 3 tabs,
+  // sourced from abScopeData's computed category, so all 4 tabs share
+  // one single classification method with Analytics.
+  const completeTiles=abGroupTiles('complete');
   // v57f -- per Misty's explicit direction: In-Progress-only meant a
   // milestone finishing was invisible here -- the exact case that
   // surfaced this, Casa Marina Key West's real M10 (Final Phase Complete)
@@ -13821,12 +13828,16 @@ function renderActionBoard(){
       groupScopesToTiles() tile exactly (per the open item: "heat map
       tiles need a project counter, as designed in dashboard"). -->
       <!-- v61b-status — 4th tab wired into tile selection, task #11. -->
-      <!-- v64m -- completeTiles now built from abGroupCompleteTiles(), which
-      groups real Scope-level Complete data by property and accumulates a
-      genuine scopeCount per tile (task #24, matching Analytics' per-project
-      counting). Complete tiles now carry a real scopeCount just like
-      construction/precon/closeout tiles, so tileCounter below renders for
-      them the same way it does for the other three tabs. -->
+      <!-- v64m -- completeTiles rebuilt from real Scope-level Complete data
+      grouped by property with a genuine accumulated scopeCount (task #24,
+      matching Analytics' per-project counting). Complete tiles now carry a
+      real scopeCount just like construction/precon/closeout tiles, so
+      tileCounter below renders for them the same way it does for the
+      other three tabs.
+      v64n -- task #26. completeTiles' source folded into the shared
+      abGroupTiles('complete') call (all 4 tabs now read from one unified,
+      milestone-computed abScopeData array), so this tab's classification
+      matches Analytics exactly, not just its counting granularity. -->
       <div style="display:flex;flex-wrap:wrap;gap:8px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:abHeatTab==='closeout'?closeoutTiles:completeTiles).map(t=>{
         const isComplete=abHeatTab==='complete';
         const borderColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
