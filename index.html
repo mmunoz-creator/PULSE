@@ -4667,7 +4667,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63p</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63r</div>
     </div>
   </nav>
 
@@ -15941,7 +15941,21 @@ let _savingCO=false;
 async function saveCO(){
   if(_savingCO)return;
   const desc=document.getElementById('co-desc').value.trim();
-  const orig=parseFloat(document.getElementById('co-original').value)||0;
+  // v63q — task from live incident: New York Hilton Midtown's "OT Cab
+  // Weighing" CO was entered as 8,289 and saved as 8. Root cause: this was
+  // raw parseFloat() on the input's string value. parseFloat stops at the
+  // first non-numeric character, so a thousands-separator comma silently
+  // truncates everything after it — "8,289" -> 8, "1,234,567" -> 1. The
+  // live preview just above this function (updateCOSavingsPreview) already
+  // used getCurrencyValue() (strips everything but digits/decimal point
+  // before parsing) and was showing the correct amount the whole time —
+  // only the actual save path still had the old parseFloat call, so what
+  // got written to Airtable silently diverged from what the PM saw on
+  // screen. Switched to the same getCurrencyValue() helper already proven
+  // elsewhere in this file (Bid Submissions, Billing, Retainage, Material
+  // Cost/O&P Claimed just below) so every money field in this form now
+  // parses identically.
+  const orig=getCurrencyValue('co-original');
   // v54d — neg used to fall straight to ||0 with no distinction between
   // "left blank" and "entered 0", same as orig below now guards against.
   // Since savings=orig-neg, a blank Negotiated Amount silently reported
@@ -15951,7 +15965,7 @@ async function saveCO(){
   // added cost), so this only blocks a genuinely empty field, checked
   // against the raw input string before parsing, not the parsed number.
   const negRaw=document.getElementById('co-negotiated').value;
-  const neg=parseFloat(negRaw)||0;
+  const neg=getCurrencyValue('co-negotiated');
   // v62l — task #52: Fast Track. When checked, this CO was already
   // approved outside PULSE, so save writes Status straight to 'Approved'
   // regardless of whatever the Status dropdown was left on — bypassing
@@ -19045,6 +19059,57 @@ async function updatePhaseStatus(id,newStatus,propName){
       renderPropertyView(currentProp);
       showToast('Could not update phase status. Please try again.','error');
       return;
+    }
+  }
+  // v63r — task from live incident (New York Hilton Midtown, Phase 1: 4
+  // real units — PE1, PE4, PE7, PE10 — stayed "Active" even after their
+  // Phase reached Complete with 11/11 tasks done). Root cause: this
+  // function has always written the Phase's OWN Status to Airtable and
+  // rolled the Property up via deriveAndWritePropertyStatus(), but never
+  // touched the individual units linked to the phase — there was no
+  // Phase-to-unit cascade at all, distinct from (and in addition to) the
+  // Scope-to-unit cascade fixed earlier tonight (worker_v44i,
+  // computeDerivedUnitStatus). Confirmed with Misty: a Phase reaching
+  // Complete means its linked units really are done, so they should flip
+  // too. Same manual-override protection as every other unit-status write
+  // in this file — a unit already manually set to Complete or Dormant is
+  // never touched.
+  if(newStatus==='Complete'){
+    const phaseUnits=(window.UNIT_INVENTORY||[]).filter(u=>(phase.linkedUnitIds||[]).includes(u.id));
+    for(const u of phaseUnits){
+      if(u.status==='Complete'||u.status==='Dormant')continue;
+      const prevUnitStatus=u.status;
+      u.status='Complete';
+      if(!demoMode){
+        const unitRes=await atUpdate('Unit Inventory List',u.id,{'Status':'Complete'});
+        if(!unitRes){
+          u.status=prevUnitStatus;
+          console.error(`Phase-complete cascade FAILED to save Complete for unit ${u.name} (${u.id}) — reverted locally to ${prevUnitStatus}`);
+        }
+      }
+    }
+  }else if(priorVals.status==='Complete'&&newStatus!=='Complete'){
+    // v63r — reverse direction, confirmed with Misty: un-completing a Phase
+    // (moving it OFF Complete) should un-complete its units too, same
+    // standing rule already applied to un-completing a Scope earlier
+    // tonight. Re-derives each unit the normal way (computeDerivedUnitStatus,
+    // which looks at the unit's SCOPE — not this Phase — since Scope is
+    // still the real source of truth for Active/Planned). Manual overrides
+    // (Complete set directly on the unit, or Dormant) are still protected.
+    const phaseUnits=(window.UNIT_INVENTORY||[]).filter(u=>(phase.linkedUnitIds||[]).includes(u.id));
+    for(const u of phaseUnits){
+      if(u.status==='Dormant')continue;
+      const prevUnitStatus=u.status;
+      const derived=computeDerivedUnitStatus(u);
+      if(derived===u.status)continue;
+      u.status=derived;
+      if(!demoMode){
+        const unitRes=await atUpdate('Unit Inventory List',u.id,{'Status':derived});
+        if(!unitRes){
+          u.status=prevUnitStatus;
+          console.error(`Phase-uncomplete cascade FAILED to save ${derived} for unit ${u.name} (${u.id}) — reverted locally to ${prevUnitStatus}`);
+        }
+      }
     }
   }
   await deriveAndWritePropertyStatus(propName);
