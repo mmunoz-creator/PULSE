@@ -4660,7 +4660,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63h</div>
     </div>
   </nav>
 
@@ -5748,7 +5748,20 @@ from unitEffectiveValue() onto each checkbox). -->
           <div id="cf-chips" style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:5px;flex-wrap:wrap;min-height:40px"></div>
         </div>
         <div id="cf-panel-backdrop" onclick="cfTogglePanel()" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;z-index:499;background:rgba(0,0,0,.15)"></div>
-      </div>
+      <!-- v63h -- task #16 fix. The closing tag that used to end .main-inner
+      right here was moved down to after view-glossary's close instead.
+      Root cause: .main-inner is the only direct child of .main with
+      flex-grow:1 (every view div is flex-grow:0), so .main-inner always
+      claims a full flex-share of .main's height regardless of its own
+      content. Every view below this comment (Calendar, Comments,
+      Documents, AI Assistant, Submit, My Updates, PM Updates, Project
+      Updates, Schedule, Operations Center, Glossary) used to be a direct
+      child of .main OUTSIDE .main-inner, so each one got visually pushed
+      down by .main-inner's reserved space -- confirmed live via Chrome
+      DevTools this looked like "pinned to bottom of pane." Moving these
+      views to be children of .main-inner (alongside view-dashboard,
+      view-charts, etc., which already lived there and never had this
+      problem) fixes it structurally, no CSS/JS changes needed. -->
 
       <!-- CALENDAR -->
       <div id="view-calendar" class="hidden">
@@ -6152,6 +6165,9 @@ from unitEffectiveValue() onto each checkbox). -->
             </div>
           </div>
         </div>
+      </div>
+      <!-- v63h -- task #16 fix. .main-inner now closes here instead of
+      before the Calendar view (see comment further up). -->
       </div>
 
     </div>
@@ -10992,7 +11008,25 @@ function renderMilestones(p){
   // below, which is what caused the Status field to get overwritten in the
   // first place. Per Misty: correction path (openScopeEditModal / Manage
   // Scopes) remains available regardless — this only changes what renders.
-  if(currentScope&&(currentScope.status==='Complete'||currentScope.isCompleteBucket)){
+  // v63h — task #31 fix. This gate used to check ONLY status==='Complete'/
+  // isCompleteBucket, so once a Scope's Status read Complete, this
+  // short-circuit rendered forever — even after the "Mark scope complete"
+  // toggle (task #30) was switched OFF and successfully seeded 14 real
+  // Not Started Milestone records underneath (autoPopulateMilestones, plus
+  // deriveAndWriteScopeStatus — which has no downward path off Complete
+  // once real Not-Started milestones exist, so Status itself stays stuck
+  // at Complete). Confirmed live on The Reach Key West: fastTrackedComplete
+  // read false, 14 real Not Started milestones existed, yet this card kept
+  // showing "Project Completed" with no way to reach the real tracker.
+  // Fixed: only show this short-circuit when the scope is genuinely meant
+  // to stay collapsed — fastTrackedComplete is explicitly true, OR there
+  // are no real Milestone records at all yet (msData.length===0, the
+  // original "nothing to track" case this block was built for). If
+  // fastTrackedComplete is false AND real milestones now exist, fall
+  // through to the normal per-milestone tracker below regardless of what
+  // the Status field still says.
+  const msShortCircuitOk=currentScope&&(currentScope.fastTrackedComplete||msData.length===0);
+  if(currentScope&&(currentScope.status==='Complete'||currentScope.isCompleteBucket)&&msShortCircuitOk){
     document.getElementById('ms-progress-badge').textContent='Completed';
     // v63e — task #60. "Mark scope complete" toggle, nested under Manual
     // Override, PM/Admin only. Lets a Complete scope be fast-tracked (this
@@ -19283,6 +19317,21 @@ function getMilestoneCategoryForProp(propName){
 // level up, since neither is a milestone-count derived state (Capital
 // Plan = not yet graduated, On Hold = manual override that suspends
 // derivation entirely).
+// v63h -- task #19 fix. Previously gated the middle-stage category on a
+// flat COUNT of Complete milestones (complete>=10 -> Project Closeout,
+// complete>=6 -> Construction), which doesn't weight which specific
+// milestones are done. Real-world milestones don't always land in strict
+// numeric order -- confirmed live: New York Hilton Midtown's "36 Units"
+// scope had M1-4 and M6 "First Phase Start" Complete (5 total, M5
+// "Submittal Drawing Review" still Not Started) with M7 actively In
+// Progress and real Unit Group phase actualStart dates proving
+// construction had genuinely begun, yet the flat count of 5 fell one
+// short of the old complete>=6 gate and stayed stuck at Pre-Construction.
+// Fixed to check the specific boundary milestone directly, matching how
+// MILESTONES_DEF's own M6-M9/M10-M13 stage grouping is already used
+// elsewhere in the app: M10 "Final Phase Complete" done -> at least
+// Project Closeout; M6 "First Phase Start" done -> at least Construction;
+// regardless of what earlier milestones in between are still open.
 function getMilestoneCategoryForScope(scope){
   if(!scope)return'Pre-Construction';
   if(scope.status==='Complete')return'Complete';
@@ -19290,8 +19339,10 @@ function getMilestoneCategoryForScope(scope){
   const complete=ms.filter(m=>m.status==='Complete').length;
   const expectedTotal=MILESTONES_DEF.length;
   if(complete>=expectedTotal)return'Complete';
-  if(complete>=10)return'Project Closeout';
-  if(complete>=6)return'Construction';
+  const m10=ms.find(m=>m.milestoneNumber===10);
+  const m6=ms.find(m=>m.milestoneNumber===6);
+  if(m10&&m10.status==='Complete')return'Project Closeout';
+  if(m6&&m6.status==='Complete')return'Construction';
   return'Pre-Construction';
 }
 
