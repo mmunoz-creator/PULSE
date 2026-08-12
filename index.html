@@ -2149,6 +2149,21 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   Heat Map/Attention Required/Action Horizon, Analytics's Budget % Spent/
   Forecasted Completion/Forecasted Spend) independent of one another. */
   body.custom-report-print-mode .custom-report-subsection.custom-report-subsection-hidden{display:none!important}
+  /* v65f -- task #46. dash-heat-not-active hides the 3 heat map tabs
+  that aren't currently selected on screen (normal, non-print browsing --
+  see renderActionBoard()'s new per-tab tile blocks). During a Custom
+  Report print, any of those 3 may have been explicitly checked even
+  though they're not the on-screen active tab, so this print-mode rule
+  forces them visible again (higher specificity + !important beats the
+  class-based hide) UNLESS custom-report-subsection-hidden is also
+  present (the person unchecked that specific tab in the builder) -- the
+  :not() keeps that unchecked case winning over this reveal rule. */
+  body.custom-report-print-mode .custom-report-subsection.dash-heat-not-active:not(.custom-report-subsection-hidden){display:block!important}
+  /* v65f -- custom-report-only-label: each heat map tab's own "X Heat
+  Map" caption, needed only when multiple tabs print together (so each
+  stacked block is identifiable) -- hidden in normal app use since the
+  card's own real title above already names the active tab there. */
+  body.custom-report-print-mode .custom-report-only-label{display:block!important;margin-top:12px}
   /* #view-report{display:block!important} above is unconditional so the
   Milestone Report and on-demand report reader (both live inside
   view-report) always print correctly on their own. That same rule was
@@ -2166,7 +2181,15 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
   body.custom-report-print-mode #report-reader-view{display:none!important}
   body{background:white;overflow:visible!important}
   html{overflow:visible!important}
-  @page{margin:16mm 12mm;size:A4 portrait}
+  /* v65e -- task #45. Switched from A4 portrait to A4 landscape per
+  direct instruction, applying app-wide since this is the one shared
+  @page rule every print button in the app uses (Dashboard, Analytics,
+  Budget Outlook, Capital Plan, Schedule, Custom Report) -- confirmed
+  there is no separate per-view @page rule anywhere else to also update.
+  Bid Leveling's own print flow (function ~line 15140) is unaffected --
+  it opens a fully separate window.open()'d document with its own
+  hardcoded @page{size:landscape} already, not this shared block. -->
+  @page{margin:16mm 12mm;size:A4 landscape}
   .report-page{max-width:100%;box-shadow:none}
   .report-header{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .stat-card,.card{-webkit-print-color-adjust:exact;print-color-adjust:exact;break-inside:avoid;page-break-inside:avoid}
@@ -2266,6 +2289,16 @@ select.styled:focus,input.styled:focus{border-color:var(--blue-mid);box-shadow:0
 .gantt-bar:hover{opacity:.85}
 .gantt-today-line{position:absolute;top:0;bottom:0;width:2px;background:var(--red);opacity:.7;z-index:5;pointer-events:none}
 .gantt-grid-line{position:absolute;top:0;bottom:0;width:1px;background:var(--border);z-index:1;pointer-events:none}
+/* v65f -- task #46. Normal (non-print) app view: hide the 3 heat map
+tabs that aren't the currently active one. Action Board's real on-screen
+behavior is unchanged from before this fix (still one tab visible at a
+time via the tab-pill buttons) -- this class only exists so all 4 tabs'
+tile blocks can live in the DOM simultaneously for the Custom Report
+Builder to pick from independently at print time. See the print-mode
+override rule in the @media print block above for the print-time reveal
+logic. */
+.dash-heat-not-active{display:none}
+.custom-report-only-label{display:none}
 </style>
 <!-- v41a — SheetJS, first external script dependency in this file. Needed
 for real .xlsx output (multiple tabs, formulas, currency number formats,
@@ -4704,7 +4737,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65f</div>
     </div>
   </nav>
 
@@ -13758,12 +13791,19 @@ function renderActionBoard(){
     11px (was 10.5px). The wrapping problem from the original report is
     solved with white-space:nowrap on the label/caption lines, not by
     shrinking type below spec. -->
+    <!-- v65f -- task #46 fix. Each stat card wrapped in its own
+    custom-report-subsection id (dashboard-stat-active/-pipeline/
+    -openactions/-pendingreview/-investment) so the Custom Report Builder
+    can offer these 5 as independently checkable sub-items, matching
+    Analytics' own per-card granularity, per direct instruction. Grid
+    layout/styling on the cards themselves is unchanged -- only a thin
+    wrapper div added around each. -->
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:12px">
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-building','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Active properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${cls.activeProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Status = In Progress</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-git-branch','var(--teal-pale)','var(--teal)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Pipeline properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${cls.pipelineProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Status = Capital Plan</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-alert-triangle','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Open action items</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${openActions.length}</p>${overdueActions.length>0?`<p style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px;white-space:nowrap">${overdueActions.length} overdue</p>`:'<p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">None overdue</p>'}</div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-inbox','var(--purple-pale)','var(--purple)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Pending review</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${pendingReviewCount}</p><p style="font-size:11px;color:${pendingReviewCount===0?'var(--green)':'var(--gray-mid)'};font-weight:${pendingReviewCount===0?600:400};margin-top:2px;white-space:nowrap">${pendingReviewCount===0?'Nothing waiting on approval':'Awaiting review'}</p></div></div>
-      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-currency-dollar','var(--green-pale)','var(--green)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Total estimated investment</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${totalEstDisplay}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Summed across ${(window.UNIT_INVENTORY||[]).length} units</p></div></div>
+      <div class="custom-report-subsection" id="dashboard-stat-active"><div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-building','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Active properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${cls.activeProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Status = In Progress</p></div></div></div>
+      <div class="custom-report-subsection" id="dashboard-stat-pipeline"><div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-git-branch','var(--teal-pale)','var(--teal)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Pipeline properties</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${cls.pipelineProps.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Status = Capital Plan</p></div></div></div>
+      <div class="custom-report-subsection" id="dashboard-stat-openactions"><div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-alert-triangle','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Open action items</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${openActions.length}</p>${overdueActions.length>0?`<p style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px;white-space:nowrap">${overdueActions.length} overdue</p>`:'<p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">None overdue</p>'}</div></div></div>
+      <div class="custom-report-subsection" id="dashboard-stat-pendingreview"><div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-inbox','var(--purple-pale)','var(--purple)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Pending review</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${pendingReviewCount}</p><p style="font-size:11px;color:${pendingReviewCount===0?'var(--green)':'var(--gray-mid)'};font-weight:${pendingReviewCount===0?600:400};margin-top:2px;white-space:nowrap">${pendingReviewCount===0?'Nothing waiting on approval':'Awaiting review'}</p></div></div></div>
+      <div class="custom-report-subsection" id="dashboard-stat-investment"><div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-currency-dollar','var(--green-pale)','var(--green)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Total estimated investment</p><p style="font-size:22px;font-weight:700;color:var(--navy);line-height:1.15;margin:0">${totalEstDisplay}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px;white-space:nowrap">Summed across ${(window.UNIT_INVENTORY||[]).length} units</p></div></div></div>
     </div>
     <div style="display:flex;align-items:center;background:var(--blue-xpale,#f0f7fe);border:1px solid var(--blue-pale);border-radius:12px;padding:12px 16px;margin-bottom:20px;gap:20px">
       ${insightItems.map((it,i)=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--gray-dark);flex:1;${i<insightItems.length-1?'padding-right:16px;border-right:1px solid var(--blue-pale)':''}"><i class="ti ${it.icon}" style="font-size:15px;flex-shrink:0;margin-top:1px;color:${it.cls==='warn'?'var(--amber)':it.cls==='info'?'var(--blue-dark)':'var(--green)'}"></i>${it.text}</div>`).join('')}
@@ -13924,29 +13964,60 @@ function renderActionBoard(){
       abGroupTiles('complete') call (all 4 tabs now read from one unified,
       milestone-computed abScopeData array), so this tab's classification
       matches Analytics exactly, not just its counting granularity. -->
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:abHeatTab==='closeout'?closeoutTiles:completeTiles).map(t=>{
-        const isComplete=abHeatTab==='complete';
-        const borderColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
-        const bgColor=isComplete?'var(--green-pale)':t.isRisk?'var(--red-pale)':'#eff6ff';
-        const lblColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
-        const lbl=isComplete?'<i class="ti ti-circle-check" style="font-size:11px;margin-right:2px"></i>COMPLETE':t.isRisk?'AT RISK':'ON TRACK';
-        const pct=isComplete?100:t.pct;
-        const overdueText=!isComplete&&t.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${t.daysLate}d overdue</div>`:'';
-        const tileCounter=t.scopeCount>1?`<span style="color:var(--gray-mid);font-weight:500"> (${t.scopeCount})</span>`:'';
-        return `<div style="border:1.5px solid ${borderColor};border-radius:8px;padding:10px 12px;background:${bgColor};cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${escHtml(t.property).replace(/'/g,"\\'")}')">
-          <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(t.property)}${tileCounter}</div>
-          <div style="margin-top:auto">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:10px;font-weight:700;color:${lblColor};letter-spacing:.04em">${lbl}</span>
-            <span style="font-size:10px;color:var(--gray-mid)">${pct}%</span>
-          </div>
-          <div style="margin-top:6px;height:4px;background:var(--gray-xpale);border-radius:2px">
-            <div style="height:100%;width:${pct}%;background:${lblColor};border-radius:2px;transition:width .4s"></div>
-          </div>
-          ${overdueText}
-          </div>
-        </div>`;
-      }).join('')||`<p style="color:var(--gray-mid);font-size:12px">No properties in ${abHeatTab==='construction'?'construction':abHeatTab==='precon'?'pre-construction':abHeatTab==='closeout'?'project closeout':'complete'} status.</p>`}</div>
+      <!-- v65f -- task #46 fix. The tile-rendering logic below is now a
+      shared local function (renderHeatTiles) instead of one inline block
+      tied to whichever tab is active, because all 4 tabs' tile arrays
+      (constructionTiles/preconTiles/closeoutTiles/completeTiles) are
+      already computed on every render regardless of abHeatTab -- only
+      the DISPLAYED html previously picked one. This lets the Custom
+      Report Builder offer all 4 heat map tabs as independently checkable
+      sub-items with zero new render-loop/state-mutation logic: each
+      tab's tiles are rendered into their own custom-report-subsection
+      wrapper every time, and CSS (not JS) decides which one is visible
+      on screen (dash-heat-active-panel, normal view) vs which ones print
+      (custom-report-subsection-hidden toggling in print mode). No
+      abHeatTab mutation needed at print time. -->
+      ${(()=>{
+        const renderHeatTiles=(tiles,tab)=>{
+          const isComplete=tab==='complete';
+          return `<div style="display:flex;flex-wrap:wrap;gap:8px">${tiles.map(t=>{
+            const borderColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
+            const bgColor=isComplete?'var(--green-pale)':t.isRisk?'var(--red-pale)':'#eff6ff';
+            const lblColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
+            const lbl=isComplete?'<i class="ti ti-circle-check" style="font-size:11px;margin-right:2px"></i>COMPLETE':t.isRisk?'AT RISK':'ON TRACK';
+            const pct=isComplete?100:t.pct;
+            const overdueText=!isComplete&&t.daysLate>0?`<div style="font-size:10px;color:var(--red);margin-top:4px">${t.daysLate}d overdue</div>`:'';
+            const tileCounter=t.scopeCount>1?`<span style="color:var(--gray-mid);font-weight:500"> (${t.scopeCount})</span>`:'';
+            return `<div style="border:1.5px solid ${borderColor};border-radius:8px;padding:10px 12px;background:${bgColor};cursor:pointer;width:200px;flex:0 0 200px;display:flex;flex-direction:column" onclick="openProperty('${escHtml(t.property).replace(/'/g,"\\'")}')">
+              <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px;line-height:1.3">${escHtml(t.property)}${tileCounter}</div>
+              <div style="margin-top:auto">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:10px;font-weight:700;color:${lblColor};letter-spacing:.04em">${lbl}</span>
+                <span style="font-size:10px;color:var(--gray-mid)">${pct}%</span>
+              </div>
+              <div style="margin-top:6px;height:4px;background:var(--gray-xpale);border-radius:2px">
+                <div style="height:100%;width:${pct}%;background:${lblColor};border-radius:2px;transition:width .4s"></div>
+              </div>
+              ${overdueText}
+              </div>
+            </div>`;
+          }).join('')||`<p style="color:var(--gray-mid);font-size:12px">No properties in ${tab==='construction'?'construction':tab==='precon'?'pre-construction':tab==='closeout'?'project closeout':'complete'} status.</p>`}</div>`;
+        };
+        const heatLabels={precon:'Pre-Construction',construction:'Construction',closeout:'Project Closeout',complete:'Complete'};
+        const heatData={precon:preconTiles,construction:constructionTiles,closeout:closeoutTiles,complete:completeTiles};
+        return Object.keys(heatData).map(tab=>{
+          // dash-heat-active-panel: shown only when this is the tab
+          // currently selected on screen (normal, non-print behavior
+          // unchanged from before). custom-report-subsection: lets the
+          // report builder independently show/hide each tab's block
+          // regardless of which one is active on screen.
+          const isActive=abHeatTab===tab;
+          return `<div class="custom-report-subsection${isActive?'':' dash-heat-not-active'}" id="dashboard-heatmap-${tab}">
+            <div class="custom-report-only-label" style="display:none;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:8px">${heatLabels[tab]} Heat Map</div>
+            ${renderHeatTiles(heatData[tab],tab)}
+          </div>`;
+        }).join('');
+      })()}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
       <div class="card" style="border-radius:12px">
@@ -34180,14 +34251,34 @@ const CUSTOM_REPORT_STORAGE_KEY='pulse_custom_report_selections';
 // Each top-level section may have sub-items (individual charts). A
 // section with no subItems prints as one block with no further breakdown.
 const CUSTOM_REPORT_SECTIONS=[
+  // v65f -- task #46 fix. Dashboard's entry was pointing at the retired
+  // archived dashboard (renderDashboard()/dashboard-body inside
+  // view-dashboard-archived) -- a view nobody navigates to since Action
+  // Board became the real Dashboard (v58s). All 6 old sub-items
+  // (Stat cards, Construction/Pre-construction heat map, Attention
+  // required, Action horizon, Activity feed) pointed at elements that
+  // only exist in that retired view, so none of them affected what
+  // actually printed. Rebuilt against Action Board's real content, per
+  // direct instruction to offer the same per-card granularity Analytics
+  // already has: 5 individual stat cards (was one bundled block) plus
+  // all 4 heat map tabs as independently checkable sub-items (was one
+  // block tied to a single hardcoded "Construction" framing that didn't
+  // even reflect the real 4-tab UI). See renderActionBoard() for the new
+  // dashboard-stat-*/dashboard-heatmap-* element ids and the
+  // dash-heat-not-active/custom-report-only-label CSS that lets all 4
+  // heat map tabs render into the DOM simultaneously without any
+  // print-time state mutation.
   {id:'dashboard',label:'Dashboard',icon:'ti-layout-dashboard',viewId:'dashboard',
     subItems:[
-      {id:'dashboard-stats',label:'Stat cards',elId:'dashboard-stats-row'},
-      {id:'dashboard-heatmap',label:'Construction heat map',elId:'dashboard-heatmap-card'},
-      {id:'dashboard-precon-heatmap',label:'Pre-construction heat map',elId:'dashboard-precon-heatmap-card'},
-      {id:'dashboard-attention',label:'Attention required',elId:'dash-attention-section'},
-      {id:'dashboard-horizon',label:'Action horizon',elId:'dash-action-horizon'},
-      {id:'dashboard-activity',label:'Activity feed',elId:'dash-activity-feed'}
+      {id:'dashboard-stat-active',label:'Active properties',elId:'dashboard-stat-active'},
+      {id:'dashboard-stat-pipeline',label:'Pipeline properties',elId:'dashboard-stat-pipeline'},
+      {id:'dashboard-stat-openactions',label:'Open action items',elId:'dashboard-stat-openactions'},
+      {id:'dashboard-stat-pendingreview',label:'Pending review',elId:'dashboard-stat-pendingreview'},
+      {id:'dashboard-stat-investment',label:'Total estimated investment',elId:'dashboard-stat-investment'},
+      {id:'dashboard-heatmap-precon',label:'Heat map — Pre-Construction',elId:'dashboard-heatmap-precon'},
+      {id:'dashboard-heatmap-construction',label:'Heat map — Construction',elId:'dashboard-heatmap-construction'},
+      {id:'dashboard-heatmap-closeout',label:'Heat map — Project Closeout',elId:'dashboard-heatmap-closeout'},
+      {id:'dashboard-heatmap-complete',label:'Heat map — Complete',elId:'dashboard-heatmap-complete'}
     ]},
   {id:'analytics',label:'Analytics',icon:'ti-chart-dots',viewId:'charts',
     subItems:[
@@ -34199,7 +34290,12 @@ const CUSTOM_REPORT_SECTIONS=[
       {id:'analytics-projects-by-stage',label:'Active projects by stage',elId:'analytics-projects-by-stage-card'},
       {id:'analytics-elevator-co',label:'Elevator company performance',elId:'analytics-elevator-co-card'},
       {id:'analytics-task-rollup',label:'Open task roll-up',elId:'analytics-task-rollup-card'},
-      {id:'analytics-top5-units',label:'Top 5 properties by unit count',elId:'analytics-top5-units-card'},
+      // v65f -- task #47 fix. 'Top 5 properties by unit count' removed --
+      // that card was deliberately removed from the live Analytics page
+      // a while back (Misty: "we don't need Top 5 Properties because we
+      // have Core"), but this checkbox was never cleaned up. It pointed
+      // at analytics-top5-units-card, an element that no longer exists
+      // anywhere in the page -- checking it did nothing.
       {id:'analytics-budget-vs-billed',label:'Budget vs billed',elId:'analytics-budget-vs-billed-card'}
     ]},
   {id:'budgetoutlook',label:'Budget outlook',icon:'ti-report-money',viewId:'budgetoutlook',hasBoFilter:true},
@@ -34224,8 +34320,19 @@ function crSaveSelections(sel){
 function crDefaultSelections(){
   return {
     sections:{dashboard:true,analytics:true,budgetoutlook:true,milestonereport:false},
+    // v65f -- task #46 fix. Old keys (dashboard-stats, dashboard-heatmap,
+    // dashboard-precon-heatmap, dashboard-attention, dashboard-horizon,
+    // dashboard-activity) no longer exist in CUSTOM_REPORT_SECTIONS,
+    // replaced by the 9 real Action Board sub-items below. Kept the same
+    // original intent as closely as possible: all 5 stat cards default
+    // OFF (matching the old single 'Stat cards: false'), Pre-Construction
+    // and Construction heat map tabs default ON (matching the old
+    // two-cards-always-shown behavior), Closeout/Complete default OFF
+    // (those two tabs didn't exist as separate always-visible cards
+    // before this fix, so there's no prior default to preserve).
     subItems:{
-      'dashboard-stats':false,'dashboard-heatmap':true,'dashboard-precon-heatmap':true,'dashboard-attention':false,'dashboard-horizon':false,'dashboard-activity':false,
+      'dashboard-stat-active':false,'dashboard-stat-pipeline':false,'dashboard-stat-openactions':false,'dashboard-stat-pendingreview':false,'dashboard-stat-investment':false,
+      'dashboard-heatmap-precon':true,'dashboard-heatmap-construction':true,'dashboard-heatmap-closeout':false,'dashboard-heatmap-complete':false,
       'analytics-stats':false,
       'analytics-portfolio-complete':false,'analytics-budget-spent':false,
       'analytics-forecasted-completion':true,'analytics-forecasted-spend':true
@@ -34469,7 +34576,15 @@ async function crPrintCustomReport(){
   // need their render function called at least once, since some (Budget
   // Outlook, Milestone Report) only populate their DOM when opened.
   for(const sec of selectedSections){
-    if(sec.id==='dashboard'&&typeof renderDashboard==='function')renderDashboard();
+    // v65f -- task #46 fix. Was calling renderDashboard(), which
+    // populates the retired archived dashboard (dashboard-body) --
+    // completely disconnected from view-dashboard, the container this
+    // same loop's sibling reveal logic actually shows (see viewId
+    // resolution below). renderActionBoard() is the real, live Dashboard
+    // render function and correctly populates view-dashboard/
+    // actionboard-body, including the new dashboard-stat-*/
+    // dashboard-heatmap-* elements this section's sub-items now target.
+    if(sec.id==='dashboard'&&typeof renderActionBoard==='function')renderActionBoard();
     if(sec.id==='analytics'&&typeof renderCharts==='function')renderCharts();
     if(sec.id==='budgetoutlook'){
       boFilter=_crBoFilter;
