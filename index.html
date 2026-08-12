@@ -4704,7 +4704,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65d</div>
     </div>
   </nav>
 
@@ -16658,9 +16658,14 @@ async function clientApproveCO(coId){
     showCalButton:false,
   });
   if(demoMode){showToast('Client approval notification simulated (demo mode)','success');return;}
+  // v65d -- task #44 fix. Same auth bug as generateOnDemandReport(): raw
+  // fetch() with no Authorization header against a route that requires
+  // the session Bearer token, so the Worker's session gate would 401
+  // this silently (caught by the try/catch, so it likely failed quietly
+  // with no visible error, not even a toast). Switched to workerFetch().
   for(const r of recipients){
     try{
-      await fetch('https://pulse-api.misty-munoz.workers.dev/send-email',{
+      await workerFetch(`${WORKER_URL}/send-email`,{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({to:r.email,subject:`Client Approved — ${co.property} Change Order`,html:htmlBody})
       });
@@ -16790,10 +16795,12 @@ async function sendCONotification(){
   }
 
   // Live mode — send via Resend through Worker
+  // v65d -- task #44 fix. Same missing-auth-header bug as the other
+  // send-email call sites (see comment above the Client Approved one).
   let successCount=0;
   for(const client of clients){
     try{
-      const resp=await fetch('https://pulse-api.misty-munoz.workers.dev/send-email',{
+      const resp=await workerFetch(`${WORKER_URL}/send-email`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
@@ -29507,8 +29514,10 @@ async function sendCalendarMeetingNotifications({propName,date,time,tz,type,purp
       if(match){email=match.email;}else{noEmailCount++;continue;}
     }
     if(demoMode){sentCount++;continue;}
+    // v65d -- task #44 fix. Same missing-auth-header bug as the other
+    // send-email call sites.
     try{
-      const resp=await fetch('https://pulse-api.misty-munoz.workers.dev/send-email',{
+      const resp=await workerFetch(`${WORKER_URL}/send-email`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({to:email,subject:`Meeting Scheduled — ${propName} · ${formattedDate} · ${timeDisplay}`,html:htmlBody,attachments:[{filename:'meeting-invite.ics',content:icsBase64,type:'text/calendar'}]})
@@ -29678,8 +29687,10 @@ async function sendSiteVisitNotifications({propName,date,time,tz,consultant,purp
       if(match){email=match.email;}else{noEmailCount++;continue;}
     }
     if(demoMode){sentCount++;continue;}
+    // v65d -- task #44 fix. Same missing-auth-header bug as the other
+    // send-email call sites.
     try{
-      const resp=await fetch('https://pulse-api.misty-munoz.workers.dev/send-email',{
+      const resp=await workerFetch(`${WORKER_URL}/send-email`,{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({to:email,subject:`Site Visit Scheduled — ${propName} · ${formattedDate} · ${timeDisplay}`,html:htmlBody,attachments:[{filename:'site-visit.ics',content:icsBase64,type:'text/calendar'}]})
       });
@@ -31544,8 +31555,10 @@ async function sendWeeklyReminders(){
     let sentCount=0;
     for(const c of missing){
       if(demoMode){sentCount++;continue;}
+      // v65d -- task #44 fix. Same missing-auth-header bug as the other
+      // send-email call sites.
       try{
-        const resp=await fetch('https://pulse-api.misty-munoz.workers.dev/send-email',{
+        const resp=await workerFetch(`${WORKER_URL}/send-email`,{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({to:c.email,subject:'Reminder: Weekly Field Update Due',html:htmlBody})
@@ -34579,8 +34592,18 @@ async function generateOnDemandReport(){
 
   if(!demoMode){
     // Live mode: call Worker to generate and save report server-side
+    // v65d -- task #44 fix. This call used a raw fetch() with a
+    // hardcoded URL and no Authorization header, instead of the shared
+    // workerFetch() helper every other live Worker call in this file
+    // uses. The Worker's session gate (v43h, "closes the open proxy")
+    // requires a valid Bearer session token on every route except
+    // /login, and correctly rejected this one with 401 -- confirmed live
+    // (client role, but this would 401 for every role identically, since
+    // the bug was "no token sent at all," not a role-scoping issue).
+    // Fixed by switching to workerFetch(), same pattern as every other
+    // endpoint call in this file.
     try{
-      const res=await fetch('https://pulse-api.misty-munoz.workers.dev/generate-report',{
+      const res=await workerFetch(`${WORKER_URL}/generate-report`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({scope,periodDays:period,isWeekly:false,generatedBy:window._userName||''})
