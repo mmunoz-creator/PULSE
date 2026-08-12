@@ -4704,7 +4704,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65b</div>
     </div>
   </nav>
 
@@ -13762,6 +13762,14 @@ function renderActionBoard(){
       7px 14px -- overridden here to match the mockup exactly. -->
       <button class="btn" style="border-color:var(--blue-dark);color:var(--blue-dark);white-space:nowrap;font-weight:600;padding:8px 13px" onclick="askMarliActionBoard()"><i class="ti ti-sparkles"></i>Ask MARLI</button>
     </div>
+    <!-- v65b -- task #37 fix. Dashboard's Ask MARLI button called
+    propsAskMarli(), which only ever renders into #props-why-panel -- an
+    element that only exists on the Properties view. On Dashboard the
+    panel lookup silently failed (early return, no error), so the button
+    did nothing. This is Dashboard's own real answer panel, same markup/
+    styling as props-why-panel, so askMarliActionBoard() has somewhere to
+    render into on this view. -->
+    <div id="dashboard-why-panel" class="hidden" style="background:var(--blue-xpale);border:1px solid var(--blue-pale);border-radius:10px;padding:12px 14px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start;font-size:12.5px;color:var(--gray-dark);line-height:1.4"></div>
     <!-- v57f -- .card's app-wide default border-radius is var(--radius)=10px;
     mockup's .panel is 12px. Every card in this render now carries an
     explicit border-radius:12px override to match exactly -- confirmed by
@@ -13966,7 +13974,10 @@ function renderActionBoard(){
     </div>`;
 }
 function askMarliActionBoard(){
-  propsAskMarli('Summarize what needs my attention across the portfolio this week');
+  // v65b -- task #37 fix. Now targets dashboard-why-panel explicitly
+  // (this button lives on the Dashboard view, which has no
+  // props-why-panel element) instead of silently no-op'ing.
+  propsAskMarli('Summarize what needs my attention across the portfolio this week','dashboard-why-panel');
 }
 function exportActionBoardCSV(){
   showToast('Export coming soon','info');
@@ -14112,8 +14123,14 @@ function propsSetStatusFilter(bucket){
 // (Worker-side, separate from the existing 7/day chat cap) remains
 // unbuilt, called out here again since this is the first round this
 // path is actually live rather than just a redirect.
-async function propsAskMarli(question){
-  const panel=document.getElementById('props-why-panel');
+// v65b -- task #37 fix. Added optional panelId param (defaults to
+// 'props-why-panel' so every existing call site, and any old cached
+// build calling this with one arg, keeps working unchanged). Lets
+// askMarliActionBoard() target Dashboard's own new dashboard-why-panel
+// instead of a Properties-only element that doesn't exist on that view.
+async function propsAskMarli(question,panelId){
+  panelId=panelId||'props-why-panel';
+  const panel=document.getElementById(panelId);
   if(!panel)return;
   panel.classList.remove('hidden');
   panel.innerHTML=`<i class="ti ti-sparkles" style="color:var(--blue-dark);font-size:15px;flex-shrink:0;margin-top:1px"></i><div style="flex:1"><div style="font-weight:600;color:var(--navy);margin-bottom:3px">${escHtml(question)}</div><span style="color:var(--gray-light);font-style:italic">Analyzing portfolio...</span></div>`;
@@ -14127,7 +14144,7 @@ async function propsAskMarli(question){
     });
     const data=await response.json();
     if(data.ok){
-      panel.innerHTML=`<i class="ti ti-sparkles" style="color:var(--blue-dark);font-size:15px;flex-shrink:0;margin-top:1px"></i><div style="flex:1"><div style="font-weight:600;color:var(--navy);margin-bottom:3px">${escHtml(question)}</div><div>${escHtml(data.answer)}</div></div><button aria-label="Close" onclick="document.getElementById('props-why-panel').classList.add('hidden')" style="margin-left:auto;background:none;border:none;color:var(--gray-mid);cursor:pointer;font-size:14px;flex-shrink:0"><i class="ti ti-x"></i></button>`;
+      panel.innerHTML=`<i class="ti ti-sparkles" style="color:var(--blue-dark);font-size:15px;flex-shrink:0;margin-top:1px"></i><div style="flex:1"><div style="font-weight:600;color:var(--navy);margin-bottom:3px">${escHtml(question)}</div><div>${escHtml(data.answer)}</div></div><button aria-label="Close" onclick="document.getElementById('${panelId}').classList.add('hidden')" style="margin-left:auto;background:none;border:none;color:var(--gray-mid);cursor:pointer;font-size:14px;flex-shrink:0"><i class="ti ti-x"></i></button>`;
     }else{
       panel.innerHTML=`<i class="ti ti-alert-triangle" style="color:var(--amber);font-size:15px;flex-shrink:0;margin-top:1px"></i><div style="flex:1">${escHtml(data.message||'MARLI could not generate a response — please try again.')}</div>`;
     }
