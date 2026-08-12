@@ -3234,6 +3234,12 @@ async function loadAllData() {
         // Scopes on its own.
         linkedUnitIds: [],
         isTbd: (r.fields['Scope Name']||'')==='TBD Scope',
+        // v63e — task #60. Scope-level "Mark scope complete" toggle,
+        // nested under Manual Override. Mirrors the Milestones table's
+        // existing Manually Completed/By/On convention, one level up.
+        fastTrackedComplete: r.fields['Fast Tracked Complete']===true,
+        fastTrackedCompleteBy: r.fields['Fast Tracked Complete By']||'',
+        fastTrackedCompleteOn: r.fields['Fast Tracked Complete On']||'',
       };
     });
     // v34a — Unit Budget Allocations (renamed/reshaped from the old
@@ -4654,7 +4660,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63e</div>
     </div>
   </nav>
 
@@ -8986,7 +8992,22 @@ const MS_WEIGHTS=[4,5,5,5,6,7,15,14,13,9,6,6,3,2];
 
 // Get ms % complete from live data
 function getMsComplete(propName){
-  const ms=getMilestonesForProp(propName);  return ms.filter(m=>m.status==='Complete').length;
+  // v63e — task #60/#20 fix. A Scope marked Fast Tracked Complete (see
+  // toggleScopeFastTrackComplete) may have zero real Milestone records —
+  // confirmed live: Hilton McLean Tysons Corner's "Completed" scope and
+  // The Reach Key West's "Completed" scope both had 0. Counting only real
+  // Complete-status records undercounted the property total (e.g. showed
+  // "10 of 28" instead of "24 of 28" for Hilton McLean, since its
+  // fast-tracked scope contributed 0 real completions despite being
+  // Complete). Now: every fast-tracked Scope on this property contributes
+  // a full MILESTONES_DEF.length regardless of its real milestone record
+  // count (matches what getMsExpectedTotal below already assumes it's
+  // worth); every other Scope is still counted from real records exactly
+  // as before.
+  const fastTrackedScopeIds=new Set((window.SCOPES||[]).filter(s=>s.property===propName&&s.fastTrackedComplete).map(s=>s.id));
+  const fastTrackedCount=fastTrackedScopeIds.size*MILESTONES_DEF.length;
+  const ms=getMilestonesForProp(propName).filter(m=>!fastTrackedScopeIds.has(m.scopeId));
+  return fastTrackedCount+ms.filter(m=>m.status==='Complete').length;
 }
 // v60b — weighted complete "points" for a property: sums each completed
 // milestone's weight instead of counting 1 per milestone. Multi-Scope
@@ -9001,6 +9022,22 @@ function getMsComplete(propName){
 // (correctly) drove the Overview mini-card and Performance Report — see
 // continuity notes, task #37.
 function getMsCompleteWeighted(propName,scopeId){
+  // v63e — task #60/#20 fix. Same fast-track awareness as getMsComplete()
+  // above — a Fast Tracked Complete scope is worth its full 100 points
+  // (MS_WEIGHTS sums to 100) regardless of real milestone record count.
+  if(scopeId){
+    const scope=(window.SCOPES||[]).find(s=>s.id===scopeId);
+    if(scope&&scope.fastTrackedComplete)return 100;
+  }else{
+    const fastTrackedCount=(window.SCOPES||[]).filter(s=>s.property===propName&&s.fastTrackedComplete).length;
+    if(fastTrackedCount>0){
+      const ms=getMilestonesForProp(propName).filter(m=>{
+        const s=(window.SCOPES||[]).find(x=>x.id===m.scopeId);
+        return !(s&&s.fastTrackedComplete);
+      });
+      return fastTrackedCount*100+ms.filter(m=>m.status==='Complete').reduce((sum,m)=>sum+(MS_WEIGHTS[(m.milestoneNumber||1)-1]||0),0);
+    }
+  }
   const ms=getMilestonesForProp(propName,scopeId);
   return ms.filter(m=>m.status==='Complete').reduce((sum,m)=>sum+(MS_WEIGHTS[(m.milestoneNumber||1)-1]||0),0);
 }
@@ -10957,10 +10994,34 @@ function renderMilestones(p){
   // Scopes) remains available regardless — this only changes what renders.
   if(currentScope&&(currentScope.status==='Complete'||currentScope.isCompleteBucket)){
     document.getElementById('ms-progress-badge').textContent='Completed';
+    // v63e — task #60. "Mark scope complete" toggle, nested under Manual
+    // Override, PM/Admin only. Lets a Complete scope be fast-tracked (this
+    // card shown, no per-milestone tracking needed) OR pulled back out into
+    // the real per-milestone tracker below (e.g. The Reach Key West, where
+    // punchlist items are genuinely still open but the Scope reads 100%
+    // complete with zero real Milestone records behind it). Only rendered
+    // when Manual Override is on for this property, same gating pattern as
+    // the per-milestone Mark Complete Today toggle.
+    const fastTrackToggle=canEdit&&p.milestoneManualOverride?`
+    <div style="display:flex;align-items:center;justify-content:space-between;background:#FAEEDA;border:1px solid #EF9F27;border-radius:8px;padding:10px 14px;margin:14px auto 0;max-width:420px;text-align:left">
+      <div style="display:flex;align-items:center;gap:10px">
+        <i class="ti ti-flag-3" style="font-size:16px;color:#854F0B"></i>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#854F0B">Mark scope complete</div>
+          <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${currentScope.fastTrackedComplete&&currentScope.fastTrackedCompleteOn?`Fast-tracked ${new Date(currentScope.fastTrackedCompleteOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} by ${escHtml(currentScope.fastTrackedCompleteBy||'')}`:'Turn off to review or fast-track individual milestones'}</div>
+        </div>
+      </div>
+      <label style="position:relative;display:inline-block;width:38px;height:22px;flex-shrink:0;cursor:pointer">
+        <input type="checkbox" ${currentScope.fastTrackedComplete?'checked':''} onchange="toggleScopeFastTrackComplete('${currentScope.id}','${p.n.replace(/'/g,"\\'")}',this.checked)" style="opacity:0;width:0;height:0;position:absolute">
+        <span style="position:absolute;inset:0;background:${currentScope.fastTrackedComplete?'#EF9F27':'#CBD5E1'};border-radius:22px;transition:background .15s"></span>
+        <span style="position:absolute;top:2px;${currentScope.fastTrackedComplete?'right':'left'}:2px;width:16px;height:16px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
+      </label>
+    </div>`:'';
     msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:13px">
       <i class="ti ti-circle-check" style="font-size:28px;color:#15803d;display:block;margin-bottom:8px"></i>
       <div style="font-weight:600;color:var(--navy);margin-bottom:4px">Project Completed</div>
       <div>All ${MILESTONES_DEF.length} milestones finished.${canEdit?' Use the pencil icon on this Project\'s card (Overview tab) to correct this if it was marked Complete in error.':''}</div>
+      ${fastTrackToggle}
     </div>`;
     return;
   }
@@ -11190,7 +11251,22 @@ function renderMilestones(p){
             <div style="font-size:11px;font-weight:600;color:#854F0B;white-space:nowrap">MARK COMPLETE TODAY <span style="font-weight:400;color:#9A6B1E">- independent of the date fields, turns off any time to revert</span></div>`}
           </div>
         </div>`:''}`:
-        `<div style="display:flex;align-items:center;gap:8px;margin-top:2px">${statusBadge}<span style="font-size:11px;color:var(--gray-mid)">${m.plannedDate?'Planned: '+m.plannedDate:''}${m.actualDate?' · Actual: '+m.actualDate:''}</span></div>`}
+        `<div style="display:flex;align-items:center;gap:8px;margin-top:2px">${statusBadge}<span style="font-size:11px;color:var(--gray-mid)">${
+          // v63d — task #59 fix, per Misty's direct instruction (2026-08-11).
+          // Confirmed live: milestones marked Complete via the "Mark
+          // Complete Today" manual-override toggle (m.manuallyCompleted)
+          // intentionally never get Planned Date/Actual Date written (see
+          // the v52f design comment near the top of this file) — so this
+          // Client-visible read-only line showed a bare status pill with no
+          // date text at all, which read as broken/missing data even though
+          // it was working as designed. Now shows "Project Team confirmed
+          // completion on MM/DD/YYYY" (using m.manuallyCompletedOn) for
+          // that case specifically, instead of falling through to the
+          // normal Planned/Actual line which has nothing to show here.
+          m.manuallyCompleted&&m.manuallyCompletedOn?
+            'Project Team confirmed completion on '+new Date(m.manuallyCompletedOn+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}):
+            `${m.plannedDate?'Planned: '+m.plannedDate:''}${m.actualDate?' · Actual: '+m.actualDate:''}`
+        }</span></div>`}
       </div>
     </div>`;
   }).join('');
@@ -11333,6 +11409,93 @@ async function toggleMilestoneManualOverride(propName,newVal){
     }
   }
 }
+
+// v63e — task #60. Scope-level "Mark scope complete" toggle handler.
+// Additive to the existing Manual Override/Mark Complete Today features —
+// does not replace or touch either. New Airtable fields on Scopes: "Fast
+// Tracked Complete" (checkbox), "Fast Tracked Complete By" (text), "Fast
+// Tracked Complete On" (date) — mirrors the Milestones table's existing
+// Manually Completed/By/On convention one level up.
+//
+// Turning ON: writes Fast Tracked Complete=true, Fast Tracked Complete
+// By=logged-in user, Fast Tracked Complete On=today, Status=Complete on
+// the Scope. Same optimistic-update-then-rollback-on-failure pattern as
+// toggleMilestoneManualOverride above.
+//
+// Turning OFF, per Misty's explicit spec (2026-08-11):
+//   1. Clear Fast Tracked Complete/By/On on the Scope.
+//   2. If this Scope has zero real Milestone records (confirmed live case:
+//      Hilton McLean Tysons Corner's "Completed" scope, The Reach Key
+//      West's "Completed" scope — both fast-tracked with no milestone
+//      data behind them), seed all 14 as real Not Started records via the
+//      existing autoPopulateMilestones() — same function already used for
+//      the ordinary "PM opens a fresh scope" path, just triggered
+//      explicitly here instead of being blocked by the isCompleteBucket
+//      guard (see autoPopulateMilestones call site above, ~line 10999,
+//      which deliberately skips Complete-bucket scopes to prevent
+//      accidental firing — this is the one deliberate, explicit trigger
+//      point that guard was designed to allow).
+//   3. Re-derive Status from real milestone/unit data via
+//      deriveAndWriteScopeStatus() — the exact same call
+//      toggleMilestoneManualCompletion's OFF path already uses, so a
+//      scope with real Complete milestones stays Complete, one with
+//      genuinely open work (e.g. Punch Lists Complete not yet done) drops
+//      to whatever stage that implies. Never hardcoded.
+// Once off, the ordinary per-milestone tracker (including the existing
+// Mark Complete Today toggle on each of the 14 rows) renders exactly as
+// it always has for any other scope — nothing about that path changes.
+async function toggleScopeFastTrackComplete(scopeId,propName,newVal){
+  const scope=(window.SCOPES||[]).find(s=>s.id===scopeId);
+  if(!scope)return;
+  const prior={fastTrackedComplete:scope.fastTrackedComplete,fastTrackedCompleteBy:scope.fastTrackedCompleteBy,fastTrackedCompleteOn:scope.fastTrackedCompleteOn,status:scope.status};
+  const today=new Date().toISOString().split('T')[0];
+  if(newVal){
+    scope.fastTrackedComplete=true;
+    scope.fastTrackedCompleteBy=window._userName||'PM User';
+    scope.fastTrackedCompleteOn=today;
+    scope.status='Complete';
+    if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+    if(demoMode||!scope.id)return;
+    const result=await atUpdate('Scopes',scope.id,{'Fast Tracked Complete':true,'Fast Tracked Complete By':scope.fastTrackedCompleteBy,'Fast Tracked Complete On':today,'Status':'Complete'});
+    if(!result){
+      console.error('Failed to save Fast Tracked Complete for scope',scope.id,'— reverting');
+      scope.fastTrackedComplete=prior.fastTrackedComplete;
+      scope.fastTrackedCompleteBy=prior.fastTrackedCompleteBy;
+      scope.fastTrackedCompleteOn=prior.fastTrackedCompleteOn;
+      scope.status=prior.status;
+      if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+      showToast('Could not save Mark scope complete. Please try again.','error');
+      return;
+    }
+    if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+    return;
+  }
+  // Turning OFF.
+  scope.fastTrackedComplete=false;
+  scope.fastTrackedCompleteBy='';
+  scope.fastTrackedCompleteOn='';
+  if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+  if(demoMode||!scope.id)return;
+  const clearResult=await atUpdate('Scopes',scope.id,{'Fast Tracked Complete':false,'Fast Tracked Complete By':'','Fast Tracked Complete On':null});
+  if(!clearResult){
+    console.error('Failed to clear Fast Tracked Complete for scope',scope.id,'— reverting');
+    scope.fastTrackedComplete=prior.fastTrackedComplete;
+    scope.fastTrackedCompleteBy=prior.fastTrackedCompleteBy;
+    scope.fastTrackedCompleteOn=prior.fastTrackedCompleteOn;
+    scope.status=prior.status;
+    if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+    showToast('Could not turn off Mark scope complete. Please try again.','error');
+    return;
+  }
+  const existingMs=(window.MILESTONES||[]).filter(m=>m.scopeId===scopeId);
+  if(existingMs.length===0){
+    showToast('Setting up milestones for review...','info');
+    await autoPopulateMilestones(propName,scopeId);
+  }
+  await deriveAndWriteScopeStatus(scopeId);
+  if(currentProp&&currentProp.n===propName)renderMilestones(currentProp);
+}
+window.toggleScopeFastTrackComplete=toggleScopeFastTrackComplete;
 
 // v52f — Manual Completion Override toggle handler. Permanent feature,
 // per-milestone, only ever rendered when the property's Milestone Manual
@@ -27907,6 +28070,19 @@ async function saveScheduledMeeting(){
     if(smtgScopeId)fields['Linked Scope']=[smtgScopeId];
     if(videoLink)fields['Video Call Link']=videoLink;
     let atId=null;
+    // v63d — task #58 fix. inviteFailures was declared with let INSIDE the
+    // if(!demoMode){...} block below, but read again at the bottom of this
+    // function OUTSIDE that block (to decide the final success/failure
+    // toast) — a real block-scoping bug, not a demoMode-only issue, since
+    // execution reaches that later read on every real (non-demo) run too.
+    // Confirmed live: the Meeting, Meeting Attendees records, and the
+    // invite email itself were all created/sent successfully, then this
+    // ReferenceError threw immediately after and got caught by the
+    // function's outer catch{}, showing "Something went wrong scheduling
+    // this meeting" — a false failure toast on a call that had actually
+    // fully succeeded. Declared here instead, one level up, so it's in
+    // scope for the whole function regardless of demoMode.
+    let inviteFailures=[];
     if(!demoMode){
       const res=await atCreate('Meetings',fields);
       atId=res?.records?.[0]?.id||null;
@@ -27937,7 +28113,9 @@ async function saveScheduledMeeting(){
       // regardless of whether every invite actually went out. Now reads
       // the response and surfaces a specific "invalid email" warning per
       // Misty's direct instruction, rather than a generic failure count.
-      let inviteFailures=[];
+      // v63d — task #58 fix. Declaration moved up out of this block (see
+      // comment near the top of this function); reassigned here now
+      // instead of redeclared.
       if(atId&&attendees.length){
         const attendeeRecordIds=[];
         for(const a of attendees){
