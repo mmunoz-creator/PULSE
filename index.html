@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64g</div>
     </div>
   </nav>
 
@@ -4918,8 +4918,22 @@ from unitEffectiveValue() onto each checkbox). -->
         dots rendered in the table below (which use PROPS_DOT_COLORS'
         fill+border pairs, finalized after Misty reviewed several palette
         mockups). Updated to render identically to the real dots so the
-        legend is actually still true to what's in the table. -->
+        legend is actually still true to what's in the table.
+        v64g -- task #43. This legend was never updated when v63m (task
+        #36) added Capital Plan dots into the table's Projects column via
+        getPropsRowData/PROPS_DOT_SORT_ORDER. Confirmed live: the table
+        genuinely renders solid-purple Capital Plan dots (e.g. Boston
+        Marriott Newton, DoubleTree Ontario Airport), but this legend
+        directly above it still only listed the other 4 stages, so a
+        purple dot on screen had no key explaining what it meant. Added
+        Capital Plan first, matching PROPS_DOT_COLORS['Capital Plan']
+        exactly (solid #534AB7 fill, no border, same as the property
+        Overview page's own stageLegend treatment for this stage at line
+        ~10440) and positioned first to match PROPS_DOT_SORT_ORDER's own
+        left-to-right order (Capital Plan is the earliest lifecycle
+        stage). -->
         <div style="display:flex;gap:16px;flex-wrap:wrap;padding:0 0 10px;font-size:11px;color:var(--gray-mid)">
+          <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:#534AB7"></div>Capital Plan</div>
           <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:#EFEDE5;border:1.5px solid #6B6A63"></div>Pre-construction</div>
           <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:#1C7ED6;border:1px solid rgba(0,0,0,0.35)"></div>Construction</div>
           <div style="display:flex;align-items:center;gap:5px"><div style="width:8px;height:8px;border-radius:50%;background:#F3B15A;border:1.5px solid #7A4808"></div>Project closeout</div>
@@ -14910,13 +14924,21 @@ async function renderBidLevelingTable(round,roundSubs,p){
   const clarificationsRows=multiItemRows('Clarifications',s=>s.clarifications,
     item=>`<div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">${item['Category']||''}</div><div style="margin-top:2px">${escHtml(item['Description']||'')}</div>`);
 
+  // Task #38. Additional Considerations are free-form Label/Value pairs
+  // (Description holds the label, Component holds the value) entered on
+  // the Supplier Bid form's "Additional Considerations" section. Rendered
+  // the same way as the other multiItemRows sections so they line up
+  // side-by-side by position across suppliers.
+  const additionalConsiderationsRows=multiItemRows('Additional Considerations',s=>s.additionalConsiderations,
+    item=>`<div style="font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.02em">${escHtml(item['Description']||'')}</div><div style="margin-top:2px">${escHtml(item['Component']||'')}</div>`);
+
   const summaryRows=
     sectionRow('Summary')+
     dataRow('Submitted',s=>s.submittedDate,v=>v?new Date(v).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—');
 
   wrap.innerHTML=`<div class="table-wrap" style="max-height:520px;overflow-y:auto"><table class="data-table" style="min-width:${280+suppliers.length*160}px">
     <thead style="position:sticky;top:0;z-index:1">${headerRow}</thead>
-    <tbody>${pricingRows}${scheduleRows}${maintenanceRows}${relatedWorkRows}${alternatesRows}${allowancesRows}${clarificationsRows}${equipmentRows}${summaryRows}</tbody>
+    <tbody>${pricingRows}${scheduleRows}${maintenanceRows}${relatedWorkRows}${alternatesRows}${allowancesRows}${clarificationsRows}${equipmentRows}${additionalConsiderationsRows}${summaryRows}</tbody>
   </table></div>`;
 }
 
@@ -15010,7 +15032,7 @@ function buildDemoBidLeveling(round,visibleSubs){
   const lineItemsAll=window.BID_LINE_ITEMS_DEMO||[];
   const suppliers=visibleSubs.map(sub=>{
     const lineItems=lineItemsAll.filter(li=>(li['Bid Submission']||[]).includes(sub.id));
-    const groupedLineItems={Alternate:[],Clarification:[],Equipment:[],Reference:[],'Schedule Phase':[],'Related Work':[],'Allowance':[]};
+    const groupedLineItems={Alternate:[],Clarification:[],Equipment:[],Reference:[],'Schedule Phase':[],'Related Work':[],'Allowance':[],'Additional Consideration':[]};
     for(const li of lineItems){
       if(groupedLineItems[li['Line Item Type']]!==undefined)groupedLineItems[li['Line Item Type']].push(li);
     }
@@ -15044,6 +15066,7 @@ function buildDemoBidLeveling(round,visibleSubs){
       clarifications:groupedLineItems['Clarification'],
       equipment:groupedLineItems['Equipment'],
       references:groupedLineItems['Reference'],
+      additionalConsiderations:groupedLineItems['Additional Consideration'],
       schedulePhases:schedulePhases,
       totalProposedDurationWeeks:schedulePhases.length>0?totalProposedWeeks:null,
     };
@@ -15298,19 +15321,22 @@ function openBidSubmissionForm(existingId,viewOnly,roundIdParam){
     ("$592/hr") with plain counts ("84 weeks") — forcing everything through
     a currency field would misrepresent the latter. Saves through the
     existing Bid Line Items table's Description field (no Airtable schema
-    change needed) under a new Line Item Type value. NOTE: this captures
-    the data on each bidder's form/detail view only — it does not yet
-    appear as its own row in the Bid Leveling side-by-side comparison
-    table, since that table is built from the Worker's fetchBidLeveling
-    endpoint, which hasn't been reviewed/updated to include this new type.
-    Per direct instruction, shipping the capture now; comparison-table
-    support is a follow-up (task #38). -->
+    change needed) under a new Line Item Type value.
+    v64f — task #38 follow-up, done: getBidLeveling on the Worker side
+    (worker_v44j) had no 'Additional Consideration' key in its
+    groupedLineItems map, so the type-check silently dropped every item of
+    this type before it ever reached the frontend. Added the key, exposed
+    it as additionalConsiderations on the per-supplier response, and added
+    a matching Additional Considerations section to the Bid Leveling table
+    using the same multiItemRows pattern as Related Work/Alternates/etc.
+    Now appears as its own comparison row, positioned after Equipment
+    Details and before the Summary section. -->
     <div style="margin-bottom:1.5rem;border-top:1px solid var(--border);padding-top:1.25rem">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
         <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em">Additional Considerations <span style="font-size:11px;font-weight:400;color:var(--gray-mid)">— anything that doesn't fit above (e.g. labor rates, project duration)</span></div>
         <button class="btn btn-add" style="font-size:11px" onclick="addBidLineItemRow('AdditionalConsideration')">+ Add Item</button>
       </div>
-      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px">Not yet included in the Bid Leveling comparison table — visible here and on this bidder's saved record only.</div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px">Also appears as its own row in the Bid Leveling comparison table for this round.</div>
       <div id="bsf-rows-additionalconsideration"></div>
     </div>
 
@@ -19830,7 +19856,14 @@ function getMilestoneCategoryForProp(propName){
 // v62k — task #46 (Misty's second request this round): Pre-Construction
 // now represents M1-M5, not M1-M4. A scope stays Pre-Construction through
 // M5 complete; Construction begins once M6 is done. Project Closeout and
-// Complete boundaries are unchanged. This is still the single source of
+// Complete boundaries are unchanged.
+// v64g — task #44. Construction boundary loosened per direct instruction:
+// triggers on M5 Complete OR M6 In Progress (whichever comes first),
+// not only M6 fully Complete. See the two new checks inline below for the
+// live example (Hilton New Orleans Riverside) that prompted this. Project
+// Closeout's M10 boundary was NOT touched — Misty's direction was scoped
+// to the Construction boundary specifically.
+// This is still the single source of
 // truth for Scope lifecycle stage — deriveAndWriteScopeStatus() (the real
 // Scope.status writer) and Action Board's heat map (abGroupTiles()) both
 // call this instead of keeping their own separate boundary logic. Capital
@@ -19880,9 +19913,27 @@ function getMilestoneCategoryForScope(scope){
   const expectedTotal=MILESTONES_DEF.length;
   if(complete>=expectedTotal)return'Complete';
   const m10=ms.find(m=>m.milestoneNumber===10);
+  const m5=ms.find(m=>m.milestoneNumber===5);
   const m6=ms.find(m=>m.milestoneNumber===6);
   if(m10&&m10.status==='Complete')return'Project Closeout';
-  if(m6&&m6.status==='Complete')return'Construction';
+  // v64g -- task #44. Confirmed live on Hilton New Orleans Riverside's
+  // "Elevators 1-10 & Escalators 9-12" scope: M1-M5 Complete, M6 "First
+  // Phase Start" already In Progress with a real Actual Date set
+  // (2026-02-27, construction genuinely underway) but no Completion Date
+  // yet on M6 itself. The old m6.status==='Complete' check meant this
+  // stayed stuck at Pre-Construction until someone went back and flipped
+  // M6 to Complete after the fact, even though the milestone data already
+  // showed construction had started. Per direct instruction, Construction
+  // now triggers on EITHER of two independent signals (whichever is true
+  // first): M5 fully Complete (all pre-construction work done, even if M6
+  // hasn't been touched yet), or M6 In Progress (construction has visibly
+  // started, even if M5 is technically still open) -- covers both "ready
+  // to start" and "already started" without requiring M6 to be finished
+  // first. Same M6.status==='Complete' check kept as a third fallback
+  // path since a scope could jump straight from Not Started to Complete
+  // on M6 without an intermediate In Progress row ever being read here.
+  if(m5&&m5.status==='Complete')return'Construction';
+  if(m6&&(m6.status==='In Progress'||m6.status==='Complete'))return'Construction';
   return'Pre-Construction';
 }
 
