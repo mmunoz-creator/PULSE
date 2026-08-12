@@ -4667,7 +4667,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63o</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63p</div>
     </div>
   </nav>
 
@@ -7968,10 +7968,31 @@ function recomputeScopeTypeCounts(scope){
 // silently overwritten by re-derivation. Dormant clears the moment a unit
 // gets linked into ANY Scope (including TBD) — "assigned to a Scope" per
 // the design spec, not gated on having a real (non-TBD) year specifically.
+//
+// v63p -- task #5. The original design above assumed Complete could only
+// ever reach a unit as a manual override, never via derivation from the
+// Scope -- so this function had no Complete branch at all. That assumption
+// broke once a Scope itself can legitimately reach Complete status without
+// a human touching every one of its units individually (Fast Tracked
+// Complete toggle, or a Scope that finishes all 14 real milestones). Live
+// bug confirmed on The Reach Key West: its "Completed" Scope (Fast Tracked
+// Complete) has 4 real linked units (PE1, PE2, PE4, SE3) that should show
+// Complete but were permanently stuck on "Auto (Active)" — this function
+// could only ever return 'Planned' or 'Active', never 'Complete', for ANY
+// Scope regardless of its actual status. Now mirrors the Worker's own
+// SCOPE_TO_UNIT_STATUS_MAP (worker_v44i, built earlier this session) so the
+// client-side dropdown/recompute path and the server-side cascade agree:
+// Capital Plan -> Planned, Complete -> Complete, anything else -> Active.
+// The existing manual-override guard in recomputeUnitStatus() (unit.status
+// ==='Complete'||'Dormant' short-circuits before this is even called) is
+// unchanged, so a unit manually marked Complete under a Scope that is NOT
+// Complete is still fully protected and never touched by this change.
 function computeDerivedUnitStatus(unit){
   const scope=(window.SCOPES||[]).find(s=>s.id===unit.scopeId);
   if(!scope)return unit.status||''; // no scope yet — leave whatever it currently has
-  return scope.status==='Capital Plan'?'Planned':'Active';
+  if(scope.status==='Capital Plan')return 'Planned';
+  if(scope.status==='Complete')return 'Complete';
+  return 'Active';
 }
 async function recomputeUnitStatus(unit){
   if(!unit)return;
