@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64l</div>
     </div>
   </nav>
 
@@ -24369,7 +24369,17 @@ function renderCharts(){
   // now returns {byMonth,detailByMonth}; detail is stashed on
   // window._fsVdaTooltipData for the VDA segment's own click-through,
   // kept separate from window._fsTooltipData (property/unit rows).
-  const fsIncludeVda=!!(document.getElementById('fs-vda-toggle')&&document.getElementById('fs-vda-toggle').checked);
+  // v64k — was reading document.getElementById('fs-vda-toggle').checked,
+  // at a point in renderCharts() that runs BEFORE container.innerHTML=
+  // (below) writes the checkbox's actual current-state markup into the
+  // DOM. That meant this always read the PREVIOUS render's checkbox (or
+  // null on first render), one full cycle stale — same root cause as the
+  // fs-legend-vda display bug fixed alongside this (see that comment,
+  // ~line 24960). Now reads window._vdaForecastIncluded.charts directly,
+  // the same real state variable the checkbox's own checked attribute is
+  // bound to and that toggleVdaForecastInclude() sets BEFORE calling
+  // renderCharts() — no DOM round-trip, no staleness possible.
+  const fsIncludeVda=!!(window._vdaForecastIncluded&&window._vdaForecastIncluded.charts);
   window._fsVdaTooltipData={};
   if(fsIncludeVda&&typeof computeVdaFsByMonth==='function'){
     const vdaResult=computeVdaFsByMonth(_fcfsMonthKeys);
@@ -24379,8 +24389,19 @@ function renderCharts(){
     });
     window._fsVdaTooltipData=vdaResult.detailByMonth||{};
   }
-  const fsLegendVda=document.getElementById('fs-legend-vda');
-  if(fsLegendVda)fsLegendVda.style.display=fsIncludeVda?'flex':'none';
+  // v64k -- REMOVED the fs-legend-vda display toggle that used to live
+  // here. This whole data-prep section runs BEFORE container.innerHTML=
+  // (below, ~line 24505+) writes the Forecasted Spend card's actual
+  // markup into the DOM -- so document.getElementById('fs-legend-vda')
+  // at this point in the function was always reading either null (first
+  // render) or the PREVIOUS render's now-about-to-be-discarded node, one
+  // full cycle stale. Confirmed live: toggled Show VDA Project on,
+  // purple bar segments rendered correctly (they're built fresh inside
+  // the innerHTML template itself, not touched by this line), but the
+  // purple "VDA Project" legend swatch never appeared. Moved the actual
+  // display-toggle to the #fs-chart render block below (~line 24960),
+  // which runs AFTER the innerHTML write and so is guaranteed to see the
+  // real, current fs-legend-vda node.
 
 
   // 6. Portfolio % Complete — v42a, switched from whole-property status to
@@ -24429,7 +24450,21 @@ function renderCharts(){
   // getPropertyBilledAndBasis(p) — same active-Scope set, summed
   // together, so numerator and denominator can never disagree about
   // which Scopes they're describing.
-  const _budgetSpentSource=filtered.filter(p=>p.st!=='Removed');
+  // v64k — was filtered.filter(p=>p.st!=='Removed'), which is really
+  // cfGetFiltered()'s set: every non-Removed, non-Capital-Plan property,
+  // 14 properties as of this pass. This card's own on-screen subtitle
+  // reads "Total billed YTD vs active properties budget" and Misty
+  // confirmed directly that it should match the Active Properties KPI
+  // tile's own $166.1M sub-label one row up, not a broader set. Root-
+  // caused live: the $1.3M gap between the two figures was entirely The
+  // Reach Key West, Curio Collection — status Complete, zero units in an
+  // active lifecycle bucket, still swept into the old source's non-
+  // Removed/non-Capital-Plan filter. Switched to activePortProps (already
+  // aliased to _pc.activeProps above, same getPortfolioClassification()
+  // call the Active Properties tile itself reads), so both figures are
+  // now guaranteed to describe the same properties, not just usually
+  // agree.
+  const _budgetSpentSource=activePortProps;
   let totalPortBudget=0,totalBilledAll=0;
   _budgetSpentSource.forEach(p=>{
     const bb=getPropertyBilledAndBasis(p);
@@ -24641,9 +24676,21 @@ function renderCharts(){
         </label>
       </div>
       <div id="fs-chart" style="margin-top:10px;position:relative"></div>
+      <!-- v64k -- Forecast swatch changed from var(--teal) to
+      var(--blue-mid). --teal (#0F6E56) and --act-billing (#3DAA7A) are
+      both dark greens, close enough in hue that Misty flagged live she
+      couldn't tell Actual and Forecast segments apart on the chart -
+      confirmed, every bar in the current 12-month window renders 100%
+      Forecast (see the v64k comment on fsByMonth's actual-override logic
+      above for why: no BILLING_LOG entry falls inside the window right
+      now), and it reads as if the chart is showing all-Actual because
+      the one visible color looks like the "real data" green. Blue is
+      already used elsewhere on this same page (Forecasted Completion's
+      bars) and reads clearly against both the kept green and the purple
+      VDA segment. -->
       <div id="fs-legend" style="display:flex;justify-content:center;gap:16px;margin-top:8px;font-size:11px;color:var(--gray-mid)">
         <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--act-billing);display:inline-block"></span>Actual (billed)</span>
-        <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--teal);display:inline-block"></span>Forecast</span>
+        <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--blue-mid);display:inline-block"></span>Forecast</span>
         <span id="fs-legend-vda" style="display:none;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--vda-billing);display:inline-block"></span>VDA Project</span>
       </div>
     </div>
@@ -24917,6 +24964,15 @@ function renderCharts(){
   // properties excluded entirely - active projects only, matching
   // Forecasted Completion's scope exactly.
   const fsChart=document.getElementById('fs-chart');
+  // v64k -- fs-legend-vda display toggle moved here from data-prep above
+  // (see that block's own comment for the full root-cause). This point
+  // in renderCharts() runs after container.innerHTML= has already
+  // written the real card markup, so document.getElementById here
+  // reliably finds the actual, current legend node -- confirmed live,
+  // the purple "VDA Project" swatch now appears/disappears in sync with
+  // the checkbox on every toggle, matching the bar segments themselves.
+  const fsLegendVda=document.getElementById('fs-legend-vda');
+  if(fsLegendVda)fsLegendVda.style.display=fsIncludeVda?'flex':'none';
   if(fsChart){
     const anyFs=_fcfsMonthKeys.some(k=>((fsByMonth[k]||{}).actual||0)+((fsByMonth[k]||{}).forecast||0)+((fsByMonth[k]||{}).vda||0)>0);
     if(!anyFs){
@@ -24937,7 +24993,7 @@ function renderCharts(){
               <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:4px">${totalAmt>0?fmtCurrency(totalAmt):'—'}</div>
               <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;cursor:${totalAmt>0?'pointer':'default'}">
                 ${vdaAmt>0?`<div style="width:100%;height:${vdaH}px;background:var(--vda-billing);opacity:.85;transition:opacity .12s;${m.forecast>0||m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'" onclick="event.stopPropagation();showVdaFsDrilldown('${k}')" title="Click for VDA Project breakdown"></div>`:''}
-                ${m.forecast>0?`<div style="width:100%;height:${forecastH}px;background:var(--teal);opacity:.85;transition:opacity .12s;${m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
+                ${m.forecast>0?`<div style="width:100%;height:${forecastH}px;background:var(--blue-mid);opacity:.85;transition:opacity .12s;${m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
                 ${m.actual>0?`<div style="width:100%;height:${actualH}px;background:var(--act-billing);border-radius:4px 4px 0 0;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
               </div>
               <div style="width:100%;height:3px;background:var(--border)"></div>
