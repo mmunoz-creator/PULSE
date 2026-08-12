@@ -4678,7 +4678,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63t</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63u</div>
     </div>
   </nav>
 
@@ -17601,6 +17601,16 @@ async function saveStepDates(phaseId){
   const saveBtn=document.getElementById('step-dates-save-btn');
   if(saveBtn)saveBtn.disabled=true;
   if(!window.PHASE_STEPS)window.PHASE_STEPS=[];
+  // v63t — real trigger for the Phase-to-unit cascade (see
+  // cascadePhaseUnitStatus and the comment on updatePhaseStatus for the
+  // incident and the wrong-trigger history). derivePhaseStatus() computes
+  // a Phase's displayed status live from these Phase Task/step rows via
+  // derivePhaseStatusFromSteps() — this save loop is the only place that
+  // changes step completion, so it's the only place a Phase can actually
+  // cross into or out of Complete. Snapshot the phase's derived status
+  // before the write loop runs, compare against the derived status after,
+  // and cascade to linked units only on a real transition.
+  const priorPhaseStatus=derivePhaseStatus(phaseId,propName,phaseName);
   let stepSaveFailCount=0;
   for(const row of rows){
     const stepName=row.dataset.stepName||row.dataset.taskName;
@@ -17646,6 +17656,16 @@ async function saveStepDates(phaseId){
       const newId=res?.records?.[0]?.id||'step_'+Date.now()+'_'+stepOrder;
       window.PHASE_STEPS.push({id:newId,property:propName,phaseName,taskName:stepName,taskOrder:stepOrder,plannedStart:plannedStart||'',plannedEnd:plannedEnd||'',actualStart:actualStart||'',completionDate:actualEnd||'',status,notes,checked});
     }
+  }
+  // v63t — real trigger point for the Phase-to-unit cascade, see comment
+  // above priorPhaseStatus. Compare derived status after the step writes
+  // above against the snapshot taken before them, and cascade only on a
+  // real Complete transition in either direction. ph.linkedUnitIds is the
+  // same field cascadePhaseUnitStatus already reads for the (dead-path)
+  // updatePhaseStatus caller, so no new data plumbing needed here.
+  const newPhaseStatus=derivePhaseStatus(phaseId,propName,phaseName);
+  if(newPhaseStatus!==priorPhaseStatus&&(newPhaseStatus==='Complete'||priorPhaseStatus==='Complete')){
+    await cascadePhaseUnitStatus(ph,newPhaseStatus,priorPhaseStatus);
   }
   document.getElementById('step-dates-overlay')?.remove();
   if(currentProp)renderPhasesTab(currentProp);
@@ -19099,10 +19119,33 @@ async function updatePhaseStatus(id,newStatus,propName){
   // Scope-to-unit cascade fixed earlier tonight (worker_v44i,
   // computeDerivedUnitStatus). Confirmed with Misty: a Phase reaching
   // Complete means its linked units really are done, so they should flip
-  // too. Same manual-override protection as every other unit-status write
-  // in this file — a unit already manually set to Complete or Dormant is
-  // never touched.
-  if(newStatus==='Complete'){
+  // too.
+  // v63t — v63r's cascade logic itself was correct but was wired to the
+  // wrong trigger: this function (updatePhaseStatus) writes the Phase's own
+  // manual Status field, but derivePhaseStatus() explicitly ignores that
+  // field in favor of derivePhaseStatusFromSteps(), which computes Complete
+  // live from Phase Task/step completion and never calls this function at
+  // all. So in real usage this branch essentially never fired. Extracted
+  // into cascadePhaseUnitStatus() below so the SAME logic can also be
+  // called from saveStepDates() — the actual save path for Phase Task rows,
+  // and the real trigger for a Phase showing Complete. Kept here too since
+  // this function still writes a real field and should stay consistent if
+  // anything else ever calls it directly.
+  await cascadePhaseUnitStatus(phase,newStatus,priorVals.status);
+  await deriveAndWritePropertyStatus(propName);
+  renderPhasesTab(currentProp);
+  renderPropertyView(currentProp);
+  showToast(`Phase updated to ${newStatus}`,'success');
+}
+
+// v63t — shared Phase-to-unit cascade, extracted from updatePhaseStatus's
+// v63r logic (see comment there for the incident this fixes). Same
+// manual-override protection as every other unit-status write in this
+// file — a unit already manually set to Complete or Dormant is never
+// touched by the forward direction; Dormant is still protected in reverse.
+async function cascadePhaseUnitStatus(phase,newStatus,priorStatus){
+  if(!phase)return;
+  if(newStatus==='Complete'&&priorStatus!=='Complete'){
     const phaseUnits=(window.UNIT_INVENTORY||[]).filter(u=>(phase.linkedUnitIds||[]).includes(u.id));
     for(const u of phaseUnits){
       if(u.status==='Complete'||u.status==='Dormant')continue;
@@ -19116,14 +19159,14 @@ async function updatePhaseStatus(id,newStatus,propName){
         }
       }
     }
-  }else if(priorVals.status==='Complete'&&newStatus!=='Complete'){
-    // v63r — reverse direction, confirmed with Misty: un-completing a Phase
+  }else if(priorStatus==='Complete'&&newStatus!=='Complete'){
+    // reverse direction, confirmed with Misty: un-completing a Phase
     // (moving it OFF Complete) should un-complete its units too, same
-    // standing rule already applied to un-completing a Scope earlier
-    // tonight. Re-derives each unit the normal way (computeDerivedUnitStatus,
-    // which looks at the unit's SCOPE — not this Phase — since Scope is
-    // still the real source of truth for Active/Planned). Manual overrides
-    // (Complete set directly on the unit, or Dormant) are still protected.
+    // standing rule already applied to un-completing a Scope. Re-derives
+    // each unit the normal way (computeDerivedUnitStatus, which looks at
+    // the unit's SCOPE — not this Phase — since Scope is still the real
+    // source of truth for Active/Planned). Manual overrides (Complete set
+    // directly on the unit, or Dormant) are still protected.
     const phaseUnits=(window.UNIT_INVENTORY||[]).filter(u=>(phase.linkedUnitIds||[]).includes(u.id));
     for(const u of phaseUnits){
       if(u.status==='Dormant')continue;
@@ -19140,10 +19183,6 @@ async function updatePhaseStatus(id,newStatus,propName){
       }
     }
   }
-  await deriveAndWritePropertyStatus(propName);
-  renderPhasesTab(currentProp);
-  renderPropertyView(currentProp);
-  showToast(`Phase updated to ${newStatus}`,'success');
 }
 
 // Open property detail with a specific tab pre-selected
