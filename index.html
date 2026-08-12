@@ -4672,7 +4672,18 @@ from unitEffectiveValue() onto each checkbox). -->
         feed grouped by property, 30-day rolling window. PM/Admin/
         Consultant nav rows (above) keep the existing pmupdates view
         unchanged. -->
-        <button class="nav-item" onclick="gotoView('clientprojectupdates',this)"><i class="ti ti-broadcast"></i>Project Updates</button>
+        <!-- v64s -- task #33. New nav badge, per Misty's explicit direction:
+        Client had no signal at all that a new update was available (every
+        other feed-style nav item -- PM Updates, Client Comments, Pending
+        Review, Operations Center -- already has one; this one never did).
+        Counts published items (PM Updates + approved Field Updates, same
+        two sources renderClientProjectUpdates() already merges) newer than
+        a 'pulse_clientpu_last_seen' localStorage timestamp, same
+        last-seen-on-view-open pattern Operations Center's badge already
+        uses (see updateOpsCenterBadge()/renderOpsCenter()) -- deliberately
+        NOT the existing updatePMUpdatesBadge()'s Draft-count logic, which
+        is structurally meaningless for Client (they never see Drafts). -->
+        <button class="nav-item" onclick="gotoView('clientprojectupdates',this)"><i class="ti ti-broadcast"></i>Project Updates<span id="clientpu-badge" class="nav-badge hidden">0</span></button>
         <button class="nav-item" onclick="gotoView('documents',this)"><i class="ti ti-files"></i>Documents</button>
         <button class="nav-item" onclick="gotoView('calendar',this)"><i class="ti ti-calendar-month"></i>Calendar</button>
       </div>
@@ -4693,7 +4704,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64r</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64t</div>
     </div>
   </nav>
 
@@ -6755,6 +6766,13 @@ async function _finishLogin(){
         // other role/refresh. Gated the same way Action Board's own
         // refresh already was below.
         renderDocFolders();refreshDashActions();refreshQueue();updateQueueBadge();refreshMyUpdates();populatePanelPropertyList();updatePMUpdatesBadge();
+        // v64s -- task #33. Client's Project Updates badge computed on
+        // initial load too, same as updatePMUpdatesBadge() just before it
+        // -- so the badge is already showing before the client ever
+        // navigates to the view, not just after a first visit stamps a
+        // baseline. No-ops harmlessly for PM/Admin/Consultant roles since
+        // #clientpu-badge only exists in the Client nav block.
+        updateClientProjectUpdatesBadge();
         if(document.getElementById('view-dashboard-archived')&&getComputedStyle(document.getElementById('view-dashboard-archived')).display!=='none')renderDashboard();
         // v58k -- Action Board never had an equivalent to renderDashboard()'s
         // unconditional re-render here, so its new AT_CONNECTED loading
@@ -22428,34 +22446,64 @@ function renderBudgetOutlook(){
     // now live here and in the detail row cells directly beneath, not in
     // the main collapsed-row header, so no column does double duty
     // between the two row types anymore.
+    // v64t -- task #34. Explicit widths added to every cell below,
+    // matching the main <thead>'s own column percentages exactly (Year's
+    // width + Properties' width from the main header, split between
+    // Property/Project here), since the sub-header/detail rows have a
+    // different cell count than the main header (2 columns -- Property,
+    // Project -- standing in for the main header's 2 columns -- Year,
+    // Properties) and neither row type had ANY explicit width before,
+    // leaving the browser's table auto-layout to size each row
+    // independently. Confirmed live/misaligned via screenshot: Property/
+    // Project didn't line up under Year's column boundary at all. Widths
+    // below sum to the same total as the main header in both the
+    // VDA-on and VDA-off cases.
+    const boColW=boIncludeVda
+      ?{chevron:'24px',prop:'20%',proj:'19%',est:'11%',cli:'11%',awd:'11%',vda:'10%',tot:'10%',units:'8%'}
+      :{chevron:'24px',prop:'22%',proj:'22%',est:'12%',cli:'12%',awd:'12%',vda:'0%',tot:'11%',units:'9%'};
+    // v64t -- task #34 (round 2, per Misty's direct conversation walking
+    // through the sub-header column by column). Property/Project renamed
+    // to "Property Name"/"Project Name" for clarity, both allowed to wrap
+    // (white-space:normal, explicit since table-layout:fixed cells can
+    // otherwise clip long names instead of wrapping). "Units" renamed to
+    // "Assigned Units" and changed from a count to the actual sorted unit
+    // name list (it.unitNames, already built via sortUnitNames() at the
+    // items.push() call site -- natural/numeric order, e.g. PE1, PE2,
+    // PE10, not plain alphabetical) -- per Misty's explicit direction:
+    // "it should identify the units by name, not another count."
     const subHeaderRow=isOpen?`<tr style="background:var(--gray-xpale)">
-      <td class="no-print"></td>
-      <td style="text-align:left;font-size:11px;font-weight:700;color:var(--gray-mid);padding-left:20px;text-transform:uppercase;letter-spacing:.03em">Property</td>
-      <td style="text-align:left;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">Project</td>
-      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">Total Work Est.</td>
-      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">Client Budget</td>
-      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">Award Value</td>
-      ${boIncludeVda?`<td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">VDA Project</td>`:''}
-      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">Total</td>
-      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em">Units</td>
+      <td class="no-print" style="width:${boColW.chevron}"></td>
+      <td style="text-align:left;font-size:11px;font-weight:700;color:var(--gray-mid);padding-left:20px;text-transform:uppercase;letter-spacing:.03em;width:${boColW.prop};white-space:normal">Property Name</td>
+      <td style="text-align:left;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;width:${boColW.proj};white-space:normal">Project Name</td>
+      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;width:${boColW.est}">Total Work Est.</td>
+      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;width:${boColW.cli}">Client Budget</td>
+      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;width:${boColW.awd}">Award Value</td>
+      ${boIncludeVda?`<td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;width:${boColW.vda}">VDA Project</td>`:''}
+      <td style="text-align:center;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;width:${boColW.tot}">Total</td>
+      <td style="text-align:left;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em;width:${boColW.units}">Assigned Units</td>
     </tr>`:'';
     const detailRows=isOpen?d.items.slice().sort((a,b)=>(a.property||'').localeCompare(b.property||'')||(a.scopeName||'').localeCompare(b.scopeName||'')).map(it=>{
+      const assignedUnitsText=it.unitNames&&it.unitNames.length>0?it.unitNames.join(', '):'<span style="color:var(--gray-light)">—</span>';
       return `
       <tr style="background:var(--gray-pale)">
-        <td></td>
+        <td style="width:${boColW.chevron}"></td>
         <!-- v64r -- task #32. Property/Project moved to the front,
         matching the new sub-header order directly above -- no more
-        combined "Property — Scope Name" label column. -->
-        <td style="text-align:left;font-size:12px;color:var(--gray-mid);padding-left:20px">${it.property||'<span style="color:var(--gray-light)">—</span>'}</td>
-        <td style="text-align:left;font-size:12px;color:var(--gray-mid)">${it.scopeName||'<span style="color:var(--gray-light)">—</span>'}</td>
-        <td style="text-align:center;font-size:12px;color:var(--teal)">${stageCell(it.estimated)}</td>
-        <td style="text-align:center;font-size:12px;color:var(--indigo)">${stageCell(it.approved)}</td>
-        <td style="text-align:center;font-size:12px;color:var(--blue-dark)">${stageCell(it.awarded)}</td>
+        combined "Property — Scope Name" label column.
+        v64t -- task #34. Explicit widths added, matching subHeaderRow's
+        boColW values exactly so every row type shares one column grid.
+        white-space:normal so long property/project names wrap instead of
+        clipping, per Misty's explicit direction. -->
+        <td style="text-align:left;font-size:12px;color:var(--gray-mid);padding-left:20px;width:${boColW.prop};white-space:normal">${it.property||'<span style="color:var(--gray-light)">—</span>'}</td>
+        <td style="text-align:left;font-size:12px;color:var(--gray-mid);width:${boColW.proj};white-space:normal">${it.scopeName||'<span style="color:var(--gray-light)">—</span>'}</td>
+        <td style="text-align:center;font-size:12px;color:var(--teal);width:${boColW.est}">${stageCell(it.estimated)}</td>
+        <td style="text-align:center;font-size:12px;color:var(--indigo);width:${boColW.cli}">${stageCell(it.approved)}</td>
+        <td style="text-align:center;font-size:12px;color:var(--blue-dark);width:${boColW.awd}">${stageCell(it.awarded)}</td>
         <!-- v64q -- task #30. VDA cell, only rendered when the toggle is
         on -- matches the header's conditional VDA Project column. -->
-        ${boIncludeVda?`<td style="text-align:center;font-size:12px;color:var(--vda-billing)">${stageCell(it.vda||0)}</td>`:''}
-        <td style="text-align:center;font-size:12px;font-weight:500">${fmtCurrency(it.amount)}</td>
-        <td style="text-align:center;font-size:12px;color:var(--gray-mid)">${it.unitCount||'—'}</td>
+        ${boIncludeVda?`<td style="text-align:center;font-size:12px;color:var(--vda-billing);width:${boColW.vda}">${stageCell(it.vda||0)}</td>`:''}
+        <td style="text-align:center;font-size:12px;font-weight:500;width:${boColW.tot}">${fmtCurrency(it.amount)}</td>
+        <td style="text-align:left;font-size:12px;color:var(--gray-mid);width:${boColW.units};white-space:normal">${assignedUnitsText}</td>
       </tr>`;}).join(''):'';
     const yVda=boIncludeVda?(d.vda||0):0;
     return `<tr style="cursor:pointer" onclick="toggleBoYear(${y})">
@@ -31813,6 +31861,34 @@ function updateOpsCenterBadge(){
     if(el){el.textContent=count;el.classList.toggle('hidden',count===0);}
   });
 }
+// v64s -- task #33. Client's Project Updates nav badge, same last-seen-
+// timestamp pattern as updateOpsCenterBadge() above (Misty confirmed she
+// wants a real signal that "there's an update available for them to look
+// at", not the existing PM-facing Draft-count badge, which is
+// structurally meaningless for Client since they only ever see Published
+// items). Counts the same two sources renderClientProjectUpdates()
+// already merges into one feed -- Published PM Updates and Approved
+// Field Update submissions -- using each item's own published/
+// approvedAt date (not createdTime) as the "new" comparison, since
+// that's the date the item actually became visible to Client, matching
+// what the feed itself sorts/filters by. Opening the view (see
+// renderClientProjectUpdates below) stamps 'pulse_clientpu_last_seen' to
+// now and clears the badge immediately, same as Operations Center.
+function updateClientProjectUpdatesBadge(){
+  let lastSeen=0;
+  try{lastSeen=parseInt(localStorage.getItem('pulse_clientpu_last_seen')||'0',10)||0;}catch(e){}
+  let count=0;
+  (window.PM_UPDATES||[]).filter(u=>u.status==='Published'&&u.published).forEach(u=>{
+    const pubTime=new Date(u.published+'T12:00:00').getTime();
+    if(pubTime>lastSeen)count++;
+  });
+  (submissions||[]).filter(s=>s.reviewStatus==='approved'&&s.approvedAt).forEach(s=>{
+    const approvedTime=new Date(s.approvedAt).getTime();
+    if(approvedTime>lastSeen)count++;
+  });
+  const el=document.getElementById('clientpu-badge');
+  if(el){el.textContent=count;el.classList.toggle('hidden',count===0);}
+}
 function populateSubmitDropdown(){
   const sel=document.getElementById('f-property');
   if(!sel)return;
@@ -32577,6 +32653,14 @@ function renderPMUpdates(){
 function renderClientProjectUpdates(){
   const feed=document.getElementById('client-project-updates-feed');
   if(!feed)return;
+  // v64s -- task #33. Stamp last-seen the moment this view actually
+  // renders, then clear the nav badge -- same pattern as
+  // renderOpsCenter()/updateOpsCenterBadge(). Items counted here stay
+  // visible in the feed below (nothing here filters what's shown), they
+  // just won't count toward the badge again until something newer is
+  // published after this timestamp.
+  try{localStorage.setItem('pulse_clientpu_last_seen',String(Date.now()));}catch(e){}
+  updateClientProjectUpdatesBadge();
   const esc=escHtml;
   const cutoff=new Date();
   cutoff.setDate(cutoff.getDate()-30);
