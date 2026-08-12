@@ -3173,6 +3173,13 @@ async function loadAllData() {
       const propId=Array.isArray(propLink)?propLink[0]:propLink;
       return {
         id: r.id,
+        // v63o — task #19/#20. Fallback date for the backfilled-complete
+        // banner when both Fast Tracked Complete On and Status Changed
+        // Date are blank (e.g. old bulk-imported/migrated scopes that
+        // predate either field). Airtable's own record creation timestamp
+        // is the last resort so the banner never silently fails to render
+        // just because no real completion date was ever captured.
+        createdDate: r.createdTime||'',
         property: propIdToName[propId]||'',
         propertyId: propId||'',
         name: r.fields['Scope Name']||'',
@@ -4660,7 +4667,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63m</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63o</div>
     </div>
   </nav>
 
@@ -11132,11 +11139,26 @@ function renderMilestones(p){
   // still renders separately above this banner, same as before.
   const scopeIsBackfilled=isBackfilledComplete(currentScope,msData);
   if((currentScope&&currentScope.fastTrackedComplete)||scopeIsBackfilled){
+    // v63o — task #19. bannerDate used to fall back only to statusChangedDate,
+    // which is blank on any scope that reached Complete before that field
+    // existed (all-Not-Started/no-date backfilled imports). That made
+    // bannerDateFmt an empty string and the whole banner silently disappeared
+    // even though scopeIsBackfilled correctly fired true. Added a final
+    // fallback to the scope's own Airtable createdDate so the banner always
+    // renders once detection says it should. createdDate is a full ISO
+    // datetime already (unlike the other two, which are date-only strings
+    // needing the T00:00:00 anchor), so it's parsed directly.
     const bannerDate=currentScope.fastTrackedComplete?currentScope.fastTrackedCompleteOn:currentScope.statusChangedDate;
-    const bannerDateFmt=bannerDate?new Date(bannerDate+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+    const usingCreatedFallback=!bannerDate&&!!currentScope.createdDate;
+    const bannerDateRaw=bannerDate||currentScope.createdDate||'';
+    const bannerDateFmt=bannerDateRaw?(usingCreatedFallback?new Date(bannerDateRaw):new Date(bannerDateRaw+'T00:00:00')).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+    // Fallback case has no real completion date on record, so the copy
+    // avoids stating a specific completion date as fact; PM/Admin/
+    // Consultant still see it was recorded in the system on that date.
+    const bannerText=usingCreatedFallback?`Project Team indicated all milestones complete. Recorded in PULSE on ${bannerDateFmt}.`:`Project Team indicated all milestones complete, project complete on ${bannerDateFmt}.`;
     var completeBanner=bannerDateFmt?`<div style="display:flex;align-items:center;gap:10px;background:var(--green-pale);border:1px solid var(--green);border-radius:8px;padding:10px 14px;margin-bottom:14px">
       <i class="ti ti-circle-check" style="font-size:18px;color:var(--green)"></i>
-      <div style="font-size:12px;font-weight:600;color:var(--navy)">Project Team indicated all milestones complete, project complete on ${bannerDateFmt}.</div>
+      <div style="font-size:12px;font-weight:600;color:var(--navy)">${bannerText}</div>
     </div>`:'';
   }else{
     var completeBanner='';
@@ -13119,19 +13141,30 @@ function getPropertyBilledAndBasis(p){
   // explicitly in the status-redesign audit.
   const activeScopes=(window.SCOPES||[]).filter(s=>s.property===p.n&&(s.status==='Pre-Construction'||s.status==='Construction'||s.status==='Project Closeout'));
   let billed=0;
+  // v63n -- task #15 fix. Both branches below used to take only the
+  // single latest Billing Log entry (sorted by date, [0]) instead of
+  // summing every entry -- confirmed live: New York Hilton Midtown has
+  // 12 real invoices on its "36 Units" scope totaling $9,926,607, but
+  // this function was only counting its single latest entry ($254,619),
+  // which is exactly where the misleading ~$255K portfolio-wide "Total
+  // Investment" figure on the Properties tab came from. Each Billing Log
+  // row is one invoice (see renderBudgetTab's own v62k comment: "Billed
+  // YTD... is now a lifetime sum across all years", the same fix already
+  // correctly applied on the Budget Performance tab but never carried
+  // over here). Both branches now sum every matching entry via reduce(),
+  // matching that established, correct convention.
   if(activeScopes.length===0){
     // No active Scope (pre-Scope legacy property, or everything
-    // Complete/On Hold/Planned) — fall back to the old property-wide
-    // latest-entry behavior exactly as before, so a property with no
-    // In Progress Scope doesn't regress to showing nothing.
-    const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n)
-      .sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
-    billed=propBilling[0]?Number(propBilling[0].billedYTD):0;
+    // Complete/On Hold/Planned) — sum every Billing Log entry for the
+    // whole property, same lifetime-sum convention as the active-scope
+    // branch below, so a property with no In Progress Scope still shows
+    // its real total instead of one invoice.
+    const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===p.n);
+    billed=propBilling.reduce((sum,b)=>sum+(Number(b.billedYTD)||0),0);
   }else{
     activeScopes.forEach(sc=>{
-      const scBilling=(window.BILLING_LOG||[]).filter(b=>b.scopeId===sc.id)
-        .sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
-      if(scBilling[0])billed+=Number(scBilling[0].billedYTD)||0;
+      const scBilling=(window.BILLING_LOG||[]).filter(b=>b.scopeId===sc.id);
+      billed+=scBilling.reduce((sum,b)=>sum+(Number(b.billedYTD)||0),0);
     });
   }
   return{billed,basis,pctBilled:basis>0?Math.round((billed/basis)*100):0,scopeCount:activeScopes.length,stages};
@@ -23667,9 +23700,15 @@ function renderCharts(){
 
   // 1. Budget vs Billed
   const budgetSource=chartFiltered; // Capital Plan excluded from billing chart unless filter is set
+  // v63n -- task #15 fix. Was entries[0] (single latest Billing Log
+  // entry) instead of a sum -- same bug as getPropertyBilledAndBasis(),
+  // confirmed live to show e.g. New York Hilton Midtown's single latest
+  // invoice ($254,619) instead of its real lifetime total ($9,926,607).
+  // Now sums every entry, matching the established convention (see
+  // renderBudgetTab's v62k comment and getPropertyBilledAndBasis's v63n fix).
   const budgetData=budgetSource.filter(p=>getBillingBasis(p).amount>0).map(p=>{
-    const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
-    const billedYTD=entries[0]?Number(entries[0].billedYTD):0;
+    const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n);
+    const billedYTD=entries.reduce((sum,b)=>sum+(Number(b.billedYTD)||0),0);
     const savings=(window.CO_SAVINGS||[]).filter(s=>s.property===p.n&&(s.status==='Approved'||s.status==='Client Approved')).reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
     const billingBasis=getBillingBasis(p);
     return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:billingBasis.amount,billedYTD,savings,pctBilled:Math.round((billedYTD/billingBasis.amount)*100)};
@@ -33743,7 +33782,15 @@ function buildReportHTML(filter,periodDays,isWeekly){
     ...medActions.map(a=>({level:'medium',property:a.property,ec:'—',type:'Action Item',desc:a.description})),
   ].slice(0,6);
   const rptBudget=activeProps.reduce((a,p)=>a+getBillingBasis(p).amount,0);
-  const rptBilled=activeProps.reduce((a,p)=>a+(p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((x,b)=>Math.max(x,b.billedYTD||0),0)),0);
+  // v63n -- task #15 fix. Was Math.max() across every Billing Log entry
+  // -- i.e. the single LARGEST individual invoice ever logged for a
+  // property, not a total -- while the label on screen literally says
+  // "Total billed YTD". Confirmed live: New York Hilton Midtown's real
+  // lifetime total is $9,926,607 across 12 invoices; the old code would
+  // have shown $4,151,267 (its single biggest invoice) instead. Now sums
+  // every entry, matching the established convention (see
+  // getPropertyBilledAndBasis's v63n fix and renderBudgetTab's v62k comment).
+  const rptBilled=activeProps.reduce((a,p)=>a+(p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((x,b)=>x+(Number(b.billedYTD)||0),0)),0);
   const rptRemain=rptBudget-rptBilled;
   const rptSavings=(window.CO_SAVINGS||[]).filter(c=>c.status==='Client Approved').reduce((a,c)=>a+(c.originalAmount-c.negotiatedAmount),0);
   const summarySection=isWeekly?`
@@ -33797,7 +33844,9 @@ function buildReportHTML(filter,periodDays,isWeekly){
                 const msC=getMsCompleteWeighted(p.n);
                 const health=derivePropertyStatusFromPhases(p.n);
                 const healthBadge=health==='At Risk'?'<span class="badge b-behind">At Risk</span>':health==='Ahead'?'<span class="badge b-health-ahead">Ahead</span>':health==='Complete'?'<span class="badge b-done">Complete</span>':'<span class="badge b-nip">On Track</span>';
-                const billedYTD=p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((a,b)=>Math.max(a,b.billedYTD||0),0);
+                // v63n -- task #15 fix, same Math.max->sum correction as
+                // rptBilled above, applied to this per-row "% Spent" column.
+                const billedYTD=p.billedYTD||(window.BILLING_LOG||[]).filter(b=>b.property===p.n).reduce((a,b)=>a+(Number(b.billedYTD)||0),0);
                 const rowBillingBasis=getBillingBasis(p);
                 const pctSpent=rowBillingBasis.amount&&billedYTD?Math.round(billedYTD/rowBillingBasis.amount*100):null;
                 // v60b — weighted, same MS_WEIGHTS table as the VDA
