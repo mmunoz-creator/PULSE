@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64h</div>
     </div>
   </nav>
 
@@ -6983,7 +6983,15 @@ function setupPortal(){
 // its help topic is now reached via the 'dashboard' id below instead.
 // v62 — 'budgetoutlook' added, now that Budget Outlook is its own
 // top-level gotoView() target instead of an Analytics sub-panel.
-const HELP_ENABLED_VIEWS = new Set(['dashboard','dashboard-archived','charts','portfolio','capital','scorecard','pmupdates','clientprojectupdates','vdaproject','queue','opscenter','schedule','properties','budgetoutlook']);
+// v64h -- 'calendar' added. Found via a live difference audit
+// (PULSE_Help_Difference_Audit_2026-08-12.md): the real "Calendar" nav
+// item (Meetings/Site Visits/RSVP) had no help button at all, confirmed
+// live for both PM and Client -- the help:calendar KV content was
+// accurate but unreachable, while "Schedule" (a different page, the
+// Gantt/timeline view) was incorrectly showing that same content instead
+// of its own. See topicMap below for the matching schedule/calendar
+// topic split.
+const HELP_ENABLED_VIEWS = new Set(['dashboard','dashboard-archived','charts','portfolio','capital','scorecard','pmupdates','clientprojectupdates','vdaproject','queue','opscenter','schedule','calendar','properties','budgetoutlook']);
 
 function updateGlobalHelpBtn(viewId) {
   const btn = document.getElementById('global-help-btn');
@@ -7014,7 +7022,14 @@ function updateGlobalHelpBtn(viewId) {
     capital: 'capital',
     scorecard: 'scorecard',
     pmupdates: 'pmupdates',
-    clientprojectupdates: 'pmupdates',
+    // v64h -- was 'pmupdates', reusing the PM's authoring-perspective
+    // content (Save Draft, Publish to Client, Who can post: Admin/PM/
+    // Consultant) on a page the Client role can't post to and never sees
+    // drafts on. Confirmed live logged in as Client: drawer title read
+    // "PM Updates Help" on the "Project Updates" page. Now points at its
+    // own key describing the read-only merged feed from the Client's
+    // point of view. See PULSE_Help_KV_Master_v64g.md.
+    clientprojectupdates: 'clientprojectupdates',
     // v58o fix -- this resolved to null whenever Portfolio View itself was
     // open (not inside a property), which made handleHelpBtnClick() fall
     // back to its 'dashboard' default -- the exact bug Misty flagged live
@@ -7028,7 +7043,17 @@ function updateGlobalHelpBtn(viewId) {
     vdaproject: 'vdaproject',
     queue: 'queue',
     opscenter: 'opscenter',
-    schedule: 'calendar',
+    // v64h -- 'schedule' viewId was pointed at the 'calendar' KV key,
+    // which describes a different, older feature (Meetings/Site Visits/
+    // RSVP). The "Schedule" nav item has shown a Gantt/timeline view
+    // ("Construction phase 6 month look ahead") for some time now, and
+    // never had its own help content -- confirmed live, clicking Help on
+    // that page showed Cancel/Reschedule/Meeting Minutes content that
+    // doesn't exist anywhere on screen there. Now points at its own key.
+    // The real Calendar page (Meetings/Site Visits) gets its own entry
+    // below, now that it's in HELP_ENABLED_VIEWS.
+    schedule: 'schedule',
+    calendar: 'calendar',
     properties: 'properties',
   };
   // v58s -- fallback below changed from 'dashboard' to 'actionboard' to
@@ -7303,14 +7328,23 @@ function setCurrentScope(scopeId){
   }
 }
 // Map property tabs to help topic keys (v31j)
+// v64h -- phases/changeorders/fieldops previously all pointed at
+// property-overview, meaning the Unit Phases, Change Orders, and
+// Meetings & Actions tabs silently showed Overview's help content with no
+// dedicated pill to reach anything else. Confirmed live on Boston
+// Marriott Newton's Unit Phases tab. Now point at their own new keys
+// (see PULSE_Help_KV_Master_v64g.md). updates/docs deliberately left on
+// the property-overview fallback -- their content is closer to file/
+// record management than lifecycle tracking and didn't seem to warrant
+// a dedicated key at this pass's scope.
 const PROP_TAB_HELP_MAP={
   overview:'property-overview',
   milestones:'property-milestones',
   budget:'property-budget',
   bids:'property-bids',
-  phases:'property-overview',
-  changeorders:'property-overview',
-  fieldops:'property-overview',
+  phases:'property-phases',
+  changeorders:'property-changeorders',
+  fieldops:'property-fieldops',
   updates:'property-overview',
   docs:'property-overview'
 };
@@ -34556,7 +34590,16 @@ window._helpCache = null;
 window._helpCurrentView = null;
 
 const HELP_VIEW_META = {
-  'dashboard':          { title: 'Dashboard',         sub: 'Portfolio health and daily triage',        tabs: null },
+  // v64h -- was still {title:'Dashboard', sub:'Portfolio health and daily
+  // triage'}, left over from before v58s repointed the 'dashboard' viewId
+  // at Action Board's content. Once the matching Worker fix (v44k) makes
+  // help:actionboard actually load, this entry would otherwise show
+  // Action Board's real content under a "Dashboard Help" title with the
+  // old sub-text -- confirmed live this would happen (drawer opened with
+  // the correct title/sub already, just empty body, before the Worker
+  // fix). Converged onto the same title/sub as the 'actionboard' entry
+  // below so both stay in sync going forward.
+  'dashboard':          { title: 'Action Board',       sub: 'Action items, priority properties, and construction status in one view', tabs: null },
   'analytics':          { title: 'Analytics',          sub: 'Portfolio performance and breakdown',      tabs: null },
   // v42d — was missing entirely, so opening help from Capital Plan silently
   // fell through to the generic {title:'Help'} default below regardless of
@@ -34578,10 +34621,15 @@ const HELP_VIEW_META = {
   'budget-outlook':     { title: 'Budget Outlook',      sub: 'Award and estimate spend by year, across every project', tabs: null },
   'scorecard':          { title: 'Scorecard',          sub: 'Portfolio-wide performance KPIs',          tabs: null },
   'pmupdates':          { title: 'PM Updates',         sub: 'Status updates shared with the client',    tabs: null },
-  'property-overview':  { title: 'Property Detail',   sub: 'Overview tab',                             tabs: ['property-overview','property-milestones','property-budget','property-bids'] },
-  'property-milestones':{ title: 'Property Detail',   sub: 'Milestones tab',                           tabs: ['property-overview','property-milestones','property-budget','property-bids'] },
-  'property-budget':    { title: 'Property Detail',   sub: 'Budget Performance tab',                   tabs: ['property-overview','property-milestones','property-budget','property-bids'] },
-  'property-bids':      { title: 'Property Detail',   sub: 'Bids tab',                                 tabs: ['property-overview','property-milestones','property-budget','property-bids'] },
+  // v64h -- tabs arrays widened from 4 to 7 entries (added property-
+  // phases, property-changeorders, property-fieldops) so the drawer's
+  // pill row can reach the three tabs added this pass instead of only
+  // ever showing Overview/Milestones/Budget/Bids. See the three new
+  // entries below for those keys' own title/sub.
+  'property-overview':  { title: 'Property Detail',   sub: 'Overview tab',                             tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
+  'property-milestones':{ title: 'Property Detail',   sub: 'Milestones tab',                           tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
+  'property-budget':    { title: 'Property Detail',   sub: 'Budget Performance tab',                   tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
+  'property-bids':      { title: 'Property Detail',   sub: 'Bids tab',                                 tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
   // v49a — new entries for the four new help keys (help:vdaproject,
   // help:queue, help:opscenter, help:calendar), matching sub-text to the
   // real on-screen page-header <p> text for each view so the drawer
@@ -34590,7 +34638,18 @@ const HELP_VIEW_META = {
   'vdaproject':          { title: 'VDA Project',       sub: 'Billing agreements, task lines, and amendment history across the portfolio', tabs: null },
   'queue':               { title: 'Pending Review',    sub: 'Approvals and MARLI suggestions waiting for your review', tabs: null },
   'opscenter':           { title: 'Operations Center', sub: 'Action plan, portfolio activity, and field updates in one view', tabs: null },
-  'calendar':            { title: 'Schedule',          sub: 'Meetings, site visits, and key dates',     tabs: null },
+  // v64h -- title corrected from 'Schedule' to 'Calendar'. This entry's
+  // title predates the Gantt/timeline view that now owns the "Schedule"
+  // nav item and viewId; left as-is it would collide with the new
+  // 'schedule' entry immediately below once help:calendar was reachable
+  // from its own real page (see HELP_ENABLED_VIEWS/topicMap fixes above).
+  // Content/sub unchanged -- still accurate for Meetings/Site Visits.
+  'calendar':            { title: 'Calendar',          sub: 'Meetings, site visits, and key dates',     tabs: null },
+  // v64h -- new entry for the Gantt/timeline view, which never had its
+  // own help:schedule KV key or meta entry, and was previously showing
+  // 'calendar' entry's content/title under the Schedule nav item instead
+  // (confirmed live, mismatched with what's actually on that page).
+  'schedule':            { title: 'Schedule',          sub: 'Construction phase 6 month look ahead',    tabs: null },
   // v58o -- three new entries. actionboard/properties sub-text matches
   // each page's real on-screen <p> text exactly, same convention as every
   // entry above. portfolio's sub is new copy (that page's on-screen
@@ -34598,14 +34657,35 @@ const HELP_VIEW_META = {
   // fixed text worth quoting here).
   'actionboard':         { title: 'Action Board',      sub: 'Action items, priority properties, and construction status in one view', tabs: null },
   'properties':          { title: 'Properties',        sub: 'Real-time view of your elevator modernization program',   tabs: null },
-  'portfolio':           { title: 'Portfolio View',    sub: 'Every property in one list',               tabs: null }
+  'portfolio':           { title: 'Portfolio View',    sub: 'Every property in one list',               tabs: null },
+  // v64h -- new entries for the Client's "Project Updates" page (was
+  // reusing 'pmupdates' meta+content, confirmed live to be PM-authoring-
+  // perspective content on a page the Client role can't post to), and for
+  // three property-detail tabs (Unit Phases, Change Orders, Meetings &
+  // Actions) that previously had no help:* key or meta entry at all and
+  // silently fell back to property-overview's content and tab highlight
+  // (confirmed live on Boston Marriott Newton's Unit Phases tab -- no
+  // Unit Phases pill even existed in the tabs row below). tabs arrays
+  // updated to include all 7 property-detail keys that now exist so the
+  // drawer's tab-pill row can navigate between any of them, not just the
+  // original 4.
+  'clientprojectupdates':{ title: 'Project Updates',   sub: 'Status updates from your VDA project team', tabs: null },
+  'property-phases':      { title: 'Property Detail',  sub: 'Unit Phases tab',                          tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
+  'property-changeorders':{ title: 'Property Detail',  sub: 'Change Orders tab',                        tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
+  'property-fieldops':    { title: 'Property Detail',  sub: 'Meetings & Actions tab',                   tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] }
 };
 
+// v64h -- added labels for the three tabs added this pass (Unit Phases,
+// Change Orders, Meetings & Actions), matching each tab's real on-screen
+// label so the drawer's pill row reads the same as the page's own tab row.
 const HELP_TAB_LABELS = {
-  'property-overview':   'Overview',
-  'property-milestones': 'Milestones',
-  'property-budget':     'Budget',
-  'property-bids':       'Bids'
+  'property-overview':    'Overview',
+  'property-milestones':  'Milestones',
+  'property-budget':      'Budget',
+  'property-bids':        'Bids',
+  'property-phases':      'Unit Phases',
+  'property-changeorders':'Change Orders',
+  'property-fieldops':    'Meetings & Actions'
 };
 
 async function openHelpDrawer(viewKey) {
