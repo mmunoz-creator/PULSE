@@ -4660,7 +4660,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63f</div>
     </div>
   </nav>
 
@@ -23674,18 +23674,24 @@ function renderCharts(){
     fsDetailByMonth[mo].push({property:prop,unitName:'',amount:billed,isActual:true});
   });
 
-  // v47a — "Include VDA billing" toggle on Forecasted Spend. Off by
-  // default; when the checkbox is checked, extend fsByMonth[month] with a
-  // third .vda key computed by computeVdaFsByMonth() (see VDA PROJECT
-  // section near the end of this script). Purely additive — never alters
-  // .actual/.forecast, and the third bar segment only renders when on.
+  // v47a — "Show VDA Project" toggle on Forecasted Spend (relabeled from
+  // "Include VDA billing" in v63f). Off by default; when the checkbox is
+  // checked, extend fsByMonth[month] with a third .vda key computed by
+  // computeVdaFsByMonth() (see VDA PROJECT section near the end of this
+  // script). Purely additive — never alters .actual/.forecast, and the
+  // third bar segment only renders when on. v63f — computeVdaFsByMonth()
+  // now returns {byMonth,detailByMonth}; detail is stashed on
+  // window._fsVdaTooltipData for the VDA segment's own click-through,
+  // kept separate from window._fsTooltipData (property/unit rows).
   const fsIncludeVda=!!(document.getElementById('fs-vda-toggle')&&document.getElementById('fs-vda-toggle').checked);
+  window._fsVdaTooltipData={};
   if(fsIncludeVda&&typeof computeVdaFsByMonth==='function'){
-    const vdaByMonth=computeVdaFsByMonth(_fcfsMonthKeys);
+    const vdaResult=computeVdaFsByMonth(_fcfsMonthKeys);
     _fcfsMonthKeys.forEach(mo=>{
       if(!fsByMonth[mo])fsByMonth[mo]={actual:0,forecast:0};
-      fsByMonth[mo].vda=vdaByMonth[mo]||0;
+      fsByMonth[mo].vda=vdaResult.byMonth[mo]||0;
     });
+    window._fsVdaTooltipData=vdaResult.detailByMonth||{};
   }
   const fsLegendVda=document.getElementById('fs-legend-vda');
   if(fsLegendVda)fsLegendVda.style.display=fsIncludeVda?'flex':'none';
@@ -23934,14 +23940,14 @@ function renderCharts(){
           <div class="card-sub">Rolling 12 months, one-month billing lag, straight-line proration</div>
         </div></div>
         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid);cursor:pointer;white-space:nowrap">
-          <input type="checkbox" id="fs-vda-toggle" onchange="toggleVdaForecastInclude('charts',this.checked)">Include VDA billing
+          <input type="checkbox" id="fs-vda-toggle" onchange="toggleVdaForecastInclude('charts',this.checked)">Show VDA Project
         </label>
       </div>
       <div id="fs-chart" style="margin-top:10px;position:relative"></div>
       <div id="fs-legend" style="display:flex;justify-content:center;gap:16px;margin-top:8px;font-size:11px;color:var(--gray-mid)">
         <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--act-billing);display:inline-block"></span>Actual (billed)</span>
         <span style="display:flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--teal);display:inline-block"></span>Forecast</span>
-        <span id="fs-legend-vda" style="display:none;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--vda-billing);display:inline-block"></span>VDA billing</span>
+        <span id="fs-legend-vda" style="display:none;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:2px;background:var(--vda-billing);display:inline-block"></span>VDA Project</span>
       </div>
     </div>
   </div>
@@ -24233,7 +24239,7 @@ function renderCharts(){
             return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0" ${totalAmt>0?`onmouseover="showFcFsTooltip(event,'fs','${k}')" onmouseout="hideFcFsTooltip()" onclick="showBarDrilldown('fs-month','${k}')"`:''}>
               <div style="font-size:10px;font-weight:700;color:var(--navy);margin-bottom:4px">${totalAmt>0?fmtCurrency(totalAmt):'—'}</div>
               <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;cursor:${totalAmt>0?'pointer':'default'}">
-                ${vdaAmt>0?`<div style="width:100%;height:${vdaH}px;background:var(--vda-billing);opacity:.85;transition:opacity .12s;${m.forecast>0||m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
+                ${vdaAmt>0?`<div style="width:100%;height:${vdaH}px;background:var(--vda-billing);opacity:.85;transition:opacity .12s;${m.forecast>0||m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'" onclick="event.stopPropagation();showVdaFsDrilldown('${k}')" title="Click for VDA Project breakdown"></div>`:''}
                 ${m.forecast>0?`<div style="width:100%;height:${forecastH}px;background:var(--teal);opacity:.85;transition:opacity .12s;${m.actual>0?'':'border-radius:4px 4px 0 0'}" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
                 ${m.actual>0?`<div style="width:100%;height:${actualH}px;background:var(--act-billing);border-radius:4px 4px 0 0;opacity:.85;transition:opacity .12s" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='.85'"></div>`:''}
               </div>
@@ -24775,6 +24781,55 @@ function showBarDrilldown(type,value){
   </div>`;
   document.body.appendChild(overlay);
 }
+
+// v63f — dedicated click-through for the Forecasted Spend chart's VDA
+// segment (separate from showBarDrilldown's generic property/unit rows,
+// per direct instruction: clicking the VDA segment shows VDA Project # /
+// Task / Contract Balance, not property/unit detail). Reads
+// window._fsVdaTooltipData, set alongside window._fsTooltipData in
+// renderCharts() whenever the "Show VDA Project" toggle is on.
+function showVdaFsDrilldown(monthKey){
+  const rows=(window._fsVdaTooltipData||{})[monthKey]||[];
+  const total=rows.reduce((a,r)=>a+(r.amount||0),0);
+  // _monthLabel isn't reachable here — it's a const scoped inside
+  // renderCharts(), not global. Same short label logic inlined.
+  const monthNames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [_mlY,_mlM]=monthKey.split('-');
+  const monthLabel=monthNames[parseInt(_mlM)-1]||monthKey;
+  const overlay=document.createElement('div');
+  overlay.id='bar-drill-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  let bodyHtml;
+  if(rows.length===0){
+    bodyHtml=`<div style="padding:24px;text-align:center;font-size:12px;color:var(--gray-mid)">No VDA task lines end in this month.</div>`;
+  }else{
+    const rowsHtml=rows.map(r=>`<tr>
+      <td style="padding:8px 10px;font-size:12px;font-weight:500;color:var(--blue-dark)">${escHtml(r.vdaNumber||'—')}</td>
+      <td style="padding:8px 10px;font-size:11px;color:var(--navy)">${escHtml(r.task||'—')}</td>
+      <td style="padding:8px 10px;font-size:11px;text-align:right;color:var(--navy)">${fmtCurrency(r.amount||0)}</td>
+    </tr>`).join('');
+    bodyHtml=`<table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--gray-xpale)">
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">VDA Project #</th>
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:left">Task</th>
+          <th style="padding:8px 10px;font-size:10px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;text-align:right">Contract Balance</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>`;
+  }
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:620px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow-md)">
+    <div style="padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:14px;font-weight:600;color:var(--navy)">VDA Billing — ${monthLabel}</div>
+        <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${fmtCurrency(total)} total</div>
+      </div>
+      <button onclick="document.getElementById('bar-drill-overlay').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);font-size:18px"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="overflow-y:auto;flex:1">${bodyHtml}</div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+window.showVdaFsDrilldown=showVdaFsDrilldown;
 
 // v42a — hover tooltips for Forecasted Completion and Forecasted Spend's
 // rolling-month bars. Property-grouped popover, positioned above the
@@ -27740,10 +27795,20 @@ function openScheduleMeetingModal(prefillPropName){
     </div>
     <div class="form-group" style="margin-bottom:12px">
       <label class="form-label">Meeting Type</label>
-      <select class="form-input" id="smtg-type">
+      <select class="form-input" id="smtg-type" onchange="document.getElementById('smtg-type-other-wrap').style.display=this.value==='Other'?'block':'none'">
         <option>Progress Meeting</option><option>Kickoff Meeting</option><option>Design Review</option>
         <option>Site Walkthrough</option><option>Client Update</option><option>Internal Review</option><option>Other</option>
       </select>
+    </div>
+    <!-- v63f -- free-text field for Meeting Type "Other", per direct
+    instruction. Hidden by default, same conditional-reveal pattern as
+    smtg-recur-body above. Meeting Type (fldQygg4CPno3uTGa) is plain
+    singleLineText in Airtable, so no schema change was needed -- the
+    typed value is written directly at save time in place of the literal
+    string "Other" (see saveScheduledMeeting()). -->
+    <div class="form-group" id="smtg-type-other-wrap" style="margin-bottom:12px;display:none">
+      <label class="form-label">Specify meeting type</label>
+      <input class="form-input" type="text" id="smtg-type-other" placeholder="e.g. Warranty Walkthrough" maxlength="80">
     </div>
     <div class="form-group" style="margin-bottom:12px">
       <label class="form-label">Video Call Link <span style="font-weight:400;color:var(--gray-mid)">(optional — paste a Teams or Zoom link)</span></label>
@@ -27989,7 +28054,15 @@ async function saveScheduledMeeting(){
   // used to assume unconditionally.
   const durationMin=parseInt(document.getElementById('smtg-duration')?.value,10)||60;
   const tz=document.getElementById('smtg-tz')?.value||'America/New_York';
-  const type=document.getElementById('smtg-type')?.value;
+  // v63f -- when Meeting Type is "Other", write the typed free-text value
+  // instead of the literal string "Other", per direct instruction. Falls
+  // back to "Other" if the field was left blank rather than silently
+  // writing an empty string.
+  let type=document.getElementById('smtg-type')?.value;
+  if(type==='Other'){
+    const otherVal=document.getElementById('smtg-type-other')?.value.trim();
+    if(otherVal)type=otherVal;
+  }
   const topics=getSmtgAgendaTopics();
   const attendees=getSmtgAttendees();
   const recurCfg=getSmtgRecurrenceConfig();
@@ -36140,73 +36213,42 @@ async function saveEditVdaProject(){
 }
 window.saveEditVdaProject=saveEditVdaProject;
 
-// ── Forecast toggle — "Include VDA billing" on the Forecasted Spend
-// chart (Analytics renderCharts() and the Budget Outlook mini version
-// added below). Extends fsByMonth[month] with a third .vda key.
-// Simplification note: for Recurring-count-based / Flat recurring Task
-// Lines, Monthly Forecast Estimate is spread evenly starting from the
-// Task Line's own creation date (falls back to the VDA Project's
-// creation date if the Task Line's own createdTime is unavailable) going
-// forward across the same rolling 12-month window used elsewhere on this
-// chart — a real recurring billing schedule isn't tracked as its own
-// field yet, so this is the simplest reasonable proxy rather than
-// modeling exact recurrence intervals.
-window._vdaForecastIncluded={charts:false,budgetOutlook:false};
+// ── Forecast toggle — "Show VDA Project" on the Forecasted Spend chart
+// (Analytics renderCharts()). Extends fsByMonth[month] with a third .vda
+// key. Budget Outlook's own copy of this chart was removed in v49b and is
+// deliberately NOT being revived for this toggle — Analytics stays the
+// single source of truth (per direct instruction, v63f).
+// v63f — rebuilt from scratch. Previous version keyed off Trigger Type
+// (Milestone Linked vs Recurring/Flat) and either matched a Milestone's
+// Planned Date by name or spread Monthly Forecast Estimate evenly from
+// the Task Line's creation date. Per direct instruction, that's replaced
+// with a single flat rule for every Task Line regardless of Trigger Type:
+// its full Contract Balance lands as a lump sum in the month of its own
+// End Date. Also now returns a detail list per month (VDA Project #, Task
+// Line description, Contract Balance) for the bar's click-through
+// drilldown, since the old per-property/unit detail rows don't apply to
+// VDA data.
+window._vdaForecastIncluded={charts:false};
 function computeVdaFsByMonth(monthKeys){
   const out={};
-  monthKeys.forEach(mo=>out[mo]=0);
+  const detail={};
+  monthKeys.forEach(mo=>{out[mo]=0;detail[mo]=[];});
   const taskLines=window.VDA_TASK_LINES||[];
-  const milestones=window.MILESTONES||[];
-  const invoices=window.VDA_INVOICES||[];
   const projects=window.VDA_PROJECTS||[];
 
   taskLines.forEach(t=>{
+    if(!t.endDate)return;
+    const balance=t.contractBalance||0;
+    if(balance<=0)return;
+    const d=new Date(t.endDate);
+    if(isNaN(d))return;
+    const mo=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    if(!monthKeys.includes(mo))return;
     const p=projects.find(pr=>pr.id===t.vdaId);
-    if(!p)return;
-    const propNames=(p.linkedPropertyIds||[]).map(id=>{const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);return pr?pr.n:'';}).filter(Boolean);
-
-    // Per-task actual invoiced amounts by month, used to override forecast.
-    const invByMonth={};
-    invoices.filter(inv=>inv.taskLineId===t.id).forEach(inv=>{
-      if(!inv.date)return;
-      const d=new Date(inv.date);
-      if(isNaN(d))return;
-      const mo=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
-      invByMonth[mo]=(invByMonth[mo]||0)+(inv.amount||0);
-    });
-
-    if(t.triggerType==='Milestone Linked'){
-      // Find the planned date for the matching milestone name, across any
-      // property/scope linked to this VDA Project.
-      let plannedMo=null;
-      for(const propName of propNames){
-        const ms=milestones.find(m=>m.property===propName&&m.milestoneName===t.description&&m.plannedDate);
-        if(ms){
-          const d=new Date(ms.plannedDate);
-          if(!isNaN(d)){plannedMo=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');break;}
-        }
-      }
-      if(plannedMo&&monthKeys.includes(plannedMo)){
-        const actual=invByMonth[plannedMo]||0;
-        out[plannedMo]+=actual>0?actual:(t.amount||0);
-      }
-    }else{
-      // Recurring-count-based / Flat recurring — spread Monthly Forecast
-      // Estimate evenly starting from this Task Line's creation date (or
-      // the VDA Project's creation date if the Task Line's own date isn't
-      // available), forward across the visible window.
-      const startSrc=t.createdTime||p.createdTime;
-      const startDate=startSrc?new Date(startSrc):new Date();
-      const startMo=isNaN(startDate)?monthKeys[0]:(startDate.getFullYear()+'-'+String(startDate.getMonth()+1).padStart(2,'0'));
-      const startIdx=Math.max(0,monthKeys.indexOf(startMo)>=0?monthKeys.indexOf(startMo):0);
-      for(let i=startIdx;i<monthKeys.length;i++){
-        const mo=monthKeys[i];
-        const actual=invByMonth[mo]||0;
-        out[mo]+=actual>0?actual:(t.monthlyForecastEstimate||0);
-      }
-    }
+    out[mo]+=balance;
+    detail[mo].push({vdaNumber:p?p.number:'',task:t.description||'(untitled task)',amount:balance});
   });
-  return out;
+  return {byMonth:out,detailByMonth:detail};
 }
 window.computeVdaFsByMonth=computeVdaFsByMonth;
 
