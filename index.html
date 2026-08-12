@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64o</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64q</div>
     </div>
   </nav>
 
@@ -5618,10 +5618,21 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
               <!-- v61a-3stage — 3-swatch legend replacing Award/Estimate,
               same three colors as the chart bar segments and stat cards. -->
-              <div style="display:flex;gap:14px;font-size:12px;color:var(--gray-mid)">
+              <!-- v64q -- task #30. VDA Project billing toggle added,
+              matching Analytics' Forecasted Spend #fs-vda-toggle pattern
+              exactly (checkbox + onchange calling toggleVdaForecastInclude,
+              real state in window._vdaForecastIncluded.budgetOutlook,
+              default unchecked). VDA swatch (#bo-vda-legend) starts hidden
+              and is only shown once toggled on, same show/hide-after-
+              render pattern as Analytics' #fs-legend-vda. -->
+              <div style="display:flex;gap:14px;font-size:12px;color:var(--gray-mid);align-items:center">
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--navy)">
+                  <input type="checkbox" id="bo-vda-toggle" onchange="toggleVdaForecastInclude('budget',this.checked)">Show VDA Project
+                </label>
                 <span><span style="display:inline-block;width:10px;height:10px;background:var(--teal);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Total Work Est.</span>
                 <span><span style="display:inline-block;width:10px;height:10px;background:var(--indigo);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Client Budget</span>
                 <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue-dark);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Award Value</span>
+                <span id="bo-vda-legend" style="display:none"><span style="display:inline-block;width:10px;height:10px;background:var(--vda-billing);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>VDA Project</span>
               </div>
             </div>
             <div id="bo-summary-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-bottom:64px;align-items:start"></div>
@@ -5639,7 +5650,24 @@ from unitEffectiveValue() onto each checkbox). -->
                 column instead of a per-scope unit name list. -->
                 <!-- v61a-3stage — 3 stage columns replacing Award/Estimate,
                 widths narrowed proportionally to fit the extra column. -->
-                <thead><tr><th style="width:24px"></th><th style="text-align:left;width:18%">Year</th><th style="text-align:center;width:10%">Total Work Est.</th><th style="text-align:center;width:10%">Client Budget</th><th style="text-align:center;width:10%">Award Value</th><th style="text-align:center;width:9%">Total</th><th style="text-align:center;width:7%">Units</th><th style="text-align:left;width:26%">Properties</th></tr></thead>
+                <!-- v64q — task #31. New "Property" column added per Misty's
+                explicit direction, right before the existing "Properties"
+                column, on the expanded/detail rows only -- the collapsed
+                year-summary row has no single property (it's an aggregate
+                across many), so its new Property cell is left blank/dash,
+                same as any other not-applicable-at-this-row-type cell
+                elsewhere in this table. Existing "Properties" column is
+                unchanged for the collapsed row (still the property count);
+                on the expanded detail rows it now shows just the Scope's
+                own Project name instead of the old combined
+                "Property — Scope Name" string, since Property has its own
+                column now. Widths trimmed slightly across the board to fit
+                the new column without the table overflowing. -->
+                <!-- v64q — task #30. thead now has an id and is rendered
+                from renderBudgetOutlook() (was fully static markup) so the
+                VDA column can appear/disappear with the toggle, same
+                dynamic-column-count approach as #bo-summary-cards above. -->
+                <thead id="bo-thead"></thead>
                 <tbody id="bo-tbody"></tbody>
               </table>
             </div>
@@ -13453,7 +13481,22 @@ function renderActionBoard(){
   // exact same computed-from-milestones method Analytics uses -- with NO
   // raw-status pre-filter, so the two screens can never structurally
   // disagree on which stage a Scope is in again.
-  const abAllScopes=(window.SCOPES||[]).filter(s=>s.status!=='Capital Plan'&&!removedNames.has(s.property));
+  // v64p -- task #29. Misty caught Complete still showing 5 vs Analytics'
+  // 3 after v64o deployed. Root-caused live: the Scope-level
+  // s.status!=='Capital Plan' check above only ever excluded Capital-
+  // Plan-STATUS Scopes -- it never excluded Scopes belonging to a
+  // property whose own overall status is Capital Plan, the same
+  // property-level check Analytics' chartFiltered already does
+  // (filtered.filter(p=>p.st!=='Capital Plan'), line ~24158) before it
+  // ever looks at Scopes. Confirmed live: Casa Marina Key West, Curio
+  // Collection's property-level status is 'Capital Plan', but it has 2
+  // real Scope-level status='Complete' scopes -- Analytics excludes the
+  // whole property upstream so never counts them, Heat Map's
+  // scope-only check still did. Now excludes Scopes belonging to any
+  // Capital-Plan-status property too, matching Analytics' two-level
+  // filter exactly.
+  const capitalPlanPropNames=new Set(port.filter(p=>p.st==='Capital Plan').map(p=>p.n));
+  const abAllScopes=(window.SCOPES||[]).filter(s=>s.status!=='Capital Plan'&&!removedNames.has(s.property)&&!capitalPlanPropNames.has(s.property));
   const abScopeData=abAllScopes.map(s=>{
     const ms=(window.MILESTONES||[]).filter(m=>m.property===s.property&&m.scopeId===s.id);
     const complete=ms.filter(m=>m.status==='Complete').length;
@@ -22134,7 +22177,7 @@ function renderBudgetOutlook(){
 
   const byYearAll={};
   allocs.forEach(a=>{
-    if(!byYearAll[a.year])byYearAll[a.year]={estimated:0,approved:0,awarded:0,items:[],unitTotal:0,propSet:new Set()};
+    if(!byYearAll[a.year])byYearAll[a.year]={estimated:0,approved:0,awarded:0,vda:0,items:[],unitTotal:0,propSet:new Set()};
     byYearAll[a.year].estimated+=(a.estimated||0);
     byYearAll[a.year].approved+=(a.approved||0);
     byYearAll[a.year].awarded+=(a.awarded||0);
@@ -22142,6 +22185,34 @@ function renderBudgetOutlook(){
     byYearAll[a.year].unitTotal+=(a.unitCount||0);
     if(a.property)byYearAll[a.year].propSet.add(a.property);
   });
+  // v64q -- task #30. VDA Project billing toggle. Per Misty's explicit
+  // scoping: VDA spend becomes a 4th stacked segment/column, bucketed by
+  // the calendar YEAR of each Task Line's own End Date (same date field
+  // computeVdaFsByMonth() already uses for the Analytics monthly chart,
+  // just year-grain here instead of year+month). Off by default, all
+  // roles, reusing window._vdaForecastIncluded's existing state object
+  // with its own 'budgetOutlook' key (the v47a/v49b original
+  // 'budgetOutlook' key was tied to the mini chart removed in v49b and
+  // has been dead ever since -- reusing it here rather than adding a new
+  // key, since nothing else reads it).
+  if(window._vdaForecastIncluded&&window._vdaForecastIncluded.budgetOutlook){
+    (window.VDA_TASK_LINES||[]).forEach(t=>{
+      const balance=t.contractBalance||0;
+      if(balance<=0)return;
+      if(!t.endDate)return;
+      const d=new Date(t.endDate);
+      if(isNaN(d))return;
+      const yr=d.getFullYear();
+      const proj=(window.VDA_PROJECTS||[]).find(p=>p.id===t.vdaId);
+      const propNames=proj?(proj.linkedPropertyIds||[]).map(id=>{const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);return pr?pr.n:'';}).filter(Boolean):[];
+      const propLabel=propNames.length>0?propNames.join(', '):'(unlinked property)';
+      const projLabel='VDA #'+(proj?proj.number:'—')+(t.description?' — '+t.description:'');
+      if(!byYearAll[yr])byYearAll[yr]={estimated:0,approved:0,awarded:0,vda:0,items:[],unitTotal:0,propSet:new Set()};
+      byYearAll[yr].vda+=balance;
+      byYearAll[yr].items.push({year:yr,amount:balance,estimated:0,approved:0,awarded:0,vda:balance,property:propLabel,scopeName:projLabel,isVda:true,unitCount:0,unitNames:[]});
+      if(propNames.length>0)propNames.forEach(n=>byYearAll[yr].propSet.add(n));
+    });
+  }
   const allYearsPresent=Object.keys(byYearAll).map(Number).sort((a,b)=>a-b);
   // v36j — year picker. boYearSelection is null until the user opens the
   // panel and touches a checkbox, at which point it becomes a Set of the
@@ -22162,6 +22233,11 @@ function renderBudgetOutlook(){
   const totalEstimated=allocsInYears.reduce((s,a)=>s+(a.estimated||0),0);
   const totalApproved=allocsInYears.reduce((s,a)=>s+(a.approved||0),0);
   const totalAwarded=allocsInYears.reduce((s,a)=>s+(a.awarded||0),0);
+  // v64q -- task #30. VDA items live only in byYearAll[year].items (they
+  // have no Scope, so they never enter allocs/allocsInYears above) --
+  // totalVda is summed straight from byYearAll's own .vda field instead,
+  // scoped to the same selected years as the other three totals.
+  const totalVda=years.reduce((s,y)=>s+((byYear[y]&&byYear[y].vda)||0),0);
   // v36j — "Properties" under "All scheduled" was undercounting (22 vs the
   // real 31-property active+pipeline portfolio) because it only counted
   // properties that happened to have a scope contributing a nonzero dollar
@@ -22243,8 +22319,32 @@ function renderBudgetOutlook(){
   // due to the unaccounted-units caption line), same fix/reasoning as
   // Capital Plan's cards above, per Misty's explicit direction: "Budget
   // outlook stat cards should all be same size as units."
+  // v64q -- task #30. VDA toggle adds a 7th stat card (only when on, to
+  // avoid a permanent always-zero card cluttering the row when off) --
+  // grid-template-columns set dynamically here to keep every card equal-
+  // width whether it's 6 or 7 across, same fixed-height/equal-width
+  // pattern as before.
+  const boIncludeVda=!!(window._vdaForecastIncluded&&window._vdaForecastIncluded.budgetOutlook);
+  // v64q -- task #30. Checkbox/legend sync. Unlike Analytics' Forecasted
+  // Spend fix (v64l), #bo-vda-toggle and #bo-vda-legend are static page
+  // shell markup, never rebuilt via innerHTML= here -- so there's no
+  // stale-DOM-read timing risk reading/writing them at any point in this
+  // function, unlike the fs-vda-toggle bug that required moving the read
+  // to after the innerHTML write.
+  const boVdaToggleEl=document.getElementById('bo-vda-toggle');
+  if(boVdaToggleEl)boVdaToggleEl.checked=boIncludeVda;
+  const boVdaLegendEl=document.getElementById('bo-vda-legend');
+  if(boVdaLegendEl)boVdaLegendEl.style.display=boIncludeVda?'inline':'none';
+  // v64q -- task #30. Header rendered here (was static markup) so the VDA
+  // column can be conditionally included. Column widths re-trimmed
+  // slightly when VDA is on to fit the extra column; task #31's
+  // Property/Properties columns are unaffected either way.
+  document.getElementById('bo-thead').innerHTML=boIncludeVda
+    ?`<tr><th style="width:24px"></th><th style="text-align:left;width:14%">Year</th><th style="text-align:center;width:8%">Total Work Est.</th><th style="text-align:center;width:8%">Client Budget</th><th style="text-align:center;width:8%">Award Value</th><th style="text-align:center;width:8%">VDA Project</th><th style="text-align:center;width:7%">Total</th><th style="text-align:center;width:5%">Units</th><th style="text-align:left;width:18%">Property</th><th style="text-align:left;width:18%">Properties</th></tr>`
+    :`<tr><th style="width:24px"></th><th style="text-align:left;width:16%">Year</th><th style="text-align:center;width:9%">Total Work Est.</th><th style="text-align:center;width:9%">Client Budget</th><th style="text-align:center;width:9%">Award Value</th><th style="text-align:center;width:8%">Total</th><th style="text-align:center;width:6%">Units</th><th style="text-align:left;width:20%">Property</th><th style="text-align:left;width:20%">Properties</th></tr>`;
+  document.getElementById('bo-summary-cards').style.gridTemplateColumns=`repeat(${boIncludeVda?7:6},1fr)`;
   document.getElementById('bo-summary-cards').innerHTML=`
-    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-currency-dollar','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Total outlook</div><div class="stat-value" style="font-size:22px">${fmtBudget(totalEstimated+totalApproved+totalAwarded)}</div></div></div>
+    <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-currency-dollar','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Total outlook</div><div class="stat-value" style="font-size:22px">${fmtBudget(totalEstimated+totalApproved+totalAwarded+(boIncludeVda?totalVda:0))}</div></div></div>
     <!-- v61a-3stage — three real stage totals replacing the old
     Award/Estimate 2-card pair, labeled with Unit Inventory's exact
     field names (Total Work Est./Client Budget/Award Value) per Misty's
@@ -22255,6 +22355,7 @@ function renderBudgetOutlook(){
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-chart-bar','var(--teal-pale)','var(--teal)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Total Work Est.</div><div class="stat-value" style="font-size:22px;color:var(--blue-mid)">${fmtBudget(totalEstimated)}</div></div></div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-clipboard-check','var(--indigo-pale)','var(--indigo)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Client Budget</div><div class="stat-value" style="font-size:22px;color:var(--indigo)">${fmtBudget(totalApproved)}</div></div></div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-file-dollar','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Award Value</div><div class="stat-value" style="font-size:22px;color:var(--blue-dark)">${fmtBudget(totalAwarded)}</div></div></div>
+    ${boIncludeVda?`<div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-building-skyscraper','var(--vda-billing-pale)','var(--vda-billing)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">VDA Project</div><div class="stat-value" style="font-size:22px;color:var(--vda-billing)">${fmtBudget(totalVda)}</div></div></div>`:''}
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-building','var(--indigo-pale)','var(--indigo)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Properties</div><div class="stat-value" style="font-size:22px">${propCount}</div></div></div>
     <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:10px;padding:12px 14px;border-radius:12px;min-width:0;width:100%;height:110px;box-sizing:border-box">${badge('ti-list-details','var(--purple-pale)','var(--purple)')}<div style="min-width:0"><div class="stat-label" style="font-size:12.5px;white-space:nowrap">Units</div><div class="stat-value" style="font-size:22px">${totalUnitsCard}</div>${_boUnaccountedNote}</div></div>`;
 
@@ -22268,19 +22369,28 @@ function renderBudgetOutlook(){
     // old committed-on-bottom layout used. Colors match the stat cards
     // above (teal=Est., indigo=Approved, blue-dark=Awarded) and the
     // legend below.
-    const maxTotal=Math.max(...years.map(y=>byYear[y].estimated+byYear[y].approved+byYear[y].awarded));
+    // v64q -- task #30. VDA becomes a 4th segment, stacked on TOP (above
+    // Total Work Est.), same relative position Analytics' Forecasted
+    // Spend bar already uses for its own VDA segment -- VDA dollars are
+    // additional/separate spend, not yet part of the Est./Approved/
+    // Awarded waterfall, so it reads clearest stacked outside that
+    // 3-stage progression rather than inserted into it.
+    const maxTotal=Math.max(...years.map(y=>byYear[y].estimated+byYear[y].approved+byYear[y].awarded+(boIncludeVda?(byYear[y].vda||0):0)));
     chartEl.innerHTML=`<div style="display:flex;align-items:flex-end;gap:20px;height:200px;padding:0 8px;border-bottom:0.5px solid var(--border)">
       ${years.map(y=>{
         const d=byYear[y];
-        const total=d.estimated+d.approved+d.awarded;
+        const vdaAmt=boIncludeVda?(d.vda||0):0;
+        const total=d.estimated+d.approved+d.awarded+vdaAmt;
         const h=maxTotal>0?Math.round((total/maxTotal)*180):0;
         const hAwarded=total>0?Math.round((d.awarded/total)*h):0;
         const hApproved=total>0?Math.round((d.approved/total)*h):0;
-        const hEstimated=Math.max(0,h-hAwarded-hApproved);
+        const hVda=total>0?Math.round((vdaAmt/total)*h):0;
+        const hEstimated=Math.max(0,h-hAwarded-hApproved-hVda);
         return `<div style="display:flex;flex-direction:column;align-items:center;flex:1">
           <div style="font-size:11px;color:var(--gray-mid);margin-bottom:4px">${fmtBudget(total)}</div>
           <div style="width:100%;display:flex;flex-direction:column;justify-content:flex-end;height:180px">
-            <div style="width:100%;background:var(--teal);height:${hEstimated}px;border-radius:3px 3px 0 0"></div>
+            ${vdaAmt>0?`<div style="width:100%;background:var(--vda-billing);height:${hVda}px;border-radius:3px 3px 0 0"></div>`:''}
+            <div style="width:100%;background:var(--teal);height:${hEstimated}px;border-radius:${vdaAmt>0?'0':'3px 3px 0 0'}"></div>
             <div style="width:100%;background:var(--indigo);height:${hApproved}px"></div>
             <div style="width:100%;background:var(--blue-dark);height:${hAwarded}px"></div>
           </div>
@@ -22314,17 +22424,32 @@ function renderBudgetOutlook(){
         <td style="text-align:center;font-size:12px;color:var(--teal)">${stageCell(it.estimated)}</td>
         <td style="text-align:center;font-size:12px;color:var(--indigo)">${stageCell(it.approved)}</td>
         <td style="text-align:center;font-size:12px;color:var(--blue-dark)">${stageCell(it.awarded)}</td>
+        <!-- v64q -- task #30. VDA cell, only rendered when the toggle is
+        on -- matches the header's conditional VDA Project column. -->
+        ${boIncludeVda?`<td style="text-align:center;font-size:12px;color:var(--vda-billing)">${stageCell(it.vda||0)}</td>`:''}
         <td style="text-align:center;font-size:12px;font-weight:500">${fmtCurrency(it.amount)}</td>
         <td style="text-align:center;font-size:12px;color:var(--gray-mid)">${it.unitCount||'—'}</td>
-        <td style="text-align:left;font-size:12px;color:var(--gray-mid)">${namesText}</td>
+        <!-- v64q -- task #31. New Property cell, own column now instead of
+        being folded into the label to its left. -->
+        <td style="text-align:left;font-size:12px;color:var(--gray-mid)">${it.property||'<span style="color:var(--gray-light)">—</span>'}</td>
+        <!-- v64q -- task #31. "Properties" column on expanded rows now
+        shows just the Scope's own Project name (it.scopeName), not the
+        old combined "Property — Scope Name" string, since Property has
+        its own column immediately to the left now. -->
+        <td style="text-align:left;font-size:12px;color:var(--gray-mid)">${it.scopeName||'<span style="color:var(--gray-light)">—</span>'}</td>
       </tr>`;}).join(''):'';
+    const yVda=boIncludeVda?(d.vda||0):0;
     return `<tr style="cursor:pointer" onclick="toggleBoYear(${y})">
       <td class="no-print"><i class="ti ti-chevron-${isOpen?'down':'right'}" style="font-size:14px;color:var(--gray-mid)"></i></td>
       <td style="text-align:left;font-weight:600">${y}</td>
       <td style="text-align:center;color:var(--teal)">${cell(d.estimated)}</td>
       <td style="text-align:center;color:var(--indigo)">${cell(d.approved)}</td>
       <td style="text-align:center;color:var(--blue-dark)">${cell(d.awarded)}</td>
-      <td style="text-align:center;font-weight:600">${fmtCurrency(d.estimated+d.approved+d.awarded)}</td>
+      <!-- v64q -- task #30. VDA cell on the collapsed year row, only when
+      the toggle is on -- matches the header's conditional VDA Project
+      column and the detail row's own conditional VDA cell above. -->
+      ${boIncludeVda?`<td style="text-align:center;color:var(--vda-billing)">${cell(yVda)}</td>`:''}
+      <td style="text-align:center;font-weight:600">${fmtCurrency(d.estimated+d.approved+d.awarded+yVda)}</td>
       <td style="text-align:center;color:var(--gray-mid)">${d.unitTotal||'—'}</td>
       <!-- v49p — the Unit Names column previously showed nothing at all
       on the collapsed year row (only the click-expanded per-scope detail
@@ -22334,13 +22459,23 @@ function renderBudgetOutlook(){
       distinct properties associated with that year instead (not units,
       since the Units column already covers that, and not a name list,
       since that only makes sense per-scope in the expanded detail rows). -->
+      <!-- v64q -- task #31. New Property column has no single value on the
+      collapsed year-summary row (it spans many properties), left blank
+      the same way other not-applicable cells elsewhere in this table are
+      dash-blanked. -->
+      <td style="text-align:left;color:var(--gray-light)">—</td>
       <td style="text-align:left;color:var(--gray-mid)">${d.propSet&&d.propSet.size?d.propSet.size+' propert'+(d.propSet.size===1?'y':'ies'):'<span style="color:var(--gray-light)">—</span>'}</td>
     </tr>${detailRows}`;
-  }).join('')||`<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--gray-mid)">No allocations for this filter</td></tr>`;
+  }).join('')||`<tr><td colspan="${boIncludeVda?10:9}" style="text-align:center;padding:2rem;color:var(--gray-mid)">No allocations for this filter</td></tr>`;
   // v34i — cache what was just rendered so Export to Excel reads the exact
   // same numbers on screen, rather than recomputing (and risking drift from)
   // the aggregation logic a second time.
-  window._boData={years,byYear,totalEstimated,totalApproved,totalAwarded,propCount,filter:boFilter};
+  // v64q -- task #30. totalVda/boIncludeVda added to the cache for
+  // consistency, in case a future consumer (export, etc.) wants the VDA
+  // total that was actually on screen -- not read by the two existing
+  // export functions today, which is intentional (VDA billing wasn't
+  // part of the Client Report/Data Entry export scope for this round).
+  window._boData={years,byYear,totalEstimated,totalApproved,totalAwarded,totalVda,boIncludeVda,propCount,filter:boFilter};
   // v36l — per-unit rows for the Excel export, filtered to the same
   // selected years the on-screen chart/table are currently showing.
   window._boUnitItems=boYearSelection?unitItems.filter(u=>boYearSelection.has(u.year)):unitItems;
@@ -37146,9 +37281,17 @@ window.computeVdaFsByMonth=computeVdaFsByMonth;
 // v49b: the 'budget' context and Budget Outlook's own #bo-fs-vda-toggle
 // were removed along with its duplicate chart card; 'charts' is now the
 // only context in use, kept as a parameter for compatibility.
+// v64q -- task #30. 'budget' context revived -- Budget Outlook's own
+// #bo-vda-toggle (new checkbox, distinct id from the old removed
+// #bo-fs-vda-toggle) calls this with context='budget'. Re-renders
+// renderBudgetOutlook() directly, same pattern as the 'charts' branch
+// re-rendering renderCharts() -- this is a different chart (per-year
+// stacked bar, not the rolling-12-month one Analytics/the old removed
+// card used), so it needs its own render call, not a shared one.
 function toggleVdaForecastInclude(context,checked){
   if(context==='budget'){
     window._vdaForecastIncluded.budgetOutlook=!!checked;
+    if(typeof renderBudgetOutlook==='function')renderBudgetOutlook();
   }else{
     window._vdaForecastIncluded.charts=!!checked;
     if(typeof renderCharts==='function')renderCharts();
