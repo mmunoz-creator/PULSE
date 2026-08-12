@@ -11020,12 +11020,21 @@ function renderMilestones(p){
   // showing "Project Completed" with no way to reach the real tracker.
   // Fixed: only show this short-circuit when the scope is genuinely meant
   // to stay collapsed — fastTrackedComplete is explicitly true, OR there
-  // are no real Milestone records at all yet (msData.length===0, the
-  // original "nothing to track" case this block was built for). If
-  // fastTrackedComplete is false AND real milestones now exist, fall
-  // through to the normal per-milestone tracker below regardless of what
-  // the Status field still says.
-  const msShortCircuitOk=currentScope&&(currentScope.fastTrackedComplete||msData.length===0);
+  // are no real Milestone records at all yet.
+  // v63h correction — the first version of this fix checked
+  // msData.length===0, but msData comes from getMilestonesForProp(p.n,
+  // scopeId), which ALWAYS backfills to all 14 slots (real records where
+  // they exist, synthetic {id:null,status:'Not Started'} placeholders for
+  // the rest) whenever a scopeId is passed — see that function's own v32b
+  // comment. So msData.length is never actually 0 here, and the toggle
+  // silently vanished for every zero-real-milestone Complete scope
+  // (confirmed live: Hilton Hawaiian Village's "Completed Project" scope,
+  // 0 real records, fastTrackedComplete false — fell through to a 14-row
+  // "Not Started" tracker with no toggle instead of the intended
+  // short-circuit card). Fixed to check for at least one REAL record
+  // (msData.some(m=>m.id)) instead of array length.
+  const hasRealMs=msData.some(m=>m.id);
+  const msShortCircuitOk=currentScope&&(currentScope.fastTrackedComplete||!hasRealMs);
   if(currentScope&&(currentScope.status==='Complete'||currentScope.isCompleteBucket)&&msShortCircuitOk){
     document.getElementById('ms-progress-badge').textContent='Completed';
     // v63e — task #60. "Mark scope complete" toggle, nested under Manual
