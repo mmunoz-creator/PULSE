@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64n</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64o</div>
     </div>
   </nav>
 
@@ -25340,10 +25340,21 @@ function getCalEvents(){
   // correctly removed from Ops Center/Dashboard/Action Board/Analytics
   // in Build 1 earlier this session -- Calendar was the one view that
   // pull never covered.
+  // v64o -- task #27. Misty flagged Client calendar showing nothing
+  // PM-entered. Root-caused live: the blanket `if(role==='client')return`
+  // below hid every meeting from Client, with no exception -- confirmed
+  // this was deliberate existing code, not a rendering bug. Per Misty's
+  // explicit direction, Client now sees every Scheduled-status meeting
+  // (same isScheduled condition already computed below), regardless of
+  // the meeting's own visibility field (all 11 meetings in the live data
+  // are currently marked Internal, meaning this will surface today's
+  // contractor bid-interview meetings to Client -- confirmed and
+  // approved directly, not a silent side effect). Internal-logged
+  // (non-Scheduled) meetings remain PM/admin-only.
   meetings.filter(m=>m.date&&!m.published&&m.isDraft===false&&m.status!=='Cancelled').forEach(m=>{
     if(!liveProps.has(m.property))return;
-    if(role==='client')return;
     const isScheduled=m.status==='Scheduled';
+    if(role==='client'&&!isScheduled)return;
     events.push({id:m.id,date:m.date,type:'meeting',
       title:(isScheduled?'📅 ':'')+(m.type||'Meeting')+' — '+m.property,
       sub:m.property,
@@ -25358,8 +25369,12 @@ function getCalEvents(){
   // cancelled site visit would keep showing here even though the rest
   // of the app (Ops Center, per-property badge counts) already filters
   // to v.status==='Scheduled' only.
+  // v64o -- task #27. role==='client' block removed, same fix as
+  // meetings above -- site visits have no visibility field to weigh
+  // against, so no data currently exists (0 live records) but Client
+  // will now correctly see them once PMs log any.
   siteVisits.forEach(v=>{
-    if(!v.date||role==='client')return;
+    if(!v.date)return;
     if(!liveProps.has(v.property))return;
     if(v.status==='Cancelled')return;
     events.push({date:v.date,type:'visit',title:'Site Visit — '+v.property,sub:v.inspector||'',
@@ -25367,8 +25382,11 @@ function getCalEvents(){
   });
 
   // Unit group planned dates — filter out deleted properties
+  // v64o -- task #27. role==='client' block removed. Phase start/end
+  // dates carry no sensitive internal-only content (no visibility field
+  // on Unit Groups at all), so these are now shown to Client the same
+  // as PM/admin.
   (window.UNIT_GROUPS||[]).forEach(u=>{
-    if(role==='client')return;
     if(!liveProps.has(u.property))return;
     if(u.plannedStart)events.push({date:u.plannedStart,type:'phase',title:'Start: '+u.phase,sub:u.property,
       color:'ev-phase',dot:CAL_COLORS.phase,propName:u.property,hour:8,duration:30});
