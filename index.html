@@ -3410,6 +3410,11 @@ async function loadAllData() {
       loggedBy: r.fields['Logged By']||'',
       date: r.fields['Date']||'',
       notes: r.fields['Notes']||'',
+      // v64b — free-text catch-all for line items that don't fit any other
+      // field (direct instruction). Requires an "Additional Considerations"
+      // column to exist on Change Order Savings Log in Airtable — falls
+      // back to '' harmlessly if it doesn't.
+      additionalConsiderations: r.fields['Additional Considerations']||'',
       // v38d — documentation/traceability only, no rollup math depends on these.
       linkedUnitIds: r.fields['Linked Units']||[],
       appliesToWholeProject: !!r.fields['Applies to Whole Project'],
@@ -4096,6 +4101,16 @@ window.PROPERTIES_SEED = [
     <label class="form-label">Linked Units</label>
     <div id="co-units-list" style="max-height:140px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
   </div>
+  <!-- v64b — catch-all requested directly: line items that don't fit any
+  field above (e.g. hourly labor rate breakdowns, total project duration
+  from a bid comparison) had nowhere to go. Free-text rather than
+  repeatable rows, since the ask was a fast catch-all, not a new
+  structured line-item table. Kept separate from Notes (below) rather than
+  merged into it, per direct instruction. -->
+  <div class="form-group">
+    <label class="form-label">Additional Considerations</label>
+    <textarea class="form-input" id="co-additional-considerations" rows="3" placeholder="Anything that doesn't fit the fields above — e.g. hourly rates, schedule detail, other line items…" style="resize:vertical"></textarea>
+  </div>
   <div class="form-group">
     <label class="form-label">Notes</label>
     <textarea class="form-input" id="co-notes" rows="2" placeholder="Optional notes…" style="resize:vertical"></textarea>
@@ -4678,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63u</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64b</div>
     </div>
   </nav>
 
@@ -14404,6 +14419,10 @@ function renderChangeOrdersTab(p){
           <div>O&amp;P Claimed: <strong>${co.opClaimed!=null?fmtCurrency(co.opClaimed):'—'}</strong>${p.coOPMarkup!=null?` <span style="color:var(--gray-mid)">(${p.coOPMarkup}% markup)</span>`:''}</div>
         </div>
       </div>`:''}
+      ${co.additionalConsiderations?`<div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px;margin-bottom:8px">
+        <div style="font-size:9px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Additional Considerations</div>
+        <div style="font-size:11px;color:var(--gray-dark);white-space:pre-wrap">${escHtml(co.additionalConsiderations)}</div>
+      </div>`:''}
       ${co.notes?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${escHtml(co.notes)}</div>`:''}
       ${canEdit?`<div style="display:flex;gap:6px;flex-wrap:wrap">
         ${!isLocked?`<button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editCO('${co.id}')">Edit</button>`:''}
@@ -15859,8 +15878,19 @@ function openCOModal(editId){
     document.getElementById('co-negotiated').value='';
     document.getElementById('co-status').value='Pending';
     document.getElementById('co-date').value=today;
+    document.getElementById('co-additional-considerations').value='';
     document.getElementById('co-notes').value='';
-    document.getElementById('co-ec').value=currentProp?.ec||'';
+    // v64a — task from live incident: New York Midtown's CO modal showed
+    // "Schindler" pre-filled, but Misty confirmed she typed that herself —
+    // it was never actually auto-populating. Root cause: this read
+    // currentProp?.ec, the stale property-level field. Per Misty, elevator
+    // company is assigned per-project (Scope), not per-property — same
+    // source-of-truth split already handled correctly elsewhere in this
+    // file (see line ~2431's comment, and the s.ec||p.ec fallback pattern
+    // at lines 8477/10280/23271). This CO is being logged against
+    // currentScope specifically, so it should prefill from currentScope.ec
+    // first, falling back to currentProp.ec only if the scope has none set.
+    document.getElementById('co-ec').value=currentScope?.ec||currentProp?.ec||'';
     document.getElementById('co-payment-resp').value='';
     document.getElementById('co-fast-track').checked=false;
     document.getElementById('co-st-hours').value='';
@@ -15920,7 +15950,12 @@ function editCO(coId){
   document.getElementById('co-modal-title').textContent='Edit Change Order';
   document.getElementById('co-edit-id').value=coId;
   document.getElementById('co-desc').value=co.description||'';
-  document.getElementById('co-original').value=co.originalAmount||'';
+  // v64b — same fix as negotiated below (v54d), now applied to Original
+  // too since saveCO() just started allowing a genuine $0 there. Was
+  // co.originalAmount||'', which would have re-blanked an existing $0
+  // Original CO Amount on edit and then re-tripped the just-fixed
+  // "Please enter the original CO amount" validation on save.
+  document.getElementById('co-original').value=(co.originalAmount!=null?co.originalAmount:'');
   // v54d — was co.negotiatedAmount||'', which prefilled a legitimately
   // stored 0 as an empty string, indistinguishable from "never entered".
   // That would have made the new blank-check below incorrectly block
@@ -15929,6 +15964,7 @@ function editCO(coId){
   document.getElementById('co-negotiated').value=(co.negotiatedAmount!=null?co.negotiatedAmount:'');
   document.getElementById('co-status').value=co.status||'Pending';
   document.getElementById('co-date').value=co.date||'';
+  document.getElementById('co-additional-considerations').value=co.additionalConsiderations||'';
   document.getElementById('co-notes').value=co.notes||'';
   document.getElementById('co-ec').value=co.ec||'';
   document.getElementById('co-payment-resp').value=co.paymentResp||'';
@@ -15966,6 +16002,7 @@ async function saveCO(){
   // elsewhere in this file (Bid Submissions, Billing, Retainage, Material
   // Cost/O&P Claimed just below) so every money field in this form now
   // parses identically.
+  const origRaw=document.getElementById('co-original').value;
   const orig=getCurrencyValue('co-original');
   // v54d — neg used to fall straight to ||0 with no distinction between
   // "left blank" and "entered 0", same as orig below now guards against.
@@ -15986,6 +16023,7 @@ async function saveCO(){
   const fastTrack=document.getElementById('co-fast-track').checked;
   const status=fastTrack?'Approved':document.getElementById('co-status').value;
   const date=document.getElementById('co-date').value;
+  const additionalConsiderations=document.getElementById('co-additional-considerations').value.trim();
   const notes=document.getElementById('co-notes').value.trim();
   const ec=document.getElementById('co-ec').value.trim();
   const paymentResp=document.getElementById('co-payment-resp').value.trim();
@@ -16003,7 +16041,15 @@ async function saveCO(){
   const appliesToWholeProject=document.getElementById('co-whole-project').checked;
   const linkedUnitIds=appliesToWholeProject?[]:Object.keys(coUnitAssign);
   if(!desc){showToast('Please enter a change order description','warn');return;}
-  if(!orig){showToast('Please enter the original CO amount','warn');return;}
+  // v64b — task from live incident: entering 0 as the Original CO Amount
+  // (a real construction practice — e.g. a documented scope change with no
+  // cost impact) was rejected with "Please enter the original CO amount".
+  // Root cause: !orig is a falsy check, so orig=0 fails identically to
+  // orig never being entered at all — same bug class already fixed for
+  // Negotiated Amount above (v54d), which checks the raw input string for
+  // blank rather than the parsed number. Original never got that same fix.
+  // Now checked against origRaw, matching the negRaw pattern exactly.
+  if(origRaw.trim()===''){showToast('Please enter the original CO amount (enter 0 if there is no cost impact)','warn');return;}
   if(negRaw.trim()===''){showToast('Please enter the negotiated amount (enter 0 if there is no negotiated cost)','warn');return;}
   const savings=orig-neg;
   const propName=currentProp?.n||'';
@@ -16031,9 +16077,9 @@ async function saveCO(){
   if(demoMode){
     if(editId){
       const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack});}
+      if(co){Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,additionalConsiderations,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack});}
     }else{
-      const newCO={id:'co_'+Date.now(),property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
+      const newCO={id:'co_'+Date.now(),property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,additionalConsiderations,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
       window.CO_SAVINGS.push(newCO);
       if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
     }
@@ -16048,6 +16094,7 @@ async function saveCO(){
       'Elevator Company':ec||undefined,
       'Logged By':loggedBy,
       'Notes':notes||undefined,
+      'Additional Considerations':additionalConsiderations||undefined,
       'Applies to Whole Project':appliesToWholeProject,
       'Payment Responsibility':paymentResp||undefined,
       'Fast Track':fastTrack,
@@ -16070,7 +16117,7 @@ async function saveCO(){
         const updRes=await atUpdate('Change Order Savings Log',editId,fields);
         if(!updRes){showToast('Could not save changes to this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
         const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
-        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack});
+        if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,additionalConsiderations,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack});
       }else{
         // v63s — task from live incident: New York Hilton Midtown's "OT
         // Cab Weighing" CO saved successfully (confirmed live in Airtable)
@@ -16091,7 +16138,7 @@ async function saveCO(){
         const rec=await atCreate('Change Order Savings Log',fields);
         const newRecId=rec?.records?.[0]?.id;
         if(!newRecId){showToast('Could not save this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
-        const newCO={id:newRecId,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
+        const newCO={id:newRecId,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,additionalConsiderations,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
         if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
         window.CO_SAVINGS.push(newCO);
         if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
@@ -16106,7 +16153,7 @@ async function saveCO(){
           originalAmount:parseFloat(r.fields['Original CO Amount'])||0,negotiatedAmount:parseFloat(r.fields['Negotiated Amount'])||0,
           savings:parseFloat(r.fields['Savings Captured'])||0,status:r.fields['Status']||'Pending',
           ec:r.fields['Elevator Company']||'',loggedBy:r.fields['Logged By']||'',
-          date:r.fields['Date']||'',notes:r.fields['Notes']||'',
+          date:r.fields['Date']||'',additionalConsiderations:r.fields['Additional Considerations']||'',notes:r.fields['Notes']||'',
           stHours:r.fields['ST Hours']!=null?Number(r.fields['ST Hours']):null,
           otHours:r.fields['OT Hours']!=null?Number(r.fields['OT Hours']):null,
           materialCost:r.fields['Material Cost']!=null?Number(r.fields['Material Cost']):null,
@@ -32825,6 +32872,7 @@ async function pollChangeOrders(){
       loggedBy: r.fields['Logged By']||'',
       date: r.fields['Date']||'',
       notes: r.fields['Notes']||'',
+      additionalConsiderations: r.fields['Additional Considerations']||'',
       linkedUnitIds: r.fields['Linked Units']||[],
       appliesToWholeProject: !!r.fields['Applies to Whole Project'],
       stHours: r.fields['ST Hours']!=null?Number(r.fields['ST Hours']):null,
