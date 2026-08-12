@@ -4660,7 +4660,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63j</div>
     </div>
   </nav>
 
@@ -11033,39 +11033,47 @@ function renderMilestones(p){
   // "Not Started" tracker with no toggle instead of the intended
   // short-circuit card). Fixed to check for at least one REAL record
   // (msData.some(m=>m.id)) instead of array length.
-  const hasRealMs=msData.some(m=>m.id);
-  const msShortCircuitOk=currentScope&&(currentScope.fastTrackedComplete||!hasRealMs);
+  // v63j — task #31, third pass. Misty's actual requirement, stated
+  // directly: (1) Manual entry override toggle exists and works (the
+  // banner above, untouched). (2) When override is on, PM/Admin can
+  // fast-track the WHOLE scope complete via the "Mark scope complete"
+  // toggle. (3) When override is on, PM/Admin can also fast-track
+  // INDIVIDUAL milestones via each row's own "Mark complete today"
+  // toggle (already works, lives in the full-tracker branch below).
+  // The bug: (2) and (3) were built as mutually exclusive — the scope-
+  // level toggle only existed inside the short-circuit branch's HTML, so
+  // it was only reachable when the code had already decided to collapse
+  // to the "Project Completed" card. Any scope with real Milestone
+  // records (even all Not Started, e.g. The Reach Key West) skips that
+  // branch entirely and landed in the full tracker with NO way to reach
+  // the scope-level toggle at all. Fixed by building fastTrackToggle once
+  // and rendering it in BOTH branches, gated only on Manual Override
+  // being on for this property (p.milestoneManualOverride) — completely
+  // independent of which tracker view is currently showing.
+  const fastTrackToggle=canEdit&&p.milestoneManualOverride&&currentScope?`
+  <div style="display:flex;align-items:center;justify-content:space-between;background:#FAEEDA;border:1px solid #EF9F27;border-radius:8px;padding:10px 14px;margin-bottom:14px;text-align:left">
+    <div style="display:flex;align-items:center;gap:10px">
+      <i class="ti ti-flag-3" style="font-size:16px;color:#854F0B"></i>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#854F0B">Mark scope complete</div>
+        <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${currentScope.fastTrackedComplete&&currentScope.fastTrackedCompleteOn?`Fast-tracked ${new Date(currentScope.fastTrackedCompleteOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} by ${escHtml(currentScope.fastTrackedCompleteBy||'')}`:'Turn on to fast-track the whole scope, or leave off and fast-track individual milestones below'}</div>
+      </div>
+    </div>
+    <label style="position:relative;display:inline-block;width:38px;height:22px;flex-shrink:0;cursor:pointer">
+      <input type="checkbox" ${currentScope.fastTrackedComplete?'checked':''} onchange="toggleScopeFastTrackComplete('${currentScope.id}','${p.n.replace(/'/g,"\\'")}',this.checked)" style="opacity:0;width:0;height:0;position:absolute">
+      <span style="position:absolute;inset:0;background:${currentScope.fastTrackedComplete?'#EF9F27':'#CBD5E1'};border-radius:22px;transition:background .15s"></span>
+      <span style="position:absolute;top:2px;${currentScope.fastTrackedComplete?'right':'left'}:2px;width:16px;height:16px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
+    </label>
+  </div>`:'';
+  const msShortCircuitOk=currentScope&&currentScope.fastTrackedComplete;
   if(currentScope&&(currentScope.status==='Complete'||currentScope.isCompleteBucket)&&msShortCircuitOk){
     document.getElementById('ms-progress-badge').textContent='Completed';
-    // v63e — task #60. "Mark scope complete" toggle, nested under Manual
-    // Override, PM/Admin only. Lets a Complete scope be fast-tracked (this
-    // card shown, no per-milestone tracking needed) OR pulled back out into
-    // the real per-milestone tracker below (e.g. The Reach Key West, where
-    // punchlist items are genuinely still open but the Scope reads 100%
-    // complete with zero real Milestone records behind it). Only rendered
-    // when Manual Override is on for this property, same gating pattern as
-    // the per-milestone Mark Complete Today toggle.
-    const fastTrackToggle=canEdit&&p.milestoneManualOverride?`
-    <div style="display:flex;align-items:center;justify-content:space-between;background:#FAEEDA;border:1px solid #EF9F27;border-radius:8px;padding:10px 14px;margin:14px auto 0;max-width:420px;text-align:left">
-      <div style="display:flex;align-items:center;gap:10px">
-        <i class="ti ti-flag-3" style="font-size:16px;color:#854F0B"></i>
-        <div>
-          <div style="font-size:12px;font-weight:600;color:#854F0B">Mark scope complete</div>
-          <div style="font-size:11px;color:var(--gray-mid);margin-top:2px">${currentScope.fastTrackedComplete&&currentScope.fastTrackedCompleteOn?`Fast-tracked ${new Date(currentScope.fastTrackedCompleteOn+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} by ${escHtml(currentScope.fastTrackedCompleteBy||'')}`:'Turn off to review or fast-track individual milestones'}</div>
-        </div>
-      </div>
-      <label style="position:relative;display:inline-block;width:38px;height:22px;flex-shrink:0;cursor:pointer">
-        <input type="checkbox" ${currentScope.fastTrackedComplete?'checked':''} onchange="toggleScopeFastTrackComplete('${currentScope.id}','${p.n.replace(/'/g,"\\'")}',this.checked)" style="opacity:0;width:0;height:0;position:absolute">
-        <span style="position:absolute;inset:0;background:${currentScope.fastTrackedComplete?'#EF9F27':'#CBD5E1'};border-radius:22px;transition:background .15s"></span>
-        <span style="position:absolute;top:2px;${currentScope.fastTrackedComplete?'right':'left'}:2px;width:16px;height:16px;background:white;border-radius:50%;transition:left .15s,right .15s"></span>
-      </label>
-    </div>`:'';
     msList.innerHTML=`<div style="text-align:center;padding:2rem;color:var(--gray-mid);font-size:13px">
       <i class="ti ti-circle-check" style="font-size:28px;color:#15803d;display:block;margin-bottom:8px"></i>
       <div style="font-weight:600;color:var(--navy);margin-bottom:4px">Project Completed</div>
       <div>All ${MILESTONES_DEF.length} milestones finished.${canEdit?' Use the pencil icon on this Project\'s card (Overview tab) to correct this if it was marked Complete in error.':''}</div>
-      ${fastTrackToggle}
-    </div>`;
+    </div>
+    ${fastTrackToggle}`;
     return;
   }
 
@@ -11149,7 +11157,11 @@ function renderMilestones(p){
   const statusTextColor={Complete:'white','In Progress':'white','At Risk':'white','Not Started':'var(--gray-mid)'};
 
   window._msRendering=true;
-  msList.innerHTML=msData.map((m,idx)=>{
+  // v63j — scope-level fast-track toggle now also rendered above the full
+  // per-milestone tracker (not just the short-circuit "Project Completed"
+  // card above), same fastTrackToggle HTML built once near the top of this
+  // function. See that comment block for the full explanation.
+  msList.innerHTML=fastTrackToggle+msData.map((m,idx)=>{
     const circleColor=statusColors[m.status]||statusColors['Not Started'];
     const textColor=statusTextColor[m.status]||'var(--gray-mid)';
     const circleId=`ms-circle-${m.id||idx}`;
