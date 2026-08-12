@@ -4007,7 +4007,18 @@ window.PROPERTIES_SEED = [
       <input class="form-input" type="text" inputmode="numeric" id="co-original" placeholder="e.g. 50,000">
     </div>
     <div class="form-group">
-      <label class="form-label">Negotiated Amount</label>
+      <!-- v63t -- task from Misty: displayed label changed from
+      "Negotiated Amount" to "Final Amount" per her direct request. This is
+      a DISPLAY-ONLY rename -- the underlying element id (co-negotiated),
+      every JS variable name, and the real Airtable field name ("Negotiated
+      Amount") are all deliberately left unchanged, since renaming the
+      actual Airtable field/schema was not asked for and would be a much
+      bigger, riskier change to make hours before a client meeting. The
+      savings formula (savings = orig - neg, in updateCOSavingsPreview and
+      saveCO) already correctly computes Original minus this field as the
+      captured savings -- confirmed by reading both functions directly,
+      nothing needed changing there. -->
+      <label class="form-label">Final Amount</label>
       <input class="form-input" type="text" inputmode="numeric" id="co-negotiated" placeholder="e.g. 30,000">
     </div>
   </div>
@@ -4667,7 +4678,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63r</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63t</div>
     </div>
   </nav>
 
@@ -14376,7 +14387,7 @@ function renderChangeOrdersTab(p){
           <div style="font-size:13px;font-weight:700;color:var(--navy)">${fmtCurrency(co.originalAmount)}</div>
         </div>
         <div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Negotiated Amount</div>
+          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Final Amount</div>
           <div style="font-size:13px;font-weight:700;color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</div>
         </div>
         <div style="background:${co.savings>0?'var(--green-pale)':'var(--gray-xpale)'};border-radius:6px;padding:8px 10px">
@@ -16061,9 +16072,26 @@ async function saveCO(){
         const co=(window.CO_SAVINGS||[]).find(c=>c.id===editId);
         if(co)Object.assign(co,{description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack});
       }else{
+        // v63s — task from live incident: New York Hilton Midtown's "OT
+        // Cab Weighing" CO saved successfully (confirmed live in Airtable)
+        // but the app showed "Could not save this change order" anyway,
+        // twice in a row across two separate save attempts — not a random
+        // flaky-network coincidence, a real, reproducible bug. Root cause:
+        // atCreate() returns the raw parsed Worker response, whose real
+        // shape (matching Airtable's own batch-create response) is
+        // {records:[{id,fields}]} — the created record's id is nested at
+        // rec.records[0].id, not rec.id directly. This exact same
+        // atCreate() helper is already used correctly elsewhere in this
+        // file (see saveNewBidRound just above: `res.records[0].id`) — this
+        // was the one call site that never got updated to match. rec?.id
+        // was checking a path that never exists on ANY successful create
+        // response, so this branch reported failure unconditionally,
+        // every single time, regardless of whether Airtable actually
+        // succeeded.
         const rec=await atCreate('Change Order Savings Log',fields);
-        if(!rec?.id){showToast('Could not save this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
-        const newCO={id:rec.id,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
+        const newRecId=rec?.records?.[0]?.id;
+        if(!newRecId){showToast('Could not save this change order. Please try again.','error');_savingCO=false;if(saveBtn)saveBtn.disabled=false;return;}
+        const newCO={id:newRecId,property:propName,scopeId,description:desc,originalAmount:orig,negotiatedAmount:neg,savings,status,date,notes,ec,loggedBy,stHours,otHours,materialCost,opClaimed,linkedUnitIds,appliesToWholeProject,paymentResp,fastTrack};
         if(!window.CO_SAVINGS)window.CO_SAVINGS=[];
         window.CO_SAVINGS.push(newCO);
         if(status==='Approved'||status==='Client Approved')autoCreateCODocument(newCO);
@@ -16222,7 +16250,7 @@ async function clientApproveCO(coId){
       ['Property',co.property],
       ['Change Order',co.description||'&mdash;'],
       ['Original Amount',fmtCurrency(co.originalAmount)],
-      ['Negotiated Amount',`<span style="color:#185FA5;font-weight:bold">${fmtCurrency(co.negotiatedAmount)}</span>`],
+      ['Final Amount',`<span style="color:#185FA5;font-weight:bold">${fmtCurrency(co.negotiatedAmount)}</span>`],
       ['Savings Captured',savings>0?`<span style="color:#3B6D11;font-weight:bold">${fmtCurrency(savings)}</span>`:'&mdash;'],
       ['Status','<span style="color:#3B6D11;font-weight:bold">Client Approved</span>'],
     ],
@@ -16342,7 +16370,7 @@ async function sendCONotification(){
       ['Change Order',co.description||'&mdash;'],
       ['Elevator Company',co.ec||'&mdash;'],
       ['Original Amount',fmtCurrency(co.originalAmount)],
-      ['Negotiated Amount',`<span style="color:#185FA5;font-weight:bold">${fmtCurrency(co.negotiatedAmount)}</span>`],
+      ['Final Amount',`<span style="color:#185FA5;font-weight:bold">${fmtCurrency(co.negotiatedAmount)}</span>`],
       ['Savings Captured',savings>0?`<span style="color:#3B6D11;font-weight:bold">${fmtCurrency(savings)}</span>`:'&mdash;'],
       ['Date',co.date||'&mdash;'],
       ...(co.notes?[['Notes',co.notes]]:[]),
