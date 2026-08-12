@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64d</div>
     </div>
   </nav>
 
@@ -14275,6 +14275,58 @@ function getCurrencyValue(id){
   if(!el)return 0;
   return parseFloat(el.value.replace(/[^0-9.]/g,''))||0;
 }
+// v64d — task from live incident: "Hoist Rope Credit" on New York Hilton
+// Midtown needed to save as a negative Change Order amount (a credit for
+// reduced scope, per direct instruction this is standard construction
+// practice) but the shared initCurrencyInput/getCurrencyValue pair strips
+// every non-digit character on every keystroke, including a leading minus
+// sign — so a negative amount was impossible to even type into the field,
+// not just mis-parsed at save time. Rather than change that shared helper
+// (used by many other money fields across the app — Bid amounts, Billing,
+// Retainage, Material Cost — that have never been asked to support
+// negatives and haven't been reviewed for whether that makes sense there),
+// this is a separate negative-aware pair used only by Original CO Amount
+// and Final Amount, per direct instruction to scope the fix to Change
+// Orders specifically.
+function initCOCurrencyInput(id){
+  const el=document.getElementById(id);
+  if(!el)return;
+  el.type='text';
+  el.inputMode='text';
+  const strip=v=>{
+    const neg=v.trim().startsWith('-');
+    const digits=v.replace(/[^0-9]/g,'');
+    return {neg,digits};
+  };
+  const fmt=v=>{
+    const {neg,digits}=strip(v);
+    if(!digits)return '';
+    return (neg?'-':'')+Number(digits).toLocaleString('en-US');
+  };
+  el.addEventListener('input',function(){
+    const cursor=this.selectionStart;
+    const prevLen=this.value.length;
+    this.value=fmt(this.value);
+    const diff=this.value.length-prevLen;
+    this.setSelectionRange(cursor+diff,cursor+diff);
+  });
+  el.addEventListener('focus',function(){
+    const {neg,digits}=strip(this.value);
+    this.value=(neg?'-':'')+digits;
+  });
+  el.addEventListener('blur',function(){
+    this.value=fmt(this.value);
+  });
+}
+function getCOCurrencyValue(id){
+  const el=document.getElementById(id);
+  if(!el)return 0;
+  const raw=el.value.trim();
+  const neg=raw.startsWith('-');
+  const digits=raw.replace(/[^0-9.]/g,'');
+  const n=parseFloat(digits)||0;
+  return neg?-n:n;
+}
 // v38k — Derives the set of Scope IDs a Change Order actually belongs to,
 // for cases where the CO's own "Linked Scope" field is blank. Misty is
 // backfilling historical CO data while reconciling units against Scopes
@@ -15235,6 +15287,33 @@ function openBidSubmissionForm(existingId,viewOnly,roundIdParam){
       <div id="bsf-rows-clarification"></div>
     </div>
 
+    <!-- v64c — task from direct instruction: the JW Marriott bid comparison
+    spreadsheet had line items with no home anywhere in this form (hourly
+    labor rates x4, Total Installation Time, Total Project Length). A single
+    free-text note would bury these as prose, defeating the actual point —
+    comparing bidders side by side. This repeatable row type follows the
+    exact same pattern as Related Work/Alternates/Allowances/Clarifications
+    above, so each fact stays its own comparable line. Label+Value both
+    plain text (not currency-only) since values here mix dollar rates
+    ("$592/hr") with plain counts ("84 weeks") — forcing everything through
+    a currency field would misrepresent the latter. Saves through the
+    existing Bid Line Items table's Description field (no Airtable schema
+    change needed) under a new Line Item Type value. NOTE: this captures
+    the data on each bidder's form/detail view only — it does not yet
+    appear as its own row in the Bid Leveling side-by-side comparison
+    table, since that table is built from the Worker's fetchBidLeveling
+    endpoint, which hasn't been reviewed/updated to include this new type.
+    Per direct instruction, shipping the capture now; comparison-table
+    support is a follow-up (task #38). -->
+    <div style="margin-bottom:1.5rem;border-top:1px solid var(--border);padding-top:1.25rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+        <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em">Additional Considerations <span style="font-size:11px;font-weight:400;color:var(--gray-mid)">— anything that doesn't fit above (e.g. labor rates, project duration)</span></div>
+        <button class="btn btn-add" style="font-size:11px" onclick="addBidLineItemRow('AdditionalConsideration')">+ Add Item</button>
+      </div>
+      <div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px">Not yet included in the Bid Leveling comparison table — visible here and on this bidder's saved record only.</div>
+      <div id="bsf-rows-additionalconsideration"></div>
+    </div>
+
     <div style="margin-bottom:1.5rem;border-top:1px solid var(--border);padding-top:1.25rem">
       <div style="font-size:10px;font-weight:700;color:var(--blue-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">H. Maintenance Pricing</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
@@ -15524,6 +15603,22 @@ const LINE_ITEM_ROW_CONFIG={
     container:'bsf-rows-reference',
     fields:[{key:'Project',type:'text',placeholder:'Project name',width:'1fr'},{key:'Owner/Contact',type:'text',placeholder:'Owner / contact',width:'1fr'},{key:'Contract Amount',type:'currency',placeholder:'Contract amount',width:'1fr'}],
   },
+  // v64c — see comment above the "Additional Considerations" section in
+  // the form HTML. Value is plain text, not currency, since entries here
+  // mix dollar rates with plain counts (weeks, hours) — forcing everything
+  // through a currency field would misrepresent "84 weeks" as a dollar
+  // figure. Label/Value are NOT real Airtable column names on Bid Line
+  // Items (no schema change made or needed) — collectLineItemsFromForm()
+  // maps Label->Description and Value->Component below (Component is a
+  // real singleLineText column, unused by this row type's siblings, so
+  // it's safe to repurpose here rather than inventing a fictitious field).
+  // Component's read-back in renderAllLineItemRows below is remapped the
+  // same way, so editing an existing entry re-populates both inputs
+  // correctly instead of showing them blank.
+  AdditionalConsideration:{
+    container:'bsf-rows-additionalconsideration',
+    fields:[{key:'Label',type:'text',placeholder:'e.g. Mechanic Overtime Rate',width:'1fr'},{key:'Value',type:'text',placeholder:'e.g. $1,185/hr or 84 weeks',width:'1fr'}],
+  },
 };
 
 function lineItemRowHtml(type,item,rowId){
@@ -15568,10 +15663,17 @@ function addBidLineItemRow(type,prefillItem){
 }
 
 function renderAllLineItemRows(){
-  ['RelatedWork','Alternate','Allowance','Equipment','Clarification','Reference'].forEach(type=>{
+  ['RelatedWork','Alternate','Allowance','Equipment','Clarification','Reference','AdditionalConsideration'].forEach(type=>{
     const container=document.getElementById(LINE_ITEM_ROW_CONFIG[type].container);
     if(container)container.innerHTML='';
-    const items=bidFormLineItems.filter(li=>li['Line Item Type']===type);
+    let items=bidFormLineItems.filter(li=>li['Line Item Type']===type);
+    // v64c — AdditionalConsideration stores Label/Value under the real
+    // Description/Component columns (see LINE_ITEM_ROW_CONFIG comment).
+    // Remap back to Label/Value here so editing an existing entry
+    // re-populates both inputs instead of showing them blank.
+    if(type==='AdditionalConsideration'){
+      items=items.map(li=>({...li,'Label':li['Description']||'','Value':li['Component']||''}));
+    }
     items.forEach(item=>addBidLineItemRow(type,item));
   });
 }
@@ -15581,7 +15683,7 @@ function renderAllLineItemRows(){
 // array ready to create as Bid Line Items records.
 function collectLineItemsFromForm(){
   const items=[];
-  ['RelatedWork','Alternate','Allowance','Equipment','Clarification','Reference'].forEach(type=>{
+  ['RelatedWork','Alternate','Allowance','Equipment','Clarification','Reference','AdditionalConsideration'].forEach(type=>{
     const cfg=LINE_ITEM_ROW_CONFIG[type];
     document.querySelectorAll(`#${cfg.container} .bsf-li-row`).forEach(row=>{
       const item={'Line Item Type':type};
@@ -15596,6 +15698,15 @@ function collectLineItemsFromForm(){
           if(v!=='')item[f.key]=v;
         }
       });
+      // v64c — AdditionalConsideration's Label/Value aren't real Airtable
+      // columns (see LINE_ITEM_ROW_CONFIG comment) — remap onto the real
+      // Description/Component columns right before this item is written.
+      if(type==='AdditionalConsideration'){
+        if(item['Label']!=null)item['Description']=item['Label'];
+        if(item['Value']!=null)item['Component']=item['Value'];
+        delete item['Label'];
+        delete item['Value'];
+      }
       items.push(item);
     });
   });
@@ -15865,8 +15976,11 @@ function toggleCOWholeProject(){
 window.toggleCOWholeProject=toggleCOWholeProject;
 
 function openCOModal(editId){
-  initCurrencyInput('co-original');
-  initCurrencyInput('co-negotiated');
+  // v64d — negative-aware handler for these two fields only, see comment
+  // on initCOCurrencyInput. Material Cost/O&P Claimed stay on the shared
+  // positive-only handler, unchanged.
+  initCOCurrencyInput('co-original');
+  initCOCurrencyInput('co-negotiated');
   initCurrencyInput('co-material-cost');
   initCurrencyInput('co-op-claimed');
   const today=new Date().toISOString().split('T')[0];
@@ -15925,12 +16039,23 @@ function openCOModal(editId){
 }
 
 function updateCOSavingsPreview(){
-  const orig=getCurrencyValue('co-original');
-  const neg=getCurrencyValue('co-negotiated');
+  // v64d — switched to getCOCurrencyValue so a credit (negative Original
+  // or Final Amount, e.g. "Hoist Rope Credit") parses correctly here too,
+  // matching the negative-aware input now on both fields.
+  const orig=getCOCurrencyValue('co-original');
+  const neg=getCOCurrencyValue('co-negotiated');
   const savings=orig-neg;
   const preview=document.getElementById('co-savings-preview');
   const val=document.getElementById('co-savings-val');
-  if(orig>0&&neg>0){
+  // v64d — was orig>0&&neg>0, which hid the preview entirely for a
+  // negative-amount credit (a legitimate value, not a missing one). Now
+  // shows the preview whenever either field has a genuinely entered
+  // (non-blank) value, matching the raw-input-blank check pattern already
+  // used elsewhere in this file (origRaw/negRaw in saveCO()) rather than
+  // a positive-only truthiness check.
+  const origEntered=document.getElementById('co-original').value.trim()!=='';
+  const negEntered=document.getElementById('co-negotiated').value.trim()!=='';
+  if(origEntered&&negEntered){
     preview.style.display='block';
     val.textContent=fmtCurrency(savings);
     val.style.color=savings>0?'var(--green)':savings<0?'var(--red)':'var(--gray-mid)';
@@ -16002,8 +16127,11 @@ async function saveCO(){
   // elsewhere in this file (Bid Submissions, Billing, Retainage, Material
   // Cost/O&P Claimed just below) so every money field in this form now
   // parses identically.
+  // v64d — switched to getCOCurrencyValue so a credit (negative amount,
+  // e.g. "Hoist Rope Credit") saves as the real negative number instead of
+  // having its sign stripped. See initCOCurrencyInput comment.
   const origRaw=document.getElementById('co-original').value;
-  const orig=getCurrencyValue('co-original');
+  const orig=getCOCurrencyValue('co-original');
   // v54d — neg used to fall straight to ||0 with no distinction between
   // "left blank" and "entered 0", same as orig below now guards against.
   // Since savings=orig-neg, a blank Negotiated Amount silently reported
@@ -16013,7 +16141,7 @@ async function saveCO(){
   // added cost), so this only blocks a genuinely empty field, checked
   // against the raw input string before parsing, not the parsed number.
   const negRaw=document.getElementById('co-negotiated').value;
-  const neg=getCurrencyValue('co-negotiated');
+  const neg=getCOCurrencyValue('co-negotiated');
   // v62l — task #52: Fast Track. When checked, this CO was already
   // approved outside PULSE, so save writes Status straight to 'Approved'
   // regardless of whatever the Status dropdown was left on — bypassing
