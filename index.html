@@ -4704,7 +4704,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64t</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65a</div>
     </div>
   </nav>
 
@@ -22591,17 +22591,26 @@ function exportBudgetOutlookClientReport(){
   // _boSortedAllUnitItems() and 21-column layout as
   // exportBudgetOutlookDataEntry(), so Client Report shows every unit
   // (including $0/no-data ones) with the full cost-breakdown columns
-  // instead of the older filtered/12-column set. Summary tab is
-  // unchanged — its formulas still point at columns B/I/K/L, which did
-  // not move since the extra columns were appended after L, not inserted
-  // before it.
+  // instead of the older filtered/12-column set.
   const sorted=_boSortedAllUnitItems();
   if(!d||!sorted.length){showToast('No budget data to export','error');return;}
   const milestoneLabels=MILESTONES_DEF.map((name,i)=>`M${i+1} - ${name}`);
-  // v61a-3stage — Client Budget added as a NEW LAST column (not inserted
-  // mid-list) specifically so the Summary tab's existing column-letter
-  // formulas (K/L/I below) never shift — appending after Unit ID keeps
-  // every existing reference correct with zero re-pointing needed.
+  // v64u -- task #35. Root-caused live against JW Marriott San Francisco
+  // Union Square: 4 Active units in Scope "Elevators 1-4" each correctly
+  // compute amount:470000, stage:'awarded' on screen (the Scope's real
+  // Contract Award Value prorated across units, same
+  // isCommitted&&!anyUnitAwarded logic used everywhere else in the app),
+  // but their raw awardValue field is 0 (no individual per-unit Award
+  // Value was ever entered) -- the OLD column mapping read u.awardValue
+  // directly and u.isCommitted?0:... for Estimate, both landing on $0 for
+  // exactly the units where the real dollar figure lives in the row's own
+  // computed `amount`/`stage` fields instead. Now reads amount/stage the
+  // same way unitBudgetStage() intends: exactly one of the three stage
+  // columns is populated per row, based on u.stage, matching what's
+  // actually on screen. Also reordered per Misty's direct request: the
+  // three dollar-stage columns (Estimate Value/Client Budget/Award Value)
+  // now sit together in that stage order, instead of Award Value early
+  // and Client Budget appended at the very end.
   const detailRows=sorted.map(u=>({
     'Year':u.year==null?'':u.year,
     'Property':u.property||'',
@@ -22613,8 +22622,9 @@ function exportBudgetOutlookClientReport(){
     'Elevator Company':u.elevatorCo||'',
     'Milestone':u.milestone||'',
     'Status':_boStatusLabel[u.status]||u.status||'',
-    'Award Value':u.awardValue||0,
-    'Estimate Value':u.isCommitted?0:(u.amount||0),
+    'Estimate Value':u.stage==='estimated'?(u.amount||0):0,
+    'Client Budget':u.stage==='approved'?(u.amount||0):0,
+    'Award Value':u.stage==='awarded'?(u.amount||0):0,
     'Consultant':u.consultant||'',
     'Device Location':u.deviceLocation||'',
     'Equipment Type':u.equipmentType||'',
@@ -22624,21 +22634,34 @@ function exportBudgetOutlookClientReport(){
     'Contingency Fee Est.':u.contingencyEst||0,
     'Target Completion':u.targetCompletion||'',
     'Unit ID':u.unitId||'',
-    'Client Budget':u.stage==='approved'?(u.amount||0):0,
   }));
   const wb=XLSX.utils.book_new();
   const wsDetail=XLSX.utils.json_to_sheet(detailRows);
   const lastRow=detailRows.length+1;
+  // v64u -- task #35. Currency columns re-pointed to their new letters
+  // after the reorder: K=Estimate Value, L=Client Budget, M=Award Value
+  // (was K=Award, L=Estimate before the swap), cost-breakdown columns
+  // shifted one letter right (P-S -> Q-T) since the three dollar-stage
+  // columns are now together instead of split around Milestone/Status.
   for(let r=2;r<=lastRow;r++){
-    ['K','L','P','Q','R','S','V'].forEach(col=>_boSetCurrencyCell(wsDetail,`${col}${r}`));
+    ['K','L','M','Q','R','S','T'].forEach(col=>_boSetCurrencyCell(wsDetail,`${col}${r}`));
   }
-  wsDetail['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0},{wch:13}];
+  wsDetail['!cols']=[{wch:6},{wch:26},{wch:14},{wch:12},{wch:16},{wch:12},{wch:14},{wch:16},{wch:26},{wch:10},{wch:13},{wch:13},{wch:13},{wch:18},{wch:18},{wch:16},{wch:14},{wch:14},{wch:14},{wch:16},{wch:16},{wch:0}];
   XLSX.utils.book_append_sheet(wb,wsDetail,'Unit detail');
+  // v64u -- task #35. Summary formulas re-pointed to the new column
+  // letters: K=Estimate Value (was L), L=Client Budget (new), M=Award
+  // Value (was K), I=Milestone (unchanged, didn't move). "Total units"
+  // still counts column B (Property) per row, same as before this round
+  // -- flagged, not changed: this counts populated Property cells, which
+  // in practice equals row/unit count since every unit row always has a
+  // property, but it's worth knowing it isn't literally counting a
+  // "Unit" column.
   const summaryRows=[
     ['Key portfolio metrics',''],
     ['Total units',{f:`COUNTA('Unit detail'!B2:B${lastRow})`}],
-    ['Total award value',{f:`SUM('Unit detail'!K2:K${lastRow})`,z:'$#,##0'}],
-    ['Total estimate value',{f:`SUM('Unit detail'!L2:L${lastRow})`,z:'$#,##0'}],
+    ['Total estimate value',{f:`SUM('Unit detail'!K2:K${lastRow})`,z:'$#,##0'}],
+    ['Total client budget',{f:`SUM('Unit detail'!L2:L${lastRow})`,z:'$#,##0'}],
+    ['Total award value',{f:`SUM('Unit detail'!M2:M${lastRow})`,z:'$#,##0'}],
     ['',''],
     ['Milestone stage breakdown',''],
   ];
@@ -22665,6 +22688,37 @@ function exportBudgetOutlookClientReport(){
   });
   wsSummary['!cols']=[{wch:30},{wch:14}];
   XLSX.utils.book_append_sheet(wb,wsSummary,'Summary');
+  // v64u -- task #35. New "VDA Project" tab, one row per VDA task line,
+  // per Misty's explicit direction: VDA spend is not unit-level data (a
+  // VDA Project can span many units or none), so it gets its own sheet
+  // rather than being mixed into Unit detail's per-unit rows. Same source
+  // data and year-bucketing (calendar year of each task's End Date) as
+  // the on-screen VDA toggle (task #30) and computeVdaFsByMonth(), just
+  // listed as real rows here instead of aggregated into a chart.
+  const vdaRows=(window.VDA_TASK_LINES||[]).filter(t=>(t.contractBalance||0)>0&&t.endDate).map(t=>{
+    const proj=(window.VDA_PROJECTS||[]).find(p=>p.id===t.vdaId);
+    const propNames=proj?(proj.linkedPropertyIds||[]).map(id=>{const pr=(window.PORTFOLIO||[]).find(x=>x.id===id);return pr?pr.n:'';}).filter(Boolean):[];
+    const endDate=new Date(t.endDate);
+    return{
+      'Year':isNaN(endDate)?'':endDate.getFullYear(),
+      'Property':propNames.length>0?propNames.join(', '):'(unlinked property)',
+      'VDA Project #':proj?proj.number:'',
+      'Task Description':t.description||'',
+      'Status':t.status||'',
+      'Contract Balance':t.contractBalance||0,
+      'Amount Invoiced':t.amountInvoiced||0,
+      'End Date':t.endDate||'',
+    };
+  }).sort((a,b)=>(a.Year||0)-(b.Year||0)||(a.Property||'').localeCompare(b.Property||''));
+  if(vdaRows.length>0){
+    const wsVda=XLSX.utils.json_to_sheet(vdaRows);
+    const vdaLastRow=vdaRows.length+1;
+    for(let r=2;r<=vdaLastRow;r++){
+      ['F','G'].forEach(col=>_boSetCurrencyCell(wsVda,`${col}${r}`));
+    }
+    wsVda['!cols']=[{wch:6},{wch:26},{wch:14},{wch:36},{wch:14},{wch:16},{wch:16},{wch:12}];
+    XLSX.utils.book_append_sheet(wb,wsVda,'VDA Project');
+  }
   const stamp=new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb,`PULSE_Budget_Outlook_Client_Report_${d.filter||'all'}_${stamp}.xlsx`);
   showToast('Client report exported','success');
