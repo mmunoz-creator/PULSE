@@ -4660,7 +4660,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v63l</div>
     </div>
   </nav>
 
@@ -9486,6 +9486,23 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // setScopeOnHold(scopeId,false), which passes force:true to bypass
   // this guard and immediately reveal wherever real progress landed.
   if(scope.status==='On Hold'&&!(opts&&opts.force))return;
+  // v63l — CRITICAL fix, task #34. This function never checked
+  // scope.fastTrackedComplete before deriving/writing a new Status. Its
+  // default (a few lines below) is 'Capital Plan' whenever M1 has no
+  // completionDate — true for every fast-tracked scope, since fast-
+  // tracking is specifically the path for marking a scope complete
+  // WITHOUT manually entering milestone dates. Sequence that caused real
+  // data loss, confirmed live in Airtable today: opening a fast-tracked
+  // scope's Milestones tab triggers autoPopulateMilestones() (creates 14
+  // real Not Started records, since none existed), then this function
+  // runs right after and sees 14 empty records with no M1 completionDate
+  // — derives 'Capital Plan', writes it to Airtable, silently destroying
+  // the real 'Complete' status. Confirmed live victim: Hilton Hawaiian
+  // Village's "Completed Project" scope (recIxZWhn98d9tS9B), Status
+  // overwritten Capital Plan today. Same guard pattern as the On Hold
+  // check above: fastTrackedComplete is a manual override, not a derived
+  // state, so this function must never touch Status while it's true.
+  if(scope.fastTrackedComplete&&!(opts&&opts.force))return;
   const msData=(window.MILESTONES||[]).filter(m=>m.scopeId===scopeId);
   // v37d — Units-Complete override. Onboarding an already-in-progress
   // program means some Scopes have real, already-finished work whose
@@ -24026,7 +24043,18 @@ function renderCharts(){
           <div class="card-sub">Rolling 12 months, one-month billing lag, straight-line proration</div>
         </div></div>
         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-mid);cursor:pointer;white-space:nowrap">
-          <input type="checkbox" id="fs-vda-toggle" onchange="toggleVdaForecastInclude('charts',this.checked)">Show VDA Project
+          <!-- v63k -- task #33 fix. This checkbox lives inside renderCharts()
+          itself, which toggleVdaForecastInclude() calls on every change to
+          redraw the chart -- but the checkbox markup had no checked
+          attribute bound to window._vdaForecastIncluded.charts, so every
+          rebuild reset it to unchecked regardless of the real state. Result:
+          clicking it on set the state to true then immediately visually
+          un-checked itself; clicking again read the now-unchecked box as
+          false, so it could toggle the underlying data on but never showed
+          checked, and could never be seen as "on" to click off. Fixed by
+          reading the live state variable here so the checkbox always
+          reflects reality after every re-render. -->
+          <input type="checkbox" id="fs-vda-toggle" ${window._vdaForecastIncluded&&window._vdaForecastIncluded.charts?'checked':''} onchange="toggleVdaForecastInclude('charts',this.checked)">Show VDA Project
         </label>
       </div>
       <div id="fs-chart" style="margin-top:10px;position:relative"></div>
