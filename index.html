@@ -4693,7 +4693,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v64m</div>
     </div>
   </nav>
 
@@ -13479,13 +13479,39 @@ function renderActionBoard(){
   // Closeout category instead of being invisible/lumped into Construction
   // the way the old 2-bucket toggle left it.
   const closeoutTiles=abGroupTiles('projectcloseout');
-  // Complete tiles -- same real source Dashboard's own heat map uses
-  // (groupScopesToTiles' sibling logic, line ~23707): properties with
-  // Property Status = Complete, Removed-excluded. Misty asked for this
-  // as the 3rd real heat tab, matching the approved mockup's 3-tab
-  // layout (Construction / Pre-construction / Complete) instead of the
-  // 2 tabs previously wired.
-  const completeTiles=port.filter(p=>p.st==='Complete').map(p=>({property:p.n,pct:100,isRisk:false,daysLate:0}));
+  // v64m -- Complete tiles rebuilt from real Scope data, replacing the
+  // old port.filter(p=>p.st==='Complete') property-level source. Root-
+  // caused live: Misty flagged Active Projects by Stage's own on-screen
+  // label explicitly says "projects", so its per-Scope counts (a
+  // property with 3 Complete scopes counts as 3) should be the source of
+  // truth Heat Map's tab badges match -- not the other way around.
+  // Digging into the OLD Complete tiles source specifically surfaced a
+  // second, deeper gap: it filtered on property.status==='Complete',
+  // which is a totally different definition than Analytics' scope-level
+  // Complete count. Confirmed live: Casa Marina Key West, Curio
+  // Collection and Hilton Hawaiian Village Waikiki Beach Resort both
+  // have real Complete-status Scopes (2 each) that Analytics counts, but
+  // neither property's own overall Status field is 'Complete' (both are
+  // still In Progress portfolio-wide, since they also have non-Complete
+  // Scopes) -- so neither ever appeared as a Complete tile here at all,
+  // not just under-counted. Now uses the same abGroupTiles() pattern as
+  // the other 3 tabs, sourced from every Scope whose OWN status is
+  // Complete (not the property's), so a property can appear as a
+  // Complete tile even while it's still In Progress overall -- correct,
+  // since a single Scope finishing is real, tile-worthy progress
+  // regardless of what the property's other Scopes are doing, same
+  // reasoning already applied to Pre-Construction/Construction/Project
+  // Closeout tiles never requiring property.status to match either.
+  const abCompleteScopeData=(window.SCOPES||[]).filter(s=>s.status==='Complete'&&!removedNames.has(s.property)).map(s=>({property:s.property,complete:1,expected:1,category:'complete',daysLate:0,isRisk:false}));
+  function abGroupCompleteTiles(){
+    const byProp={};
+    abCompleteScopeData.forEach(d=>{
+      if(!byProp[d.property])byProp[d.property]={property:d.property,scopeCount:0};
+      byProp[d.property].scopeCount+=1;
+    });
+    return Object.values(byProp).map(t=>({...t,pct:100,isRisk:false,daysLate:0}));
+  }
+  const completeTiles=abGroupCompleteTiles();
   // v57f -- per Misty's explicit direction: In-Progress-only meant a
   // milestone finishing was invisible here -- the exact case that
   // surfaced this, Casa Marina Key West's real M10 (Final Phase Complete)
@@ -13764,13 +13790,23 @@ function renderActionBoard(){
       <!-- v57e -- mockup's .heat-tab is font-weight:600; the shared .btn
       class these tab pills inherit from is 500-weight -- overridden to
       match exactly. -->
+      <!-- v64m -- tab badge counts changed from tiles.length (one count
+      per PROPERTY, after abGroupTiles' grouping) to a sum of each tile's
+      scopeCount (one count per PROJECT/Scope). Root-caused live: Misty
+      flagged that Active Projects by Stage on Analytics explicitly
+      labels itself "projects" and counts per-Scope (a property with 3
+      Pre-Construction Scopes counts as 3 there), so this tab's own
+      headline number should match that, not the post-grouping tile
+      count. Tiles themselves stay grouped one-per-property (unchanged --
+      that's still the right visual, nobody wants 3 separate tiles for
+      the same building), only the number in the pill label changes. -->
       <div style="display:flex;gap:4px;margin-bottom:12px">
-        <button class="btn" style="${abHeatTab==='precon'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('precon')">Pre-Construction (${preconTiles.length})</button>
-        <button class="btn" style="${abHeatTab==='construction'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('construction')">Construction (${constructionTiles.length})</button>
+        <button class="btn" style="${abHeatTab==='precon'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('precon')">Pre-Construction (${preconTiles.reduce((a,t)=>a+(t.scopeCount||1),0)})</button>
+        <button class="btn" style="${abHeatTab==='construction'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('construction')">Construction (${constructionTiles.reduce((a,t)=>a+(t.scopeCount||1),0)})</button>
         <!-- v61b-status — 4th tab (task #11), same abGroupTiles() pattern
         as Construction/Pre-Construction. -->
-        <button class="btn" style="${abHeatTab==='closeout'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('closeout')">Project Closeout (${closeoutTiles.length})</button>
-        <button class="btn" style="${abHeatTab==='complete'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('complete')">Complete (${completeTiles.length})</button>
+        <button class="btn" style="${abHeatTab==='closeout'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('closeout')">Project Closeout (${closeoutTiles.reduce((a,t)=>a+(t.scopeCount||1),0)})</button>
+        <button class="btn" style="${abHeatTab==='complete'?'background:var(--navy);border-color:var(--navy);color:#fff;':''}padding:6px 12px;font-size:12px;font-weight:600" onclick="abSetHeatTab('complete')">Complete (${completeTiles.reduce((a,t)=>a+(t.scopeCount||1),0)})</button>
       </div>
       <!-- v57d -- tile markup now matches Dashboard's real heat tile
       renderer exactly (groupScopesToTiles' tile HTML, ~line 23883), per
@@ -13783,13 +13819,14 @@ function renderActionBoard(){
       itself is shared. -->
       <!-- v58i -- heatTileCounter added, matching Dashboard's real
       groupScopesToTiles() tile exactly (per the open item: "heat map
-      tiles need a project counter, as designed in dashboard"). Only
-      construction/precon tiles carry a real scopeCount (from abGroupTiles
-      above) -- completeTiles is built straight from port.filter(), same
-      as Dashboard's own dashHeatDataComplete, which also has no counter,
-      so Complete tiles correctly show no count here either, matching
-      Dashboard's own behavior exactly rather than inventing one. -->
+      tiles need a project counter, as designed in dashboard"). -->
       <!-- v61b-status — 4th tab wired into tile selection, task #11. -->
+      <!-- v64m -- completeTiles now built from abGroupCompleteTiles(), which
+      groups real Scope-level Complete data by property and accumulates a
+      genuine scopeCount per tile (task #24, matching Analytics' per-project
+      counting). Complete tiles now carry a real scopeCount just like
+      construction/precon/closeout tiles, so tileCounter below renders for
+      them the same way it does for the other three tabs. -->
       <div style="display:flex;flex-wrap:wrap;gap:8px">${(abHeatTab==='construction'?constructionTiles:abHeatTab==='precon'?preconTiles:abHeatTab==='closeout'?closeoutTiles:completeTiles).map(t=>{
         const isComplete=abHeatTab==='complete';
         const borderColor=isComplete?'var(--green)':t.isRisk?'var(--red)':'var(--blue-dark)';
