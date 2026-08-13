@@ -1,4 +1,54 @@
 <!--
+pulse_v66f. Changes from v66e, this round. Requires no worker changes.
+New feature: "Portfolio-wide access" — a shared Consultant login that sees
+every property instead of just its own assigned ones, for handing out to
+people who need broad visibility without full IT Admin privileges. Built
+after ruling out two heavier options with Misty directly: a genuinely new
+5th role (would need Worker/Access-PINs-table changes to accept a new role
+value at /login -- bigger than asked) and a toggle IT Admin flips on after
+logging in (wrong shape once Misty clarified she wants to hand this out as
+its own credential to other people, not something Admin turns on for
+itself).
+  1. New Airtable record: Access PINs (recQ3KUcGWeBSZEm8) — Name "Pulse
+     Consultant", Role Consultant, a fixed PIN that's meant to never rotate
+     (this is a deliberate shared-credential tradeoff, not a per-person
+     PIN), Active. Authenticates through the exact same /login Worker path
+     every other Consultant login already uses — no Worker or Access PINs
+     schema changes.
+  2. Login screen: clicking Consultant now reveals a "Portfolio-wide
+     access" checkbox above the name/PIN fields (login-consultant-
+     unrestricted-wrap). Checking it hides the name field entirely (same
+     PIN-only pattern Admin's login already uses, since the shared identity
+     has a fixed name with nothing to type) and sends "Pulse Consultant" as
+     the name to verifyPinLogin() instead of whatever's in the name input.
+     No 5th button on the role grid, no change to the PM/Client/Admin login
+     paths.
+  3. New global window._consultantUnrestricted, set true on a successful
+     unrestricted-checkbox login, persisted through a page refresh via
+     sessionStorage (pulse_consultant_unrestricted) alongside the rest of
+     the session, and cleared on logout -- same lifetime pattern already
+     used for currentConsultantName/pulse_consultant.
+  4. New helper consultantSeesProperty(propName) (next to
+     propertyHasConsultant(), which it wraps) — returns true unconditionally
+     when window._consultantUnrestricted is set, otherwise behaves exactly
+     like the existing propertyHasConsultant() check. Every property-
+     RESTRICTION call site that filters a consultant down to their own
+     assigned properties (Dashboard, Analytics/Charts, Capital Plan,
+     Completed Scopes, Documents, Portfolio View, Operations Center x2,
+     Submit Update dropdown, Change Orders/Dependencies/Bids edit
+     permission gates -- 12 sites total) now routes through this helper.
+     Classified against the real code at each site, not guessed from
+     variable names -- confirmed one deliberately-NOT-touched site along
+     the way (Analytics' CF.consultant filter, an admin-picked dropdown
+     value, unrelated to the logged-in user's own scoping) and left it
+     alone. Every FEATURE-gate check (Field Update submit button,
+     consultant-only report wording, author/attribution name on a Field
+     Update or PM Update, the Custom Report Builder block, etc.) is
+     deliberately untouched -- the shared Pulse Consultant login is still a
+     real Consultant and keeps every real Consultant feature, it just isn't
+     limited to one person's assigned properties.
+
+<!--
 pulse_v66e. Changes from v66d, this round. Requires no worker changes.
 New feature: Dependencies & Coordination, mapped from the MARLI Operations
 Center mockup Misty shared, scoped down to what's real and buildable per
@@ -2701,6 +2751,22 @@ function propertyHasConsultant(propName,consultantName){
   const target=consultantName.trim().toLowerCase();
   return propertyConsultants(propName).some(c=>c.toLowerCase()===target);
 }
+// v66f — Portfolio-wide access. Every PROPERTY-RESTRICTION check (does this
+// consultant get to see this property/scope at all) should route through
+// this instead of calling propertyHasConsultant/role==='consultant' scoping
+// directly, so window._consultantUnrestricted can short-circuit it to "show
+// everything." Deliberately NOT used for FEATURE-GATE checks (does this
+// role get the Field Update submit button, the consultant-only report
+// wording, etc.) — those stay on role==='consultant' unchanged, since the
+// Pulse Consultant shared login is still a real Consultant and should still
+// see every consultant feature exactly as before, just without the
+// per-property filter. Call sites were classified one at a time against the
+// real code at each line, not guessed from variable names.
+function consultantSeesProperty(propName){
+  if(role!=='consultant')return true; // not a consultant filter's problem
+  if(window._consultantUnrestricted)return true;
+  return propertyHasConsultant(propName,currentConsultantName);
+}
 // v37j -- Scorecard KPI attribution helper. The 5 KPI functions below were
 // attributing every metric event (milestone completion, closed action
 // item, budget variance, CO savings) to a property's stale p.v field
@@ -4060,6 +4126,25 @@ window.PROPERTIES_SEED = [
           <button class="role-btn" onclick="selectRole('client',this)"><i class="ti ti-building"></i>Client</button>
         </div>
       </div>
+      <!-- v66f — Portfolio-wide access checkbox, Consultant role only. Per
+      Misty's direct spec: no 5th login button, no new role/PIN validated on
+      the Worker side. Real Consultant login (existing /login path, existing
+      Access PINs table) with a shared, fixed identity ("Pulse Consultant" /
+      recQ3KUcGWeBSZEm8, PIN never rotates) for whoever needs to see every
+      property instead of just their own assigned ones. Checking this hides
+      the name field (same PIN-only pattern Admin already uses) and sets
+      window._consultantUnrestricted=true after a successful login, which
+      every property-restriction check (not feature-gate check — see
+      _consultantVisible()) treats as "skip the filter." -->
+      <div class="field-wrap" id="login-consultant-unrestricted-wrap" style="display:none">
+        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;color:var(--navy);background:var(--gray-xpale);border-radius:8px;padding:10px 12px">
+          <input type="checkbox" id="login-consultant-unrestricted" onchange="toggleConsultantUnrestrictedField()" style="margin-top:2px">
+          <span>
+            Portfolio-wide access
+            <span style="display:block;font-size:11px;color:var(--gray-mid);margin-top:2px;font-weight:400">See every property instead of just assigned ones. Uses a shared sign-in — PIN, no name entry.</span>
+          </span>
+        </label>
+      </div>
       <div class="field-wrap" id="login-name-pin-wrap" style="display:block">
         <div id="login-name-field-group" style="display:none">
           <label class="field-label">Your name</label>
@@ -5071,7 +5156,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66f</div>
     </div>
   </nav>
 
@@ -6889,6 +6974,27 @@ function selectRole(r,btn){
     if(nameGroup)nameGroup.style.display=(r==='admin')?'none':'block';
     const err=document.getElementById('login-pin-error');if(err)err.style.display='none';
   }
+  // v66f — Portfolio-wide access checkbox only ever makes sense under
+  // Consultant. Switching away from Consultant resets it, so a stray check
+  // left over from a previous role pick can't silently carry into a PM/
+  // Client/Admin login attempt.
+  const unrestrictedWrap=document.getElementById('login-consultant-unrestricted-wrap');
+  if(unrestrictedWrap)unrestrictedWrap.style.display=(r==='consultant')?'block':'none';
+  if(r!=='consultant'){
+    const cb=document.getElementById('login-consultant-unrestricted');
+    if(cb){cb.checked=false;toggleConsultantUnrestrictedField();}
+  }
+}
+
+// v66f — Checking "Portfolio-wide access" switches Consultant login to the
+// same PIN-only pattern Admin already uses (no name field), since the
+// shared "Pulse Consultant" identity has a fixed name, nothing to type.
+// Unchecking restores the normal name+PIN Consultant flow.
+function toggleConsultantUnrestrictedField(){
+  const cb=document.getElementById('login-consultant-unrestricted');
+  const nameGroup=document.getElementById('login-name-field-group');
+  if(!cb||!nameGroup||role!=='consultant')return;
+  nameGroup.style.display=cb.checked?'none':'block';
 }
 
 // Show/hide toggle for masked PIN fields (login + consultant picker).
@@ -6925,7 +7031,15 @@ async function doLogin(){
     const nameEl=document.getElementById('login-name-input');
     const pinEl=document.getElementById('login-pin-input');
     const errEl=document.getElementById('login-pin-error');
-    const result=await verifyPinLogin(role,role==='admin'?null:nameEl.value,pinEl.value);
+    // v66f — Portfolio-wide access. Real Consultant login, still verified
+    // against the same Access PINs table/Worker path as every other
+    // Consultant — the only difference is the name sent is the fixed shared
+    // identity "Pulse Consultant" instead of whatever's typed in the name
+    // field (which is hidden in this mode, see toggleConsultantUnrestrictedField).
+    const unrestrictedCb=document.getElementById('login-consultant-unrestricted');
+    const isUnrestrictedConsultant=(role==='consultant'&&unrestrictedCb&&unrestrictedCb.checked);
+    const nameToSend=isUnrestrictedConsultant?'Pulse Consultant':(role==='admin'?null:nameEl.value);
+    const result=await verifyPinLogin(role,nameToSend,pinEl.value);
     if(!result.ok){
       errEl.textContent=result.message;errEl.style.display='block';
       return;
@@ -6940,6 +7054,15 @@ async function doLogin(){
     if(role==='consultant'){
       currentConsultantName=result.name;
       sessionStorage.setItem('pulse_consultant',result.name);
+    }
+    // v66f — Set once, right after a successful login, and persisted so a
+    // page refresh (tryRestorePulseSession()) doesn't silently drop back to
+    // scoped-consultant behavior mid-session. Every property-restriction
+    // check (not feature-gate check) now consults this via
+    // _consultantVisible() instead of checking role==='consultant' alone.
+    window._consultantUnrestricted=isUnrestrictedConsultant;
+    if(isUnrestrictedConsultant){
+      try{sessionStorage.setItem('pulse_consultant_unrestricted','1');}catch(e){}
     }
     // v42h — persist just enough to restore this session after a browser
     // refresh (role, client, display name, and the Access PINs recordId so
@@ -7029,6 +7152,9 @@ async function tryRestorePulseSession(){
   window._userName=saved.userName||null;
   if(role==='consultant'){
     currentConsultantName=sessionStorage.getItem('pulse_consultant')||saved.userName||'';
+    // v66f — restore the Portfolio-wide access flag across a refresh, same
+    // sessionStorage-survives-reload lifetime as everything else here.
+    window._consultantUnrestricted=sessionStorage.getItem('pulse_consultant_unrestricted')==='1';
   }
   // Background verification (fire-and-forget, does not block restore).
   // Admin has no per-user recordId to re-check (shared PIN, see
@@ -7365,7 +7491,9 @@ function doLogout(){
   }
   currentConsultantName='';
   window._userName=null;
+  window._consultantUnrestricted=false;
   sessionStorage.removeItem('pulse_consultant');
+  sessionStorage.removeItem('pulse_consultant_unrestricted');
   sessionStorage.removeItem('pulse_session');
   window._sessionToken=null; // v51a. Drop the Worker session token.
   demoMode=false;
@@ -15067,7 +15195,7 @@ function renderChangeOrdersTab(p){
   // and the note flagged to Misty about whether the Worker also needs a
   // server-side scoping check, since this UI gate is not itself a
   // security boundary against a direct API call.
-  const canEdit=role==='pm'||role==='admin'||(role==='consultant'&&(p?.v||'')===(currentConsultantName||''));
+  const canEdit=role==='pm'||role==='admin'||(role==='consultant'&&(window._consultantUnrestricted||(p?.v||'')===(currentConsultantName||'')));
   const coAddBtn=document.getElementById('co-add-btn');
   if(coAddBtn)coAddBtn.style.display=canEdit?'inline-flex':'none';
   if(coAddBtn&&canEdit){
@@ -15193,7 +15321,7 @@ function depOwnerLabel(d){return d.owner==='Other'?(d.ownerOther||'Other'):d.own
 function renderDependenciesTab(p){
   renderScopeTabs('dep-scope-tabs',p.n);
   const scopeId=currentScope?.id;
-  const canEdit=role==='pm'||role==='admin'||(role==='consultant'&&(p?.v||'')===(currentConsultantName||''));
+  const canEdit=role==='pm'||role==='admin'||(role==='consultant'&&(window._consultantUnrestricted||(p?.v||'')===(currentConsultantName||'')));
   const depAddBtn=document.getElementById('dep-add-btn');
   if(depAddBtn)depAddBtn.style.display=canEdit?'inline-flex':'none';
   const deps=(window.DEPENDENCIES||[]).filter(d=>d.scopeId===scopeId);
@@ -15352,7 +15480,7 @@ let BID_SUBMISSIONS_CACHE=[]; // Bid Submissions records for currentProp (all ro
 // own assigned properties (same scoping convention as Field Updates).
 function canEditBids(p){
   if(role==='pm'||role==='admin')return true;
-  if(role==='consultant')return (p?.v||'')===(currentConsultantName||'');
+  if(role==='consultant')return window._consultantUnrestricted||(p?.v||'')===(currentConsultantName||'');
   return false;
 }
 // Publish/unpublish a round's submissions is explicitly PM/Admin only —
@@ -21134,7 +21262,7 @@ function cfGetFiltered(){
     if(p.st==='Capital Plan')return false;
     // v29b — consultant role pre-scoping: same pattern as renderDashboard.
     // Without this, consultants see the full portfolio in Analytics/Charts.
-    if(role==='consultant'&&!propertyHasConsultant(p.n,currentConsultantName))return false;
+    if(role==='consultant'&&!consultantSeesProperty(p.n))return false;
     if(inp&&CF.property.length===0&&!p.n.toLowerCase().includes(inp))return false;
     if(CF.property.length&&!CF.property.includes(p.n))return false;
     if(CF.status&&p.st!==CF.status)return false;
@@ -21490,7 +21618,7 @@ function getCapitalPlanScopes(){
   // out a co-assigned property's other scopes would hide exactly the
   // context a consultant needs.
   const visiblePropNames=role==='consultant'
-    ? new Set([...allPropNames].filter(n=>propertyHasConsultant(n,currentConsultantName)))
+    ? new Set([...allPropNames].filter(n=>consultantSeesProperty(n)))
     : allPropNames;
   return scopes
     .filter(s=>s.status==='Capital Plan'&&visiblePropNames.has(s.property))
@@ -21702,7 +21830,7 @@ function getCompletedScopes(){
   const scopes=window.SCOPES||[];
   const allPropNames=new Set(port.filter(p=>p.st!=='Removed').map(p=>p.n));
   const visiblePropNames=role==='consultant'
-    ? new Set([...allPropNames].filter(n=>propertyHasConsultant(n,currentConsultantName)))
+    ? new Set([...allPropNames].filter(n=>consultantSeesProperty(n)))
     : allPropNames;
   // v35e fix — this used to only surface a Scope once its own status
   // graduated to Complete, which matched reality back when a Scope's
@@ -28314,7 +28442,7 @@ function renderDashboard(){
   // Consultant scoping: consultants only see properties where they're
   // assigned to at least one Scope (or, for un-scoped properties, the
   // legacy Properties-level VDA Consultant field). See propertyHasConsultant().
-  const port=role==='consultant'?_allPort.filter(p=>propertyHasConsultant(p.n,currentConsultantName)):_allPort;
+  const port=role==='consultant'?_allPort.filter(p=>consultantSeesProperty(p.n)):_allPort;
   // v36n — this block used to render a "Loading portfolio data..." spinner
   // whenever port.length===0, on the assumption that an empty port array
   // always meant data hadn't arrived from Airtable yet. That's true right
@@ -31147,8 +31275,8 @@ function renderDocFolders(){
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   let docs=window.DOCUMENTS_LIVE||[];
   if(role==='client')docs=docs.filter(d=>d.visibility==='Public');
-  if(role==='consultant'){
-    const myProps=port.filter(p=>propertyHasConsultant(p.n,currentConsultantName)).map(p=>p.n);
+  if(role==='consultant'&&!window._consultantUnrestricted){
+    const myProps=port.filter(p=>consultantSeesProperty(p.n)).map(p=>p.n);
     docs=docs.filter(d=>myProps.includes(d.property));
   }
   if(docSearchQuery){
@@ -31557,7 +31685,7 @@ function populatePortfolio(){
   // Consultants only see their assigned properties; PM/Admin/Client see all —
   // matches the same scoping already applied to the Submit Update dropdown.
   const port=role==='consultant'
-    ? allPort.filter(p=>propertyHasConsultant(p.n,currentConsultantName))
+    ? allPort.filter(p=>consultantSeesProperty(p.n))
     : allPort;
   const tbody=document.getElementById('portfolio-tbody');if(!tbody)return;
   const sub=document.getElementById('portfolio-sub');
@@ -33234,9 +33362,9 @@ function updateOpsCenterBadge(){
   let lastSeen=0;
   try{lastSeen=parseInt(localStorage.getItem('pulse_opscenter_last_seen')||'0',10)||0;}catch(e){}
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
-  const isConsultant=role==='consultant';
+  const isConsultant=role==='consultant'&&!window._consultantUnrestricted;
   const consultantProps=isConsultant
-    ? new Set(port.filter(p=>propertyHasConsultant(p.n,currentConsultantName)).map(p=>p.n))
+    ? new Set(port.filter(p=>consultantSeesProperty(p.n)).map(p=>p.n))
     : null;
   const propFilter=prop=>!isConsultant||consultantProps.has(prop);
   const allActions=actionItems||(window.ACTION_ITEMS||[]);
@@ -33305,7 +33433,7 @@ function populateSubmitDropdown(){
   const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
   // Consultants only see their assigned properties; PM/Admin see all
   let filtered=role==='consultant'
-    ? port.filter(p=>propertyHasConsultant(p.n,currentConsultantName))
+    ? port.filter(p=>consultantSeesProperty(p.n))
     : port;
   // Property is locked (disabled) during edit/resubmit — if the consultant's
   // assignment changed since the original submission, the original property
@@ -36906,9 +37034,9 @@ function renderOpsCenter(){
   const allActions=actionItems||(window.ACTION_ITEMS||[]);
 
   // Consultant filtering — only show items for assigned properties
-  const isConsultant=role==='consultant';
+  const isConsultant=role==='consultant'&&!window._consultantUnrestricted;
   const consultantProps=isConsultant
-    ? new Set(port.filter(p=>propertyHasConsultant(p.n,currentConsultantName)).map(p=>p.n))
+    ? new Set(port.filter(p=>consultantSeesProperty(p.n)).map(p=>p.n))
     : null;
   const propFilter=prop=>!isConsultant||consultantProps.has(prop);
 
