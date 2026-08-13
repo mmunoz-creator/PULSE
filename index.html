@@ -1,4 +1,58 @@
 <!--
+pulse_v66j. Changes from v66i, this round. Requires no new worker changes
+beyond worker_v44n_build.mjs (already required by v66i, for the consultant
+DELETE rule — still needed here since bulk delete uses the same atDelete
+path). Six fixes from Misty's live testing feedback after v66i:
+  1. Status enum replaced. Misty caught that "On Track" made no sense as a
+     default for a just-created, not-yet-worked-on dependency ("What would
+     make it on track? It's either, planned, complete, or overdue
+     correct?"). On Track and At Risk are gone; the enum is now Planned
+     (new default on bulk create) / Complete / Overdue. Scoped strictly to
+     Dependencies — DEP_STATUS_COLOR, DEP_STATUS_BG, the loadAllData()
+     default, saveDepBulk()'s create payload, the dep-modal Status select,
+     the Dependencies tab summary bar, and the admin Ops Center rollup
+     table were all updated together. Unrelated On Track/At Risk usage
+     elsewhere in this file (property/phase health status) is untouched —
+     that's a separate concept that was never part of this ask.
+  2. Added a relative due-date countdown (depDueCountdown()) next to each
+     row's due date — "in 12 days" / "3 days overdue" / "Due today" — per
+     Misty's direct ask. Suppressed for Complete rows since a countdown on
+     a finished item isn't meaningful; shown in red/bold when overdue for
+     at-a-glance severity.
+  3. Per-row Delete button (shipped in v66i) removed per Misty's explicit
+     reversal ("I don't need a delete button on everyone"). Replaced with
+     a global "Delete dependencies" toggle that switches the list into a
+     depSelectMode state: each row shows a checkbox instead of Edit, plus a
+     confirm bar ("N selected" / Cancel / Delete selected). deleteDepsBulk()
+     reuses the same optimistic-remove-then-rollback-on-failure pattern as
+     the row-level deleteDep() it replaces, just run sequentially across
+     every checked id.
+  4. The "Controlled Access (Card Reader)" wrap issue that survived the
+     520px modal-width bump in v66g — the real constraint was the
+     2-column grid's per-cell width (~232px), not the container. Fixed
+     structurally by the slide-out conversion below: the panel is 560px
+     with a single-column picker grid, so each chip gets ~460px of content
+     width. Not confirmed with a live getBBox() measurement this round —
+     this sandbox has no headless browser available — so worth a quick
+     visual check once deployed, but the math (a ~210px-wide label in a
+     ~460px-wide row) leaves comfortable margin.
+  5. Modal heading corrected to title case, "Add Dependencies", matching
+     the rest of PULSE's modal/panel headings (e.g. "Log Change Order",
+     "Edit Property") — was sentence case ("Add dependencies") from the
+     original CDS-mockup-tool convention Claude applied in v66g without
+     checking against the app's own existing pattern.
+  6. Add Dependencies converted from a centered modal to a slide-out panel
+     (right edge, full height, transform translateX), per Misty's question
+     ("Should we make the panel a slider instead of a modal?"). Mirrors the
+     existing edit-prop-panel/openEditPropertyPanel and sup-panel/
+     openSetUpProjects pattern already used elsewhere in this file exactly
+     — same overlay+panel pair, same requestAnimationFrame-triggered open
+     transition, same setTimeout-delayed display:none on close so the
+     slide-out transition finishes before the panel is hidden. IDs renamed
+     dep-bulk-modal-overlay -> dep-bulk-overlay to match convention; all
+     JS references updated.
+
+<!--
 pulse_v66i. Changes from v66h, this round. Requires worker_v44n_build.mjs
 (adds 'Dependencies' to the Worker's consultant DELETE rules -- deploy
 together, a Consultant's delete click will 403 without it, though PM/Admin
@@ -3868,7 +3922,7 @@ async function loadAllData() {
       categoryOther: r.fields['Category - Other']||'',
       owner: r.fields['Coordination Owner']||'',
       ownerOther: r.fields['Coordination Owner - Other']||'',
-      status: r.fields['Status']||'On Track',
+      status: r.fields['Status']||'Planned',
       due: r.fields['Due Date']||'',
       note: r.fields['Note']||'',
     })).sort((a,b)=>new Date(a.due||'9999-12-31')-new Date(b.due||'9999-12-31'));
@@ -4592,24 +4646,41 @@ now, there's nothing else to name it. dep-bulk-modal handles create;
 dep-modal is now edit-only (no category selector, since a row's category is
 fixed once created — re-categorizing was never asked for and reusing the
 picker for that would reopen the "is this now two rows or one" question
-Misty didn't ask to solve here). Modal widened 460px -> 520px on Misty's
-direct note so "Controlled access (card reader)" doesn't wrap inside its
-picker chip. -->
-<div id="dep-bulk-modal-overlay" onclick="closeDepBulkModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
-<div id="dep-bulk-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:520px;max-width:95vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2);max-height:90vh;overflow-y:auto">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-    <div style="font-size:16px;font-weight:700;color:var(--navy)">Add dependencies</div>
-    <button onclick="closeDepBulkModal()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--gray-mid);line-height:1">×</button>
+Misty didn't ask to solve here).
+v66j — converted from a centered modal to a slide-out panel per Misty's
+direct request ("Should we make the panel a slider instead of a modal?"),
+matching the existing edit-prop-panel/sup-panel pattern already used
+elsewhere in PULSE (fixed to the right edge, full height, transform
+translateX slide transition). This also structurally fixes the "Controlled
+Access (Card Reader)" text-wrap complaint that persisted even after the
+520px modal-width bump in v66g — the real constraint was never the overall
+container width, it was the 2-column grid's per-cell width (roughly
+(520-48-8)/2 ≈ 232px, too narrow for that label at 13px). The panel is
+560px wide with the picker grid switched to a single column, so each chip
+gets ~460px of content width instead of a ~232px half-width cell — the
+30-character label needs roughly 210px at 13px sans-serif, well under that,
+so this should resolve cleanly, but it's worth a quick visual check on the
+live deploy since this sandbox has no headless browser available to confirm
+with an actual getBBox() measurement before shipping. Heading corrected to
+title case "Add Dependencies" to match the rest of PULSE's modal/panel
+headings (e.g. "Log Change Order", "Edit Property"). -->
+<div id="dep-bulk-overlay" onclick="closeDepBulkModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="dep-bulk-modal" style="display:none;position:fixed;top:0;right:0;width:560px;max-width:95vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div style="font-size:16px;font-weight:700;color:#85B7EB">Add Dependencies</div>
+    <button onclick="closeDepBulkModal()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
   </div>
-  <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">Pick one or more categories. Each becomes its own row you can fill in after.</div>
-  <div id="dep-bulk-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px"></div>
-  <div class="form-group" id="dep-bulk-other-group" style="display:none;margin-bottom:8px">
-    <label class="form-label">Other — describe the category</label>
-    <input class="form-input" type="text" id="dep-bulk-category-other" placeholder="e.g. structural, exterior facade">
-  </div>
-  <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px">
-    <button class="btn btn-edit" onclick="closeDepBulkModal()">Cancel</button>
-    <button class="btn btn-primary" id="save-dep-bulk-btn" onclick="saveDepBulk()"><i class="ti ti-check"></i><span id="save-dep-bulk-btn-label">Add dependencies</span></button>
+  <div style="padding:24px">
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">Pick one or more categories. Each becomes its own row you can fill in after.</div>
+    <div id="dep-bulk-grid" style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:16px"></div>
+    <div class="form-group" id="dep-bulk-other-group" style="display:none;margin-bottom:8px">
+      <label class="form-label">Other — describe the category</label>
+      <input class="form-input" type="text" id="dep-bulk-category-other" placeholder="e.g. structural, exterior facade">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px">
+      <button class="btn btn-edit" onclick="closeDepBulkModal()">Cancel</button>
+      <button class="btn btn-primary" id="save-dep-bulk-btn" onclick="saveDepBulk()"><i class="ti ti-check"></i><span id="save-dep-bulk-btn-label">Add Dependencies</span></button>
+    </div>
   </div>
 </div>
 
@@ -4639,8 +4710,8 @@ picker chip. -->
     <div class="form-group">
       <label class="form-label">Status</label>
       <select class="form-input" id="dep-status">
-        <option value="On Track">On Track</option>
-        <option value="At Risk">At Risk</option>
+        <option value="Planned">Planned</option>
+        <option value="Complete">Complete</option>
         <option value="Overdue">Overdue</option>
       </select>
     </div>
@@ -5248,7 +5319,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66j</div>
     </div>
   </nav>
 
@@ -5933,10 +6004,18 @@ from unitEffectiveValue() onto each checkbox). -->
                     </div>
                     <div style="display:flex;align-items:center;gap:8px">
                       <span id="dep-summary-badge" style="font-size:11px;color:var(--gray-mid)"></span>
+                      <button class="btn btn-edit" id="dep-delete-toggle-btn" onclick="toggleDepSelectMode()" style="display:none;font-size:11px"><i class="ti ti-trash"></i> Delete dependencies</button>
                       <button class="btn btn-add" id="dep-add-btn" onclick="openDepBulkModal()" style="display:none">+ <i class="ti ti-link"></i>Dependencies</button>
                     </div>
                   </div>
                   <div id="dep-summary-bar" style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:12px;flex-wrap:wrap"></div>
+                  <div id="dep-delete-bar" style="display:none;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;margin-bottom:12px;background:var(--red-pale);border-radius:8px;font-size:12px">
+                    <span id="dep-delete-count" style="color:var(--navy);font-weight:600">0 selected</span>
+                    <div style="display:flex;gap:8px">
+                      <button class="btn btn-edit" style="font-size:11px;padding:4px 10px" onclick="toggleDepSelectMode()">Cancel</button>
+                      <button class="btn btn-delete" style="font-size:11px;padding:4px 10px" id="dep-delete-confirm-btn" onclick="deleteDepsBulk()" disabled>Delete selected</button>
+                    </div>
+                  </div>
                   <div id="dep-list"></div>
                 </div>
               </div>
@@ -15405,8 +15484,14 @@ function renderChangeOrdersTab(p){
 // same tab bar position, same summary-bar-then-list layout, same modal
 // skeleton. New Dependencies Airtable table (tblHaAzpAAqjFUPXV), linked to
 // Scopes via the Scope field.
-const DEP_STATUS_COLOR={'On Track':'var(--green)','At Risk':'var(--amber)','Overdue':'var(--red)'};
-const DEP_STATUS_BG={'On Track':'var(--green-pale)','At Risk':'var(--amber-pale)','Overdue':'var(--red-pale)'};
+// v66j — Status enum replaced per Misty's direct correction ("What would
+// make it on track? It's either, planned, complete, or overdue correct?").
+// On Track/At Risk are gone entirely, replaced with Planned (default on
+// create) and Complete (done). Overdue is kept as-is. This enum is scoped
+// to Dependencies only — unrelated On Track/At Risk usage elsewhere in this
+// file (property/phase health status) is untouched.
+const DEP_STATUS_COLOR={'Planned':'var(--blue-dark)','Complete':'var(--green)','Overdue':'var(--red)'};
+const DEP_STATUS_BG={'Planned':'var(--blue-pale)','Complete':'var(--green-pale)','Overdue':'var(--red-pale)'};
 // v66g — Security Cameras and Barricades added per Misty's direct request.
 // NOTE: these two are new Airtable select-option values on the Category
 // field (Dependencies table) that weren't created via the Airtable schema
@@ -15419,15 +15504,35 @@ const DEP_CATEGORIES=['Fire Life Safety','HVAC','Electrical Upgrades','Controlle
 function depCategoryLabel(d){return d.category==='Other'?(d.categoryOther||'Other'):d.category;}
 function depOwnerLabel(d){return d.owner==='Other'?(d.ownerOther||'Other'):d.owner;}
 
+// v66j — relative due-date countdown per Misty's request ("there should be
+// a countdown to due date right?"). Whole-day diff against local midnight
+// so "today" reads as Due today rather than off-by-one from time-of-day.
+// Returns '' when there's no due date (row already shows "No due date").
+// Not shown for Complete rows — a countdown on a finished item isn't
+// meaningful, and Overdue rows already carry their own status badge, but
+// the "X days overdue" text is still useful there for at-a-glance severity.
+function depDueCountdown(d){
+  if(!d.due)return '';
+  const due=new Date(d.due+'T00:00:00');
+  const today=new Date();today.setHours(0,0,0,0);
+  const diffDays=Math.round((due-today)/86400000);
+  if(d.status==='Complete')return '';
+  if(diffDays===0)return 'Due today';
+  if(diffDays>0)return `in ${diffDays} day${diffDays===1?'':'s'}`;
+  return `${Math.abs(diffDays)} day${Math.abs(diffDays)===1?'':'s'} overdue`;
+}
+
 function renderDependenciesTab(p){
   renderScopeTabs('dep-scope-tabs',p.n);
   const scopeId=currentScope?.id;
   const canEdit=role==='pm'||role==='admin'||(role==='consultant'&&(window._consultantUnrestricted||(p?.v||'')===(currentConsultantName||'')));
   const depAddBtn=document.getElementById('dep-add-btn');
-  if(depAddBtn)depAddBtn.style.display=canEdit?'inline-flex':'none';
+  if(depAddBtn)depAddBtn.style.display=canEdit&&!depSelectMode?'inline-flex':'none';
+  const depDeleteToggleBtn=document.getElementById('dep-delete-toggle-btn');
+  if(depDeleteToggleBtn)depDeleteToggleBtn.style.display=canEdit&&!depSelectMode?'inline-flex':'none';
   const deps=(window.DEPENDENCIES||[]).filter(d=>d.scopeId===scopeId);
-  const onTrack=deps.filter(d=>d.status==='On Track').length;
-  const atRisk=deps.filter(d=>d.status==='At Risk').length;
+  const planned=deps.filter(d=>d.status==='Planned').length;
+  const complete=deps.filter(d=>d.status==='Complete').length;
   const overdue=deps.filter(d=>d.status==='Overdue').length;
   const summaryBar=document.getElementById('dep-summary-bar');
   if(summaryBar){
@@ -15435,8 +15540,8 @@ function renderDependenciesTab(p){
       <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Total</div><div style="font-size:16px;font-weight:700;color:var(--navy)">${deps.length}</div></div>
       <div style="width:1px;background:var(--border)"></div>
       <div style="display:flex;gap:6px;align-items:center">
-        <span style="font-size:10px;color:var(--green);font-weight:600">${onTrack} On Track</span>
-        <span style="font-size:10px;color:var(--amber);font-weight:600">${atRisk} At Risk</span>
+        <span style="font-size:10px;color:var(--blue-dark);font-weight:600">${planned} Planned</span>
+        <span style="font-size:10px;color:var(--green);font-weight:600">${complete} Complete</span>
         <span style="font-size:10px;color:var(--red);font-weight:600">${overdue} Overdue</span>
       </div>`;
   }
@@ -15448,21 +15553,32 @@ function renderDependenciesTab(p){
     list.innerHTML='<div class="empty-state" style="padding:2rem"><i class="ti ti-link-off"></i><div class="empty-state-title">No Dependencies Logged</div><div class="empty-state-sub">Track cross-trade coordination items — permitting, fire life safety, access control, and more</div></div>';
     return;
   }
+  // v66j — per-row Delete button removed per Misty's direct request ("I
+  // don't need a delete button on everyone"). Deletion now happens through
+  // depSelectMode: a global "Delete dependencies" toggle (see
+  // toggleDepSelectMode) puts the whole list into a selection state where
+  // each row shows a checkbox instead of Edit/Delete, and a confirm bar
+  // handles the actual bulk removal. Edit stays available at all times
+  // outside select mode.
   list.innerHTML=deps.map(d=>{
     const dueStr=d.due?new Date(d.due+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'No due date';
-    return `<div class="co-row" style="border-left:3px solid ${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
-        <div style="flex:1">
-          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(depCategoryLabel(d)||'Uncategorized')}</div>
-          <div style="font-size:11px;color:var(--gray-mid)">${escHtml(depOwnerLabel(d)||'No owner set')} · Due: ${dueStr}</div>
+    const countdown=depDueCountdown(d);
+    const dueLine=d.due?`Due: ${dueStr}${countdown?` <span style="color:${d.status==='Overdue'?'var(--red)':'var(--gray-mid)'};font-weight:${d.status==='Overdue'?'600':'400'}">(${countdown})</span>`:''}`:'Due: No due date';
+    return `<div class="co-row" style="border-left:3px solid ${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'};display:flex;gap:10px;align-items:flex-start">
+      ${depSelectMode?`<input type="checkbox" class="dep-select-cb" value="${d.id}" onchange="updateDepDeleteBar()" style="margin-top:4px;flex-shrink:0">`:''}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(depCategoryLabel(d)||'Uncategorized')}</div>
+            <div style="font-size:11px;color:var(--gray-mid)">${escHtml(depOwnerLabel(d)||'No owner set')} · ${dueLine}</div>
+          </div>
+          <span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:9px;background:${DEP_STATUS_BG[d.status]||'var(--gray-pale)'};color:${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'}">${escHtml(d.status)}</span>
         </div>
-        <span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:9px;background:${DEP_STATUS_BG[d.status]||'var(--gray-pale)'};color:${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'}">${escHtml(d.status)}</span>
+        ${d.note?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${escHtml(d.note)}</div>`:''}
+        ${canEdit&&!depSelectMode?`<div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editDep('${d.id}')">Edit</button>
+        </div>`:''}
       </div>
-      ${d.note?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${escHtml(d.note)}</div>`:''}
-      ${canEdit?`<div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editDep('${d.id}')">Edit</button>
-        <button class="btn btn-delete" style="font-size:10px;padding:2px 8px" onclick="deleteDep('${d.id}')">Delete</button>
-      </div>`:''}
     </div>`;
   }).join('');
 }
@@ -15483,11 +15599,15 @@ function toggleDepOtherField(which){
 // (none pre-checked, matching Misty's "pick as many as apply" framing
 // rather than defaulting to any one selection) and wires the live
 // "Add N dependencies" button label plus the Other free-text reveal.
+// v66j — grid is now single-column (see markup comment above) and the
+// panel slides in/out via transform, matching openSetUpProjects/
+// closeSetUpProjects and openEditPropertyPanel/closeEditPropertyPanel
+// elsewhere in this file.
 function openDepBulkModal(){
   const grid=document.getElementById('dep-bulk-grid');
   if(grid){
     grid.innerHTML=DEP_CATEGORIES.map(cat=>`
-      <label class="dep-bulk-chip" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--navy)">
+      <label class="dep-bulk-chip" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--navy);white-space:nowrap">
         <input type="checkbox" class="dep-bulk-cb" value="${escHtml(cat)}" onchange="updateDepBulkModalState()">
         ${escHtml(cat)}
       </label>`).join('');
@@ -15497,13 +15617,20 @@ function openDepBulkModal(){
   const otherInput=document.getElementById('dep-bulk-category-other');
   if(otherInput)otherInput.value='';
   updateDepBulkModalState();
-  document.getElementById('dep-bulk-modal-overlay').style.display='block';
-  document.getElementById('dep-bulk-modal').style.display='block';
+  const overlay=document.getElementById('dep-bulk-overlay');
+  const panel=document.getElementById('dep-bulk-modal');
+  overlay.style.display='block';
+  panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
 }
 
 function closeDepBulkModal(){
-  document.getElementById('dep-bulk-modal-overlay').style.display='none';
-  document.getElementById('dep-bulk-modal').style.display='none';
+  const panel=document.getElementById('dep-bulk-modal');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{
+    panel.style.display='none';
+    document.getElementById('dep-bulk-overlay').style.display='none';
+  },300);
 }
 
 // v66g — live-updates the Other free-text visibility and the "Add N
@@ -15523,7 +15650,7 @@ function updateDepBulkModalState(){
   const otherGroup=document.getElementById('dep-bulk-other-group');
   if(otherGroup)otherGroup.style.display=otherChecked?'':'none';
   const label=document.getElementById('save-dep-bulk-btn-label');
-  if(label)label.textContent=checked.length>0?`Add ${checked.length} dependenc${checked.length===1?'y':'ies'}`:'Add dependencies';
+  if(label)label.textContent=checked.length>0?`Add ${checked.length} Dependenc${checked.length===1?'y':'ies'}`:'Add Dependencies';
 }
 
 let _savingDepBulk=false;
@@ -15539,7 +15666,8 @@ async function saveDepBulk(){
   const saveBtn=document.getElementById('save-dep-bulk-btn');
   if(saveBtn)saveBtn.disabled=true;
   // v66g — each checked category becomes its own blank row: default status
-  // On Track, no owner/note/due date yet, filled in afterward via the
+  // Planned (v66j — corrected from the original On Track per Misty's
+  // direct note), no owner/note/due date yet, filled in afterward via the
   // per-row Edit modal. Created sequentially (not Promise.all) so a
   // mid-batch failure leaves a clean, known set of successes rather than a
   // partially-applied parallel batch that's hard to reason about after the
@@ -15564,13 +15692,13 @@ async function saveDepBulk(){
       'Scope':[scopeId],
       'Category':category,
       'Category - Other':category==='Other'?categoryOther:'',
-      'Status':'On Track',
+      'Status':'Planned',
     };
     try{
       const rec=await atCreate('Dependencies',fields);
       const newRecId=rec?.records?.[0]?.id;
       if(!newRecId){failed++;continue;}
-      const newDep={id:newRecId,scopeId,category,categoryOther:category==='Other'?categoryOther:'',owner:'',ownerOther:'',status:'On Track',due:'',note:''};
+      const newDep={id:newRecId,scopeId,category,categoryOther:category==='Other'?categoryOther:'',owner:'',ownerOther:'',status:'Planned',due:'',note:''};
       if(!window.DEPENDENCIES)window.DEPENDENCIES=[];
       window.DEPENDENCIES.push(newDep);
       created++;
@@ -15611,7 +15739,7 @@ function editDep(depId){
   document.getElementById('dep-modal-category-display').textContent=depCategoryLabel(d)||'Uncategorized';
   document.getElementById('dep-owner').value=d.owner||'Owner';
   document.getElementById('dep-owner-other').value=d.ownerOther||'';
-  document.getElementById('dep-status').value=d.status||'On Track';
+  document.getElementById('dep-status').value=d.status||'Planned';
   document.getElementById('dep-due').value=d.due||'';
   document.getElementById('dep-note').value=d.note||'';
   toggleDepOtherField('owner');
@@ -15681,6 +15809,73 @@ async function deleteDep(depId){
     }
   }
   showToast('Dependency deleted','success');
+}
+
+// v66j — bulk delete, per Misty's direct request replacing the v66i
+// per-row Delete button ("Can I have a global delete dependencies button?
+// so I can pick the ones I want to delete in bulk? I don't need a delete
+// button on everyone."). depSelectMode flips the whole Dependencies list
+// into a checkbox state (see renderDependenciesTab); this function toggles
+// that state on/off and always leaves the list in a clean, unchecked
+// render on exit.
+let depSelectMode=false;
+function toggleDepSelectMode(){
+  depSelectMode=!depSelectMode;
+  const bar=document.getElementById('dep-delete-bar');
+  if(bar)bar.style.display=depSelectMode?'flex':'none';
+  if(currentProp)renderDependenciesTab(currentProp);
+}
+
+function updateDepDeleteBar(){
+  const checked=[...document.querySelectorAll('.dep-select-cb')].filter(cb=>cb.checked);
+  const countEl=document.getElementById('dep-delete-count');
+  if(countEl)countEl.textContent=`${checked.length} selected`;
+  const confirmBtn=document.getElementById('dep-delete-confirm-btn');
+  if(confirmBtn)confirmBtn.disabled=checked.length===0;
+}
+
+// Same optimistic-remove-then-rollback-on-failure pattern as deleteDep,
+// just run across every checked id. Created sequentially rather than
+// Promise.all so a mid-batch failure leaves a legible, known set of
+// successes (same reasoning as saveDepBulk above).
+let _deletingDepsBulk=false;
+async function deleteDepsBulk(){
+  if(_deletingDepsBulk)return;
+  const ids=[...document.querySelectorAll('.dep-select-cb')].filter(cb=>cb.checked).map(cb=>cb.value);
+  if(ids.length===0)return;
+  if(!confirm(`Delete ${ids.length} dependenc${ids.length===1?'y':'ies'}? This can't be undone.`))return;
+  _deletingDepsBulk=true;
+  const confirmBtn=document.getElementById('dep-delete-confirm-btn');
+  if(confirmBtn)confirmBtn.disabled=true;
+  let deleted=0,failed=0;
+  for(const depId of ids){
+    const removed=(window.DEPENDENCIES||[]).find(d=>d.id===depId);
+    window.DEPENDENCIES=(window.DEPENDENCIES||[]).filter(d=>d.id!==depId);
+    if(demoMode){deleted++;continue;}
+    try{
+      const delRes=await atDelete('Dependencies',depId);
+      if(!delRes){
+        if(removed)window.DEPENDENCIES=(window.DEPENDENCIES||[]).concat([removed]);
+        failed++;
+      }else{
+        deleted++;
+      }
+    }catch(e){
+      console.error('deleteDepsBulk error:',e);
+      if(removed)window.DEPENDENCIES=(window.DEPENDENCIES||[]).concat([removed]);
+      failed++;
+    }
+  }
+  _deletingDepsBulk=false;
+  depSelectMode=false;
+  const bar=document.getElementById('dep-delete-bar');
+  if(bar)bar.style.display='none';
+  if(currentProp)renderDependenciesTab(currentProp);
+  if(deleted>0){
+    showToast(failed>0?`${deleted} deleted, ${failed} failed`:`${deleted} dependenc${deleted===1?'y':'ies'} deleted`,failed>0?'warn':'success');
+  }else{
+    showToast('Could not delete these dependencies. Please try again.','error');
+  }
 }
 
 // ── BIDS / BID LEVELING (Build v27a) ─────────────────────────────────
@@ -37424,13 +37619,13 @@ function renderOpsCenter(){
     const byCategory={};
     allDeps.forEach(d=>{
       const label=depCategoryLabel(d)||'Uncategorized';
-      if(!byCategory[label])byCategory[label]={onTrack:0,atRisk:0,overdue:0};
-      if(d.status==='On Track')byCategory[label].onTrack++;
-      else if(d.status==='At Risk')byCategory[label].atRisk++;
+      if(!byCategory[label])byCategory[label]={planned:0,complete:0,overdue:0};
+      if(d.status==='Planned')byCategory[label].planned++;
+      else if(d.status==='Complete')byCategory[label].complete++;
       else if(d.status==='Overdue')byCategory[label].overdue++;
     });
     const catRows=Object.keys(byCategory).sort();
-    const totalOpen=allDeps.filter(d=>d.status==='On Track'||d.status==='At Risk').length;
+    const totalOpen=allDeps.filter(d=>d.status==='Planned').length;
     const totalOverdue=allDeps.filter(d=>d.status==='Overdue').length;
     depCoordSection=`
     <div style="margin-bottom:24px">
@@ -37449,12 +37644,12 @@ function renderOpsCenter(){
         ${catRows.length===0
           ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No dependencies logged across the portfolio yet. Add them from a property\'s Dependencies tab.</div>'
           :`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;font-size:9px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;padding:0 4px 6px;border-bottom:1px solid var(--border)">
-              <div>Category</div><div style="text-align:right">On Track</div><div style="text-align:right">At Risk</div><div style="text-align:right">Overdue</div>
+              <div>Category</div><div style="text-align:right">Planned</div><div style="text-align:right">Complete</div><div style="text-align:right">Overdue</div>
             </div>
             ${catRows.map(cat=>{const c=byCategory[cat];return `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;font-size:12px;padding:8px 4px;border-bottom:1px solid var(--gray-xpale)">
               <div style="color:var(--navy);font-weight:600">${escHtml(cat)}</div>
-              <div style="text-align:right;color:var(--green)">${c.onTrack||''}</div>
-              <div style="text-align:right;color:var(--amber)">${c.atRisk||''}</div>
+              <div style="text-align:right;color:var(--blue-dark)">${c.planned||''}</div>
+              <div style="text-align:right;color:var(--green)">${c.complete||''}</div>
               <div style="text-align:right;color:var(--red);font-weight:${c.overdue>0?'700':'400'}">${c.overdue||''}</div>
             </div>`;}).join('')}`
         }
