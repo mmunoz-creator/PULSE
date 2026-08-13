@@ -1,4 +1,37 @@
 <!--
+pulse_v66b. Changes from v66a, this round. Requires no worker changes.
+Live-usability fixes reported by Misty after v66a went live and she
+navigated to New York Hilton Midtown's Budget Performance tab to check it
+in person.
+  1. Retainage Tracking moved from a full-width card below Cash Flow Curve
+     into the left column, stacked under Budget Performance -- that column
+     had real leftover vertical space next to the taller Billing History
+     table on the right, so Retainage now fills it instead of pushing
+     everything below down a full card's height. Cash Flow Curve moved up
+     to sit right after the two-col Budget Performance/Billing History
+     row (previously below the Billing entry form, between it and
+     Retainage). Both changes confirmed with Misty via a mockup before
+     building.
+  2. Cash Flow Curve chart downsized (buildCashFlowSVG): viewBox height
+     260->175, dollar labels moved from stacked above/below the checkpoint
+     dots to sitting close against the dot itself. Also dropped a
+     min-width:480px on the rendered <svg> that, combined with the
+     wrapper's overflow-x:auto, forced horizontal scrolling and cut off
+     the Completion checkpoint on narrower containers -- confirmed this
+     was the actual cause of the clipped "Completi.../Closeout Documen..."
+     Misty saw live, not just a sizing issue. viewBox scaling with no
+     min-width now lets the chart shrink to fit its real container.
+  3. Scenario sandbox close control added. Opening "Explore scenario" had
+     no way to close it again -- the trigger button's label/style never
+     reflected "open" state, so nothing on screen suggested clicking it
+     again would collapse the panel (the underlying toggle logic already
+     worked correctly; only the visual affordance was missing). Button now
+     relabels to "Close scenario" (X icon, muted gray fill) while the
+     panel is open. A second Close button was also added inside the panel
+     itself, next to Reset to actual plan, reachable without scrolling
+     back up to the card header.
+
+<!--
 pulse_v66a. Changes from v65h, this round. Requires no worker changes
 (new Scope fields added directly via Airtable API, not through the
 Worker). New feature, built and syntax-verified, not yet live-verified.
@@ -4836,7 +4869,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66b</div>
     </div>
   </nav>
 
@@ -5267,10 +5300,24 @@ from unitEffectiveValue() onto each checkbox). -->
             local to this one tab instead of affecting every other
             .two-col layout in the app. -->
             <div class="two-col" style="grid-template-columns:2fr 3fr">
-              <div>
+              <div style="display:flex;flex-direction:column;gap:1rem">
                 <div class="card" id="budget-perf-card">
                   <div class="card-header"><div><div class="card-title">Budget Performance</div><div class="card-sub" id="budget-perf-sub">Project Budget vs Billed YTD</div></div></div>
                   <div id="budget-perf-detail"></div>
+                </div>
+                <!-- v66b — Retainage Tracking moved here, under Budget
+                Performance in the left column, per Misty's direct call
+                after seeing v66a live: this column has real leftover
+                vertical space next to the taller Billing History table on
+                the right, so Retainage fits naturally here instead of
+                spanning full-width below everything (its old position,
+                below Cash Flow Curve). Accounting purposes only; monitors
+                what the client (not VDA) withholds from and pays out to
+                the elevator company. -->
+                <div class="card" style="background:var(--gray-xpale)">
+                  <div class="card-header"><div><div class="card-title" style="font-size:13px">Retainage Tracking</div><div class="card-sub">Client cash flow — accounting reference only</div></div><button class="btn btn-add" id="prop-retainage-inline-btn" onclick="openRetainageReleaseForm()" style="font-size:12px">+ <i class="ti ti-cash"></i>Release</button></div>
+                  <div id="retainage-detail"></div>
+                  <div id="retainage-history-list"></div>
                 </div>
               </div>
               <div>
@@ -5279,31 +5326,6 @@ from unitEffectiveValue() onto each checkbox). -->
                   <div id="billing-history-list"></div>
                 </div>
               </div>
-            </div>
-            <!-- v66a — Cash Flow Curve. Planned-vs-actual S-curve over 4
-            fixed contract checkpoints (Award/Material-Start/Installation/
-            Completion, mapped to M4/M6/M10/M14), scoped to currentScope
-            like the rest of this tab. See renderCashFlowCurve(). -->
-            <div class="card" id="cashflow-card" style="margin-top:1rem">
-              <div class="card-header">
-                <div>
-                  <div class="card-title">Cash Flow Curve</div>
-                  <div class="card-sub" id="cashflow-sub">Planned vs. billed, by contract checkpoint</div>
-                </div>
-                <div style="display:flex;gap:8px;align-items:center">
-                  <div style="display:flex;gap:14px;font-size:10.5px;color:var(--gray-mid);align-items:center" id="cashflow-legend">
-                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gray-light);margin-right:5px"></span>Planned</span>
-                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-right:5px"></span>Actual</span>
-                  </div>
-                  <button class="btn" id="cashflow-edit-btn" onclick="toggleCashFlowEditor()" style="font-size:12px;display:none"><i class="ti ti-pencil"></i>Edit checkpoints</button>
-                  <button class="btn" id="cashflow-scenario-btn" onclick="toggleCashFlowScenario()" style="font-size:12px"><i class="ti ti-adjustments"></i>Explore scenario</button>
-                  <button class="btn btn-add" id="cashflow-export-btn" onclick="exportCashFlowCurve()" style="font-size:12px"><i class="ti ti-file-spreadsheet"></i>Export</button>
-                </div>
-              </div>
-              <div id="cashflow-editor-panel" style="display:none"></div>
-              <div id="cashflow-scenario-panel" style="display:none"></div>
-              <div id="cashflow-svg-wrap" style="margin-top:14px;overflow-x:auto"></div>
-              <div id="cashflow-footer" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)"></div>
             </div>
             <!-- Billing entry form -->
             <div class="card" id="billing-entry-form" style="display:none;margin-top:1rem">
@@ -5318,13 +5340,32 @@ from unitEffectiveValue() onto each checkbox). -->
                 <button class="btn" onclick="document.getElementById('billing-entry-form').style.display='none'">Cancel</button>
               </div>
             </div>
-            <!-- Retainage tracking — accounting purposes only; monitors what the
-                 client (not VDA) withholds from and pays out to the elevator
-                 company. Visually secondary to the billing/progress block above. -->
-            <div class="card" style="margin-top:1rem;background:var(--gray-xpale)">
-              <div class="card-header"><div><div class="card-title" style="font-size:13px">Retainage Tracking</div><div class="card-sub">Client cash flow — accounting reference only</div></div><button class="btn btn-add" id="prop-retainage-inline-btn" onclick="openRetainageReleaseForm()" style="font-size:12px">+ <i class="ti ti-cash"></i>Release</button></div>
-              <div id="retainage-detail"></div>
-              <div id="retainage-history-list"></div>
+            <!-- v66a — Cash Flow Curve. Planned-vs-actual S-curve over 4
+            fixed contract checkpoints (Award/Material-Start/Installation/
+            Completion, mapped to M4/M6/M10/M14), scoped to currentScope
+            like the rest of this tab. See renderCashFlowCurve().
+            v66b — moved to sit right after the two-col row (was below the
+            Billing entry form / above Retainage before this round). -->
+            <div class="card" id="cashflow-card" style="margin-top:1rem">
+              <div class="card-header">
+                <div>
+                  <div class="card-title">Cash Flow Curve</div>
+                  <div class="card-sub" id="cashflow-sub">Planned vs. billed, by contract checkpoint</div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <div style="display:flex;gap:14px;font-size:10.5px;color:var(--gray-mid);align-items:center" id="cashflow-legend">
+                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gray-light);margin-right:5px"></span>Planned</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-right:5px"></span>Actual</span>
+                  </div>
+                  <button class="btn" id="cashflow-edit-btn" onclick="toggleCashFlowEditor()" style="font-size:12px;display:none"><i class="ti ti-pencil"></i>Edit checkpoints</button>
+                  <button class="btn" id="cashflow-scenario-btn" onclick="toggleCashFlowScenario()" style="font-size:12px"><i class="ti ti-adjustments"></i>Explore scenario</button>
+                  <button class="btn btn-add" id="cashflow-export-btn" onclick="exportCashFlowCurve()" style="font-size:12px"><i class="ti ti-file-spreadsheet"></i>Export</button>
+                </div>
+              </div>
+              <div id="cashflow-editor-panel" style="display:none"></div>
+              <div id="cashflow-scenario-panel" style="display:none"></div>
+              <div id="cashflow-svg-wrap" style="margin-top:14px;overflow-x:auto"></div>
+              <div id="cashflow-footer" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)"></div>
             </div>
             <!-- Retainage release entry form -->
             <div class="card" id="retainage-release-form" style="display:none;margin-top:1rem">
@@ -17470,7 +17511,18 @@ function fmtMonYear(dateStr){
 // apart from each other.
 function buildCashFlowSVG(checkpoints,opts){
   opts=opts||{};
-  const W=560,H=260,padL=60,padR=20,padT=44,padB=62;
+  // v66b — downsized per Misty's direct feedback on the live v66a card:
+  // H 260->175, padT 44->15, padB 62->48. Dollar labels moved from
+  // stacked-above/below-the-dot (which needed the taller top/bottom
+  // padding) to sitting close against the dot itself, planned above and
+  // actual below the same point when they land at the same checkpoint.
+  // Also dropped the hard min-width:480px on the returned <svg> below --
+  // combined with the wrapper's overflow-x:auto, that forced horizontal
+  // scrolling on any container narrower than 480px, which is what cut off
+  // the Completion column in the live screenshot Misty sent. viewBox
+  // scaling alone (width:100%, no min-width) lets the chart shrink to fit
+  // its real container instead.
+  const W=560,H=175,padL=55,padR=20,padT=15,padB=48;
   const plotW=W-padL-padR,plotH=H-padT-padB;
   const xForIdx=i=>padL+(i/(checkpoints.length-1))*plotW;
   const yForPct=pct=>padT+plotH-(pct/100)*plotH;
@@ -17482,7 +17534,7 @@ function buildCashFlowSVG(checkpoints,opts){
   svg+=`<line x1="${padL}" y1="${padT+plotH}" x2="${padL+plotW}" y2="${padT+plotH}" stroke="var(--border)" stroke-width="1"/>`;
   [0,50,100].forEach(pc=>{
     const y=yForPct(pc);
-    svg+=`<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="9" fill="var(--gray-mid)">${pc}%</text>`;
+    svg+=`<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="8.5" fill="var(--gray-mid)">${pc}%</text>`;
     if(pc===50)svg+=`<line x1="${padL}" y1="${y}" x2="${padL+plotW}" y2="${y}" stroke="var(--gray-pale)" stroke-width="1"/>`;
   });
 
@@ -17492,11 +17544,11 @@ function buildCashFlowSVG(checkpoints,opts){
   });
   plannedSeg.withData.forEach(i=>{
     const cp=checkpoints[i],x=xForIdx(i),y=yForPct(cp.pct);
-    svg+=`<circle cx="${x}" cy="${y}" r="4" fill="var(--gray-light)"/>`;
-    svg+=`<text x="${x}" y="${y-9}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#8A887E">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
+    svg+=`<circle cx="${x}" cy="${y}" r="3.5" fill="var(--gray-light)"/>`;
+    svg+=`<text x="${x}" y="${y-8}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#8A887E">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
   });
   checkpoints.forEach(cp=>{
-    if(!cp.plannedDate)svg+=`<circle cx="${xForIdx(cp.idx)}" cy="${yForPct(cp.pct)}" r="4" fill="#fff" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="2,2"/>`;
+    if(!cp.plannedDate)svg+=`<circle cx="${xForIdx(cp.idx)}" cy="${yForPct(cp.pct)}" r="3.5" fill="#fff" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="2,2"/>`;
   });
 
   // actual series (navy blue, solid)
@@ -17505,8 +17557,8 @@ function buildCashFlowSVG(checkpoints,opts){
   });
   actualSeg.withData.forEach((i,arrIdx)=>{
     const cp=checkpoints[i],x=xForIdx(i),y=yForPct(cp.pct),isLast=arrIdx===actualSeg.withData.length-1;
-    svg+=`<circle cx="${x}" cy="${y}" r="${isLast?5.5:4.5}" fill="var(--blue-dark)" ${isLast?'stroke="#fff" stroke-width="2"':''}/>`;
-    svg+=`<text x="${x}" y="${y+16}" text-anchor="middle" font-size="9.5" font-weight="700" fill="var(--blue-dark)">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
+    svg+=`<circle cx="${x}" cy="${y}" r="${isLast?5:4}" fill="var(--blue-dark)" ${isLast?'stroke="#fff" stroke-width="1.5"':''}/>`;
+    svg+=`<text x="${x}" y="${y+15}" text-anchor="middle" font-size="8.5" font-weight="700" fill="var(--blue-dark)">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
   });
 
   // scenario series (purple, dashed), only present when the sandbox is open
@@ -17517,7 +17569,7 @@ function buildCashFlowSVG(checkpoints,opts){
     });
     opts.scenarioCheckpoints.forEach(cp=>{
       const x=xForIdx(cp.idx),y=yForPct(cp.pct);
-      svg+=`<circle cx="${x}" cy="${y}" r="4" fill="var(--purple)"/>`;
+      svg+=`<circle cx="${x}" cy="${y}" r="3.5" fill="var(--purple)"/>`;
     });
   }
 
@@ -17525,18 +17577,18 @@ function buildCashFlowSVG(checkpoints,opts){
   // Planned Date when both exist)
   checkpoints.forEach(cp=>{
     const x=xForIdx(cp.idx);
-    svg+=`<text x="${x}" y="${padT+plotH+18}" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--navy)">${escHtml(cp.label)}</text>`;
-    svg+=`<text x="${x}" y="${padT+plotH+29}" text-anchor="middle" font-size="8.5" fill="var(--gray-mid)">${escHtml(cp.msName)} · ${cp.pct}%</text>`;
+    svg+=`<text x="${x}" y="${padT+plotH+20}" text-anchor="middle" font-size="9" font-weight="600" fill="var(--navy)">${escHtml(cp.label)}</text>`;
+    svg+=`<text x="${x}" y="${padT+plotH+31}" text-anchor="middle" font-size="8" fill="var(--gray-mid)">${escHtml(cp.msName)} · ${cp.pct}%</text>`;
     const dateStr=cp.completionDate||cp.plannedDate;
     if(dateStr){
       const isActual=!!cp.completionDate;
       const fmtted=fmtMonYear(dateStr);
-      svg+=`<text x="${x}" y="${padT+plotH+41}" text-anchor="middle" font-size="9" font-weight="600" fill="${isActual?'var(--blue-dark)':'#8A887E'}">${escHtml(fmtted||'TBD')}</text>`;
+      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="middle" font-size="8" font-weight="600" fill="${isActual?'var(--blue-dark)':'#8A887E'}">${escHtml(fmtted||'TBD')}</text>`;
     }else{
-      svg+=`<text x="${x}" y="${padT+plotH+41}" text-anchor="middle" font-size="8.5" font-style="italic" fill="var(--gray-light)">TBD</text>`;
+      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="middle" font-size="7.5" font-style="italic" fill="var(--gray-light)">TBD</text>`;
     }
   });
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:480px;overflow:visible">${svg}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;overflow:visible">${svg}</svg>`;
 }
 
 // Main render entry point, called from renderBudgetTab on every render
@@ -17663,15 +17715,38 @@ async function saveCashFlowCheckpoints(){
 let _cashFlowScenarioPcts=null; // null = sandbox closed; array of 4 = open
 function toggleCashFlowScenario(){
   const panel=document.getElementById('cashflow-scenario-panel');
+  const btn=document.getElementById('cashflow-scenario-btn');
   if(!panel)return;
   if(_cashFlowScenarioPcts){
+    // v66b — closing. Per Misty's direct feedback on v66a live: opening
+    // the scenario sandbox had no way to close it again -- the trigger
+    // button's own label/style never changed to reflect "open" state, so
+    // nothing on screen suggested clicking it again would collapse the
+    // panel. Button now flips back to its original "Explore scenario"
+    // label/style here.
     _cashFlowScenarioPcts=null;
     panel.style.display='none';
     panel.innerHTML='';
+    if(btn){
+      btn.innerHTML='<i class="ti ti-adjustments"></i>Explore scenario';
+      btn.style.background='';
+      btn.style.borderColor='';
+      btn.style.color='';
+    }
     if(currentProp)renderCashFlowCurve(currentProp,currentScope?.id);
   }else{
+    // opening. Button relabels to "Close scenario" with a muted fill so
+    // it visually reads as a toggle now in its "on" state, same pattern
+    // used for other open/close toggles elsewhere in the app (e.g. Edit
+    // Property).
     _cashFlowScenarioPcts=getCashFlowCheckpointPcts(currentScope);
     panel.style.display='block';
+    if(btn){
+      btn.innerHTML='<i class="ti ti-x"></i>Close scenario';
+      btn.style.background='var(--gray-pale)';
+      btn.style.borderColor='var(--border-strong)';
+      btn.style.color='var(--navy)';
+    }
     renderCashFlowScenarioPanel();
     renderCashFlowScenarioCurve();
   }
@@ -17681,9 +17756,16 @@ function renderCashFlowScenarioPanel(){
   if(!panel||!_cashFlowScenarioPcts)return;
   panel.innerHTML=`
     <div style="margin-top:14px;padding:12px 14px;background:var(--purple-pale);border:1px solid #D8D5F5;border-radius:8px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap">
         <div style="font-size:11px;font-weight:600;color:var(--purple)">Explore a scenario — adjust checkpoints to see a different curve</div>
-        <button class="btn" style="font-size:11px;border-color:var(--purple);color:var(--purple)" onclick="resetCashFlowScenario()">Reset to actual plan</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn" style="font-size:11px;border-color:var(--purple);color:var(--purple)" onclick="resetCashFlowScenario()">Reset to actual plan</button>
+          <!-- v66b — close reachable from inside the panel too, not just
+          the top "Close scenario" toggle button, in case a user is
+          scrolled past it. Same toggleCashFlowScenario() closes either
+          way. -->
+          <button class="btn" style="font-size:11px" onclick="toggleCashFlowScenario()"><i class="ti ti-x"></i>Close</button>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
         ${CASHFLOW_CHECKPOINT_LABELS.map((label,i)=>`
