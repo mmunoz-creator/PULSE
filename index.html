@@ -1,4 +1,37 @@
 <!--
+pulse_v66d. Changes from v66c, this round. Requires no worker changes.
+Two more fixes reported by Misty checking v66c live on New York Hilton
+Midtown's Budget Performance tab.
+  1. Installation and Completion checkpoints were showing no planned
+     dollar value. Root cause confirmed via live inspection of
+     window._cashFlowCurrentCheckpoints on the real page: both checkpoints
+     do have a real dollarTarget (90%/100% of the $18.5M basis --
+     $16,660,201.50 and $18,511,335 respectively), they just have no
+     Planned Date on record yet. The dollar label was gated on
+     plannedSeg.withData, the same date-presence check used for the dot
+     and connecting line, so a checkpoint with a known amount but unknown
+     timing showed nothing at all. dollarTarget is pct * basis -- a fixed
+     contractual number, true regardless of whether anyone has entered a
+     date for it -- so gating it on date presence was hiding a real,
+     already-known figure. Fixed by decoupling: every checkpoint now shows
+     its $ target unconditionally, colored full gray (#8A887E) when a real
+     Planned Date exists and faded (var(--gray-light)) when it doesn't.
+     The dot and connecting line stay exactly as before (hollow/dashed =
+     no date on record) so the chart still never fabricates a timeline --
+     it only stopped hiding an amount that was never actually in question.
+  2. "Closeout Documentation · 100%" (and every other checkpoint's msName
+     + pct subtitle) was one unbroken text line, cramped under the ~110px-
+     wide last column. Native SVG <text> doesn't auto-wrap, so this needed
+     a manual break: split into two <tspan> lines (msName on its own line,
+     pct badge on the line below) for all 4 checkpoints, not just the long
+     one, so the subtitle block has consistent two-line height across the
+     whole row. Chart viewBox grown (H 175->183, padB 48->56) and the date
+     line pushed down accordingly (y+42->y+50) to fit the extra line
+     without re-clipping against the canvas edge -- rechecked the same way
+     as the v66c overflow fix, this time confirming the new date-line y
+     position (177) stays inside the new H=183 boundary.
+
+<!--
 pulse_v66c. Changes from v66b, this round. Requires no worker changes.
 Two more live-usability fixes on the same New York Hilton Midtown Cash
 Flow Curve card, found by Misty checking v66b live in the browser.
@@ -4898,7 +4931,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66d</div>
     </div>
   </nav>
 
@@ -17563,7 +17596,11 @@ function buildCashFlowSVG(checkpoints,opts){
   //    instead of overflowing past them, regardless of container width.
   //    Middle checkpoints keep center anchor since they have real
   //    neighbors on both sides to absorb overflow safely.
-  const W=560,H=175,padL=55,padR=20,padT=15,padB=48;
+  // v66d — H/padB grown 175/48 -> 183/56 to fit the checkpoint subtitle's
+  // new two-line wrap (msName on its own line, pct badge below it) plus
+  // the date line beneath, without clipping the last row against the
+  // viewBox edge.
+  const W=560,H=183,padL=55,padR=20,padT=15,padB=56;
   const plotW=W-padL-padR,plotH=H-padT-padB;
   const xForIdx=i=>padL+(i/(checkpoints.length-1))*plotW;
   const yForPct=pct=>padT+plotH-(pct/100)*plotH;
@@ -17581,16 +17618,23 @@ function buildCashFlowSVG(checkpoints,opts){
   });
 
   // planned series (gray, dashed)
+  // v66d — dollarTarget is a fixed contractual number (pct * basis), true
+  // regardless of whether a Planned Date has been entered yet, so it no
+  // longer waits on plannedSeg.withData (date presence). Every checkpoint
+  // gets its $ target label. The dot + date line still stay gated on real
+  // dates (hollow/dashed = undated), so the chart still never fabricates a
+  // timeline, it just stops hiding a number that was never in question.
   plannedSeg.segments.forEach(([a,b])=>{
     svg+=`<polyline points="${xForIdx(a)},${yForPct(checkpoints[a].pct)} ${xForIdx(b)},${yForPct(checkpoints[b].pct)}" fill="none" stroke="var(--gray-light)" stroke-width="2" stroke-dasharray="5,4"/>`;
   });
-  plannedSeg.withData.forEach(i=>{
-    const cp=checkpoints[i],x=xForIdx(i),y=yForPct(cp.pct);
-    svg+=`<circle cx="${x}" cy="${y}" r="3" fill="var(--gray-light)"/>`;
-    svg+=`<text x="${x}" y="${y-7}" text-anchor="${anchorForIdx(i,checkpoints.length)}" font-size="7" font-weight="700" fill="#8A887E">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
-  });
   checkpoints.forEach(cp=>{
-    if(!cp.plannedDate)svg+=`<circle cx="${xForIdx(cp.idx)}" cy="${yForPct(cp.pct)}" r="3" fill="#fff" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="2,2"/>`;
+    const x=xForIdx(cp.idx),y=yForPct(cp.pct),hasDate=!!cp.plannedDate;
+    if(hasDate){
+      svg+=`<circle cx="${x}" cy="${y}" r="3" fill="var(--gray-light)"/>`;
+    }else{
+      svg+=`<circle cx="${x}" cy="${y}" r="3" fill="#fff" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="2,2"/>`;
+    }
+    svg+=`<text x="${x}" y="${y-7}" text-anchor="${anchorForIdx(cp.idx,checkpoints.length)}" font-size="7" font-weight="700" fill="${hasDate?'#8A887E':'var(--gray-light)'}">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
   });
 
   // actual series (navy blue, solid)
@@ -17621,14 +17665,19 @@ function buildCashFlowSVG(checkpoints,opts){
     const x=xForIdx(cp.idx);
     const anchor=anchorForIdx(cp.idx,checkpoints.length);
     svg+=`<text x="${x}" y="${padT+plotH+20}" text-anchor="${anchor}" font-size="7.5" font-weight="600" fill="var(--navy)">${escHtml(cp.label)}</text>`;
-    svg+=`<text x="${x}" y="${padT+plotH+31}" text-anchor="${anchor}" font-size="6.5" fill="var(--gray-mid)">${escHtml(cp.msName)} · ${cp.pct}%</text>`;
+    // v66d — msName + pct badge wrapped onto two tspan lines instead of one
+    // unbroken "Closeout Documentation · 100%" string. Native SVG <text>
+    // doesn't auto-wrap, so the line break is manual; splitting the msName
+    // from the pct badge reads cleanly for every checkpoint (not just the
+    // long one) and gives the subtitle block consistent two-line height.
+    svg+=`<text x="${x}" y="${padT+plotH+31}" text-anchor="${anchor}" font-size="6.5" fill="var(--gray-mid)"><tspan x="${x}" dy="0">${escHtml(cp.msName)}</tspan><tspan x="${x}" dy="8">${cp.pct}%</tspan></text>`;
     const dateStr=cp.completionDate||cp.plannedDate;
     if(dateStr){
       const isActual=!!cp.completionDate;
       const fmtted=fmtMonYear(dateStr);
-      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="${anchor}" font-size="6.5" font-weight="600" fill="${isActual?'var(--blue-dark)':'#8A887E'}">${escHtml(fmtted||'TBD')}</text>`;
+      svg+=`<text x="${x}" y="${padT+plotH+50}" text-anchor="${anchor}" font-size="6.5" font-weight="600" fill="${isActual?'var(--blue-dark)':'#8A887E'}">${escHtml(fmtted||'TBD')}</text>`;
     }else{
-      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="${anchor}" font-size="6" font-style="italic" fill="var(--gray-light)">TBD</text>`;
+      svg+=`<text x="${x}" y="${padT+plotH+50}" text-anchor="${anchor}" font-size="6" font-style="italic" fill="var(--gray-light)">TBD</text>`;
     }
   });
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;overflow:visible">${svg}</svg>`;
