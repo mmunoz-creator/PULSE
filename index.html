@@ -4737,7 +4737,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65g</div>
     </div>
   </nav>
 
@@ -4893,7 +4893,7 @@ from unitEffectiveValue() onto each checkbox). -->
           <div class="header-actions no-print">
             <button class="btn" onclick="showToast('Filters coming soon','info')"><i class="ti ti-adjustments-horizontal"></i>Filters</button>
             <button class="btn" onclick="exportActionBoardCSV()"><i class="ti ti-download"></i>Export</button>
-            <button class="btn btn-primary" onclick="window.print()"><i class="ti ti-printer"></i>Print / PDF</button>
+            <button class="btn btn-primary" onclick="printActionBoard()"><i class="ti ti-printer"></i>Print / PDF</button>
             <span id="actionboard-asof" style="font-size:11.5px;color:var(--gray-mid);display:flex;align-items:center;gap:5px"></span>
           </div>
         </div>
@@ -14012,8 +14012,20 @@ function renderActionBoard(){
           // report builder independently show/hide each tab's block
           // regardless of which one is active on screen.
           const isActive=abHeatTab===tab;
+          // v65g -- task #48 cleanup. This label had an inline
+          // style="display:none" alongside the .custom-report-only-label
+          // class that already sets display:none in normal view. Inline
+          // styles always beat class-based rules regardless of
+          // !important on the property, so the print-mode override rule
+          // for this class (body.custom-report-print-mode
+          // .custom-report-only-label{display:block!important}) could
+          // never actually take effect -- the caption silently never
+          // printed. Removed the inline style; the class alone already
+          // handles both the normal-view-hidden and print-mode-visible
+          // states correctly, same fix pattern already used for Budget
+          // Outlook/Milestone Report (v49e).
           return `<div class="custom-report-subsection${isActive?'':' dash-heat-not-active'}" id="dashboard-heatmap-${tab}">
-            <div class="custom-report-only-label" style="display:none;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:8px">${heatLabels[tab]} Heat Map</div>
+            <div class="custom-report-only-label" style="font-size:12px;font-weight:700;color:var(--navy);margin-bottom:8px">${heatLabels[tab]} Heat Map</div>
             ${renderHeatTiles(heatData[tab],tab)}
           </div>`;
         }).join('');
@@ -27731,6 +27743,25 @@ function refreshDashActions(){
 }
 
 function printDashboard(){
+  const el=document.getElementById('view-dashboard');
+  if(el)el.classList.add('print-active');
+  window.print();
+  setTimeout(()=>el?.classList.remove('print-active'),1000);
+}
+
+// v65g -- task #48 fix. The real Dashboard's own Print/PDF button (Action
+// Board, #view-dashboard) called bare window.print() with no setup, unlike
+// every other view's print button. The @media print catch-all rule hides
+// every [id^="view-"] element unless it specifically matches one of the
+// .print-active exceptions (#view-dashboard.print-active is the one
+// listed) -- so without that class ever being added, view-dashboard itself
+// got caught by the catch-all and force-hidden, producing a fully blank
+// print preview. Also calls renderActionBoard() first so the printed
+// content is guaranteed fresh, matching the pattern already used by
+// printBudgetOutlook()/printCapitalPlan()/etc rather than relying on
+// whatever was last rendered on screen.
+function printActionBoard(){
+  if(typeof renderActionBoard==='function')renderActionBoard();
   const el=document.getElementById('view-dashboard');
   if(el)el.classList.add('print-active');
   window.print();
