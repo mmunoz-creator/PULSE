@@ -1,4 +1,24 @@
 <!--
+pulse_v65h. Changes from v65g, this round. Requires no worker changes.
+  1. Task #23 fix. Analytics' Budget vs Billed chart (renderCharts, "1.
+     Budget vs Billed" section) called getBillingBasis(p) with no scope
+     argument in a portfolio-wide loop, so every property's budget figure
+     silently read the page-global currentScope left over from whichever
+     property-detail page was last opened, not that property's own scope
+     -- and was wrong outright for any multi-Scope property regardless of
+     staleness, since getBillingBasis only ever reads one Scope's dollar
+     fields. Swapped to getPropertyBilledAndBasis(p), the same function
+     already powering Properties tab's Total Investment: basis comes from
+     rollupUnitsByStage() across all of a property's units (portfolio-wide,
+     immune to scope count), billed sums every active Scope's Billing Log
+     entries (falling back to a whole-property sum when no Scope is
+     active). budget/billedYTD/pctBilled now come from one function call
+     instead of two separately-computed values, so they can't drift apart.
+     Chart title left as "Budget vs Billed" -- rename to "Project Award vs
+     Billed" (also part of Task #23) not built this round, no go-ahead
+     given yet.
+
+<!--
 pulse_v55d. Changes from v55c, this round. Same backlog. Requires no
 worker changes.
   1. Budget Outlook's two exports (Export Client Report and Export for
@@ -4737,7 +4757,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65h</div>
     </div>
   </nav>
 
@@ -24568,12 +24588,25 @@ function renderCharts(){
   // invoice ($254,619) instead of its real lifetime total ($9,926,607).
   // Now sums every entry, matching the established convention (see
   // renderBudgetTab's v62k comment and getPropertyBilledAndBasis's v63n fix).
-  const budgetData=budgetSource.filter(p=>getBillingBasis(p).amount>0).map(p=>{
-    const entries=(window.BILLING_LOG||[]).filter(b=>b.property===p.n);
-    const billedYTD=entries.reduce((sum,b)=>sum+(Number(b.billedYTD)||0),0);
+  // v65h -- task #23 fix. Was getBillingBasis(p), which reads the single
+  // page-global currentScope (see its own v42a comment) instead of each
+  // property's real scope(s). In this portfolio-wide loop that meant every
+  // property's budget bar silently reused whichever Scope was last opened
+  // on a property-detail page, not its own -- confirmed the root cause of
+  // wrong budget figures reported live. Also wrong for any multi-Scope
+  // property regardless of currentScope staleness, since getBillingBasis
+  // only ever reads one Scope's contractAwardValue/plannedBudget. Switched
+  // to getPropertyBilledAndBasis(p), the same function Properties tab's
+  // Total Investment already uses -- basis comes from rollupUnitsByStage()
+  // across all of the property's units (portfolio-wide, scope-count-proof),
+  // and billed sums every active Scope's Billing Log entries (falling back
+  // to a whole-property sum when no Scope is active), so budget/billedYTD/
+  // pctBilled can never drift apart the way two separately-computed values
+  // could.
+  const budgetData=budgetSource.filter(p=>getPropertyBilledAndBasis(p).basis>0).map(p=>{
+    const{basis,billed,pctBilled}=getPropertyBilledAndBasis(p);
     const savings=(window.CO_SAVINGS||[]).filter(s=>s.property===p.n&&(s.status==='Approved'||s.status==='Client Approved')).reduce((a,s)=>a+Math.max(0,(parseFloat(s.originalAmount)||0)-(parseFloat(s.negotiatedAmount)||0)),0);
-    const billingBasis=getBillingBasis(p);
-    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:billingBasis.amount,billedYTD,savings,pctBilled:Math.round((billedYTD/billingBasis.amount)*100)};
+    return {name:p.n.length>22?p.n.slice(0,20)+'…':p.n,fullName:p.n,budget:basis,billedYTD:billed,savings,pctBilled};
   }).sort((a,b)=>b.budget-a.budget).slice(0,12);
 
   // 2. Elevator Company Performance
