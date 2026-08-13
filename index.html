@@ -1,4 +1,33 @@
 <!--
+pulse_v66c. Changes from v66b, this round. Requires no worker changes.
+Two more live-usability fixes on the same New York Hilton Midtown Cash
+Flow Curve card, found by Misty checking v66b live in the browser.
+  1. Checkpoint label font sizes cut further (9->7.5, 8.5->7, 8->6.5,
+     7.5->6) and, more importantly, the actual clipping root cause fixed.
+     Measured live via getBBox() before touching anything: "Closeout
+     Documentation · 100%" at the old font-size 8 was 123.7 SVG units
+     wide, centered on the last checkpoint at x=540 with the viewBox
+     ending at x=560 -- the label's right half ran 42 units past the
+     canvas edge, genuinely off-canvas (confirmed wrap.scrollWidth===
+     wrap.clientWidth on the live page, so there was nothing for
+     overflow-x:auto to scroll to -- the SVG was already being scaled to
+     exactly fit its container). Fixed by anchoring the first checkpoint's
+     labels to text-anchor:start and the last checkpoint's to
+     text-anchor:end instead of every checkpoint center-anchoring -- the
+     two outermost labels now grow inward from the canvas edges instead
+     of overflowing past them, regardless of container width. Re-verified
+     live post-fix via the same getBBox() approach: all 4 checkpoint
+     labels now stay fully inside the 0-560 viewBox at every screen width
+     tested. Also confirmed via computed-style comparison that the new
+     font sizes render proportionately smaller than the card's own "Cash
+     Flow Curve" title (14px) and subtitle (12px), not just smaller in
+     the abstract.
+  2. Scenario sandbox's in-panel Close button (added in v66b) removed per
+     direct feedback -- Misty prefers the single top "Explore scenario"
+     <-> "Close scenario" toggle button alone, no second close control.
+     The toggle transition itself (added in v66b) is unchanged and stays.
+
+<!--
 pulse_v66b. Changes from v66a, this round. Requires no worker changes.
 Live-usability fixes reported by Misty after v66a went live and she
 navigated to New York Hilton Midtown's Budget Performance tab to check it
@@ -4869,7 +4898,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66c</div>
     </div>
   </nav>
 
@@ -17511,21 +17540,34 @@ function fmtMonYear(dateStr){
 // apart from each other.
 function buildCashFlowSVG(checkpoints,opts){
   opts=opts||{};
-  // v66b — downsized per Misty's direct feedback on the live v66a card:
-  // H 260->175, padT 44->15, padB 62->48. Dollar labels moved from
-  // stacked-above/below-the-dot (which needed the taller top/bottom
-  // padding) to sitting close against the dot itself, planned above and
-  // actual below the same point when they land at the same checkpoint.
-  // Also dropped the hard min-width:480px on the returned <svg> below --
-  // combined with the wrapper's overflow-x:auto, that forced horizontal
-  // scrolling on any container narrower than 480px, which is what cut off
-  // the Completion column in the live screenshot Misty sent. viewBox
-  // scaling alone (width:100%, no min-width) lets the chart shrink to fit
-  // its real container instead.
+  // v66c — two real bugs found live and fixed, per Misty's direct
+  // feedback on v66b (New York Hilton Midtown, Budget Performance,
+  // measured via the real DOM, not guessed):
+  // 1. Text was visually oversized next to the "Cash Flow Curve" card
+  //    title (a real 15px CSS px). All SVG font-sizes cut further here
+  //    (9->7, 8.5->7, 8->6.5, 7.5->6) to actually read at a size
+  //    proportionate to the surrounding card chrome, not just smaller in
+  //    the abstract.
+  // 2. The real clipping cause: "Closeout Documentation · 100%" at the
+  //    old font-size 8 measured 123.7 SVG units wide (confirmed via
+  //    getBBox() on the live page), centered on the last checkpoint at
+  //    x=540 with the viewBox ending at x=560 -- the label's right half
+  //    ran 42 units past the canvas edge, genuinely off-canvas, not just
+  //    visually cramped (the wrap div's overflow-x:auto had nothing to
+  //    scroll to, since the SVG itself was being scaled to fully fit the
+  //    container -- confirmed wrap.scrollWidth===wrap.clientWidth on the
+  //    live page). Fixed by anchoring the first checkpoint's labels to
+  //    start (text-anchor:start) and the last checkpoint's labels to end
+  //    (text-anchor:end) instead of every checkpoint using center anchor
+  //    -- the two outermost labels now grow inward from the canvas edges
+  //    instead of overflowing past them, regardless of container width.
+  //    Middle checkpoints keep center anchor since they have real
+  //    neighbors on both sides to absorb overflow safely.
   const W=560,H=175,padL=55,padR=20,padT=15,padB=48;
   const plotW=W-padL-padR,plotH=H-padT-padB;
   const xForIdx=i=>padL+(i/(checkpoints.length-1))*plotW;
   const yForPct=pct=>padT+plotH-(pct/100)*plotH;
+  const anchorForIdx=(i,n)=>i===0?'start':i===n-1?'end':'middle';
   const plannedSeg=buildCashFlowSegments(checkpoints,cp=>!!cp.plannedDate);
   const actualSeg=buildCashFlowSegments(checkpoints,cp=>cp.isComplete);
 
@@ -17534,7 +17576,7 @@ function buildCashFlowSVG(checkpoints,opts){
   svg+=`<line x1="${padL}" y1="${padT+plotH}" x2="${padL+plotW}" y2="${padT+plotH}" stroke="var(--border)" stroke-width="1"/>`;
   [0,50,100].forEach(pc=>{
     const y=yForPct(pc);
-    svg+=`<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="8.5" fill="var(--gray-mid)">${pc}%</text>`;
+    svg+=`<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="7" fill="var(--gray-mid)">${pc}%</text>`;
     if(pc===50)svg+=`<line x1="${padL}" y1="${y}" x2="${padL+plotW}" y2="${y}" stroke="var(--gray-pale)" stroke-width="1"/>`;
   });
 
@@ -17544,11 +17586,11 @@ function buildCashFlowSVG(checkpoints,opts){
   });
   plannedSeg.withData.forEach(i=>{
     const cp=checkpoints[i],x=xForIdx(i),y=yForPct(cp.pct);
-    svg+=`<circle cx="${x}" cy="${y}" r="3.5" fill="var(--gray-light)"/>`;
-    svg+=`<text x="${x}" y="${y-8}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#8A887E">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
+    svg+=`<circle cx="${x}" cy="${y}" r="3" fill="var(--gray-light)"/>`;
+    svg+=`<text x="${x}" y="${y-7}" text-anchor="${anchorForIdx(i,checkpoints.length)}" font-size="7" font-weight="700" fill="#8A887E">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
   });
   checkpoints.forEach(cp=>{
-    if(!cp.plannedDate)svg+=`<circle cx="${xForIdx(cp.idx)}" cy="${yForPct(cp.pct)}" r="3.5" fill="#fff" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="2,2"/>`;
+    if(!cp.plannedDate)svg+=`<circle cx="${xForIdx(cp.idx)}" cy="${yForPct(cp.pct)}" r="3" fill="#fff" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="2,2"/>`;
   });
 
   // actual series (navy blue, solid)
@@ -17557,8 +17599,8 @@ function buildCashFlowSVG(checkpoints,opts){
   });
   actualSeg.withData.forEach((i,arrIdx)=>{
     const cp=checkpoints[i],x=xForIdx(i),y=yForPct(cp.pct),isLast=arrIdx===actualSeg.withData.length-1;
-    svg+=`<circle cx="${x}" cy="${y}" r="${isLast?5:4}" fill="var(--blue-dark)" ${isLast?'stroke="#fff" stroke-width="1.5"':''}/>`;
-    svg+=`<text x="${x}" y="${y+15}" text-anchor="middle" font-size="8.5" font-weight="700" fill="var(--blue-dark)">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
+    svg+=`<circle cx="${x}" cy="${y}" r="${isLast?4.5:3.5}" fill="var(--blue-dark)" ${isLast?'stroke="#fff" stroke-width="1.5"':''}/>`;
+    svg+=`<text x="${x}" y="${y+13}" text-anchor="${anchorForIdx(i,checkpoints.length)}" font-size="7" font-weight="700" fill="var(--blue-dark)">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
   });
 
   // scenario series (purple, dashed), only present when the sandbox is open
@@ -17569,7 +17611,7 @@ function buildCashFlowSVG(checkpoints,opts){
     });
     opts.scenarioCheckpoints.forEach(cp=>{
       const x=xForIdx(cp.idx),y=yForPct(cp.pct);
-      svg+=`<circle cx="${x}" cy="${y}" r="3.5" fill="var(--purple)"/>`;
+      svg+=`<circle cx="${x}" cy="${y}" r="3" fill="var(--purple)"/>`;
     });
   }
 
@@ -17577,15 +17619,16 @@ function buildCashFlowSVG(checkpoints,opts){
   // Planned Date when both exist)
   checkpoints.forEach(cp=>{
     const x=xForIdx(cp.idx);
-    svg+=`<text x="${x}" y="${padT+plotH+20}" text-anchor="middle" font-size="9" font-weight="600" fill="var(--navy)">${escHtml(cp.label)}</text>`;
-    svg+=`<text x="${x}" y="${padT+plotH+31}" text-anchor="middle" font-size="8" fill="var(--gray-mid)">${escHtml(cp.msName)} · ${cp.pct}%</text>`;
+    const anchor=anchorForIdx(cp.idx,checkpoints.length);
+    svg+=`<text x="${x}" y="${padT+plotH+20}" text-anchor="${anchor}" font-size="7.5" font-weight="600" fill="var(--navy)">${escHtml(cp.label)}</text>`;
+    svg+=`<text x="${x}" y="${padT+plotH+31}" text-anchor="${anchor}" font-size="6.5" fill="var(--gray-mid)">${escHtml(cp.msName)} · ${cp.pct}%</text>`;
     const dateStr=cp.completionDate||cp.plannedDate;
     if(dateStr){
       const isActual=!!cp.completionDate;
       const fmtted=fmtMonYear(dateStr);
-      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="middle" font-size="8" font-weight="600" fill="${isActual?'var(--blue-dark)':'#8A887E'}">${escHtml(fmtted||'TBD')}</text>`;
+      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="${anchor}" font-size="6.5" font-weight="600" fill="${isActual?'var(--blue-dark)':'#8A887E'}">${escHtml(fmtted||'TBD')}</text>`;
     }else{
-      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="middle" font-size="7.5" font-style="italic" fill="var(--gray-light)">TBD</text>`;
+      svg+=`<text x="${x}" y="${padT+plotH+42}" text-anchor="${anchor}" font-size="6" font-style="italic" fill="var(--gray-light)">TBD</text>`;
     }
   });
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;overflow:visible">${svg}</svg>`;
@@ -17756,16 +17799,13 @@ function renderCashFlowScenarioPanel(){
   if(!panel||!_cashFlowScenarioPcts)return;
   panel.innerHTML=`
     <div style="margin-top:14px;padding:12px 14px;background:var(--purple-pale);border:1px solid #D8D5F5;border-radius:8px">
+      <!-- v66c — the separate in-panel Close button (added in v66b) was
+      removed per Misty's direct feedback: she prefers the single top
+      "Explore scenario" <-> "Close scenario" toggle button alone, without
+      a second close control duplicating it. -->
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap">
         <div style="font-size:11px;font-weight:600;color:var(--purple)">Explore a scenario — adjust checkpoints to see a different curve</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn" style="font-size:11px;border-color:var(--purple);color:var(--purple)" onclick="resetCashFlowScenario()">Reset to actual plan</button>
-          <!-- v66b — close reachable from inside the panel too, not just
-          the top "Close scenario" toggle button, in case a user is
-          scrolled past it. Same toggleCashFlowScenario() closes either
-          way. -->
-          <button class="btn" style="font-size:11px" onclick="toggleCashFlowScenario()"><i class="ti ti-x"></i>Close</button>
-        </div>
+        <button class="btn" style="font-size:11px;border-color:var(--purple);color:var(--purple)" onclick="resetCashFlowScenario()">Reset to actual plan</button>
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
         ${CASHFLOW_CHECKPOINT_LABELS.map((label,i)=>`
