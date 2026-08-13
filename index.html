@@ -1,4 +1,73 @@
 <!--
+pulse_v66a. Changes from v65h, this round. Requires no worker changes
+(new Scope fields added directly via Airtable API, not through the
+Worker). New feature, built and syntax-verified, not yet live-verified.
+  1. Cash Flow Curve, new card on the Budget Performance tab. Planned-vs-
+     actual S-curve over 4 fixed contract checkpoints -- Award (M4,
+     Contract Award), Material/Start (M6, First Phase Start), Installation
+     (M10, Final Phase Complete), Completion (M14, Closeout Documentation)
+     -- cumulative % defaults 10/50/90/100, per Misty's direction. This is
+     a billing-schedule split, distinct from the M1-M14 weighted physical-
+     progress system (MS_WEIGHTS) used elsewhere in the app.
+     Design rules, established by testing the real render function against
+     real live scope data before any UI was built (Hilton New Orleans
+     Riverside "Elevators 1-10 & Escalators 9-12" and Hilton McLean Tysons
+     Corner "PE1-PE4 & SE5-SE7", both confirmed live via Airtable):
+       - Never extrapolate. Planned line only connects two checkpoints
+         when both have a real Planned Date; actual line only connects
+         checkpoints that are really Complete. A checkpoint with real data
+         but no real neighbor draws as an isolated dot, not a suppressed
+         point and not a guessed connection.
+       - Completion Date takes priority over Planned Date for a
+         checkpoint's date label when both exist (confirmed against Hilton
+         McLean's M10, which has both).
+       - Every real dot shows its dollar target (fmtCurrency) and a Mon
+         YYYY date; checkpoints with no date on record show "TBD" rather
+         than a silent gap.
+     4 new Airtable fields added to Scopes (Cash Flow Checkpoint % -
+     Award/Material-Start/Installation/Completion, percent type, blank on
+     every existing scope -- code treats blank as the 10/50/90/100
+     default, no backfill needed). PM/Admin can edit and save via a new
+     inline editor (cumulative + sums-to-100 validation, Completion locked
+     at 100%), same permission tier as Contract Award Value. All roles can
+     also open a separate client-side scenario sandbox (purple slider UI)
+     to explore "what if" curves -- purely local, never written to
+     Airtable, resets on reload. New Export button (.xlsx via SheetJS,
+     matching Budget Outlook's existing exportBudgetOutlookClientReport
+     convention -- no property-level export existed on this tab before).
+     Scope-tab switching (existing renderScopeTabs/setCurrentScope
+     mechanism) already re-renders this card for free, no separate wiring
+     needed.
+  2. Portfolio Cash Flow Curve, new card on Budget Outlook (below the
+     existing year-bucket table). Folded into this same v66a build after
+     scoping it separately with Misty. Different axis than the per-scope
+     card above: sums every eligible Scope's 4 checkpoint dollar deltas
+     onto a real calendar month timeline (not checkpoint-position), then
+     runs a cumulative sum across months for planned and actual
+     independently -- a genuine time-based portfolio spend forecast, not
+     a stage-of-contract breakdown. Respects the same boFilter pill state
+     (all/capital/active) the rest of Budget Outlook already uses -- no
+     new filter UI. Eligibility mirrors renderBudgetOutlook's own
+     Complete/Removed-property exclusions and boFilter branches, applied
+     at Scope grain via the new getCashFlowEligibleScopes().
+     Same never-extrapolate rule as the per-scope card: a scope with no
+     real date on a checkpoint contributes nothing to that series at that
+     point -- verified against a 2-scope test portfolio built from real
+     Airtable data (Hilton New Orleans Riverside + Hilton McLean Tysons
+     Corner) that Hilton McLean's M4/M6 (both real Complete milestones,
+     but with no Planned Date AND no Completion Date on either) correctly
+     drop out of the actual series entirely rather than leaking into a
+     stray bucket -- an early version of the aggregation logic had exactly
+     this bug (a literal "null" key swallowing $1,077,100 of real
+     completed-but-dateless work into the wrong place), caught and fixed
+     before this code was ever loaded into the real app, by testing the
+     real function against real data first. A footer flag reports "N of M
+     scopes have any planned checkpoint dates entered" so the planned line
+     is never mistaken for a full portfolio projection when coverage is
+     partial -- expected to be common today given how sparse real Planned
+     Date entry currently is across the base.
+
+<!--
 pulse_v65h. Changes from v65g, this round. Requires no worker changes.
   1. Task #23 fix. Analytics' Budget vs Billed chart (renderCharts, "1.
      Budget vs Billed" section) called getBillingBasis(p) with no scope
@@ -3241,6 +3310,16 @@ async function loadAllData() {
         plannedBudget: r.fields['Planned Budget']!=null?Number(r.fields['Planned Budget']):0,
         approvedBudget: r.fields['Approved Budget']!=null?Number(r.fields['Approved Budget']):0,
         contractAwardValue: r.fields['Contract Award Value']!=null?Number(r.fields['Contract Award Value']):null,
+        // v66a — Cash Flow Curve checkpoint percentages. Airtable Percent
+        // fields, same *100 decimal convention as Retainage/CO markups
+        // above (0.10 = 10%). null (blank in Airtable) means "use the
+        // default" — the render/editor code treats null as 10/50/90/100,
+        // never invents a stored default here so a blank field stays
+        // genuinely blank on the record.
+        chkAward: r.fields['Cash Flow Checkpoint % - Award']!=null?Number(r.fields['Cash Flow Checkpoint % - Award'])*100:null,
+        chkMaterial: r.fields['Cash Flow Checkpoint % - Material/Start']!=null?Number(r.fields['Cash Flow Checkpoint % - Material/Start'])*100:null,
+        chkInstall: r.fields['Cash Flow Checkpoint % - Installation']!=null?Number(r.fields['Cash Flow Checkpoint % - Installation'])*100:null,
+        chkComplete: r.fields['Cash Flow Checkpoint % - Completion']!=null?Number(r.fields['Cash Flow Checkpoint % - Completion'])*100:null,
         budgetStatus: r.fields['Budget Status']||'TBD',
         priority: r.fields['Priority']||'4: Standard',
         status: r.fields['Status']||'Capital Plan',
@@ -4757,7 +4836,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v65h</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66a</div>
     </div>
   </nav>
 
@@ -5200,6 +5279,31 @@ from unitEffectiveValue() onto each checkbox). -->
                   <div id="billing-history-list"></div>
                 </div>
               </div>
+            </div>
+            <!-- v66a — Cash Flow Curve. Planned-vs-actual S-curve over 4
+            fixed contract checkpoints (Award/Material-Start/Installation/
+            Completion, mapped to M4/M6/M10/M14), scoped to currentScope
+            like the rest of this tab. See renderCashFlowCurve(). -->
+            <div class="card" id="cashflow-card" style="margin-top:1rem">
+              <div class="card-header">
+                <div>
+                  <div class="card-title">Cash Flow Curve</div>
+                  <div class="card-sub" id="cashflow-sub">Planned vs. billed, by contract checkpoint</div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <div style="display:flex;gap:14px;font-size:10.5px;color:var(--gray-mid);align-items:center" id="cashflow-legend">
+                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gray-light);margin-right:5px"></span>Planned</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-right:5px"></span>Actual</span>
+                  </div>
+                  <button class="btn" id="cashflow-edit-btn" onclick="toggleCashFlowEditor()" style="font-size:12px;display:none"><i class="ti ti-pencil"></i>Edit checkpoints</button>
+                  <button class="btn" id="cashflow-scenario-btn" onclick="toggleCashFlowScenario()" style="font-size:12px"><i class="ti ti-adjustments"></i>Explore scenario</button>
+                  <button class="btn btn-add" id="cashflow-export-btn" onclick="exportCashFlowCurve()" style="font-size:12px"><i class="ti ti-file-spreadsheet"></i>Export</button>
+                </div>
+              </div>
+              <div id="cashflow-editor-panel" style="display:none"></div>
+              <div id="cashflow-scenario-panel" style="display:none"></div>
+              <div id="cashflow-svg-wrap" style="margin-top:14px;overflow-x:auto"></div>
+              <div id="cashflow-footer" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)"></div>
             </div>
             <!-- Billing entry form -->
             <div class="card" id="billing-entry-form" style="display:none;margin-top:1rem">
@@ -5744,6 +5848,27 @@ from unitEffectiveValue() onto each checkbox). -->
                 <thead id="bo-thead"></thead>
                 <tbody id="bo-tbody"></tbody>
               </table>
+            </div>
+            <!-- v66a — Portfolio Cash Flow Curve. Aggregate S-curve summed
+            across every eligible Scope's 4 checkpoints, plotted on a real
+            calendar timeline (not checkpoint-position like the per-scope
+            card) so differently-timed scopes combine into one genuine
+            portfolio spend forecast. Respects the same boFilter pill state
+            as the rest of this page (all/capital/active) -- no separate
+            filter UI. See renderPortfolioCashFlowCurve(). -->
+            <div class="card no-print" id="portfolio-cashflow-card" style="margin-top:24px">
+              <div class="card-header">
+                <div>
+                  <div class="card-title">Portfolio Cash Flow Curve</div>
+                  <div class="card-sub" id="portfolio-cashflow-sub">Planned vs. billed, summed across scopes</div>
+                </div>
+                <div style="display:flex;gap:14px;font-size:10.5px;color:var(--gray-mid);align-items:center">
+                  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gray-light);margin-right:5px"></span>Planned</span>
+                  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-right:5px"></span>Actual</span>
+                </div>
+              </div>
+              <div id="portfolio-cashflow-svg-wrap" style="margin-top:14px;overflow-x:auto"></div>
+              <div id="portfolio-cashflow-footer" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)"></div>
             </div>
           </div>
         </div>
@@ -17116,6 +17241,11 @@ function renderBudgetTab(p){
   const pctComplete=msExpectedWeighted>0?Math.round((msCompleteWeighted/msExpectedWeighted)*100):0;
   const variance=pctBilled-pctComplete;
 
+  // v66a — Cash Flow Curve. Own scope-aware render, driven by currentScope
+  // like the rest of this tab (renderScopeTabs above already re-renders
+  // this whole tab on scope switch, so no separate wiring needed there).
+  renderCashFlowCurve(p, scopeId);
+
   // Phase duration rendered by renderPhasesTab
 
   // Budget performance card
@@ -17232,6 +17362,547 @@ function renderBudgetTab(p){
   }
 }
 
+// ── CASH FLOW CURVE (v66a) ──────────────────────────────────────────
+// Planned-vs-actual S-curve over 4 fixed contract checkpoints, mapped to
+// real Milestone data. Per Misty's direction: checkpoints are fixed at
+// 10/50/90/100% cumulative, anchored to M4 (Contract Award), M6 (First
+// Phase Start), M10 (Final Phase Complete), M14 (Closeout Documentation)
+// -- billing-schedule checkpoints, not the M1-M14 weighted physical-
+// progress system (MS_WEIGHTS) used elsewhere in the app. Editable per
+// Scope via 4 new Airtable fields (Cash Flow Checkpoint % - Award/
+// Material-Start/Installation/Completion); blank = default split.
+//
+// Design rules, established through iteration against real Airtable data
+// (Hilton New Orleans Riverside "Elevators 1-10 & Escalators 9-12" and
+// Hilton McLean Tysons Corner "PE1-PE4 & SE5-SE7", both confirmed live):
+//   - Never extrapolate. A line only connects two checkpoints when BOTH
+//     have real data (a real Planned Date for the planned series, a real
+//     Complete status for the actual series). A checkpoint with real data
+//     but no real neighbor renders as an isolated dot, not a suppressed
+//     point and not a guessed connection.
+//   - Completion Date takes priority over Planned Date for a checkpoint's
+//     x-axis position/label when both exist (confirmed: Hilton McLean's
+//     M10 has both -- Completion Date wins, colored to match the actual
+//     line, since it reflects what really happened, not what was
+//     estimated).
+//   - Every real dot shows its dollar target (fmtCurrency) and a Mon YYYY
+//     date; checkpoints with no date on record show "TBD" rather than a
+//     silent gap.
+const CASHFLOW_CHECKPOINT_MS=[4,6,10,14];
+const CASHFLOW_CHECKPOINT_LABELS=['Award','Material / Start','Installation','Completion'];
+const CASHFLOW_CHECKPOINT_MS_NAMES=['Contract Award','First Phase Start','Final Phase Complete','Closeout Documentation'];
+const CASHFLOW_DEFAULT_PCTS=[10,50,90,100];
+
+// Returns the 4 checkpoint percentages for a scope (fields already loaded
+// as *100 whole numbers, same convention as retainagePct/coMaterialMarkup
+// elsewhere). Falls back to the fixed default split field-by-field, so a
+// scope with only some checkpoints overridden still gets sane defaults
+// for the rest.
+function getCashFlowCheckpointPcts(scope){
+  if(!scope)return CASHFLOW_DEFAULT_PCTS.slice();
+  const fields=[scope.chkAward,scope.chkMaterial,scope.chkInstall,scope.chkComplete];
+  return fields.map((v,i)=>(v==null?CASHFLOW_DEFAULT_PCTS[i]:Number(v)));
+}
+
+// Cumulative + sums-to-100 validation, shared by the PM editor's Save
+// button and the client scenario sandbox's own internal consistency
+// (sandbox doesn't block on this since it's just exploratory, but the
+// editor does).
+function validateCashFlowPcts(pcts){
+  for(let i=0;i<pcts.length;i++){
+    if(pcts[i]==null||isNaN(pcts[i])||pcts[i]<0||pcts[i]>100)return 'Each checkpoint must be a number between 0 and 100.';
+    if(i>0&&pcts[i]<=pcts[i-1])return 'Each checkpoint must be greater than the one before it.';
+  }
+  if(Math.round(pcts[3])!==100)return 'Completion must be 100%.';
+  return null;
+}
+
+// Builds the 4 checkpoint data objects for a scope: label, milestone
+// name/number, cumulative %, dollar target, and whatever real planned/
+// completion dates + complete-status exist. overridePcts (optional) lets
+// the scenario sandbox render against unsaved, in-memory percentages
+// without touching the real scope object.
+function buildCashFlowCheckpoints(p,scope,scopeId,overridePcts){
+  const pcts=overridePcts||getCashFlowCheckpointPcts(scope);
+  // Deliberately getBillingBasis (single-scope), not getPropertyBilledAndBasis
+  // (portfolio/multi-scope rollup) -- this card is always scoped to one
+  // specific Scope's own checkpoints, never a property-wide aggregate.
+  const basis=getBillingBasis(p,scope);
+  const msList=getMilestonesForProp(p.n,scopeId);
+  const byNum={};
+  msList.forEach(m=>{byNum[m.milestoneNumber]=m;});
+  return CASHFLOW_CHECKPOINT_MS.map((msNum,i)=>{
+    const ms=byNum[msNum];
+    const pct=pcts[i];
+    return{
+      idx:i,label:CASHFLOW_CHECKPOINT_LABELS[i],msNum,msName:CASHFLOW_CHECKPOINT_MS_NAMES[i],
+      pct,dollarTarget:(basis.amount||0)*(pct/100),
+      plannedDate:ms?ms.plannedDate||null:null,
+      isComplete:ms?ms.status==='Complete':false,
+      completionDate:ms?ms.completionDate||null:null
+    };
+  });
+}
+
+// Connect-only-where-consecutive segment builder. Returns which indices
+// have real data, which adjacent pairs both do (draw a line between
+// them), and leaves everything else to render as an isolated dot.
+function buildCashFlowSegments(checkpoints,hasFn){
+  const withData=checkpoints.filter(hasFn).map(cp=>cp.idx);
+  const segments=[];
+  for(let i=0;i<withData.length;i++){
+    const cur=withData[i],next=withData[i+1];
+    if(next!==undefined&&next===cur+1)segments.push([cur,next]);
+  }
+  return{withData,segments};
+}
+
+function fmtMonYear(dateStr){
+  if(!dateStr)return null;
+  const d=new Date(dateStr+'T00:00:00');
+  if(isNaN(d.getTime()))return null;
+  return d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+}
+
+// Builds the real SVG inner-markup for a set of checkpoints. Shared by
+// the real (saved) render, the scenario sandbox overlay, and the export
+// preview -- one geometry function so all three can never visually drift
+// apart from each other.
+function buildCashFlowSVG(checkpoints,opts){
+  opts=opts||{};
+  const W=560,H=260,padL=60,padR=20,padT=44,padB=62;
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  const xForIdx=i=>padL+(i/(checkpoints.length-1))*plotW;
+  const yForPct=pct=>padT+plotH-(pct/100)*plotH;
+  const plannedSeg=buildCashFlowSegments(checkpoints,cp=>!!cp.plannedDate);
+  const actualSeg=buildCashFlowSegments(checkpoints,cp=>cp.isComplete);
+
+  let svg='';
+  svg+=`<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT+plotH}" stroke="var(--border)" stroke-width="1"/>`;
+  svg+=`<line x1="${padL}" y1="${padT+plotH}" x2="${padL+plotW}" y2="${padT+plotH}" stroke="var(--border)" stroke-width="1"/>`;
+  [0,50,100].forEach(pc=>{
+    const y=yForPct(pc);
+    svg+=`<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="9" fill="var(--gray-mid)">${pc}%</text>`;
+    if(pc===50)svg+=`<line x1="${padL}" y1="${y}" x2="${padL+plotW}" y2="${y}" stroke="var(--gray-pale)" stroke-width="1"/>`;
+  });
+
+  // planned series (gray, dashed)
+  plannedSeg.segments.forEach(([a,b])=>{
+    svg+=`<polyline points="${xForIdx(a)},${yForPct(checkpoints[a].pct)} ${xForIdx(b)},${yForPct(checkpoints[b].pct)}" fill="none" stroke="var(--gray-light)" stroke-width="2" stroke-dasharray="5,4"/>`;
+  });
+  plannedSeg.withData.forEach(i=>{
+    const cp=checkpoints[i],x=xForIdx(i),y=yForPct(cp.pct);
+    svg+=`<circle cx="${x}" cy="${y}" r="4" fill="var(--gray-light)"/>`;
+    svg+=`<text x="${x}" y="${y-9}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#8A887E">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
+  });
+  checkpoints.forEach(cp=>{
+    if(!cp.plannedDate)svg+=`<circle cx="${xForIdx(cp.idx)}" cy="${yForPct(cp.pct)}" r="4" fill="#fff" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="2,2"/>`;
+  });
+
+  // actual series (navy blue, solid)
+  actualSeg.segments.forEach(([a,b])=>{
+    svg+=`<polyline points="${xForIdx(a)},${yForPct(checkpoints[a].pct)} ${xForIdx(b)},${yForPct(checkpoints[b].pct)}" fill="none" stroke="var(--blue-dark)" stroke-width="2.5"/>`;
+  });
+  actualSeg.withData.forEach((i,arrIdx)=>{
+    const cp=checkpoints[i],x=xForIdx(i),y=yForPct(cp.pct),isLast=arrIdx===actualSeg.withData.length-1;
+    svg+=`<circle cx="${x}" cy="${y}" r="${isLast?5.5:4.5}" fill="var(--blue-dark)" ${isLast?'stroke="#fff" stroke-width="2"':''}/>`;
+    svg+=`<text x="${x}" y="${y+16}" text-anchor="middle" font-size="9.5" font-weight="700" fill="var(--blue-dark)">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
+  });
+
+  // scenario series (purple, dashed), only present when the sandbox is open
+  if(opts.scenarioCheckpoints){
+    const scSeg=buildCashFlowSegments(opts.scenarioCheckpoints,()=>true); // scenario always has all 4, no real-data gating
+    scSeg.segments.forEach(([a,b])=>{
+      svg+=`<polyline points="${xForIdx(a)},${yForPct(opts.scenarioCheckpoints[a].pct)} ${xForIdx(b)},${yForPct(opts.scenarioCheckpoints[b].pct)}" fill="none" stroke="var(--purple)" stroke-width="2.5" stroke-dasharray="3,2"/>`;
+    });
+    opts.scenarioCheckpoints.forEach(cp=>{
+      const x=xForIdx(cp.idx),y=yForPct(cp.pct);
+      svg+=`<circle cx="${x}" cy="${y}" r="4" fill="var(--purple)"/>`;
+    });
+  }
+
+  // checkpoint labels + Mon YYYY (Completion Date takes priority over
+  // Planned Date when both exist)
+  checkpoints.forEach(cp=>{
+    const x=xForIdx(cp.idx);
+    svg+=`<text x="${x}" y="${padT+plotH+18}" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--navy)">${escHtml(cp.label)}</text>`;
+    svg+=`<text x="${x}" y="${padT+plotH+29}" text-anchor="middle" font-size="8.5" fill="var(--gray-mid)">${escHtml(cp.msName)} · ${cp.pct}%</text>`;
+    const dateStr=cp.completionDate||cp.plannedDate;
+    if(dateStr){
+      const isActual=!!cp.completionDate;
+      const fmtted=fmtMonYear(dateStr);
+      svg+=`<text x="${x}" y="${padT+plotH+41}" text-anchor="middle" font-size="9" font-weight="600" fill="${isActual?'var(--blue-dark)':'#8A887E'}">${escHtml(fmtted||'TBD')}</text>`;
+    }else{
+      svg+=`<text x="${x}" y="${padT+plotH+41}" text-anchor="middle" font-size="8.5" font-style="italic" fill="var(--gray-light)">TBD</text>`;
+    }
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:480px;overflow:visible">${svg}</svg>`;
+}
+
+// Main render entry point, called from renderBudgetTab on every render
+// and every scope-tab switch (renderScopeTabs already triggers a full
+// tab re-render on switch, so no separate hook needed here).
+function renderCashFlowCurve(p,scopeId){
+  const wrap=document.getElementById('cashflow-svg-wrap');
+  const footer=document.getElementById('cashflow-footer');
+  const sub=document.getElementById('cashflow-sub');
+  const editBtn=document.getElementById('cashflow-edit-btn');
+  if(!wrap)return;
+  const scope=scopeId?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  const canPM=role==='pm'||role==='admin';
+  if(editBtn)editBtn.style.display=canPM?'':'none';
+
+  const checkpoints=buildCashFlowCheckpoints(p,scope,scopeId);
+  const basis=scope?getBillingBasis(p,scope):getBillingBasis(p);
+  if(sub)sub.textContent=`Planned vs. billed, by contract checkpoint${basis.amount?' · '+fmtCurrency(basis.amount):''}`;
+
+  wrap.innerHTML=buildCashFlowSVG(checkpoints);
+  window._cashFlowCurrentCheckpoints=checkpoints; // used by export + scenario sandbox
+
+  const plannedCount=checkpoints.filter(cp=>cp.plannedDate).length;
+  const actualCount=checkpoints.filter(cp=>cp.isComplete).length;
+  if(footer){
+    footer.innerHTML=plannedCount<4?
+      `<div style="font-size:11px;color:var(--amber)">${plannedCount} of 4 checkpoint planned dates set${plannedCount<4?' — planned line only draws between checkpoints with real dates':''}</div>`:
+      `<div style="font-size:11px;color:var(--green)">All 4 checkpoint planned dates set</div>`;
+  }
+}
+
+// ── PM/ADMIN CHECKPOINT EDITOR ───────────────────────────────────────
+function toggleCashFlowEditor(){
+  const panel=document.getElementById('cashflow-editor-panel');
+  if(!panel)return;
+  if(panel.style.display==='none'||!panel.style.display){
+    renderCashFlowEditor();
+    panel.style.display='block';
+  }else{
+    panel.style.display='none';
+    panel.innerHTML='';
+  }
+}
+function renderCashFlowEditor(){
+  const panel=document.getElementById('cashflow-editor-panel');
+  if(!panel||!currentScope)return;
+  const pcts=getCashFlowCheckpointPcts(currentScope);
+  panel.innerHTML=`
+    <div style="margin-top:14px;padding:14px;background:var(--gray-xpale);border:1px solid var(--border);border-radius:8px">
+      <div style="font-size:11px;font-weight:600;color:var(--gray-mid);text-transform:uppercase;margin-bottom:10px">Checkpoint percentages · this scope only</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        ${CASHFLOW_CHECKPOINT_LABELS.map((label,i)=>`
+        <div>
+          <div style="font-size:10.5px;color:var(--gray-mid);margin-bottom:5px">${escHtml(label)} (M${CASHFLOW_CHECKPOINT_MS[i]})</div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <input class="form-input cashflow-editor-input" data-idx="${i}" type="number" min="0" max="100" step="1" value="${pcts[i]}" style="padding:4px 6px;font-size:12px;text-align:center;font-weight:600" ${i===3?'disabled':''} oninput="validateCashFlowEditorLive()">
+            <span style="font-size:12px;color:var(--gray-mid)">%</span>
+          </div>
+        </div>`).join('')}
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+        <div id="cashflow-editor-validation" style="font-size:10.5px"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn" style="font-size:11px" onclick="resetCashFlowEditorToDefault()">Reset to default (10/50/90/100)</button>
+          <button class="btn btn-primary" id="cashflow-editor-save-btn" style="font-size:11px" onclick="saveCashFlowCheckpoints()">Save</button>
+        </div>
+      </div>
+    </div>`;
+  validateCashFlowEditorLive();
+}
+function readCashFlowEditorInputs(){
+  return [...document.querySelectorAll('.cashflow-editor-input')].map(inp=>{
+    const v=inp.value.trim();
+    return v===''?NaN:Number(v);
+  });
+}
+function validateCashFlowEditorLive(){
+  const valEl=document.getElementById('cashflow-editor-validation');
+  const saveBtn=document.getElementById('cashflow-editor-save-btn');
+  if(!valEl)return;
+  const pcts=readCashFlowEditorInputs();
+  pcts[3]=100; // Completion always locked to 100, regardless of the disabled input's literal value
+  const err=validateCashFlowPcts(pcts);
+  if(err){
+    valEl.innerHTML=`<span style="color:var(--red)"><i class="ti ti-alert-triangle"></i> ${escHtml(err)}</span>`;
+    if(saveBtn)saveBtn.disabled=true;
+  }else{
+    valEl.innerHTML=`<span style="color:var(--green)"><i class="ti ti-circle-check"></i> Valid — cumulative, sums to 100%</span>`;
+    if(saveBtn)saveBtn.disabled=false;
+  }
+}
+function resetCashFlowEditorToDefault(){
+  document.querySelectorAll('.cashflow-editor-input').forEach((inp,i)=>{inp.value=CASHFLOW_DEFAULT_PCTS[i];});
+  validateCashFlowEditorLive();
+}
+let _savingCashFlowCheckpoints=false;
+async function saveCashFlowCheckpoints(){
+  if(_savingCashFlowCheckpoints||!currentScope)return;
+  const pcts=readCashFlowEditorInputs();
+  pcts[3]=100;
+  const err=validateCashFlowPcts(pcts);
+  if(err){showToast(err,'warn');return;}
+  _savingCashFlowCheckpoints=true;
+  showToast('Saving checkpoints...','info');
+  const fields={
+    'Cash Flow Checkpoint % - Award':pcts[0]/100,
+    'Cash Flow Checkpoint % - Material/Start':pcts[1]/100,
+    'Cash Flow Checkpoint % - Installation':pcts[2]/100,
+    'Cash Flow Checkpoint % - Completion':pcts[3]/100
+  };
+  const result=demoMode?{ok:true}:await atUpdate('Scopes',currentScope.id,fields);
+  _savingCashFlowCheckpoints=false;
+  if(!result){showToast('Failed to save checkpoints — try again','error');return;}
+  currentScope.chkAward=pcts[0];currentScope.chkMaterial=pcts[1];currentScope.chkInstall=pcts[2];currentScope.chkComplete=pcts[3];
+  // keep window.SCOPES in sync with the in-memory currentScope reference
+  const scopeInList=(window.SCOPES||[]).find(s=>s.id===currentScope.id);
+  if(scopeInList){scopeInList.chkAward=pcts[0];scopeInList.chkMaterial=pcts[1];scopeInList.chkInstall=pcts[2];scopeInList.chkComplete=pcts[3];}
+  showToast('Checkpoints saved','success');
+  toggleCashFlowEditor();
+  if(currentProp)renderCashFlowCurve(currentProp,currentScope.id);
+}
+
+// ── CLIENT SCENARIO SANDBOX (local only, never saved) ────────────────
+let _cashFlowScenarioPcts=null; // null = sandbox closed; array of 4 = open
+function toggleCashFlowScenario(){
+  const panel=document.getElementById('cashflow-scenario-panel');
+  if(!panel)return;
+  if(_cashFlowScenarioPcts){
+    _cashFlowScenarioPcts=null;
+    panel.style.display='none';
+    panel.innerHTML='';
+    if(currentProp)renderCashFlowCurve(currentProp,currentScope?.id);
+  }else{
+    _cashFlowScenarioPcts=getCashFlowCheckpointPcts(currentScope);
+    panel.style.display='block';
+    renderCashFlowScenarioPanel();
+    renderCashFlowScenarioCurve();
+  }
+}
+function renderCashFlowScenarioPanel(){
+  const panel=document.getElementById('cashflow-scenario-panel');
+  if(!panel||!_cashFlowScenarioPcts)return;
+  panel.innerHTML=`
+    <div style="margin-top:14px;padding:12px 14px;background:var(--purple-pale);border:1px solid #D8D5F5;border-radius:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--purple)">Explore a scenario — adjust checkpoints to see a different curve</div>
+        <button class="btn" style="font-size:11px;border-color:var(--purple);color:var(--purple)" onclick="resetCashFlowScenario()">Reset to actual plan</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+        ${CASHFLOW_CHECKPOINT_LABELS.map((label,i)=>`
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--gray-mid);margin-bottom:4px"><span>${escHtml(label)}</span><span style="font-weight:700;color:var(--purple)" id="cashflow-scenario-val-${i}">${_cashFlowScenarioPcts[i]}%</span></div>
+          <input type="range" min="0" max="100" value="${_cashFlowScenarioPcts[i]}" data-idx="${i}" class="cashflow-scenario-slider" style="width:100%;accent-color:var(--purple)" ${i===3?'disabled':''} oninput="updateCashFlowScenarioSlider(${i},this.value)">
+        </div>`).join('')}
+      </div>
+      <div style="font-size:10.5px;color:var(--purple);margin-top:8px">Scenario view only — nothing here is saved. Reload the page and it reverts to the real plan.</div>
+    </div>`;
+}
+function updateCashFlowScenarioSlider(idx,val){
+  if(!_cashFlowScenarioPcts)return;
+  _cashFlowScenarioPcts[idx]=Number(val);
+  const label=document.getElementById(`cashflow-scenario-val-${idx}`);
+  if(label)label.textContent=val+'%';
+  renderCashFlowScenarioCurve();
+}
+function resetCashFlowScenario(){
+  _cashFlowScenarioPcts=getCashFlowCheckpointPcts(currentScope);
+  renderCashFlowScenarioPanel();
+  renderCashFlowScenarioCurve();
+}
+function renderCashFlowScenarioCurve(){
+  const wrap=document.getElementById('cashflow-svg-wrap');
+  if(!wrap||!currentProp||!_cashFlowScenarioPcts)return;
+  const realCheckpoints=buildCashFlowCheckpoints(currentProp,currentScope,currentScope?.id);
+  const scenarioCheckpoints=buildCashFlowCheckpoints(currentProp,currentScope,currentScope?.id,_cashFlowScenarioPcts);
+  wrap.innerHTML=buildCashFlowSVG(realCheckpoints,{scenarioCheckpoints});
+}
+
+// ── EXPORT (.xlsx) ───────────────────────────────────────────────────
+// Follows the same SheetJS/XLSX convention as exportBudgetOutlookClientReport
+// (Budget Outlook's existing portfolio-wide export) -- no property-level
+// export existed on this tab before, so this establishes that pattern here.
+function exportCashFlowCurve(){
+  if(typeof XLSX==='undefined'){showToast('Excel export library failed to load — check your connection and try again','error');return;}
+  if(!currentProp||!currentScope){showToast('Select a scope first','warn');return;}
+  const checkpoints=window._cashFlowCurrentCheckpoints||buildCashFlowCheckpoints(currentProp,currentScope,currentScope.id);
+  const rows=[['Checkpoint','Milestone','Cumulative %','Planned Date','Planned $','Actual Status','Completion Date','Actual $']];
+  checkpoints.forEach(cp=>{
+    rows.push([
+      cp.label,
+      cp.msName,
+      cp.pct+'%',
+      cp.plannedDate||'',
+      cp.plannedDate?Math.round(cp.dollarTarget):'',
+      cp.isComplete?'Complete':'Not yet complete',
+      cp.completionDate||'',
+      cp.isComplete?Math.round(cp.dollarTarget):''
+    ]);
+  });
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:14},{wch:24},{wch:12},{wch:14},{wch:14},{wch:16},{wch:14},{wch:14}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Cash Flow Curve');
+  const fname=`Cash Flow Curve - ${currentProp.n} - ${currentScope.name}.xlsx`.replace(/[\\/:*?"<>|]/g,'');
+  XLSX.writeFile(wb,fname);
+}
+
+// ── PORTFOLIO CASH FLOW CURVE (v66a) — Budget Outlook aggregate ──────
+// Sums every eligible Scope's 4 checkpoint dollar values onto a real
+// calendar timeline (year-month), then runs a cumulative sum across
+// months for both the planned and actual series. Different axis than the
+// per-scope card (which plots by checkpoint position, not real date) —
+// this is a genuine time-based portfolio spend forecast, matching what
+// "cash flow curve" means at the portfolio level. Respects the same
+// boFilter pill (all/capital/active) the rest of Budget Outlook uses, so
+// there's no separate filter UI to maintain.
+//
+// Same no-extrapolation principle as the per-scope card: a scope with no
+// real Planned Date on a checkpoint contributes nothing to the planned
+// series at all (not a guess, not smeared evenly) -- so the portfolio
+// planned line is honestly a floor on real known commitments, not a
+// projection. A coverage flag makes this explicit rather than letting a
+// partial curve masquerade as the full picture.
+
+// Mirrors renderBudgetOutlook's own boFilter semantics (see its 'capital'/
+// 'active' branches ~line 22799) but applied directly to Scopes, since
+// the checkpoint curve operates at scope grain, not per-unit-allocation
+// grain like the year-bucket table does.
+function getCashFlowEligibleScopes(){
+  const _propByName={};
+  (window.PORTFOLIO||[]).forEach(p=>{_propByName[p.n]=p;});
+  const _activePropNames=new Set(getPortfolioClassification().activeProps.map(p=>p.n));
+  return (window.SCOPES||[]).filter(sc=>{
+    if(sc.status==='Complete')return false;
+    const prop=_propByName[sc.property];
+    if(prop&&(prop.st==='Complete'||prop.st==='Removed'))return false;
+    if(boFilter==='capital')return !(sc.contractAwardValue>0);
+    if(boFilter==='active')return _activePropNames.has(sc.property);
+    return true;
+  });
+}
+
+// Real-calendar year-month key, same T12:00:00 anchor fix used elsewhere
+// in this file (unitGroupYear, above) to avoid UTC-midnight date-string
+// parsing landing a Jan 1 date in the wrong bucket for timezones behind
+// UTC.
+function _cfYearMonthKey(dateStr){
+  if(!dateStr)return null;
+  const d=new Date(dateStr+'T12:00:00');
+  if(isNaN(d.getTime()))return null;
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function _cfYearMonthLabel(key){
+  const[y,m]=key.split('-');
+  return new Date(Number(y),Number(m)-1,1).toLocaleDateString('en-US',{month:'short',year:'numeric'});
+}
+
+// Builds the portfolio-level checkpoint deltas: for every eligible scope
+// and every one of its 4 checkpoints, the dollar DELTA that checkpoint
+// represents (not cumulative -- e.g. Material/Start's delta is 40% of
+// basis, the difference between its 50% and Award's 10%), bucketed by
+// real month, separately for planned and actual.
+function buildPortfolioCashFlowData(){
+  const scopes=getCashFlowEligibleScopes();
+  const plannedByMonth={}; // yearMonthKey -> dollar delta
+  const actualByMonth={};
+  let scopesWithAnyPlanned=0, scopesWithAnyActual=0;
+  const propByName={};
+  (window.PORTFOLIO||[]).forEach(p=>{propByName[p.n]=p;});
+
+  scopes.forEach(sc=>{
+    const prop=propByName[sc.property];
+    if(!prop)return;
+    const checkpoints=buildCashFlowCheckpoints(prop,sc,sc.id);
+    let prevPct=0;
+    let scopeHasPlanned=false, scopeHasActual=false;
+    checkpoints.forEach(cp=>{
+      const delta=(cp.pct-prevPct)/100*(getBillingBasis(prop,sc).amount||0);
+      prevPct=cp.pct;
+      if(cp.plannedDate){
+        const key=_cfYearMonthKey(cp.plannedDate);
+        if(key){plannedByMonth[key]=(plannedByMonth[key]||0)+delta;scopeHasPlanned=true;}
+      }
+      if(cp.isComplete){
+        const dateForActual=cp.completionDate||cp.plannedDate;
+        const key=_cfYearMonthKey(dateForActual);
+        if(key){actualByMonth[key]=(actualByMonth[key]||0)+delta;scopeHasActual=true;}
+      }
+    });
+    if(scopeHasPlanned)scopesWithAnyPlanned++;
+    if(scopeHasActual)scopesWithAnyActual++;
+  });
+
+  return{scopes,plannedByMonth,actualByMonth,scopesWithAnyPlanned,scopesWithAnyActual};
+}
+
+function renderPortfolioCashFlowCurve(){
+  const wrap=document.getElementById('portfolio-cashflow-svg-wrap');
+  const footer=document.getElementById('portfolio-cashflow-footer');
+  const sub=document.getElementById('portfolio-cashflow-sub');
+  if(!wrap)return;
+
+  const{scopes,plannedByMonth,actualByMonth,scopesWithAnyPlanned,scopesWithAnyActual}=buildPortfolioCashFlowData();
+
+  if(sub)sub.textContent=`Planned vs. billed, summed across ${scopes.length} scope${scopes.length===1?'':'s'} (${boFilter==='all'?'all scheduled':boFilter==='capital'?'capital plan only':'active properties'})`;
+
+  const allMonthKeys=[...new Set([...Object.keys(plannedByMonth),...Object.keys(actualByMonth)])].sort();
+  if(allMonthKeys.length===0){
+    wrap.innerHTML=`<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:24px">No scopes with real checkpoint dates yet under this filter — the portfolio curve will populate as Planned Dates and completions are entered.</div>`;
+    if(footer)footer.innerHTML='';
+    return;
+  }
+
+  // Cumulative sums across the real month sequence, for both series
+  // independently — a month with no planned delta simply carries the
+  // running total forward flat, same convention as any real S-curve.
+  let plannedCum=0, actualCum=0;
+  const plannedPoints=[], actualPoints=[];
+  allMonthKeys.forEach(key=>{
+    if(plannedByMonth[key]!=null){plannedCum+=plannedByMonth[key];plannedPoints.push({key,cum:plannedCum});}
+    if(actualByMonth[key]!=null){actualCum+=actualByMonth[key];actualPoints.push({key,cum:actualCum});}
+  });
+  const maxCum=Math.max(plannedCum,actualCum,1);
+
+  const W=Math.max(560,allMonthKeys.length*70),H=220,padL=70,padR=20,padT=20,padB=50;
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  const xForKey=key=>padL+(allMonthKeys.indexOf(key)/(Math.max(allMonthKeys.length-1,1)))*plotW;
+  const yForVal=v=>padT+plotH-(v/maxCum)*plotH;
+
+  let svg='';
+  svg+=`<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT+plotH}" stroke="var(--border)" stroke-width="1"/>`;
+  svg+=`<line x1="${padL}" y1="${padT+plotH}" x2="${padL+plotW}" y2="${padT+plotH}" stroke="var(--border)" stroke-width="1"/>`;
+  [0,0.5,1].forEach(f=>{
+    const y=yForVal(maxCum*f);
+    svg+=`<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="9" fill="var(--gray-mid)">${escHtml(fmtCurrency(maxCum*f))}</text>`;
+    if(f===0.5)svg+=`<line x1="${padL}" y1="${y}" x2="${padL+plotW}" y2="${y}" stroke="var(--gray-pale)" stroke-width="1"/>`;
+  });
+
+  if(plannedPoints.length>0){
+    const pts=plannedPoints.map(pt=>`${xForKey(pt.key)},${yForVal(pt.cum)}`).join(' ');
+    svg+=`<polyline points="${pts}" fill="none" stroke="var(--gray-light)" stroke-width="2" stroke-dasharray="5,4"/>`;
+    plannedPoints.forEach(pt=>{svg+=`<circle cx="${xForKey(pt.key)}" cy="${yForVal(pt.cum)}" r="3.5" fill="var(--gray-light)"/>`;});
+  }
+  if(actualPoints.length>0){
+    const pts=actualPoints.map(pt=>`${xForKey(pt.key)},${yForVal(pt.cum)}`).join(' ');
+    svg+=`<polyline points="${pts}" fill="none" stroke="var(--blue-dark)" stroke-width="2.5"/>`;
+    actualPoints.forEach((pt,i)=>{
+      const isLast=i===actualPoints.length-1;
+      svg+=`<circle cx="${xForKey(pt.key)}" cy="${yForVal(pt.cum)}" r="${isLast?5:4}" fill="var(--blue-dark)" ${isLast?'stroke="#fff" stroke-width="2"':''}/>`;
+    });
+  }
+
+  allMonthKeys.forEach((key,i)=>{
+    if(i%Math.max(1,Math.ceil(allMonthKeys.length/12))!==0&&i!==allMonthKeys.length-1)return; // thin labels so a long timeline doesn't overlap
+    svg+=`<text x="${xForKey(key)}" y="${padT+plotH+16}" text-anchor="middle" font-size="8.5" fill="var(--gray-mid)">${escHtml(_cfYearMonthLabel(key))}</text>`;
+  });
+
+  wrap.innerHTML=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:480px;overflow:visible">${svg}</svg>`;
+
+  if(footer){
+    const plannedNote=scopesWithAnyPlanned<scopes.length?
+      `<span style="color:var(--amber)">${scopesWithAnyPlanned} of ${scopes.length} scopes have any planned checkpoint dates entered — planned line reflects known commitments only, not a full portfolio projection.</span>`:
+      `<span style="color:var(--green)">All ${scopes.length} scopes have at least one planned checkpoint date.</span>`;
+    footer.innerHTML=`<div style="font-size:11px">${plannedNote}</div>`;
+  }
+}
 
 // v51k — status-string-to-badge-markup map factored out of renderHealthBadge
 // so Portfolio View's new per-project Health column (fed by
@@ -22689,6 +23360,10 @@ function renderBudgetOutlook(){
   // v36l — per-unit rows for the Excel export, filtered to the same
   // selected years the on-screen chart/table are currently showing.
   window._boUnitItems=boYearSelection?unitItems.filter(u=>boYearSelection.has(u.year)):unitItems;
+
+  // v66a — Portfolio Cash Flow Curve, driven by the same boFilter pill
+  // state as everything else on this page.
+  renderPortfolioCashFlowCurve();
 }
 // v41a — Budget Outlook exports rebuilt around SheetJS as real .xlsx files.
 // exportBudgetOutlookExcel() (CSV, one file, Committed/Planned/Total
