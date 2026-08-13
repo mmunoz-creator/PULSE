@@ -1,4 +1,49 @@
 <!--
+pulse_v66e. Changes from v66d, this round. Requires no worker changes.
+New feature: Dependencies & Coordination, mapped from the MARLI Operations
+Center mockup Misty shared, scoped down to what's real and buildable per
+her direct decisions in this round (Ops Center admin-only for now, real
+categories/owners she supplied, no historical trend line since there's no
+snapshot mechanism to feed one and no clear operational need for it yet).
+  1. New Airtable table: Dependencies (tblHaAzpAAqjFUPXV), linked to Scopes
+     (per Misty: "Project" = Scope, matching Milestones/Cash Flow Curve,
+     not Property). Fields: Dependency (name), Scope (link), Category
+     (singleSelect: Fire Life Safety / HVAC / Electrical Upgrades /
+     Controlled Access (Card Reader) / Cab Interiors / Other, Misty's exact
+     list) + Category - Other (free text, only meaningful when Category is
+     Other), Coordination Owner (singleSelect: Owner / Facilities Team /
+     Elevator Company / Consultant / Other, also Misty's exact list) +
+     Coordination Owner - Other (free text), Status (On Track/At Risk/
+     Overdue), Due Date, Note.
+  2. New "Dependencies" tab on the property ribbon, positioned right after
+     Change Orders. Built as a close structural mirror of the Change Orders
+     tab -- same scope-tab reuse (renderScopeTabs), same canEdit gate
+     (pm/admin/assigned consultant), same summary-bar-then-list layout, same
+     modal add/edit pattern (openDepModal/editDep/saveDep/closeDepModal,
+     modeled directly on openCOModal/editCO/saveCO/closeCOModal). Category
+     and Coordination Owner dropdowns each reveal a paired free-text input
+     when "Other" is selected (toggleDepOtherField()), validated at save
+     time so an "Other" selection can't be saved with no actual text behind
+     it.
+  3. New admin-only "Dependencies & Coordination" panel on Operations
+     Center (renderOpsCenter()), gated on role==='admin' exactly like every
+     other admin-only control in this file. Portfolio-wide rollup grouped
+     by Category, showing live On Track / At Risk / Overdue counts per
+     category, computed fresh from window.DEPENDENCIES on every render --
+     nothing cached or snapshotted. Deliberately has no historical trend
+     line: Misty and I discussed the mockup's "Dependency Health Over Time"
+     sparkline directly and agreed it doesn't earn its cost for v1 -- it
+     would need a new logging mechanism just to have history to plot, built
+     before there's any evidence anyone would check it, when what actually
+     matters for a same-day coordination view is what's overdue right now.
+  4. loadAllData() extended: Dependencies added to the initial Promise.all
+     batch fetch (atGet('Dependencies')) and mapped into window.DEPENDENCIES,
+     same pattern as window.CO_SAVINGS immediately above it in the file.
+     Both the logout/demo-reset block and the top-level fallback init
+     (window.DEPENDENCIES=window.DEPENDENCIES||[]) updated to match the
+     existing CO_SAVINGS pattern so the global is never left undefined.
+
+<!--
 pulse_v66d. Changes from v66c, this round. Requires no worker changes.
 Two more fixes reported by Misty checking v66c live on New York Hilton
 Midtown's Budget Performance tab.
@@ -3004,12 +3049,12 @@ async function loadAllData() {
   // Loading in background - no overlay
   try {
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory, pmUpdates, meetingAttendeesRaw] = await Promise.all([
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory, pmUpdates, meetingAttendeesRaw, dependencies] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
       atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes'), atGet('Unit Inventory List'), atGet('PM Updates'),
-      atGet('Meeting Attendees')
+      atGet('Meeting Attendees'), atGet('Dependencies')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     // v46a — Meeting Attendees was never fetched into memory at load, only
@@ -3657,6 +3702,27 @@ async function loadAllData() {
       // v55o — optimistic-locking conflict detection (task #90).
       conflictTs: r.fields['Change Order Last Modified']||'',
     })).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    // v66e — Dependencies & Coordination feature. New table, one record per
+    // coordination item tied to a Scope (per Misty's direct call: Scope, not
+    // Property, matching Milestones/Cash Flow Curve). Category and
+    // Coordination Owner are both singleSelect-plus-free-text pairs — a
+    // real dropdown value everywhere except "Other", where the paired
+    // "- Other" text field is what actually gets displayed/used. Feeds both
+    // the new property-ribbon Dependencies tab (renderDependenciesTab) and
+    // the admin-only Dependencies & Coordination rollup on Operations
+    // Center (renderOpsCenter).
+    window.DEPENDENCIES = dependencies.map(r=>({
+      id: r.id,
+      scopeId: (r.fields['Scope']||[])[0]||'',
+      name: r.fields['Dependency']||'',
+      category: r.fields['Category']||'',
+      categoryOther: r.fields['Category - Other']||'',
+      owner: r.fields['Coordination Owner']||'',
+      ownerOther: r.fields['Coordination Owner - Other']||'',
+      status: r.fields['Status']||'On Track',
+      due: r.fields['Due Date']||'',
+      note: r.fields['Note']||'',
+    })).sort((a,b)=>new Date(a.due||'9999-12-31')-new Date(b.due||'9999-12-31'));
     // v47a — VDA Project billing-tracking feature. Loaded fire-and-forget,
     // same pattern as backfillAllUnassignedUnits() below, so a slow VDA
     // Project table never blocks the rest of the app's initial render.
@@ -4348,6 +4414,80 @@ window.PROPERTIES_SEED = [
   </div>
 </div>
 
+<!-- v66e — Dependencies & Coordination modal. Same skeleton as the Change
+Order modal (openCOModal/saveCO/closeCOModal), overlay + centered card +
+form-group inputs, Cancel/Save footer. Category and Coordination Owner are
+each a select plus a paired free-text input that only becomes relevant (and
+visible) when "Other" is selected — toggled by toggleDepOtherField(), same
+show/hide-on-change idea as co-whole-project's toggleCOWholeProject(). -->
+<div id="dep-modal-overlay" onclick="closeDepModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
+<div id="dep-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:460px;max-width:95vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2);max-height:90vh;overflow-y:auto">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <div style="font-size:16px;font-weight:700;color:var(--navy)" id="dep-modal-title">Add Dependency</div>
+    <button onclick="closeDepModal()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--gray-mid);line-height:1">×</button>
+  </div>
+  <input type="hidden" id="dep-edit-id">
+  <div class="form-group">
+    <label class="form-label">Dependency</label>
+    <input class="form-input" type="text" id="dep-name" placeholder="e.g. Fire Life Safety inspection coordination">
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="form-group">
+      <label class="form-label">Category</label>
+      <select class="form-input" id="dep-category" onchange="toggleDepOtherField('category')">
+        <option value="Fire Life Safety">Fire Life Safety</option>
+        <option value="HVAC">HVAC</option>
+        <option value="Electrical Upgrades">Electrical Upgrades</option>
+        <option value="Controlled Access (Card Reader)">Controlled Access (Card Reader)</option>
+        <option value="Cab Interiors">Cab Interiors</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Coordination Owner</label>
+      <select class="form-input" id="dep-owner" onchange="toggleDepOtherField('owner')">
+        <option value="Owner">Owner</option>
+        <option value="Facilities Team">Facilities Team</option>
+        <option value="Elevator Company">Elevator Company</option>
+        <option value="Consultant">Consultant</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="form-group" id="dep-category-other-group" style="display:none">
+      <label class="form-label">Category — Other</label>
+      <input class="form-input" type="text" id="dep-category-other" placeholder="Describe the category">
+    </div>
+    <div class="form-group" id="dep-owner-other-group" style="display:none">
+      <label class="form-label">Coordination Owner — Other</label>
+      <input class="form-input" type="text" id="dep-owner-other" placeholder="Name or party">
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="form-group">
+      <label class="form-label">Status</label>
+      <select class="form-input" id="dep-status">
+        <option value="On Track">On Track</option>
+        <option value="At Risk">At Risk</option>
+        <option value="Overdue">Overdue</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Due Date</label>
+      <input class="form-input" type="date" id="dep-due">
+    </div>
+  </div>
+  <div class="form-group">
+    <label class="form-label">Note</label>
+    <textarea class="form-input" id="dep-note" rows="3" placeholder="Optional context…" style="resize:vertical"></textarea>
+  </div>
+  <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+    <button class="btn btn-edit" onclick="closeDepModal()">Cancel</button>
+    <button class="btn btn-primary" id="save-dep-btn" onclick="saveDep()"><i class="ti ti-check"></i>Save</button>
+  </div>
+</div>
+
 <div id="billing-modal-overlay" onclick="closeBillingModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
 <div id="billing-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:420px;max-width:90vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -4931,7 +5071,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66e</div>
     </div>
   </nav>
 
@@ -5349,6 +5489,7 @@ from unitEffectiveValue() onto each checkbox). -->
             <button class="tab-btn" onclick="switchPropTab('phases',this)">Unit Phases</button>
             <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget Performance</button>
             <button class="tab-btn" onclick="switchPropTab('changeorders',this)">Change Orders</button>
+            <button class="tab-btn" onclick="switchPropTab('dependencies',this)">Dependencies</button>
             <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions<span id="prop-fieldops-tab-badge" class="nav-badge hidden" style="background:var(--red);margin-left:6px">0</span><span id="prop-fieldops-rsvp-badge" class="nav-badge hidden" title="New RSVP responses" style="background:var(--green);margin-left:4px">0</span></button>
             <button class="tab-btn" onclick="switchPropTab('updates',this)">Field Updates</button>
             <button class="tab-btn" onclick="switchPropTab('docs',this)">Documents</button>
@@ -5599,6 +5740,27 @@ from unitEffectiveValue() onto each checkbox). -->
                   </div>
                   <div id="co-summary-bar" style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:12px;flex-wrap:wrap"></div>
                   <div id="co-list"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="prop-tab-dependencies" class="tab-content">
+            <div id="dep-scope-tabs"></div>
+            <div class="two-col" style="gap:16px">
+              <div style="grid-column:1/-1">
+                <div class="card">
+                  <div class="card-header">
+                    <div>
+                      <div class="card-title">Dependencies &amp; Coordination</div>
+                      <div class="card-sub">Cross-trade coordination items for this scope</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span id="dep-summary-badge" style="font-size:11px;color:var(--gray-mid)"></span>
+                      <button class="btn btn-add" id="dep-add-btn" onclick="openDepModal()" style="display:none">+ <i class="ti ti-link"></i>Dependency</button>
+                    </div>
+                  </div>
+                  <div id="dep-summary-bar" style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:12px;flex-wrap:wrap"></div>
+                  <div id="dep-list"></div>
                 </div>
               </div>
             </div>
@@ -6707,6 +6869,7 @@ let role='admin',client='park',currentProp=null,prevView='portfolio';
 let currentScope=null;
 let submissions=[],notifications=[],meetings=[],siteVisits=[],actionItems=[];
 window.CO_SAVINGS=window.CO_SAVINGS||[];
+window.DEPENDENCIES=window.DEPENDENCIES||[];
 PORTFOLIO.sort((a,b)=>a.n.localeCompare(b.n));
 const PARK_PORTFOLIO=PORTFOLIO;
 
@@ -7209,7 +7372,7 @@ function doLogout(){
   AT_CONNECTED=false;
   sessionStorage.removeItem('pulse_portfolio');
   meetings=[];actionItems=[];submissions=[];siteVisits=[];notifications=[];
-  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.UNIT_INVENTORY=[];window.PM_UPDATES=[];
+  window.UNIT_GROUPS=[];window.BILLING_LOG=[];window.DOCUMENTS_LIVE=[];window.MILESTONES=[];window.CLIENT_COMMENTS=[];window.PHASE_STEPS=[];window.CO_SAVINGS=[];window.RETAINAGE_RELEASES=[];window.SCOPES=[];window.UNIT_INVENTORY=[];window.PM_UPDATES=[];window.DEPENDENCIES=[];
   clientFlags=[];flagIdCounter=0;
   window.PORTFOLIO=[];window.PARK_PORTFOLIO=[];
   // v51g — clear the Back to [Property] quick-link so the next person to
@@ -7681,6 +7844,7 @@ const PROP_TAB_HELP_MAP={
   bids:'property-bids',
   phases:'property-phases',
   changeorders:'property-changeorders',
+  dependencies:'property-overview',
   fieldops:'property-fieldops',
   updates:'property-overview',
   docs:'property-overview'
@@ -8778,6 +8942,7 @@ function switchPropTab(tab,btn){
   if(tab==='budget'&&currentProp)renderBudgetTab(currentProp);
   if(tab==='phases'&&currentProp)renderPhasesTab(currentProp);
   if(tab==='changeorders'&&currentProp)renderChangeOrdersTab(currentProp);
+  if(tab==='dependencies'&&currentProp)renderDependenciesTab(currentProp);
   if(tab==='bids'&&currentProp)renderBidsTab(currentProp);
   if(tab==='units'&&currentProp)renderUnitsTab(currentProp);
   // v54f — start/stop live polling for whichever tab is now active.
@@ -15009,6 +15174,169 @@ function renderChangeOrdersTab(p){
       </div>`:''}
     </div>`;
   }).join('');
+}
+
+// ── DEPENDENCIES & COORDINATION (Build v66e) ──────────────────────────
+// Per-scope coordination tracking, per Misty's direct spec: category
+// (dropdown + free-text Other) and coordination owner (dropdown + free-text
+// Other), status (On Track/At Risk/Overdue), note, due date. Mirrors the
+// Change Orders tab's structure end to end (scope-tab reuse, canEdit gate,
+// modal add/edit) since it's the closest existing per-scope list feature —
+// same tab bar position, same summary-bar-then-list layout, same modal
+// skeleton. New Dependencies Airtable table (tblHaAzpAAqjFUPXV), linked to
+// Scopes via the Scope field.
+const DEP_STATUS_COLOR={'On Track':'var(--green)','At Risk':'var(--amber)','Overdue':'var(--red)'};
+const DEP_STATUS_BG={'On Track':'var(--green-pale)','At Risk':'var(--amber-pale)','Overdue':'var(--red-pale)'};
+function depCategoryLabel(d){return d.category==='Other'?(d.categoryOther||'Other'):d.category;}
+function depOwnerLabel(d){return d.owner==='Other'?(d.ownerOther||'Other'):d.owner;}
+
+function renderDependenciesTab(p){
+  renderScopeTabs('dep-scope-tabs',p.n);
+  const scopeId=currentScope?.id;
+  const canEdit=role==='pm'||role==='admin'||(role==='consultant'&&(p?.v||'')===(currentConsultantName||''));
+  const depAddBtn=document.getElementById('dep-add-btn');
+  if(depAddBtn)depAddBtn.style.display=canEdit?'inline-flex':'none';
+  const deps=(window.DEPENDENCIES||[]).filter(d=>d.scopeId===scopeId);
+  const onTrack=deps.filter(d=>d.status==='On Track').length;
+  const atRisk=deps.filter(d=>d.status==='At Risk').length;
+  const overdue=deps.filter(d=>d.status==='Overdue').length;
+  const summaryBar=document.getElementById('dep-summary-bar');
+  if(summaryBar){
+    summaryBar.innerHTML=`
+      <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Total</div><div style="font-size:16px;font-weight:700;color:var(--navy)">${deps.length}</div></div>
+      <div style="width:1px;background:var(--border)"></div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="font-size:10px;color:var(--green);font-weight:600">${onTrack} On Track</span>
+        <span style="font-size:10px;color:var(--amber);font-weight:600">${atRisk} At Risk</span>
+        <span style="font-size:10px;color:var(--red);font-weight:600">${overdue} Overdue</span>
+      </div>`;
+  }
+  const badge=document.getElementById('dep-summary-badge');
+  if(badge)badge.textContent=deps.length>0?`${deps.length} item${deps.length!==1?'s':''}`:'';
+  const list=document.getElementById('dep-list');
+  if(!list)return;
+  if(deps.length===0){
+    list.innerHTML='<div class="empty-state" style="padding:2rem"><i class="ti ti-link-off"></i><div class="empty-state-title">No Dependencies Logged</div><div class="empty-state-sub">Track cross-trade coordination items — permitting, fire life safety, access control, and more</div></div>';
+    return;
+  }
+  list.innerHTML=deps.map(d=>{
+    const dueStr=d.due?new Date(d.due+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'No due date';
+    return `<div class="co-row" style="border-left:3px solid ${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(d.name||'Untitled dependency')}</div>
+          <div style="font-size:11px;color:var(--gray-mid)">${escHtml(depCategoryLabel(d)||'—')} · ${escHtml(depOwnerLabel(d)||'—')} · Due: ${dueStr}</div>
+        </div>
+        <span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:9px;background:${DEP_STATUS_BG[d.status]||'var(--gray-pale)'};color:${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'}">${escHtml(d.status)}</span>
+      </div>
+      ${d.note?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${escHtml(d.note)}</div>`:''}
+      ${canEdit?`<div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editDep('${d.id}')">Edit</button>
+      </div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function toggleDepOtherField(which){
+  const sel=document.getElementById(which==='category'?'dep-category':'dep-owner');
+  const group=document.getElementById(which==='category'?'dep-category-other-group':'dep-owner-other-group');
+  if(group)group.style.display=sel.value==='Other'?'':'none';
+}
+
+function openDepModal(editId){
+  if(!editId){
+    document.getElementById('dep-modal-title').textContent='Add Dependency';
+    document.getElementById('dep-edit-id').value='';
+    document.getElementById('dep-name').value='';
+    document.getElementById('dep-category').value='Fire Life Safety';
+    document.getElementById('dep-category-other').value='';
+    document.getElementById('dep-owner').value='Owner';
+    document.getElementById('dep-owner-other').value='';
+    document.getElementById('dep-status').value='On Track';
+    document.getElementById('dep-due').value='';
+    document.getElementById('dep-note').value='';
+  }
+  toggleDepOtherField('category');
+  toggleDepOtherField('owner');
+  document.getElementById('dep-modal-overlay').style.display='block';
+  document.getElementById('dep-modal').style.display='block';
+}
+
+function closeDepModal(){
+  document.getElementById('dep-modal-overlay').style.display='none';
+  document.getElementById('dep-modal').style.display='none';
+}
+
+function editDep(depId){
+  const d=(window.DEPENDENCIES||[]).find(x=>x.id===depId);
+  if(!d)return;
+  document.getElementById('dep-modal-title').textContent='Edit Dependency';
+  document.getElementById('dep-edit-id').value=depId;
+  document.getElementById('dep-name').value=d.name||'';
+  document.getElementById('dep-category').value=d.category||'Fire Life Safety';
+  document.getElementById('dep-category-other').value=d.categoryOther||'';
+  document.getElementById('dep-owner').value=d.owner||'Owner';
+  document.getElementById('dep-owner-other').value=d.ownerOther||'';
+  document.getElementById('dep-status').value=d.status||'On Track';
+  document.getElementById('dep-due').value=d.due||'';
+  document.getElementById('dep-note').value=d.note||'';
+  openDepModal(depId);
+}
+
+let _savingDep=false;
+async function saveDep(){
+  if(_savingDep)return;
+  const name=document.getElementById('dep-name').value.trim();
+  const category=document.getElementById('dep-category').value;
+  const categoryOther=document.getElementById('dep-category-other').value.trim();
+  const owner=document.getElementById('dep-owner').value;
+  const ownerOther=document.getElementById('dep-owner-other').value.trim();
+  const status=document.getElementById('dep-status').value;
+  const due=document.getElementById('dep-due').value;
+  const note=document.getElementById('dep-note').value.trim();
+  const editId=document.getElementById('dep-edit-id').value;
+  if(!name){showToast('Please enter a dependency name','warn');return;}
+  if(category==='Other'&&!categoryOther){showToast('Please describe the category','warn');return;}
+  if(owner==='Other'&&!ownerOther){showToast('Please enter the coordination owner','warn');return;}
+  const scopeId=currentScope?.id||'';
+  if(!scopeId){showToast('Select a scope before adding a dependency','warn');return;}
+  _savingDep=true;
+  const saveBtn=document.getElementById('save-dep-btn');
+  if(saveBtn)saveBtn.disabled=true;
+  const fields={
+    'Dependency':name,
+    'Scope':[scopeId],
+    'Category':category,
+    'Category - Other':category==='Other'?categoryOther:'',
+    'Coordination Owner':owner,
+    'Coordination Owner - Other':owner==='Other'?ownerOther:'',
+    'Status':status,
+    'Note':note||undefined,
+  };
+  if(due)fields['Due Date']=due;
+  try{
+    if(editId){
+      const updRes=await atUpdate('Dependencies',editId,fields);
+      if(!updRes){showToast('Could not save changes to this dependency. Please try again.','error');_savingDep=false;if(saveBtn)saveBtn.disabled=false;return;}
+      const d=(window.DEPENDENCIES||[]).find(x=>x.id===editId);
+      if(d)Object.assign(d,{name,category,categoryOther,owner,ownerOther,status,due,note});
+    }else{
+      const rec=await atCreate('Dependencies',fields);
+      const newRecId=rec?.records?.[0]?.id;
+      if(!newRecId){showToast('Could not save this dependency. Please try again.','error');_savingDep=false;if(saveBtn)saveBtn.disabled=false;return;}
+      const newDep={id:newRecId,scopeId,name,category,categoryOther,owner,ownerOther,status,due,note};
+      if(!window.DEPENDENCIES)window.DEPENDENCIES=[];
+      window.DEPENDENCIES.push(newDep);
+    }
+    showToast(editId?'Dependency updated':'Dependency logged','success');
+    closeDepModal();
+    if(currentProp)renderDependenciesTab(currentProp);
+  }catch(e){
+    console.error('saveDep error:',e);
+    showToast('Could not save this dependency. Please try again.','error');
+  }
+  _savingDep=false;
+  if(saveBtn)saveBtn.disabled=false;
 }
 
 // ── BIDS / BID LEVELING (Build v27a) ─────────────────────────────────
@@ -36735,7 +37063,63 @@ function renderOpsCenter(){
   // here -- it's covered by the property's own Meeting Log instead.
   const recentMeetings=(meetings||[]).filter(m=>m.status!=='Cancelled'&&propFilter(m.property)).slice().reverse().slice(0,4);
 
+  // v66e — Dependencies & Coordination portfolio rollup, admin-only per
+  // Misty's direct spec ("map out an Ops Center tab for admin profile only
+  // for now"). Grouped by Category (Other rolls up under its own label —
+  // categoryOther values aren't further split, since with more than a
+  // couple of scopes a per-free-text breakdown would fragment into a long
+  // tail of one-off rows rather than a useful summary). Counts computed
+  // live from window.DEPENDENCIES on every render, nothing cached/stored —
+  // matches Misty's explicit call to skip a historical trend line for v1
+  // (no snapshot mechanism exists to feed one, and there's no clear
+  // operational need for it yet).
+  const isAdmin=role==='admin';
+  let depCoordSection='';
+  if(isAdmin){
+    const allDeps=window.DEPENDENCIES||[];
+    const byCategory={};
+    allDeps.forEach(d=>{
+      const label=depCategoryLabel(d)||'Uncategorized';
+      if(!byCategory[label])byCategory[label]={onTrack:0,atRisk:0,overdue:0};
+      if(d.status==='On Track')byCategory[label].onTrack++;
+      else if(d.status==='At Risk')byCategory[label].atRisk++;
+      else if(d.status==='Overdue')byCategory[label].overdue++;
+    });
+    const catRows=Object.keys(byCategory).sort();
+    const totalOpen=allDeps.filter(d=>d.status==='On Track'||d.status==='At Risk').length;
+    const totalOverdue=allDeps.filter(d=>d.status==='Overdue').length;
+    depCoordSection=`
+    <div style="margin-bottom:24px">
+      <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Dependencies &amp; Coordination <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">— admin only</span></div>
+      <div class="card">
+        <div class="card-header">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--blue-pale)"><i class="ti ti-affiliate" style="color:var(--blue-dark);font-size:15px"></i></div>
+            <div class="card-title">Dependencies by Category</div>
+          </div>
+          <div style="display:flex;gap:10px;font-size:11px">
+            <span style="color:var(--gray-mid)">${totalOpen} open</span>
+            ${totalOverdue>0?`<span style="color:var(--red);font-weight:700">${totalOverdue} overdue</span>`:''}
+          </div>
+        </div>
+        ${catRows.length===0
+          ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No dependencies logged across the portfolio yet. Add them from a property\'s Dependencies tab.</div>'
+          :`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;font-size:9px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;padding:0 4px 6px;border-bottom:1px solid var(--border)">
+              <div>Category</div><div style="text-align:right">On Track</div><div style="text-align:right">At Risk</div><div style="text-align:right">Overdue</div>
+            </div>
+            ${catRows.map(cat=>{const c=byCategory[cat];return `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;font-size:12px;padding:8px 4px;border-bottom:1px solid var(--gray-xpale)">
+              <div style="color:var(--navy);font-weight:600">${escHtml(cat)}</div>
+              <div style="text-align:right;color:var(--green)">${c.onTrack||''}</div>
+              <div style="text-align:right;color:var(--amber)">${c.atRisk||''}</div>
+              <div style="text-align:right;color:var(--red);font-weight:${c.overdue>0?'700':'400'}">${c.overdue||''}</div>
+            </div>`;}).join('')}`
+        }
+      </div>
+    </div>`;
+  }
+
   container.innerHTML=`
+    ${depCoordSection}
     <!-- ACTION PLAN -->
     <div style="margin-bottom:8px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
