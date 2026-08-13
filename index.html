@@ -1,4 +1,48 @@
 <!--
+pulse_v66i. Changes from v66h, this round. Requires worker_v44n_build.mjs
+(adds 'Dependencies' to the Worker's consultant DELETE rules -- deploy
+together, a Consultant's delete click will 403 without it, though PM/Admin
+deletes work regardless since they bypass role-based write rules entirely).
+New: a Delete button on each dependency row, per Misty's direct request
+("I need to be able to delete a dependency if it's not needed"). Same
+button placement and confirm()-then-atDelete()-with-rollback-on-failure
+pattern already used by deleteBillingEntry/deleteRetainageRelease
+elsewhere in this file -- the row disappears immediately on click+confirm,
+then either stays gone (real delete succeeded) or reappears with an error
+toast if the Worker/Airtable call actually failed. Gated on the same
+canEdit check as the existing Edit button (PM/Admin/assigned Consultant),
+so delete access matches create/edit access exactly, per Misty's explicit
+choice when asked whether delete should match PM/Admin-only convention
+used elsewhere in the app or the create/edit access this table already
+grants -- she chose the latter, hence the paired Worker change.
+
+<!--
+pulse_v66h. Changes from v66g, this round. Requires no worker changes
+(paired with worker_v44m_build.mjs, already deployed live -- that fixed a
+separate issue, Dependencies missing from the Worker's own table allowlist,
+confirmed fixed live: the earlier 403 "Unknown table" errors are gone).
+Real bug found live via direct console testing after v44m deployed: the
+bulk picker's Add button still failed, now with a 422
+INVALID_MULTIPLE_CHOICE_OPTIONS error instead of a 403. Root cause isolated
+by calling atCreate('Dependencies', ...) directly in the browser console
+with and without specific fields present: 'Coordination Owner' is an
+Airtable singleSelect field, and saveDepBulk() was sending it as ''
+(empty string) for every bulk-created row (correct, since Owner isn't set
+until someone opens the row's Edit modal afterward) -- but Airtable
+doesn't treat an empty string on a singleSelect as "no value," it reads it
+as a request to CREATE a new select option literally named "", which the
+shared Airtable token doesn't have permission to do. 'Coordination Owner'
+and 'Coordination Owner - Other' are now omitted from the create payload
+entirely for a blank bulk-created row, instead of sent as ''. 'Category -
+Other' was left unchanged (still sent as '' when not applicable) since
+it's a plain singleLineText field, not a select -- an empty string there
+is a real, ordinary value, never mistaken for a new choice. Confirmed via
+the same direct-console method that omitting the two singleSelect-adjacent
+fields succeeds (a real Dependencies record was created, then manually
+deleted from Airtable after confirming the fix, so it doesn't linger as
+test data on Waldorf Astoria Orlando's 2030 Scope).
+
+<!--
 pulse_v66g. Changes from v66f, this round. Requires no worker changes
 (Category field on Dependencies will auto-add its 2 new select options on
 first real save — see note in DEP_CATEGORIES below).
@@ -5204,7 +5248,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66g</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66i</div>
     </div>
   </nav>
 
@@ -15417,6 +15461,7 @@ function renderDependenciesTab(p){
       ${d.note?`<div style="font-size:11px;color:var(--gray-mid);margin-bottom:8px;font-style:italic">${escHtml(d.note)}</div>`:''}
       ${canEdit?`<div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-edit" style="font-size:10px;padding:2px 8px" onclick="editDep('${d.id}')">Edit</button>
+        <button class="btn btn-delete" style="font-size:10px;padding:2px 8px" onclick="deleteDep('${d.id}')">Delete</button>
       </div>`:''}
     </div>`;
   }).join('');
@@ -15502,13 +15547,23 @@ async function saveDepBulk(){
   // extra round-trip time is not a real cost here.
   let created=0,failed=0;
   for(const category of checked){
+    // v66h — 'Coordination Owner' is an Airtable singleSelect field.
+    // Sending it as '' isn't "no value", Airtable reads an empty string as
+    // a request to CREATE a new select option literally named "" — which
+    // the shared Airtable token doesn't have permission to do, so every
+    // bulk create failed with a 422 INVALID_MULTIPLE_CHOICE_OPTIONS error
+    // (confirmed live via the browser console, isolated by testing atCreate
+    // directly with and without the empty singleSelect fields present).
+    // 'Coordination Owner' and its paired 'Coordination Owner - Other' are
+    // now omitted from the payload entirely when blank, rather than sent as
+    // ''. 'Category - Other' stays as '' safely since it's a plain
+    // singleLineText field, not a select — an empty string there is a real,
+    // ordinary value, not a phantom new choice.
     const fields={
       'Dependency':category==='Other'?categoryOther:category,
       'Scope':[scopeId],
       'Category':category,
       'Category - Other':category==='Other'?categoryOther:'',
-      'Coordination Owner':'',
-      'Coordination Owner - Other':'',
       'Status':'On Track',
     };
     try{
@@ -15598,6 +15653,34 @@ async function saveDep(){
   }
   _savingDep=false;
   if(saveBtn)saveBtn.disabled=false;
+}
+
+// v66i — Delete, per Misty's direct request ("I need to be able to delete
+// a dependency if it's not needed"). Same optimistic-remove-then-roll-
+// back-on-failure pattern as deleteBillingEntry/deleteRetainageRelease
+// elsewhere in this file: the row disappears immediately, then either
+// stays gone (real delete confirmed) or reappears with an error toast (the
+// atDelete call failed, e.g. a network blip or a permissions mismatch).
+// canEdit already gates the Delete button itself (PM/Admin/assigned
+// Consultant, matching create/edit) -- paired with worker_v44n_build.mjs,
+// which adds 'Dependencies' to the Worker's consultant DELETE rules so a
+// Consultant's click here doesn't itself 403 even though the button was
+// visible to them.
+async function deleteDep(depId){
+  if(!confirm('Delete this dependency?'))return;
+  const removed=(window.DEPENDENCIES||[]).find(d=>d.id===depId);
+  window.DEPENDENCIES=(window.DEPENDENCIES||[]).filter(d=>d.id!==depId);
+  renderDependenciesTab(currentProp);
+  if(!demoMode){
+    const delRes=await atDelete('Dependencies',depId);
+    if(!delRes){
+      if(removed)window.DEPENDENCIES=(window.DEPENDENCIES||[]).concat([removed]);
+      renderDependenciesTab(currentProp);
+      showToast('Could not delete this dependency. Please try again.','error');
+      return;
+    }
+  }
+  showToast('Dependency deleted','success');
 }
 
 // ── BIDS / BID LEVELING (Build v27a) ─────────────────────────────────
