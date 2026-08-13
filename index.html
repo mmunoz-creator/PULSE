@@ -1,4 +1,43 @@
 <!--
+pulse_v66g. Changes from v66f, this round. Requires no worker changes
+(Category field on Dependencies will auto-add its 2 new select options on
+first real save — see note in DEP_CATEGORIES below).
+Dependencies & Coordination create flow rebuilt per Misty's direct
+feedback after seeing it live: the original single-row modal (free-text
+"Dependency" name field, single Category dropdown) didn't match the
+workflow she'd actually envisioned.
+  1. Create is now a bulk picker (dep-bulk-modal, opened via
+     openDepBulkModal()): a checkbox grid of every category. Check any
+     number, hit "Add N dependencies," and one blank row is created per
+     checked category (default status On Track, no owner/note/due date
+     yet) — filled in afterward by opening each row's own Edit modal.
+     Matches Misty's exact framing: "create Dependency in bulk... have a
+     picker for the categories, have them get created and aligned
+     vertically, then edit each one individually."
+  2. A dependency's identity is now its Category, not a separate typed
+     name — the old free-text "Dependency" field is gone from the UI
+     entirely (dep-name input removed). Row titles in the list
+     (renderDependenciesTab) now show depCategoryLabel(d) instead of
+     d.name. The Airtable "Dependency" field still gets written (set to
+     the category label, or the Other free-text when Other is picked) for
+     backward-compatible reads, it's just not user-editable as its own
+     field anymore.
+  3. Two new categories added per direct request: Security Cameras and
+     Barricades (DEP_CATEGORIES now has 8 entries total). "Controlled
+     Access (Card Reader)" label unchanged. Other still reveals a
+     free-text field (dep-bulk-category-other) exactly like the old
+     modal's Other behavior, just living in the bulk picker now.
+  4. Edit-only dep-modal simplified to match: Category is no longer a
+     select (a row's category is fixed once created, re-categorizing
+     wasn't asked for) — shown as plain display text instead
+     (dep-modal-category-display). Coordination Owner/Status/Due Date/Note
+     remain fully editable per row, same fields and validation as before.
+  5. dep-bulk-modal widened to 520px (was 460px on the old single-row
+     modal) per Misty's explicit note so "Controlled Access (Card Reader)"
+     doesn't wrap inside its picker chip — checked visually against the
+     8-category grid at that width before shipping.
+
+<!--
 pulse_v66f. Changes from v66e, this round. Requires no worker changes.
 New feature: "Portfolio-wide access" — a shared Consultant login that sees
 every property instead of just its own assigned ones, for handing out to
@@ -4499,35 +4538,50 @@ window.PROPERTIES_SEED = [
   </div>
 </div>
 
-<!-- v66e — Dependencies & Coordination modal. Same skeleton as the Change
-Order modal (openCOModal/saveCO/closeCOModal), overlay + centered card +
-form-group inputs, Cancel/Save footer. Category and Coordination Owner are
-each a select plus a paired free-text input that only becomes relevant (and
-visible) when "Other" is selected — toggled by toggleDepOtherField(), same
-show/hide-on-change idea as co-whole-project's toggleCOWholeProject(). -->
+<!-- v66g — Dependencies & Coordination rebuilt around Misty's real workflow:
+create is a bulk category picker (check any of the 8 categories, one row
+gets created per checked box, each blank except its category), then each
+row is opened individually afterward to fill in Coordination Owner/Status/
+Note/Due Date. The old single-row create modal (with its own free-text
+"Dependency" name field) is gone — a dependency's identity IS its category
+now, there's nothing else to name it. dep-bulk-modal handles create;
+dep-modal is now edit-only (no category selector, since a row's category is
+fixed once created — re-categorizing was never asked for and reusing the
+picker for that would reopen the "is this now two rows or one" question
+Misty didn't ask to solve here). Modal widened 460px -> 520px on Misty's
+direct note so "Controlled access (card reader)" doesn't wrap inside its
+picker chip. -->
+<div id="dep-bulk-modal-overlay" onclick="closeDepBulkModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
+<div id="dep-bulk-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:520px;max-width:95vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2);max-height:90vh;overflow-y:auto">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <div style="font-size:16px;font-weight:700;color:var(--navy)">Add dependencies</div>
+    <button onclick="closeDepBulkModal()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--gray-mid);line-height:1">×</button>
+  </div>
+  <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">Pick one or more categories. Each becomes its own row you can fill in after.</div>
+  <div id="dep-bulk-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px"></div>
+  <div class="form-group" id="dep-bulk-other-group" style="display:none;margin-bottom:8px">
+    <label class="form-label">Other — describe the category</label>
+    <input class="form-input" type="text" id="dep-bulk-category-other" placeholder="e.g. structural, exterior facade">
+  </div>
+  <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:12px">
+    <button class="btn btn-edit" onclick="closeDepBulkModal()">Cancel</button>
+    <button class="btn btn-primary" id="save-dep-bulk-btn" onclick="saveDepBulk()"><i class="ti ti-check"></i><span id="save-dep-bulk-btn-label">Add dependencies</span></button>
+  </div>
+</div>
+
+<!-- Edit-only modal. Category is not editable here — see note above. -->
 <div id="dep-modal-overlay" onclick="closeDepModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
 <div id="dep-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:460px;max-width:95vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2);max-height:90vh;overflow-y:auto">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-    <div style="font-size:16px;font-weight:700;color:var(--navy)" id="dep-modal-title">Add Dependency</div>
+    <div style="font-size:16px;font-weight:700;color:var(--navy)" id="dep-modal-title">Edit dependency</div>
     <button onclick="closeDepModal()" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--gray-mid);line-height:1">×</button>
   </div>
   <input type="hidden" id="dep-edit-id">
   <div class="form-group">
-    <label class="form-label">Dependency</label>
-    <input class="form-input" type="text" id="dep-name" placeholder="e.g. Fire Life Safety inspection coordination">
+    <label class="form-label">Category</label>
+    <div id="dep-modal-category-display" style="font-size:14px;font-weight:600;color:var(--navy);padding:8px 0"></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-    <div class="form-group">
-      <label class="form-label">Category</label>
-      <select class="form-input" id="dep-category" onchange="toggleDepOtherField('category')">
-        <option value="Fire Life Safety">Fire Life Safety</option>
-        <option value="HVAC">HVAC</option>
-        <option value="Electrical Upgrades">Electrical Upgrades</option>
-        <option value="Controlled Access (Card Reader)">Controlled Access (Card Reader)</option>
-        <option value="Cab Interiors">Cab Interiors</option>
-        <option value="Other">Other</option>
-      </select>
-    </div>
     <div class="form-group">
       <label class="form-label">Coordination Owner</label>
       <select class="form-input" id="dep-owner" onchange="toggleDepOtherField('owner')">
@@ -4538,18 +4592,6 @@ show/hide-on-change idea as co-whole-project's toggleCOWholeProject(). -->
         <option value="Other">Other</option>
       </select>
     </div>
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-    <div class="form-group" id="dep-category-other-group" style="display:none">
-      <label class="form-label">Category — Other</label>
-      <input class="form-input" type="text" id="dep-category-other" placeholder="Describe the category">
-    </div>
-    <div class="form-group" id="dep-owner-other-group" style="display:none">
-      <label class="form-label">Coordination Owner — Other</label>
-      <input class="form-input" type="text" id="dep-owner-other" placeholder="Name or party">
-    </div>
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
     <div class="form-group">
       <label class="form-label">Status</label>
       <select class="form-input" id="dep-status">
@@ -4557,6 +4599,12 @@ show/hide-on-change idea as co-whole-project's toggleCOWholeProject(). -->
         <option value="At Risk">At Risk</option>
         <option value="Overdue">Overdue</option>
       </select>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="form-group" id="dep-owner-other-group" style="display:none">
+      <label class="form-label">Coordination Owner — Other</label>
+      <input class="form-input" type="text" id="dep-owner-other" placeholder="Name or party">
     </div>
     <div class="form-group">
       <label class="form-label">Due Date</label>
@@ -5156,7 +5204,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66g</div>
     </div>
   </nav>
 
@@ -5841,7 +5889,7 @@ from unitEffectiveValue() onto each checkbox). -->
                     </div>
                     <div style="display:flex;align-items:center;gap:8px">
                       <span id="dep-summary-badge" style="font-size:11px;color:var(--gray-mid)"></span>
-                      <button class="btn btn-add" id="dep-add-btn" onclick="openDepModal()" style="display:none">+ <i class="ti ti-link"></i>Dependency</button>
+                      <button class="btn btn-add" id="dep-add-btn" onclick="openDepBulkModal()" style="display:none">+ <i class="ti ti-link"></i>Dependencies</button>
                     </div>
                   </div>
                   <div id="dep-summary-bar" style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:12px;flex-wrap:wrap"></div>
@@ -15315,6 +15363,15 @@ function renderChangeOrdersTab(p){
 // Scopes via the Scope field.
 const DEP_STATUS_COLOR={'On Track':'var(--green)','At Risk':'var(--amber)','Overdue':'var(--red)'};
 const DEP_STATUS_BG={'On Track':'var(--green-pale)','At Risk':'var(--amber-pale)','Overdue':'var(--red-pale)'};
+// v66g — Security Cameras and Barricades added per Misty's direct request.
+// NOTE: these two are new Airtable select-option values on the Category
+// field (Dependencies table) that weren't created via the Airtable schema
+// tool this round (MCP was disconnected) — Airtable will auto-add them as
+// real select choices the first time either is actually saved, so this is
+// safe to ship, but worth a quick look at the Dependencies table's Category
+// field next time Airtable access is back, just to confirm they landed
+// clean rather than as some default color/position.
+const DEP_CATEGORIES=['Fire Life Safety','HVAC','Electrical Upgrades','Controlled Access (Card Reader)','Cab Interiors','Security Cameras','Barricades','Other'];
 function depCategoryLabel(d){return d.category==='Other'?(d.categoryOther||'Other'):d.category;}
 function depOwnerLabel(d){return d.owner==='Other'?(d.ownerOther||'Other'):d.owner;}
 
@@ -15352,8 +15409,8 @@ function renderDependenciesTab(p){
     return `<div class="co-row" style="border-left:3px solid ${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
         <div style="flex:1">
-          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(d.name||'Untitled dependency')}</div>
-          <div style="font-size:11px;color:var(--gray-mid)">${escHtml(depCategoryLabel(d)||'—')} · ${escHtml(depOwnerLabel(d)||'—')} · Due: ${dueStr}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(depCategoryLabel(d)||'Uncategorized')}</div>
+          <div style="font-size:11px;color:var(--gray-mid)">${escHtml(depOwnerLabel(d)||'No owner set')} · Due: ${dueStr}</div>
         </div>
         <span style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:9px;background:${DEP_STATUS_BG[d.status]||'var(--gray-pale)'};color:${DEP_STATUS_COLOR[d.status]||'var(--gray-mid)'}">${escHtml(d.status)}</span>
       </div>
@@ -15365,27 +15422,120 @@ function renderDependenciesTab(p){
   }).join('');
 }
 
+// v66g — only ever used inside the edit-only modal now (Coordination Owner
+// is the sole remaining Other-paired select there — Category lost its
+// select entirely, see dep-modal-category-display). 'category' branch kept
+// dead-but-harmless rather than deleted, since dep-bulk-modal's own picker
+// has its own separate, simpler other-field toggle below
+// (toggleDepBulkOtherField) that doesn't share this function.
 function toggleDepOtherField(which){
   const sel=document.getElementById(which==='category'?'dep-category':'dep-owner');
   const group=document.getElementById(which==='category'?'dep-category-other-group':'dep-owner-other-group');
-  if(group)group.style.display=sel.value==='Other'?'':'none';
+  if(sel&&group)group.style.display=sel.value==='Other'?'':'none';
+}
+
+// v66g — Bulk create. Renders the 8-category checkbox grid fresh every open
+// (none pre-checked, matching Misty's "pick as many as apply" framing
+// rather than defaulting to any one selection) and wires the live
+// "Add N dependencies" button label plus the Other free-text reveal.
+function openDepBulkModal(){
+  const grid=document.getElementById('dep-bulk-grid');
+  if(grid){
+    grid.innerHTML=DEP_CATEGORIES.map(cat=>`
+      <label class="dep-bulk-chip" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--navy)">
+        <input type="checkbox" class="dep-bulk-cb" value="${escHtml(cat)}" onchange="updateDepBulkModalState()">
+        ${escHtml(cat)}
+      </label>`).join('');
+  }
+  const otherGroup=document.getElementById('dep-bulk-other-group');
+  if(otherGroup)otherGroup.style.display='none';
+  const otherInput=document.getElementById('dep-bulk-category-other');
+  if(otherInput)otherInput.value='';
+  updateDepBulkModalState();
+  document.getElementById('dep-bulk-modal-overlay').style.display='block';
+  document.getElementById('dep-bulk-modal').style.display='block';
+}
+
+function closeDepBulkModal(){
+  document.getElementById('dep-bulk-modal-overlay').style.display='none';
+  document.getElementById('dep-bulk-modal').style.display='none';
+}
+
+// v66g — live-updates the Other free-text visibility and the "Add N
+// dependencies" button label/count as checkboxes are toggled, same
+// immediate-feedback idea as updateCashFlowScenarioSlider elsewhere in this
+// file. Also visually highlights checked chips (accent border) so the grid
+// reads clearly at a glance with several boxes checked.
+function updateDepBulkModalState(){
+  const boxes=[...document.querySelectorAll('.dep-bulk-cb')];
+  const checked=boxes.filter(cb=>cb.checked);
+  boxes.forEach(cb=>{
+    const chip=cb.closest('.dep-bulk-chip');
+    if(chip)chip.style.borderColor=cb.checked?'var(--blue-dark)':'var(--border)';
+    if(chip)chip.style.background=cb.checked?'var(--blue-xpale)':'transparent';
+  });
+  const otherChecked=checked.some(cb=>cb.value==='Other');
+  const otherGroup=document.getElementById('dep-bulk-other-group');
+  if(otherGroup)otherGroup.style.display=otherChecked?'':'none';
+  const label=document.getElementById('save-dep-bulk-btn-label');
+  if(label)label.textContent=checked.length>0?`Add ${checked.length} dependenc${checked.length===1?'y':'ies'}`:'Add dependencies';
+}
+
+let _savingDepBulk=false;
+async function saveDepBulk(){
+  if(_savingDepBulk)return;
+  const checked=[...document.querySelectorAll('.dep-bulk-cb')].filter(cb=>cb.checked).map(cb=>cb.value);
+  if(checked.length===0){showToast('Pick at least one category','warn');return;}
+  const categoryOther=document.getElementById('dep-bulk-category-other').value.trim();
+  if(checked.includes('Other')&&!categoryOther){showToast('Please describe the Other category','warn');return;}
+  const scopeId=currentScope?.id||'';
+  if(!scopeId){showToast('Select a scope before adding dependencies','warn');return;}
+  _savingDepBulk=true;
+  const saveBtn=document.getElementById('save-dep-bulk-btn');
+  if(saveBtn)saveBtn.disabled=true;
+  // v66g — each checked category becomes its own blank row: default status
+  // On Track, no owner/note/due date yet, filled in afterward via the
+  // per-row Edit modal. Created sequentially (not Promise.all) so a
+  // mid-batch failure leaves a clean, known set of successes rather than a
+  // partially-applied parallel batch that's hard to reason about after the
+  // fact — this only ever runs for a handful of checkboxes at once, so the
+  // extra round-trip time is not a real cost here.
+  let created=0,failed=0;
+  for(const category of checked){
+    const fields={
+      'Dependency':category==='Other'?categoryOther:category,
+      'Scope':[scopeId],
+      'Category':category,
+      'Category - Other':category==='Other'?categoryOther:'',
+      'Coordination Owner':'',
+      'Coordination Owner - Other':'',
+      'Status':'On Track',
+    };
+    try{
+      const rec=await atCreate('Dependencies',fields);
+      const newRecId=rec?.records?.[0]?.id;
+      if(!newRecId){failed++;continue;}
+      const newDep={id:newRecId,scopeId,category,categoryOther:category==='Other'?categoryOther:'',owner:'',ownerOther:'',status:'On Track',due:'',note:''};
+      if(!window.DEPENDENCIES)window.DEPENDENCIES=[];
+      window.DEPENDENCIES.push(newDep);
+      created++;
+    }catch(e){
+      console.error('saveDepBulk error:',e);
+      failed++;
+    }
+  }
+  _savingDepBulk=false;
+  if(saveBtn)saveBtn.disabled=false;
+  if(created>0){
+    showToast(failed>0?`${created} dependenc${created===1?'y':'ies'} added, ${failed} failed`:`${created} dependenc${created===1?'y':'ies'} added`,failed>0?'warn':'success');
+    closeDepBulkModal();
+    if(currentProp)renderDependenciesTab(currentProp);
+  }else{
+    showToast('Could not add these dependencies. Please try again.','error');
+  }
 }
 
 function openDepModal(editId){
-  if(!editId){
-    document.getElementById('dep-modal-title').textContent='Add Dependency';
-    document.getElementById('dep-edit-id').value='';
-    document.getElementById('dep-name').value='';
-    document.getElementById('dep-category').value='Fire Life Safety';
-    document.getElementById('dep-category-other').value='';
-    document.getElementById('dep-owner').value='Owner';
-    document.getElementById('dep-owner-other').value='';
-    document.getElementById('dep-status').value='On Track';
-    document.getElementById('dep-due').value='';
-    document.getElementById('dep-note').value='';
-  }
-  toggleDepOtherField('category');
-  toggleDepOtherField('owner');
   document.getElementById('dep-modal-overlay').style.display='block';
   document.getElementById('dep-modal').style.display='block';
 }
@@ -15395,47 +15545,39 @@ function closeDepModal(){
   document.getElementById('dep-modal').style.display='none';
 }
 
+// v66g — edit-only now. Category is fixed at creation (display-only, see
+// dep-modal-category-display) — this only ever changes Coordination Owner/
+// Status/Due Date/Note on an existing row.
 function editDep(depId){
   const d=(window.DEPENDENCIES||[]).find(x=>x.id===depId);
   if(!d)return;
-  document.getElementById('dep-modal-title').textContent='Edit Dependency';
+  document.getElementById('dep-modal-title').textContent='Edit dependency';
   document.getElementById('dep-edit-id').value=depId;
-  document.getElementById('dep-name').value=d.name||'';
-  document.getElementById('dep-category').value=d.category||'Fire Life Safety';
-  document.getElementById('dep-category-other').value=d.categoryOther||'';
+  document.getElementById('dep-modal-category-display').textContent=depCategoryLabel(d)||'Uncategorized';
   document.getElementById('dep-owner').value=d.owner||'Owner';
   document.getElementById('dep-owner-other').value=d.ownerOther||'';
   document.getElementById('dep-status').value=d.status||'On Track';
   document.getElementById('dep-due').value=d.due||'';
   document.getElementById('dep-note').value=d.note||'';
+  toggleDepOtherField('owner');
   openDepModal(depId);
 }
 
 let _savingDep=false;
 async function saveDep(){
   if(_savingDep)return;
-  const name=document.getElementById('dep-name').value.trim();
-  const category=document.getElementById('dep-category').value;
-  const categoryOther=document.getElementById('dep-category-other').value.trim();
   const owner=document.getElementById('dep-owner').value;
   const ownerOther=document.getElementById('dep-owner-other').value.trim();
   const status=document.getElementById('dep-status').value;
   const due=document.getElementById('dep-due').value;
   const note=document.getElementById('dep-note').value.trim();
   const editId=document.getElementById('dep-edit-id').value;
-  if(!name){showToast('Please enter a dependency name','warn');return;}
-  if(category==='Other'&&!categoryOther){showToast('Please describe the category','warn');return;}
   if(owner==='Other'&&!ownerOther){showToast('Please enter the coordination owner','warn');return;}
-  const scopeId=currentScope?.id||'';
-  if(!scopeId){showToast('Select a scope before adding a dependency','warn');return;}
+  if(!editId)return; // this modal is edit-only now — nothing to create here
   _savingDep=true;
   const saveBtn=document.getElementById('save-dep-btn');
   if(saveBtn)saveBtn.disabled=true;
   const fields={
-    'Dependency':name,
-    'Scope':[scopeId],
-    'Category':category,
-    'Category - Other':category==='Other'?categoryOther:'',
     'Coordination Owner':owner,
     'Coordination Owner - Other':owner==='Other'?ownerOther:'',
     'Status':status,
@@ -15443,20 +15585,11 @@ async function saveDep(){
   };
   if(due)fields['Due Date']=due;
   try{
-    if(editId){
-      const updRes=await atUpdate('Dependencies',editId,fields);
-      if(!updRes){showToast('Could not save changes to this dependency. Please try again.','error');_savingDep=false;if(saveBtn)saveBtn.disabled=false;return;}
-      const d=(window.DEPENDENCIES||[]).find(x=>x.id===editId);
-      if(d)Object.assign(d,{name,category,categoryOther,owner,ownerOther,status,due,note});
-    }else{
-      const rec=await atCreate('Dependencies',fields);
-      const newRecId=rec?.records?.[0]?.id;
-      if(!newRecId){showToast('Could not save this dependency. Please try again.','error');_savingDep=false;if(saveBtn)saveBtn.disabled=false;return;}
-      const newDep={id:newRecId,scopeId,name,category,categoryOther,owner,ownerOther,status,due,note};
-      if(!window.DEPENDENCIES)window.DEPENDENCIES=[];
-      window.DEPENDENCIES.push(newDep);
-    }
-    showToast(editId?'Dependency updated':'Dependency logged','success');
+    const updRes=await atUpdate('Dependencies',editId,fields);
+    if(!updRes){showToast('Could not save changes to this dependency. Please try again.','error');_savingDep=false;if(saveBtn)saveBtn.disabled=false;return;}
+    const d=(window.DEPENDENCIES||[]).find(x=>x.id===editId);
+    if(d)Object.assign(d,{owner,ownerOther,status,due,note});
+    showToast('Dependency updated','success');
     closeDepModal();
     if(currentProp)renderDependenciesTab(currentProp);
   }catch(e){
