@@ -1,4 +1,59 @@
 <!--
+pulse_v67b. Changes from v67a, this round. Requires worker_v44p (no code
+changes from v44o -- confirmed and documented, this feature's writes are
+already covered by the existing pm/admin role bypass). Related Work
+auto-flow, designed across several rounds of mockups and clarifying
+questions this session and built only after each piece was explicitly
+locked in:
+
+  Bid form: Related Work line items on the Bid Submission form now have a
+  Category dropdown (same DEP_CATEGORIES list Dependencies uses) with an
+  "Other" free-text fallback that reveals per-row, mirroring how
+  Dependencies' own Category-Other pattern works. Category is required --
+  a blank/unselected row blocks Save Draft and Finish & Submit both, per
+  Misty's explicit call. New Airtable fields on Bid Line Items: "Related
+  Work Category" and "Related Work Category - Other" (kept separate from
+  the pre-existing "Category" field, which already means something
+  different -- Scope/Contract/Maintenance -- for other line item types).
+
+  Award flow: new "Award" button on the Bid Leveling panel (pm/admin
+  only, same gate as Publish), opening a two-step flow built exactly to
+  the two mockups Misty approved:
+    Step 1 -- pick the awarded supplier from the round's Submitted/
+    Negotiating submissions. Lowest Total badge is a real computation
+    (lowest Total Price in the round), not decorative.
+    Step 2 -- review/edit the picked supplier's baseline bid: Base Bid
+    Amount and Bond Cost are editable against the original submitted
+    values shown struck through, Total Price recalculates live; Related
+    Work line items are editable/addable/removable here too (same
+    Category-required rule); Negotiation History renders as an
+    append-only timeline, one entry per Save Draft click (not per field
+    edit -- Misty's explicit choice); a scope-attachment line shows what
+    the awarded Related Work will attach to, with a Change link that
+    reopens the exact same scope-picker used below.
+  Save Draft writes a real Status=Negotiating to the Bid Submission
+  (not just local state -- Misty's explicit choice, so a draft survives
+  a closed tab and is visible to anyone else on the round) plus one Bid
+  Award History snapshot. Mark as Awarded Bid writes Status=Awarded,
+  flips every other Submitted/Negotiating submission in the round to
+  Not Awarded, writes a final history snapshot, and runs the Dependency
+  auto-flow: each Related Work line item becomes a real Dependency
+  record (same create-then-update two-step pattern as saveDepBulk/
+  saveDep, since Coordination Owner is a singleSelect that 422s if sent
+  empty on create), with Coordination Owner pre-filled as "Elevator
+  Company" and a Note crediting the awarded supplier.
+  If the round has no Linked Scope when Mark as Awarded Bid is clicked,
+  the flow stops and opens a prompt with a picker of the property's
+  scopes (exact mockup Misty asked to see) instead of blocking outright
+  or silently skipping -- linking a scope there resumes the award
+  automatically rather than making the PM click Award a second time.
+  New Airtable table: Bid Award History (linked to Bid Submissions).
+  Also added this round, closing a pre-existing gap the Award auto-flow
+  would otherwise have silently hit: Dependencies' Category field was
+  missing "Security Cameras" and "Barricades" as real choices even
+  though the app's own DEP_CATEGORIES array already listed them (a gap
+  from a prior session) -- both added directly in Airtable.
+
 pulse_v67a. Changes from v66m, this round. Requires worker_v44o (Approved
 Date stamp on Change Order Savings Log). Six items total from Misty's
 direct requests this session, batched into one build per standing rule.
@@ -5092,6 +5147,32 @@ property as a whole. -->
   </div>
 </div>
 
+<!-- v67b -- Award flow. Two pieces, matching the two approved mockups:
+  award-scope-modal is the small centered "link this award to a scope"
+  prompt (fires when the round's Bid Round has no Linked Scope set,
+  reused both from the Award flow itself and from the "Change" link on
+  the scope-attachment strip in Step 2 -- one shared picker, per Misty's
+  explicit answer, not two variants). award-flow-panel is the wide
+  slide-in that holds Step 1 (pick awarded supplier) and Step 2 (review/
+  edit + Negotiation History), content built entirely in JS since it
+  swaps between steps -- see openAwardFlow/renderAwardStep1/
+  renderAwardStep2 below. z-index 210/211 so the scope-picker modal can
+  stack on top of the award panel (211/212) when opened via "Change". -->
+<div id="award-scope-overlay" onclick="closeAwardScopeModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:210"></div>
+<div id="award-scope-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:16px;width:480px;max-width:94vw;z-index:211;box-shadow:0 20px 60px rgba(0,0,0,0.35);max-height:90vh;overflow-y:auto"></div>
+
+<div id="award-flow-overlay" onclick="closeAwardFlow()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="award-flow-panel" style="display:none;position:fixed;top:0;right:0;width:720px;max-width:96vw;height:100vh;background:#f6f7f9;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:22px 26px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div>
+      <div style="font-size:16px;font-weight:700;color:#85B7EB" id="award-flow-title">Award Bid</div>
+      <div style="font-size:12px;color:rgba(133,183,235,0.7)" id="award-flow-subtitle"></div>
+    </div>
+    <button onclick="closeAwardFlow()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div id="award-flow-body" style="padding:22px 26px"></div>
+</div>
+
 <div id="billing-modal-overlay" onclick="closeBillingModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
 <div id="billing-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:420px;max-width:90vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -5688,7 +5769,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67a</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67b</div>
     </div>
   </nav>
 
@@ -16612,12 +16693,25 @@ function renderRoundCardBody(round,p){
   const showLevelingEye=visibleSubs.length>0;
   const isLevelingOpen=openLevelingRoundId===round.id;
 
+  // v67b -- Award button. Eligible whenever the round has at least one
+  // Submitted or Negotiating submission and no submission is already
+  // Awarded (once awarded, the round is decided -- re-awarding isn't
+  // supported here, matching "the evolution documented" intent: a second
+  // award would need its own separate design conversation, not a silent
+  // overwrite). Same canPublishBids() pm/admin gate as Publish, since both
+  // are Bid Submissions PATCH-level actions and only pm/admin can write to
+  // that table (worker_v44p WRITE_ROLE_RULES).
+  const alreadyAwarded=roundSubs.some(s=>s['Status']==='Awarded');
+  const hasAwardable=roundSubs.some(s=>s['Status']==='Submitted'||s['Status']==='Negotiating');
+  const showAwardBtn=canPublishBids()&&!alreadyAwarded&&hasAwardable;
+
   bodyEl.innerHTML=`
     ${editAllowed?`<div style="text-align:right;margin-bottom:10px"><button class="btn btn-add" style="font-size:12px" onclick="openBidSubmissionForm(null,false,'${round.id}')">+ <i class="ti ti-building"></i>Supplier Bid</button></div>`:''}
     <div id="round-suppliers-${round.id}">${supplierRows||'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No supplier bids yet for this round.</div>'}</div>
     <div style="border-top:1px solid var(--border-strong);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:center">
       <div style="font-size:12px;font-weight:600;color:var(--navy)">Bid Leveling</div>
       <div style="display:flex;align-items:center">
+        ${showAwardBtn?`<button class="btn btn-add" style="font-size:11px;margin-right:10px;background:var(--green,#1E9E5A)" onclick="openAwardFlow('${round.id}')">Award</button>`:''}
         ${canPublishBids()?`<button class="btn btn-edit" id="bid-publish-toggle-btn-${round.id}" style="font-size:11px;margin-right:10px" onclick="toggleBidRoundVisibility('${round.id}')"></button>`:''}
         ${isLevelingOpen?`<button class="btn btn-add" onclick="printBidLeveling('${round.id}')" title="Print" style="padding:6px 8px;margin-right:10px"><i class="ti ti-printer" style="font-size:14px;color:white"></i></button>`:''}
         <div style="display:flex;width:64px;justify-content:flex-end">
@@ -16938,6 +17032,552 @@ function printBidLeveling(roundId){
   </body></html>`;
   const w=window.open('','_blank','width=900,height=700');
   if(w){w.document.write(html);w.document.close();}
+}
+
+// ── AWARD FLOW ───────────────────────────────────────────────────────
+// v67b — two-step Award flow, built exactly to the two mockups Misty
+// approved and the follow-up behavioral decisions locked afterward:
+//   Step 1: pick the awarded supplier from the round's submissions.
+//   Step 2: review/edit that supplier's baseline bid (submitted vs
+//     negotiated pricing, Related Work line items, Negotiation History),
+//     Save Draft (writes Status=Negotiating + one Bid Award History
+//     snapshot) or Mark as Awarded Bid (writes Status=Awarded, flips
+//     every other Submitted/Negotiating submission in the round to Not
+//     Awarded, writes a final Bid Award History snapshot, and runs the
+//     auto-flow that creates real Dependency records from the awarded
+//     submission's Related Work line items).
+// State lives in awardFlowState rather than re-reading the DOM on every
+// step transition, since Step 2's pricing fields are user-edited and
+// need to survive a Save Draft round-trip without losing in-progress
+// edits to fields Save Draft doesn't touch.
+let awardFlowState=null;
+let _savingAwardDraft=false;
+let _markingAwarded=false;
+
+function openAwardFlow(roundId){
+  const round=BID_ROUNDS_CACHE.find(r=>r.id===roundId);
+  if(!round){showToast('Could not find this bid round','error');return;}
+  const roundSubs=BID_SUBMISSIONS_CACHE.filter(s=>(s['Bid Round']||[]).includes(roundId));
+  const awardable=roundSubs.filter(s=>s['Status']==='Submitted'||s['Status']==='Negotiating');
+  if(awardable.length===0){showToast('No submitted bids in this round to award','warn');return;}
+  awardFlowState={roundId,step:1,selectedSubId:null,pricing:{},relatedWork:[],history:[]};
+  document.getElementById('award-flow-title').textContent='Award Bid';
+  document.getElementById('award-flow-subtitle').textContent=`${round['Round Name']||'Untitled Round'} — ${currentProp?.n||''}`;
+  renderAwardStep1();
+  const overlay=document.getElementById('award-flow-overlay');
+  const panel=document.getElementById('award-flow-panel');
+  overlay.style.display='block';
+  panel.style.display='block';
+  requestAnimationFrame(()=>{panel.style.transform='translateX(0)';});
+}
+
+function closeAwardFlow(){
+  const overlay=document.getElementById('award-flow-overlay');
+  const panel=document.getElementById('award-flow-panel');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{overlay.style.display='none';panel.style.display='none';},300);
+  awardFlowState=null;
+}
+
+// Step 1 — supplier picker. "Lowest Total" badge is a real computation
+// (lowest Total Price among awardable submissions in this round), not
+// decorative — Misty confirmed this explicitly rather than leaving it as
+// a mockup placeholder. No Bid/Withdrawn submissions are shown, greyed
+// out and unselectable, so a PM can see the full round's outcome in one
+// place without them being pickable.
+function renderAwardStep1(){
+  const st=awardFlowState;
+  const roundSubs=BID_SUBMISSIONS_CACHE.filter(s=>(s['Bid Round']||[]).includes(st.roundId));
+  const awardable=roundSubs.filter(s=>s['Status']==='Submitted'||s['Status']==='Negotiating');
+  const other=roundSubs.filter(s=>s['Status']==='No Bid'||s['Status']==='Withdrawn');
+  const lowestTotal=awardable.reduce((min,s)=>{
+    const t=Number(s['Total Price']);
+    return (!isNaN(t)&&t>0&&(min===null||t<min))?t:min;
+  },null);
+
+  const row=(s,selectable)=>{
+    const isLowest=selectable&&lowestTotal!==null&&Number(s['Total Price'])===lowestTotal;
+    const submittedDate=s['Submitted Date']?new Date(s['Submitted Date']).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
+    const detail=selectable
+      ?`Base Bid ${fmtCurrencyFull(s['Base Bid Amount'])||'—'} · Total ${fmtCurrencyFull(s['Total Price'])||'—'} · Submitted ${submittedDate}`
+      :(s['Status']==='No Bid'?'No Bid':`Withdrawn`);
+    return `<div class="award-supplier-row" data-sub-id="${s.id}" onclick="${selectable?`selectAwardSupplier('${s.id}')`:''}" style="display:flex;align-items:center;gap:14px;padding:14px 16px;margin-bottom:10px;border:1.5px solid var(--border);border-radius:12px;${selectable?'cursor:pointer':'opacity:0.6'};background:white">
+      <div style="width:16px;height:16px;border-radius:50%;border:2px solid ${selectable?'var(--border-strong)':'var(--border)'};flex-shrink:0"></div>
+      <div style="flex:1">
+        <div style="font-size:14.5px;font-weight:700;color:var(--navy)">${escHtml(s['Supplier Name']||'Unnamed Supplier')}</div>
+        <div style="font-size:12px;color:var(--gray-mid);margin-top:2px">${detail}</div>
+      </div>
+      ${isLowest?`<div style="font-size:11px;font-weight:700;color:#1E9E5A;background:#E7F8EE;padding:4px 10px;border-radius:20px">LOWEST TOTAL</div>`:''}
+    </div>`;
+  };
+
+  document.getElementById('award-flow-body').innerHTML=`
+    <div style="font-size:11px;font-weight:700;color:var(--brand,#1E6FEB);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Step 1 of 2</div>
+    <div style="font-size:16px;font-weight:700;color:var(--navy);margin-bottom:14px">Select Awarded Supplier</div>
+    ${awardable.map(s=>row(s,true)).join('')}
+    ${other.map(s=>row(s,false)).join('')}
+  `;
+}
+
+function selectAwardSupplier(subId){
+  const st=awardFlowState;
+  if(!st)return;
+  st.selectedSubId=subId;
+  st.step=2;
+  loadAwardStep2(subId);
+}
+
+// Step 2 — review/edit surface. Loads the selected submission's Related
+// Work line items and any prior Bid Award History snapshots (so
+// re-opening a submission already in Negotiating status resumes with its
+// real history, not a blank slate), then renders. Pricing negotiated
+// values seed from the submission's current Base Bid Amount/Total Price
+// on first open, or from the latest history snapshot if one exists —
+// matches "review and edit the pre-populated baseline award bid."
+async function loadAwardStep2(subId){
+  const st=awardFlowState;
+  document.getElementById('award-flow-body').innerHTML='<div style="padding:40px;text-align:center;color:var(--gray-mid);font-size:13px">Loading bid details…</div>';
+  const sub=BID_SUBMISSIONS_CACHE.find(s=>s.id===subId);
+  if(!sub){showToast('Could not load this submission','error');closeAwardFlow();return;}
+
+  const [allLineItems,historyRecs]=await Promise.all([
+    atGet('Bid Line Items'),
+    atGet('Bid Award History'),
+  ]);
+  if(!awardFlowState||awardFlowState.selectedSubId!==subId)return; // panel closed or re-selected while loading
+
+  st.relatedWork=(allLineItems||[])
+    .filter(r=>(r.fields['Bid Submission']||[]).includes(subId)&&r.fields['Line Item Type']==='Related Work')
+    .map(r=>({id:r.id,category:r.fields['Related Work Category']||'',categoryOther:r.fields['Related Work Category - Other']||'',description:r.fields['Description']||'',amount:r.fields['Amount']!=null?Number(r.fields['Amount']):null}));
+
+  st.history=(historyRecs||[])
+    .filter(r=>(r.fields['Bid Submission']||[]).includes(subId))
+    .map(r=>({id:r.id,baseBid:r.fields['Base Bid Amount'],total:r.fields['Total Price'],note:r.fields['Snapshot Note']||'',by:r.fields['Saved By']||'',date:r.fields['Saved Date']||r.createdTime||''}))
+    .sort((a,b)=>new Date(a.date)-new Date(b.date));
+
+  const latest=st.history[st.history.length-1];
+  st.pricing={
+    baseBid:latest?latest.baseBid:sub['Base Bid Amount'],
+    bondCost:sub['Bond Cost'],
+    total:latest?latest.total:sub['Total Price'],
+  };
+  st.sub=sub;
+  renderAwardStep2();
+}
+
+function fmtAwardHistoryDate(d){
+  if(!d)return '';
+  return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+new Date(d).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
+
+function renderAwardStep2(){
+  const st=awardFlowState;
+  const sub=st.sub;
+  const round=BID_ROUNDS_CACHE.find(r=>r.id===st.roundId);
+  const linkedScopeId=(round?.['Linked Scope']||[])[0]||null;
+  const linkedScope=linkedScopeId?(window.SCOPES||[]).find(sc=>sc.id===linkedScopeId):null;
+
+  const historyRows=st.history.length>0?st.history.map((h,i)=>`
+    <div style="padding-bottom:14px;position:relative">
+      <div style="position:absolute;left:-19px;top:3px;width:8px;height:8px;border-radius:50%;background:${i===st.history.length-1?'var(--brand,#1E6FEB)':'var(--border-strong)'}"></div>
+      <div style="font-size:12.5px;color:var(--navy)"><span style="font-weight:700">${escHtml(h.note||(i===0?'Original submission':'Negotiated'))}</span> · Base Bid ${fmtCurrencyFull(h.baseBid)||'—'} · Total ${fmtCurrencyFull(h.total)||'—'}</div>
+      <div style="font-size:11.5px;color:var(--gray-mid);margin-top:1px">${escHtml(h.by||'')}${h.by?' · ':''}${fmtAwardHistoryDate(h.date)}</div>
+    </div>`).join('')
+    :`<div style="font-size:12.5px;color:var(--gray-mid)">No snapshots yet — the first Save Draft or Award will create the initial history entry.</div>`;
+
+  const rwRows=st.relatedWork.map((li,i)=>`
+    <div class="award-rw-row" data-idx="${i}" style="display:grid;grid-template-columns:160px 1fr 110px 28px;gap:8px;padding:9px 0;align-items:start;border-top:1px solid var(--border)">
+      <div>
+        <select class="award-rw-category" style="font-size:12px;padding:5px 7px;width:100%" onchange="updateAwardRWField(${i},'category',this.value);toggleAwardRWOther(${i},this.value)">
+          ${DEP_CATEGORIES.map(c=>`<option value="${c}" ${li.category===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+        <input type="text" class="award-rw-other" placeholder="Specify category" value="${escHtml(li.categoryOther)}" oninput="updateAwardRWField(${i},'categoryOther',this.value)" style="display:${li.category==='Other'?'block':'none'};margin-top:5px;font-size:11.5px;padding:5px 7px;border:1px dashed var(--brand,#1E6FEB);border-radius:6px;width:100%">
+      </div>
+      <input type="text" value="${escHtml(li.description)}" oninput="updateAwardRWField(${i},'description',this.value)" style="font-size:13px;padding:6px 8px;width:100%">
+      <input type="text" class="award-rw-amount" value="${li.amount!=null?Number(li.amount).toLocaleString('en-US'):''}" oninput="updateAwardRWField(${i},'amount',this.value.replace(/[^0-9.]/g,''))" style="font-size:13px;padding:6px 8px;width:100%;text-align:right">
+      <button onclick="removeAwardRWRow(${i})" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);padding:6px 0" title="Remove"><i class="ti ti-x"></i></button>
+    </div>`).join('');
+
+  document.getElementById('award-flow-body').innerHTML=`
+    <div style="font-size:11px;font-weight:700;color:var(--brand,#1E6FEB);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Step 2 of 2</div>
+    <div style="font-size:16px;font-weight:700;color:var(--navy)">Review &amp; Finalize Award — ${escHtml(sub['Supplier Name']||'')}</div>
+    <div style="font-size:12.5px;color:var(--gray-mid);margin-top:5px;line-height:1.4">Pre-populated from their submitted bid. Edit any line to reflect final negotiated terms — the original submission stays on record.</div>
+
+    <div style="background:white;border-radius:12px;padding:18px 20px;margin-top:16px">
+      <div style="font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">Pricing</div>
+      <div style="display:grid;grid-template-columns:1fr 130px 130px;font-size:11px;color:var(--gray-mid);font-weight:700;padding-bottom:6px">
+        <div></div><div style="text-align:right">SUBMITTED</div><div style="text-align:right">NEGOTIATED</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 130px 130px;align-items:center;padding:9px 0;border-top:1px solid var(--border)">
+        <div style="font-size:13.5px;color:var(--navy)">Base Bid Amount</div>
+        <div style="text-align:right;font-size:12.5px;color:var(--gray-mid);text-decoration:line-through">${fmtCurrencyFull(sub['Base Bid Amount'])||'—'}</div>
+        <input type="text" id="award-basebid" value="${st.pricing.baseBid!=null?Number(st.pricing.baseBid).toLocaleString('en-US'):''}" style="text-align:right;font-size:13px;font-weight:700;color:var(--brand,#1E6FEB);padding:5px 8px">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 130px 130px;align-items:center;padding:9px 0;border-top:1px solid var(--border)">
+        <div style="font-size:13.5px;color:var(--navy)">Bond Cost</div>
+        <div style="text-align:right;font-size:12.5px;color:var(--gray-mid)">${fmtCurrencyFull(sub['Bond Cost'])||'—'}</div>
+        <input type="text" id="award-bondcost" value="${st.pricing.bondCost!=null?Number(st.pricing.bondCost).toLocaleString('en-US'):''}" style="text-align:right;font-size:13px;padding:5px 8px">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 130px 130px;align-items:center;padding:9px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+        <div style="font-size:14px;font-weight:700;color:var(--navy)">Total Price</div>
+        <div style="text-align:right;font-size:12.5px;color:var(--gray-mid);text-decoration:line-through">${fmtCurrencyFull(sub['Total Price'])||'—'}</div>
+        <div style="text-align:right;font-size:14.5px;font-weight:700;color:#1E9E5A" id="award-total-display">${fmtCurrencyFull(st.pricing.total)||'—'}</div>
+      </div>
+    </div>
+
+    <div style="background:white;border-radius:12px;padding:18px 20px;margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Related Work — will create Dependencies on award</div>
+        <div style="font-size:11px;font-weight:700;color:var(--brand,#1E6FEB);cursor:pointer" onclick="addAwardRWRow()">+ Add Line</div>
+      </div>
+      <div style="display:grid;grid-template-columns:160px 1fr 110px 28px;gap:8px;font-size:11px;font-weight:700;color:var(--gray-mid);text-transform:uppercase">
+        <div>Category</div><div>Description</div><div style="text-align:right">Amount</div><div></div>
+      </div>
+      <div id="award-rw-rows">${rwRows||'<div style="font-size:12.5px;color:var(--gray-mid);padding:10px 0">No Related Work line items on this bid.</div>'}</div>
+    </div>
+
+    <div style="background:white;border-radius:12px;padding:18px 20px;margin-top:14px">
+      <div style="font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">Negotiation History</div>
+      <div style="border-left:2px solid var(--border);padding-left:14px;margin-left:4px">${historyRows}</div>
+    </div>
+
+    <div style="margin-top:14px;padding:12px 14px;background:white;border-radius:10px;font-size:12.5px;color:var(--gray-mid);display:flex;align-items:center;justify-content:space-between">
+      <span>Related Work will attach to ${linkedScope?`<span style="color:var(--navy);font-weight:700">${escHtml(linkedScope.name)}</span>`:'<span style="color:var(--red);font-weight:700">no scope linked yet</span>'}</span>
+      <span style="color:var(--brand,#1E6FEB);font-weight:700;cursor:pointer" onclick="openAwardScopePicker()">${linkedScope?'Change':'Link Scope'}</span>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;padding-bottom:10px">
+      <button class="btn btn-edit" id="award-save-draft-btn" onclick="saveAwardDraft()">Save Draft</button>
+      <button class="btn btn-add" id="award-mark-btn" style="background:#1E9E5A" onclick="markAsAwardedBid()">Mark as Awarded Bid</button>
+    </div>
+  `;
+
+  ['award-basebid','award-bondcost'].forEach(id=>{
+    initCurrencyInput(id);
+    document.getElementById(id).addEventListener('input',updateAwardTotalDisplay);
+  });
+}
+
+function updateAwardTotalDisplay(){
+  const base=getCurrencyValue('award-basebid');
+  const bond=getCurrencyValue('award-bondcost');
+  const sub=awardFlowState?.sub;
+  // Total Price on the original submission already includes tax/other
+  // components beyond Base Bid + Bond Cost (see bid submission form's own
+  // updateBidSummary) — rather than re-deriving that full formula here,
+  // the negotiated Total tracks the same delta applied to Base Bid, so a
+  // $13,500 reduction in Base Bid shows up as the same $13,500 reduction
+  // in the negotiated Total shown to the PM, without silently dropping
+  // the tax/fee components this screen doesn't expose fields for.
+  const origBase=Number(sub?.['Base Bid Amount'])||0;
+  const origBond=Number(sub?.['Bond Cost'])||0;
+  const origTotal=Number(sub?.['Total Price'])||0;
+  const delta=(base-origBase)+(bond-origBond);
+  const newTotal=origTotal+delta;
+  awardFlowState.pricing.baseBid=base;
+  awardFlowState.pricing.bondCost=bond;
+  awardFlowState.pricing.total=newTotal;
+  const el=document.getElementById('award-total-display');
+  if(el)el.textContent=fmtCurrencyFull(newTotal)||'—';
+}
+
+function addAwardRWRow(){
+  awardFlowState.relatedWork.push({category:'',categoryOther:'',description:'',amount:null});
+  renderAwardStep2();
+}
+function removeAwardRWRow(idx){
+  awardFlowState.relatedWork.splice(idx,1);
+  renderAwardStep2();
+}
+function updateAwardRWField(idx,field,val){
+  const li=awardFlowState.relatedWork[idx];
+  if(!li)return;
+  if(field==='amount')li[field]=val===''?null:parseFloat(val);
+  else li[field]=val;
+}
+function toggleAwardRWOther(idx,val){
+  const row=document.querySelector(`.award-rw-row[data-idx="${idx}"]`);
+  const otherInput=row?.querySelector('.award-rw-other');
+  if(otherInput)otherInput.style.display=val==='Other'?'block':'none';
+}
+
+// Save Draft — per Misty's decision, writes a real Status=Negotiating to
+// Airtable (not just local state) so a draft-in-progress is visible to
+// anyone else looking at the round and survives a closed tab, and
+// appends exactly one Bid Award History snapshot per click (not one per
+// field edit) — the coarser, cleaner audit trail she chose.
+async function saveAwardDraft(){
+  if(_savingAwardDraft)return;
+  const st=awardFlowState;
+  if(!st)return;
+  if(st.relatedWork.some(li=>!li.category)){
+    showToast('Select a Category for every Related Work line before saving','error');
+    return;
+  }
+  _savingAwardDraft=true;
+  const btn=document.getElementById('award-save-draft-btn');
+  if(btn)btn.disabled=true;
+  const myName=role==='consultant'?(currentConsultantName||''):(window._userName||'PM User');
+
+  const subFields={'Status':'Negotiating','Base Bid Amount':st.pricing.baseBid,'Bond Cost':st.pricing.bondCost,'Total Price':st.pricing.total};
+  const updRes=await atUpdate('Bid Submissions',st.selectedSubId,subFields);
+  if(!updRes){showToast('Could not save this draft. Please try again.','error');_savingAwardDraft=false;if(btn)btn.disabled=false;return;}
+
+  await saveAwardRelatedWorkLineItems();
+
+  const histRes=await atCreate('Bid Award History',{
+    'Bid Submission':[st.selectedSubId],
+    'Base Bid Amount':st.pricing.baseBid,
+    'Total Price':st.pricing.total,
+    'Snapshot Note':st.history.length===0?'Original submission':'Negotiated — in progress',
+    'Saved By':myName,
+    'Saved Date':new Date().toISOString(),
+  });
+  const histId=histRes?.records?.[0]?.id;
+  if(histId)st.history.push({id:histId,baseBid:st.pricing.baseBid,total:st.pricing.total,note:st.history.length===0?'Original submission':'Negotiated — in progress',by:myName,date:new Date().toISOString()});
+
+  const subLocal=BID_SUBMISSIONS_CACHE.find(s=>s.id===st.selectedSubId);
+  if(subLocal)Object.assign(subLocal,subFields);
+
+  showToast('Draft saved','success');
+  _savingAwardDraft=false;
+  if(btn)btn.disabled=false;
+  renderAwardStep2();
+}
+
+// Writes the current Related Work line-item state back to Bid Line
+// Items: new rows (no id yet) are created, existing rows are updated,
+// and rows removed from awardFlowState.relatedWork since load are
+// deleted. Shared by both Save Draft and Mark as Awarded Bid so the
+// line items are always in sync with whichever action just ran.
+async function saveAwardRelatedWorkLineItems(){
+  const st=awardFlowState;
+  for(const li of st.relatedWork){
+    const fields={
+      'Related Work Category':li.category,
+      'Related Work Category - Other':li.category==='Other'?(li.categoryOther||''):'',
+      'Description':li.description||'',
+      'Amount':li.amount,
+    };
+    if(li.id){
+      await atUpdate('Bid Line Items',li.id,fields);
+    }else{
+      fields['Bid Submission']=[st.selectedSubId];
+      fields['Line Item Type']='Related Work';
+      const rec=await atCreate('Bid Line Items',fields);
+      const newId=rec?.records?.[0]?.id;
+      if(newId)li.id=newId;
+    }
+  }
+}
+
+// Mark as Awarded Bid — the terminal action. Writes Status=Awarded on
+// the selected submission, flips every other Submitted/Negotiating
+// submission in the round to Not Awarded (Misty's explicit call — closes
+// the round out cleanly), writes a final Bid Award History snapshot, and
+// then runs the Dependency auto-flow. If the round has no Linked Scope,
+// this stops and opens the scope-picker prompt instead of proceeding
+// silently or blocking outright, matching the approved mockup.
+async function markAsAwardedBid(){
+  if(_markingAwarded)return;
+  const st=awardFlowState;
+  if(!st)return;
+  if(st.relatedWork.some(li=>!li.category)){
+    showToast('Select a Category for every Related Work line before awarding','error');
+    return;
+  }
+  const round=BID_ROUNDS_CACHE.find(r=>r.id===st.roundId);
+  const linkedScopeId=(round?.['Linked Scope']||[])[0]||null;
+  if(!linkedScopeId){
+    openAwardScopePicker({resumeAward:true});
+    return;
+  }
+  await finalizeAward(linkedScopeId);
+}
+
+async function finalizeAward(scopeId){
+  const st=awardFlowState;
+  _markingAwarded=true;
+  const btn=document.getElementById('award-mark-btn');
+  if(btn)btn.disabled=true;
+  const myName=role==='consultant'?(currentConsultantName||''):(window._userName||'PM User');
+
+  const subFields={'Status':'Awarded','Base Bid Amount':st.pricing.baseBid,'Bond Cost':st.pricing.bondCost,'Total Price':st.pricing.total};
+  const updRes=await atUpdate('Bid Submissions',st.selectedSubId,subFields);
+  if(!updRes){showToast('Could not finalize this award. Please try again.','error');_markingAwarded=false;if(btn)btn.disabled=false;return;}
+
+  await saveAwardRelatedWorkLineItems();
+
+  await atCreate('Bid Award History',{
+    'Bid Submission':[st.selectedSubId],
+    'Base Bid Amount':st.pricing.baseBid,
+    'Total Price':st.pricing.total,
+    'Snapshot Note':'Awarded',
+    'Saved By':myName,
+    'Saved Date':new Date().toISOString(),
+  });
+
+  const subLocal=BID_SUBMISSIONS_CACHE.find(s=>s.id===st.selectedSubId);
+  if(subLocal)Object.assign(subLocal,subFields);
+
+  // Flip every other Submitted/Negotiating submission in the round to Not
+  // Awarded, sequentially (matches saveDepBulk's sequential-not-parallel
+  // convention elsewhere in this file), so a mid-batch failure leaves a
+  // clean, known set of successes rather than an unreadable partial
+  // parallel batch.
+  const roundSubs=BID_SUBMISSIONS_CACHE.filter(s=>(s['Bid Round']||[]).includes(st.roundId)&&s.id!==st.selectedSubId);
+  for(const s of roundSubs){
+    if(s['Status']==='Submitted'||s['Status']==='Negotiating'){
+      const r=await atUpdate('Bid Submissions',s.id,{'Status':'Not Awarded'});
+      if(r)s['Status']='Not Awarded';
+    }
+  }
+
+  await createDependenciesFromAwardedRelatedWork(scopeId,st.sub);
+
+  showToast('Bid awarded — Related Work added to project Dependencies','success');
+  _markingAwarded=false;
+  if(btn)btn.disabled=false;
+  closeAwardFlow();
+  if(typeof renderBidsTab==='function'&&currentProp)renderBidsTab(currentProp);
+}
+
+// Dependency auto-flow. Same two-step create-then-update pattern as
+// saveDepBulk/saveDep elsewhere in this file (Coordination Owner is a
+// singleSelect — sending it empty on create causes a 422, so it's set
+// separately after creation succeeds). Coordination Owner is pre-filled
+// as 'Elevator Company' since the awarded supplier now IS the elevator
+// company for this scope. Sequential creates, same reasoning as
+// saveDepBulk: this only ever runs for a handful of Related Work lines
+// per award, so the extra round-trip time is not a real cost, and a
+// mid-batch failure leaves a known, explainable partial result.
+async function createDependenciesFromAwardedRelatedWork(scopeId,sub){
+  const st=awardFlowState;
+  let created=0,failed=0;
+  for(const li of st.relatedWork){
+    if(!li.category)continue;
+    const createFields={
+      'Dependency':li.category==='Other'?(li.categoryOther||li.description||'Related Work'):li.category,
+      'Scope':[scopeId],
+      'Category':li.category,
+      'Category - Other':li.category==='Other'?(li.categoryOther||''):'',
+      'Status':'Planned',
+    };
+    const rec=await atCreate('Dependencies',createFields);
+    const newId=rec?.records?.[0]?.id;
+    if(!newId){failed++;continue;}
+    const updFields={
+      'Coordination Owner':'Elevator Company',
+      'Coordination Owner - Other':'',
+      'Note':`Auto-created from awarded bid — ${sub?.['Supplier Name']||'Supplier'}${li.description?': '+li.description:''}`,
+    };
+    await atUpdate('Dependencies',newId,updFields);
+    if(!window.DEPENDENCIES)window.DEPENDENCIES=[];
+    window.DEPENDENCIES.push({id:newId,scopeId,category:li.category,categoryOther:li.category==='Other'?(li.categoryOther||''):'',owner:'Elevator Company',ownerOther:'',status:'Planned',due:'',note:updFields['Note']});
+    created++;
+  }
+  if(failed>0)showToast(`${created} Related Work item(s) added as Dependencies, ${failed} failed — check Dependencies for gaps`,'warn');
+}
+
+// ── Missing-Linked-Scope prompt ─────────────────────────────────────
+// Shown when Mark as Awarded Bid is clicked and the round has no Linked
+// Scope, and reused identically from the "Change"/"Link Scope" link in
+// Step 2 — one shared picker, per Misty's explicit answer, not a second
+// variant. Radio-style list of the property's scopes with a status/
+// detail subtext line, "Link Scope & Continue" disabled until one is
+// picked, "Create a new scope" escape hatch for when none fit.
+let awardScopePickCallbackAfterLink=null;
+let awardScopePickResumeAward=false;
+function openAwardScopePicker(opts){
+  awardScopePickResumeAward=!!(opts&&opts.resumeAward);
+  const st=awardFlowState;
+  const round=BID_ROUNDS_CACHE.find(r=>r.id===st.roundId);
+  const propScopes=(window.SCOPES||[]).filter(sc=>sc.propertyId===currentProp?.id);
+  const rows=propScopes.map(sc=>`
+    <div class="award-scope-row" data-scope-id="${sc.id}" onclick="pickAwardScope('${sc.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--border);cursor:pointer">
+      <div class="award-scope-radio" data-scope-id="${sc.id}" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--border-strong);flex-shrink:0;display:flex;align-items:center;justify-content:center"></div>
+      <div style="flex:1">
+        <div style="font-size:13.5px;font-weight:600;color:var(--navy)">${escHtml(sc.name||'Untitled Scope')}</div>
+        <div style="font-size:11.5px;color:var(--gray-mid);margin-top:1px">${escHtml(sc.status||'')}${sc.unitList?' · '+escHtml(sc.unitList):''}</div>
+      </div>
+    </div>`).join('');
+
+  document.getElementById('award-scope-modal').innerHTML=`
+    <div style="padding:24px 28px 0 28px">
+      <div style="display:flex;align-items:flex-start;gap:14px">
+        <div style="flex-shrink:0;width:40px;height:40px;border-radius:10px;background:#FFF4E5;display:flex;align-items:center;justify-content:center">
+          <i class="ti ti-alert-triangle" style="color:#C77700;font-size:18px"></i>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:17px;font-weight:700;color:var(--navy)">Link this award to a scope</div>
+          <div style="font-size:13.5px;color:var(--gray-mid);margin-top:4px;line-height:1.45">This bid round isn't linked to a Scope of Work yet. Awarding it will create Related Work items, and those need a scope to attach to.</div>
+        </div>
+      </div>
+    </div>
+    <div style="margin:18px 28px 0 28px;padding:12px 14px;background:var(--gray-pale);border-radius:10px;font-size:12.5px;color:var(--gray-mid)">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Bid Round</span><span style="color:var(--navy);font-weight:700">${escHtml(round?.['Round Name']||'')}</span></div>
+      <div style="display:flex;justify-content:space-between"><span>Property</span><span style="color:var(--navy);font-weight:700">${escHtml(currentProp?.n||'')}</span></div>
+    </div>
+    <div style="padding:20px 28px 4px 28px">
+      <label style="display:block;font-size:12.5px;font-weight:700;color:var(--navy);margin-bottom:8px">Select a scope to link</label>
+      <div style="border:1.5px solid var(--border);border-radius:10px;overflow:hidden;max-height:260px;overflow-y:auto">
+        ${rows||'<div style="padding:14px;font-size:12.5px;color:var(--gray-mid)">No scopes found on this property.</div>'}
+      </div>
+      <div style="margin-top:10px;font-size:12px;color:var(--gray-mid)">Don't see it? <span style="color:var(--brand,#1E6FEB);font-weight:700;cursor:pointer" onclick="closeAwardScopeModal();if(typeof openNewScopeModal==='function')openNewScopeModal();">Create a new scope for this property</span></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;padding:22px 28px 24px 28px">
+      <button class="btn btn-edit" onclick="closeAwardScopeModal()">Cancel</button>
+      <button class="btn btn-add" id="award-scope-link-btn" disabled onclick="confirmAwardScopeLink()">Link Scope &amp; Continue</button>
+    </div>
+  `;
+  awardScopePickCallbackAfterLink=null;
+  const overlay=document.getElementById('award-scope-overlay');
+  const modal=document.getElementById('award-scope-modal');
+  overlay.style.display='block';
+  modal.style.display='block';
+}
+
+function pickAwardScope(scopeId){
+  document.querySelectorAll('.award-scope-row').forEach(row=>{
+    row.style.background=row.dataset.scopeId===scopeId?'#F0F6FF':'';
+    row.style.borderColor=row.dataset.scopeId===scopeId?'var(--brand,#1E6FEB)':'';
+  });
+  document.querySelectorAll('.award-scope-radio').forEach(r=>{
+    const on=r.dataset.scopeId===scopeId;
+    r.style.borderColor=on?'var(--brand,#1E6FEB)':'var(--border-strong)';
+    r.innerHTML=on?'<div style="width:8px;height:8px;border-radius:50%;background:var(--brand,#1E6FEB)"></div>':'';
+  });
+  awardScopePickCallbackAfterLink=scopeId;
+  const linkBtn=document.getElementById('award-scope-link-btn');
+  if(linkBtn)linkBtn.disabled=false;
+}
+
+function closeAwardScopeModal(){
+  document.getElementById('award-scope-overlay').style.display='none';
+  document.getElementById('award-scope-modal').style.display='none';
+}
+
+// Links the picked scope onto the Bid Round's Linked Scope field, then
+// either resumes the interrupted Mark as Awarded Bid (only when this
+// prompt was triggered by that button finding no scope -- tracked via
+// awardScopePickResumeAward, set explicitly by markAsAwardedBid rather
+// than inferred from panel visibility) or, if opened via the "Change"
+// link for a routine scope swap, just relinks and refreshes Step 2
+// without forcing an award the PM didn't ask for.
+async function confirmAwardScopeLink(){
+  const scopeId=awardScopePickCallbackAfterLink;
+  if(!scopeId)return;
+  const st=awardFlowState;
+  const round=BID_ROUNDS_CACHE.find(r=>r.id===st.roundId);
+  const updRes=await atUpdate('Bid Rounds',st.roundId,{'Linked Scope':[scopeId]});
+  if(!updRes){showToast('Could not link this scope. Please try again.','error');return;}
+  if(round)round['Linked Scope']=[scopeId];
+  closeAwardScopeModal();
+  const shouldResumeAward=awardScopePickResumeAward;
+  awardScopePickResumeAward=false;
+  if(!st||st.step!==2)return;
+  renderAwardStep2();
+  if(shouldResumeAward)await finalizeAward(scopeId);
 }
 
 
@@ -17538,7 +18178,19 @@ function recalcScheduleTotal(){
 const LINE_ITEM_ROW_CONFIG={
   RelatedWork:{
     container:'bsf-rows-relatedwork',
-    fields:[{key:'Vendor',type:'text',placeholder:'Vendor name',width:'140px'},{key:'Description',type:'text',placeholder:'Description (e.g. Fire life safety)',width:'1fr'},{key:'Amount',type:'currency',placeholder:'$0.00',width:'140px'}],
+    // v67b -- Category added (dropdown mirrors DEP_CATEGORIES so an awarded
+    // bid's Related Work items map cleanly onto Dependency categories at
+    // auto-flow time). 'Other' reveals a per-row free-text field, same
+    // show/hide pattern as Dependencies' Category-Other, just scoped to
+    // this one row instead of a single global field -- see 'otherKey' on
+    // lineItemRowHtml's select branch.
+    // Field keys match the real Airtable column names on Bid Line Items
+    // exactly ('Related Work Category' / 'Related Work Category - Other'
+    // -- created as their own fields rather than reusing the pre-existing
+    // 'Category'/'Category - Other' columns, since those already carry a
+    // different, unrelated choice set (Scope/Contract/Maintenance) used by
+    // other line item types).
+    fields:[{key:'Related Work Category',type:'select',options:DEP_CATEGORIES,otherKey:'Related Work Category - Other',required:true,width:'160px'},{key:'Vendor',type:'text',placeholder:'Vendor name',width:'140px'},{key:'Description',type:'text',placeholder:'Description (e.g. Fire life safety)',width:'1fr'},{key:'Amount',type:'currency',placeholder:'$0.00',width:'140px'}],
   },
   Alternate:{
     container:'bsf-rows-alternate',
@@ -17581,11 +18233,33 @@ const LINE_ITEM_ROW_CONFIG={
 function lineItemRowHtml(type,item,rowId){
   const cfg=LINE_ITEM_ROW_CONFIG[type];
   const cols=cfg.fields.map(f=>f.width).join(' ')+' 28px';
+  // v67b -- otherRow accumulates a second grid line for any select field
+  // that declares otherKey (currently only RelatedWork's Category). Kept
+  // separate from `cells` so the toggle button/remove-X column alignment
+  // on the main row is untouched.
+  let otherRow='';
   const cells=cfg.fields.map(f=>{
     const val=item?(item[f.key]??''):'';
     const inputId=`bsf-li-${rowId}-${f.key.replace(/[^a-zA-Z]/g,'')}`;
     if(f.type==='select'){
-      return `<select class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" style="font-size:12px;padding:6px 8px">${f.options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select>`;
+      // v67b -- a real blank/placeholder option only when the row is new
+      // (no prefill value yet) and the field is marked required. Without
+      // this, a fresh row would silently default to the first real choice
+      // (e.g. 'Fire Life Safety') rather than truly being unset, which
+      // would defeat "Category required to save" -- a row that was never
+      // touched would look identical to one the PM deliberately chose Fire
+      // Life Safety for.
+      const blankOpt=(f.required&&!val)?`<option value="" selected disabled>Select category...</option>`:'';
+      const opts=`<select class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" ${f.required?'data-required="true"':''} ${f.otherKey?`data-other-key="${escHtml(f.otherKey)}" onchange="toggleBidLineItemOtherField(this)"`:''} style="font-size:12px;padding:6px 8px">${blankOpt}${f.options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select>`;
+      if(f.otherKey){
+        const otherVal=item?(item[f.otherKey]??''):'';
+        const otherId=`bsf-li-${rowId}-${f.otherKey.replace(/[^a-zA-Z]/g,'')}`;
+        const showOther=val==='Other';
+        otherRow+=`<div class="bsf-li-other-wrap" data-for="${inputId}" style="grid-column:1/-1;display:${showOther?'block':'none'};margin:-2px 0 4px 0">
+          <input type="text" class="form-input bsf-li-field" id="${otherId}" data-key="${f.otherKey}" placeholder="Specify ${f.key.toLowerCase()}" style="font-size:11.5px;padding:5px 8px;border:1px dashed var(--brand,#1E6FEB);border-radius:6px;width:160px" value="${escHtml(otherVal)}">
+        </div>`;
+      }
+      return opts;
     }
     if(f.type==='textarea'){
       return `<textarea class="form-input bsf-li-field" id="${inputId}" data-key="${f.key}" rows="2" placeholder="${f.placeholder}" style="font-size:12px;padding:6px 8px;resize:vertical">${escHtml(val)}</textarea>`;
@@ -17595,6 +18269,7 @@ function lineItemRowHtml(type,item,rowId){
   return `<div class="bsf-li-row" data-type="${type}" data-row-id="${rowId}" style="display:grid;grid-template-columns:${cols};gap:8px;margin-bottom:8px;align-items:start">
     ${cells}
     <button onclick="this.closest('.bsf-li-row').remove()" style="background:none;border:none;cursor:pointer;color:var(--gray-mid);padding:6px 0" title="Remove"><i class="ti ti-x"></i></button>
+    ${otherRow}
   </div>`;
 }
 
@@ -17617,6 +18292,22 @@ function addBidLineItemRow(type,prefillItem){
     // no-op for non-currency, but the remove button needs to trigger summary update
   });
   updateBidSummary();
+}
+
+// v67b -- toggles the per-row "Other" free-text field that sits directly
+// beneath a select of type otherKey (see lineItemRowHtml). Scoped to the
+// single row via data-for="<select id>" rather than a page-wide id, since
+// a form can have several RelatedWork rows open at once, each with its
+// own independent Other state -- unlike Dependencies' single global
+// toggleDepOtherField, which only ever has one Category select on screen.
+function toggleBidLineItemOtherField(selectEl){
+  const wrap=selectEl.closest('.bsf-li-row')?.querySelector(`.bsf-li-other-wrap[data-for="${selectEl.id}"]`);
+  if(!wrap)return;
+  wrap.style.display=selectEl.value==='Other'?'block':'none';
+  if(selectEl.value!=='Other'){
+    const otherInput=wrap.querySelector('input');
+    if(otherInput)otherInput.value='';
+  }
 }
 
 function renderAllLineItemRows(){
@@ -17774,6 +18465,20 @@ async function saveBidSubmissionForm(asDraft){
   if(tradeAssoc)qualParts.push(`Trade associations: ${tradeAssoc}`);
   if(union)qualParts.push(`Union affiliation: ${union}`);
   if(qualParts.length>0)fields['Bidder Qualifications']=qualParts.join(' · ');
+
+  // v67b -- block save (draft or submit) if any required line-item select
+  // (currently just Related Work's Category) was left on the blank
+  // placeholder. Checked directly against the rendered DOM rather than
+  // the collected items array, since a truly-unset select's value is ''
+  // either way and collectLineItemsFromForm has no concept of "required".
+  const unsetRequired=document.querySelectorAll('.bsf-li-field[data-required="true"]');
+  for(const el of unsetRequired){
+    if(!el.value){
+      showToast('Select a Category for every Related Work line before saving','error');
+      el.focus();
+      return;
+    }
+  }
 
   bidFormLineItems=collectLineItemsFromForm();
 
