@@ -1,4 +1,48 @@
 <!--
+pulse_v67f. Changes from v67e, this round. Requires no worker changes.
+Two items, batched into one build per standing rule:
+
+  1. Change Order client-visibility correction. v67d's fix filtered a
+    client's Ops Center to Status==='Approved' only, on the reasoning that
+    the existing Approve action's "Note to Client" modal implied
+    client-visibility begins at approval. Misty corrected this live: "it's
+    Pending Owner Approval still and that's what we're surfacing for
+    them" -- a 'Pending' Change Order can specifically mean pending the
+    client/owner's own approval, which the client needs to see, not hide.
+    Pulled the real Change Order Savings Log schema rather than guessing:
+    its Status field has 4 choices, not 3 -- Pending / Approved / Rejected
+    / Client Approved -- and the app's JS had never distinguished
+    'Client Approved' from 'Approved' anywhere in this block (though
+    other parts of the app, e.g. savings totals and CO document
+    auto-creation, already treat the two as equivalent). Also checked the
+    pre-existing "Fast Track" checkbox on the Change Order form per
+    Misty's pointer ("look at the code... it's a function built in change
+    order section") -- confirmed Fast Track writes plain
+    Status:'Approved' with no separate flag, so it needed no special
+    handling here. Confirmed the corrected rule with Misty directly
+    (AskUserQuestion): client sees Status==='Approved' OR
+    'Client Approved'; Pending and Rejected stay hidden. allCOs and
+    coApproved both updated so every downstream card/total stays
+    consistent; coPending (still Status==='Pending' only) is unchanged by
+    definition, since Pending is never client-visible regardless of what
+    it represents internally.
+
+  2. Change Orders Pending/Approved card headers now show a count plus a
+    total dollar value, per Misty's direct request ("add a summarized
+    total of pending... Change Order Approved should be the same with a
+    counter and a total value... to date"). Mocked up and iterated with
+    her (mcp__visualize__show_widget, 4 rounds) before writing any code,
+    per her standing preference. Final approved design: both the count
+    pill and the total-value pill on a card share that card's tint --
+    blue for Pending, green for Approved -- so the pair reads as one
+    unit; the Pending count pill changed from its old neutral/red tint to
+    blue to match, per Misty's last note ("Change Orders pending counter
+    should be blue too"). Total pill uses the existing fmtBudget()
+    compact formatter ($55K / $551K), at 17px/700 weight -- bumped up
+    from an initial 13px pass per Misty's direct ask ("font size of the
+    summary totals to be bumped up") so it reads as the card's headline
+    number, not secondary text.
+
 pulse_v67e. Changes from v67d, this round. Requires no worker changes.
 One self-inflicted bug, found and fixed same-session: the v67d changelog
 comment added to the .main CSS block (documenting the sidebar-collapse
@@ -5917,7 +5961,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67f</div>
     </div>
   </nav>
 
@@ -39079,19 +39123,19 @@ function renderOpsCenter(){
   // role, including client, with no visibility check at all (confirmed:
   // no role gate existed anywhere in this block, and Change Order Savings
   // Log has no Visibility/Published field the way Bid Submissions does).
-  // Checked what "approved and published to client" should actually mean
-  // with Misty before building anything: the existing Approve action
-  // already opens a modal asking the PM for an optional "Note to Client"
-  // -- that copy already implies the client sees it the moment it's
-  // approved, so rather than add a second, separate Publish step (a new
-  // Airtable field + toggle UI + an extra click a PM could forget), a
-  // client's Ops Center simply never sees Pending Change Orders at all --
-  // only ones that have cleared Approved. Every other role keeps seeing
-  // both Pending and Approved unchanged.
-  const allCOs=(window.CO_SAVINGS||[]).filter(c=>propFilter(c.property)&&(role!=='client'||c.status==='Approved'));
+  // v67f -- v67d's fix filtered client to Status==='Approved' only, which
+  // turned out to be wrong: Change Order Savings Log's real Status field
+  // has 4 choices (Pending / Approved / Rejected / Client Approved), and
+  // a 'Pending' record can specifically mean "pending the owner/client's
+  // own approval" -- something the client needs to see, not hide. Misty
+  // confirmed directly (AskUserQuestion): client sees Status==='Approved'
+  // OR 'Client Approved'; Pending and Rejected stay hidden. Every other
+  // role keeps seeing everything unchanged.
+  const allCOs=(window.CO_SAVINGS||[]).filter(c=>propFilter(c.property)&&(role!=='client'||c.status==='Approved'||c.status==='Client Approved'));
   const coPending=allCOs.filter(c=>c.status==='Pending').sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
-  const coApproved=allCOs.filter(c=>c.status==='Approved').sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+  const coApproved=allCOs.filter(c=>c.status==='Approved'||c.status==='Client Approved').sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
   const coPendingTotal=coPending.reduce((s,c)=>s+(Number(c.negotiatedAmount||c.originalAmount)||0),0);
+  const coApprovedTotal=coApproved.reduce((s,c)=>s+(Number(c.negotiatedAmount||c.originalAmount)||0),0);
   const _d30ago=new Date(today);_d30ago.setDate(_d30ago.getDate()-30);
   const coApprovedThisMonth=coApproved.filter(c=>c.date&&new Date(c.date)>=_d30ago).length;
 
@@ -39409,14 +39453,31 @@ function renderOpsCenter(){
       <span style="font-size:11.5px;font-weight:700;color:var(--navy);white-space:nowrap;flex-shrink:0">${fmtBudget(Number(c.negotiatedAmount||c.originalAmount)||0)}</span>
     </div>`;
   }
+  // v67f -- Count + total-value pills added to both card headers, per
+  // Misty's direct request ("add a summarized total of pending" / "same
+  // with a counter and a total value... to date"), mocked up and
+  // iterated with her (mcp__visualize__show_widget) before being built:
+  // both pills on a card share that card's tint (blue for Pending, green
+  // for Approved) so the pair reads as one unit at a glance -- the count
+  // pill was previously red on the Pending card, changed to blue here to
+  // match its own total pill rather than an unrelated urgency color.
+  const coHeaderPills=(count,total,tint)=>{
+    if(count===0)return '';
+    const bg=tint==='blue'?'var(--blue-pale)':'var(--green-pale)';
+    const fg=tint==='blue'?'var(--blue-dark)':'var(--green)';
+    return `<span style="display:inline-flex;align-items:center;gap:6px;margin-left:4px">`+
+      `<span style="font-size:10px;font-weight:700;color:${fg};background:${bg};padding:2px 7px;border-radius:9px">${count}</span>`+
+      `<span style="font-size:17px;font-weight:700;color:${fg};background:${bg};padding:5px 12px;border-radius:8px">${fmtBudget(total)}</span>`+
+      `</span>`;
+  };
   const coPendingCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Change Orders Pending',coPending.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${coPending.length}</span>`:'')}
+      ${panelTitle('Change Orders Pending',coHeaderPills(coPending.length,coPendingTotal,'blue'))}
       ${coPending.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing pending approval.</div>`:coPending.slice(0,6).map(c=>coRow(c,false)).join('')}
     </div>`;
   const coApprovedCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Change Orders Approved')}
+      ${panelTitle('Change Orders Approved',coHeaderPills(coApproved.length,coApprovedTotal,'green'))}
       ${coApproved.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">None approved yet.</div>`:coApproved.slice(0,6).map(c=>coRow(c,true)).join('')}
     </div>`;
 
