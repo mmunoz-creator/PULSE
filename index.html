@@ -1,4 +1,58 @@
 <!--
+pulse_v67a. Changes from v66m, this round. Requires worker_v44o (Approved
+Date stamp on Change Order Savings Log). Four items from Misty's direct
+requests this session, batched into one build per standing rule:
+
+  1. Operations Center visual pass, iterated live against screenshots
+    Misty pointed to directly:
+    - 30/60/90 Day Outlook: dots now colored one flat color per bucket
+      (This Week / Next 30 / Next 60-90), replacing the old per-item-type
+      coloring. Each row also shows the resolved property name (Misty:
+      "we also need to identify the project").
+    - Related Work snapshot reworked from Plan/Comp/Overdue status columns
+      to Owner columns (Owner/Facilities Team/Elevator Company/Consultant/
+      Other), per Misty's explicit request that the client be able to see
+      at a glance whether something needs coordination with their own
+      internal teams vs. the elevator company/consultant. Categories stay
+      as rows; each cell is colored by worst status present (Overdue >
+      Planned > Complete) with a legend explaining the color code, since
+      the column headers no longer state status directly. Category icons
+      now render in color (previously flat gray). Card content is
+      vertically centered in a flex wrapper so it doesn't float in dead
+      whitespace when grid-stretched to match the taller Outlook card
+      (confirmed live -- with only 4-6 categories the old table was much
+      shorter than its neighbor).
+    - Title case applied to "Related Work", "Category" column header (now
+      blue, matching "This Week"), "Upcoming Milestones", "Upcoming
+      Meetings", "Owner Decisions", "Change Orders Pending", "Change
+      Orders Approved" -- all previously sentence-case, inconsistent with
+      "30 / 60 / 90 Day Outlook" and other headers already title-cased.
+    - Change Orders Pending rows now show Submitted Date. Change Orders
+      Approved rows show both Submitted Date and Approved Date (new field,
+      see worker_v44o) -- the table previously had one Date field reused
+      for both submission and approval, with no true approved-on date.
+  2. "Cab Flooring" added as a new, distinct Related Work category --
+    deliberately separate from the existing "Cab Interiors" (itself
+    already collision-prone with the unrelated "Cab Interior Est." Unit
+    Inventory dollar field). Airtable choice added directly in the base by
+    Misty; code list updated to match spelling exactly.
+  3. Coordination Owner now shown as a tag on every row in the Related
+    Work portfolio slide-out panel (openDepsPortfolioPanel), which
+    previously showed category/property/scope/due-date only with no way
+    to tell who needs to actually handle the item without opening it.
+
+  Not done this round (explicitly held back): Related Work auto-flow
+  workflow (bid-awarded line items -> Dependency records), Help button KV
+  content pass, hiding Capital Plan nav for PM/Consultant/Client. All
+  three remain open for a future session.
+
+  Known gap, not fixed this round: live Dependencies records currently
+  have no Coordination Owner set and a Status value ("On Track") that
+  doesn't match the app's Planned/Complete/Overdue enum -- pre-existing
+  data hygiene issue, surfaced during this build's data review, not
+  introduced by it. The new Owner-column table will show blank/"Other"
+  for these until real data is entered.
+
 pulse_v66m. Changes from v66l, this round. Requires no worker changes.
 5 items, capped per Misty's explicit instruction after reviewing the live
 Ops Center ("if so we'll cap the changes as these two plus the other 3"):
@@ -4047,6 +4101,10 @@ async function loadAllData() {
       ec: r.fields['Elevator Company']||'',
       loggedBy: r.fields['Logged By']||'',
       date: r.fields['Date']||'',
+      // v67a — new field, set server-side when Status transitions to
+      // Approved (see worker v44o's CO PATCH handler). Existing approved
+      // records predate the field and will read '' here until re-saved.
+      approvedDate: r.fields['Approved Date']||'',
       notes: r.fields['Notes']||'',
       // v64b — free-text catch-all for line items that don't fit any other
       // field (direct instruction). Requires an "Additional Considerations"
@@ -5549,7 +5607,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66m</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67a</div>
     </div>
   </nav>
 
@@ -15764,7 +15822,15 @@ const DEP_STATUS_BG={'Planned':'var(--blue-pale)','Complete':'var(--green-pale)'
 // safe to ship, but worth a quick look at the Dependencies table's Category
 // field next time Airtable access is back, just to confirm they landed
 // clean rather than as some default color/position.
-const DEP_CATEGORIES=['Fire Life Safety','HVAC','Electrical Upgrades','Controlled Access (Card Reader)','Cab Interiors','Security Cameras','Barricades','Other'];
+// v67a — added 'Cab Flooring' as its own distinct category, per Misty's
+// direct request. Deliberately separate from 'Cab Interiors' (which
+// already exists here, and separately collides with the unrelated 'Cab
+// Interior Est.' Unit Inventory dollar field) rather than folded into it
+// — Misty's explicit call after being shown the naming overlap. Airtable
+// choice added directly in the base by Misty (MCP field-choice writes
+// aren't supported by the connected Airtable tool for existing
+// singleSelect fields); spelling here must match exactly.
+const DEP_CATEGORIES=['Fire Life Safety','HVAC','Electrical Upgrades','Controlled Access (Card Reader)','Cab Interiors','Cab Flooring','Security Cameras','Barricades','Other'];
 function depCategoryLabel(d){return d.category==='Other'?(d.categoryOther||'Other'):d.category;}
 function depOwnerLabel(d){return d.owner==='Other'?(d.ownerOther||'Other'):d.owner;}
 
@@ -16242,7 +16308,7 @@ function renderDepsPortfolioList(){
   deps.forEach(d=>{if(!grouped[d.status])grouped[d.status]=[];grouped[d.status].push(d);});
   order.forEach(st=>{if(grouped[st])grouped[st].sort((a,b)=>new Date(a.due||'9999-12-31')-new Date(b.due||'9999-12-31'));});
 
-  const DEP_CAT_ICON={'Fire Life Safety':'ti-flame','Controlled Access (Card Reader)':'ti-shield-lock','Cab Interiors':'ti-armchair','Barricades':'ti-fence','Security Cameras':'ti-video','Electrical Upgrades':'ti-bolt','HVAC':'ti-wind'};
+  const DEP_CAT_ICON={'Fire Life Safety':'ti-flame','Controlled Access (Card Reader)':'ti-shield-lock','Cab Interiors':'ti-armchair','Cab Flooring':'ti-square','Barricades':'ti-fence','Security Cameras':'ti-video','Electrical Upgrades':'ti-bolt','HVAC':'ti-wind'};
   const STATUS_COLOR={Overdue:'var(--red)',Planned:'var(--blue-dark)',Complete:'var(--green)'};
   const STATUS_BG={Overdue:'var(--red-pale)',Planned:'var(--blue-pale)',Complete:'var(--green-pale)'};
 
@@ -16257,12 +16323,21 @@ function renderDepsPortfolioList(){
         // implementation of what a countdown string means, not two.
         const countdown=depDueCountdown(d);
         const dueLabel=!d.due?'No due date':(countdown||fmtDate(d.due));
+        // v67a -- Coordination Owner surfaced on each row, per Misty's
+        // direct request. This panel previously showed category/property/
+        // scope/due-date only, with no way to tell who (Owner, Facilities
+        // Team, Elevator Company, Consultant, Other) needs to actually
+        // handle the item without opening it. depOwnerLabel() already
+        // existed (used elsewhere for the edit modal); reused here rather
+        // than re-deriving the Other/free-text fallback logic.
+        const ownerLabel=depOwnerLabel(d)||'Unassigned';
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="closeDepsPortfolioPanel();openProperty('${(d._property||'').replace(/'/g,"\\'")}')">
           <div style="display:flex;align-items:center;gap:10px;min-width:0">
             <div style="width:28px;height:28px;border-radius:8px;background:${STATUS_BG[st]};color:${STATUS_COLOR[st]};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0"><i class="ti ${icon}"></i></div>
             <div style="min-width:0"><div style="font-size:12.5px;font-weight:600;color:var(--navy)">${escHtml(depCategoryLabel(d)||'Uncategorized')}</div><div style="font-size:11px;color:var(--gray-mid)">${escHtml(d._property||'Unknown property')}${d._scopeName?' · '+escHtml(d._scopeName):''}</div></div>
           </div>
-          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:9px;background:var(--gray-xpale);color:var(--gray-mid);white-space:nowrap">${escHtml(ownerLabel)}</span>
             <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;background:${STATUS_BG[st]};color:${STATUS_COLOR[st]};white-space:nowrap">${escHtml(dueLabel)}</span>
             <i class="ti ti-chevron-right" style="color:var(--blue-dark);font-size:15px"></i>
           </div>
@@ -35860,6 +35935,9 @@ async function pollChangeOrders(){
       ec: r.fields['Elevator Company']||'',
       loggedBy: r.fields['Logged By']||'',
       date: r.fields['Date']||'',
+      // v67a — new field, set server-side when Status transitions to
+      // Approved (see worker v44o's CO PATCH handler).
+      approvedDate: r.fields['Approved Date']||'',
       notes: r.fields['Notes']||'',
       additionalConsiderations: r.fields['Additional Considerations']||'',
       linkedUnitIds: r.fields['Linked Units']||[],
@@ -37941,17 +38019,31 @@ function renderOpsCenter(){
     const sc=(window.SCOPES||[]).find(s=>s.id===d.scopeId);
     return sc?propFilter(sc.property):true;
   });
+  // v67a -- Related Work snapshot reworked from a Plan/Comp/Overdue status
+  // breakdown to an Owner breakdown, per Misty's direct request: the goal
+  // is for the client to see at a glance whether something needs their own
+  // internal teams' coordination (Owner/Facilities Team) vs. the elevator
+  // company/consultant's. Columns are now the four real Coordination Owner
+  // dropdown values plus Other (see #dep-owner select), rows stay Category.
+  // Each category x owner cell tracks its own status breakdown so the cell
+  // can still be colored by worst status (Overdue > Planned > Complete),
+  // same status vocabulary as before -- just cross-tabbed against owner
+  // instead of collapsed into one Plan/Comp/Overdue row per category.
+  const DEP_OWNER_COLS=['Owner','Facilities Team','Elevator Company','Consultant','Other'];
   const depsByCategory={};
   allDeps.forEach(d=>{
     const label=depCategoryLabel(d)||'Uncategorized';
-    if(!depsByCategory[label])depsByCategory[label]={planned:0,complete:0,overdue:0};
-    if(d.status==='Planned')depsByCategory[label].planned++;
-    else if(d.status==='Complete')depsByCategory[label].complete++;
-    else if(d.status==='Overdue')depsByCategory[label].overdue++;
+    const ownerLabel=depOwnerLabel(d)||'Other';
+    const ownerCol=DEP_OWNER_COLS.includes(ownerLabel)?ownerLabel:'Other';
+    if(!depsByCategory[label])depsByCategory[label]={};
+    if(!depsByCategory[label][ownerCol])depsByCategory[label][ownerCol]={planned:0,complete:0,overdue:0};
+    if(d.status==='Planned')depsByCategory[label][ownerCol].planned++;
+    else if(d.status==='Complete')depsByCategory[label][ownerCol].complete++;
+    else if(d.status==='Overdue')depsByCategory[label][ownerCol].overdue++;
   });
   const depsCatRows=Object.keys(depsByCategory).sort();
   const depsOverdueCount=allDeps.filter(d=>d.status==='Overdue').length;
-  const DEP_CAT_ICON={'Fire Life Safety':'ti-flame','Controlled Access (Card Reader)':'ti-shield-lock','Cab Interiors':'ti-armchair','Barricades':'ti-fence','Security Cameras':'ti-video','Electrical Upgrades':'ti-bolt','HVAC':'ti-wind'};
+  const DEP_CAT_ICON={'Fire Life Safety':'ti-flame','Controlled Access (Card Reader)':'ti-shield-lock','Cab Interiors':'ti-armchair','Cab Flooring':'ti-square','Barricades':'ti-fence','Security Cameras':'ti-video','Electrical Upgrades':'ti-bolt','HVAC':'ti-wind'};
 
   // Due-in-30-days count across Dependencies, for the stat header.
   const depsDueSoon=allDeps.filter(d=>{
@@ -38056,18 +38148,26 @@ function renderOpsCenter(){
   // date, shown as an approval-due marker), and Milestones into one
   // date-sorted list, bucketed the same way the rest of this page already
   // buckets by horizon (this week / next 30 / next 60-90).
+  // v67a -- each item now also carries a resolved property name (per
+  // Misty's direct request: "we also need to identify the project"), and
+  // the per-item .color that used to distinguish item type (dependency vs
+  // CO approval vs milestone) is dropped in favor of one color per bucket,
+  // applied uniformly at render time in outlookBucket() below -- also per
+  // direct request ("30 day dots are the same color, 60 day dots are the
+  // same color, and 90 day dots are the same color").
   const outlookItems=[];
   allDeps.forEach(d=>{
     if(d.status!=='Planned'||!d.due)return;
-    outlookItems.push({date:d.due,label:depCategoryLabel(d)||'Dependency',color:'var(--blue-dark)'});
+    const sc=(window.SCOPES||[]).find(s=>s.id===d.scopeId);
+    outlookItems.push({date:d.due,label:depCategoryLabel(d)||'Dependency',property:sc?.property||''});
   });
   coPending.forEach(c=>{
     if(!c.date)return;
-    outlookItems.push({date:c.date,label:`CO approval — ${c.property||''}`,color:'var(--amber)'});
+    outlookItems.push({date:c.date,label:'CO approval',property:c.property||''});
   });
   (window.MILESTONES||[]).forEach(m=>{
     if(!propFilter(m.property)||!m.plannedDate||m.status==='Complete')return;
-    outlookItems.push({date:m.plannedDate,label:m.milestoneName||'Milestone',color:m.status==='At Risk'?'var(--red)':'var(--gray-light)'});
+    outlookItems.push({date:m.plannedDate,label:m.milestoneName||'Milestone',property:m.property||''});
   });
   outlookItems.forEach(it=>{it._date=new Date(it.date+'T12:00:00');});
   const _d7=new Date(today);_d7.setDate(_d7.getDate()+7);
@@ -38107,40 +38207,93 @@ function renderOpsCenter(){
     </div>`;
 
   // ── ROW 1: 30/60/90 OUTLOOK + RELATED WORK ──────────────────────────
-  function outlookBucket(label,color,items){
-    return `<div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.04em;margin:${label==='This week'?'0':'10px'} 0 6px">${label}</div>
+  // v67a -- dotColor is now one flat color per bucket (This Week / Next 30
+  // / Next 60-90), applied to every dot in that bucket regardless of item
+  // type. labelColor stays the bucket's header color throughout.
+  function outlookBucket(label,dotColor,items){
+    return `<div style="font-size:10px;font-weight:700;color:${dotColor};text-transform:uppercase;letter-spacing:.04em;margin:${label==='This week'?'0':'10px'} 0 6px">${label}</div>
       ${items.length===0?`<div style="font-size:11px;color:var(--gray-light);padding:2px 0 2px 4px">Nothing scheduled</div>`:items.map(it=>`
       <div style="position:relative;padding:5px 0 5px 4px">
-        <div style="position:absolute;left:-18px;top:10px;width:9px;height:9px;border-radius:50%;background:${it.color};border:2px solid #fff;box-shadow:0 0 0 1px ${it.color}"></div>
-        <div style="font-size:11.5px;color:var(--gray-mid)">${fmtDateShort(it.date)} <span style="color:var(--navy);font-weight:600">${escHtml(it.label)}</span></div>
+        <div style="position:absolute;left:-18px;top:10px;width:9px;height:9px;border-radius:50%;background:${dotColor};border:2px solid #fff;box-shadow:0 0 0 1px ${dotColor}"></div>
+        <div style="font-size:11.5px;color:var(--gray-mid)">${fmtDateShort(it.date)} <span style="color:var(--navy);font-weight:600">${escHtml(it.label)}</span>${it.property?` <span style="color:var(--gray-mid)">· ${escHtml(it.property)}</span>`:''}</div>
       </div>`).join('')}`;
   }
   const outlookCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('30 / 60 / 90 day outlook')}
+      ${panelTitle('30 / 60 / 90 Day Outlook')}
       <div style="position:relative;padding-left:18px">
         <div style="position:absolute;left:5px;top:4px;bottom:4px;width:2px;background:var(--border)"></div>
         ${outlookBucket('This week','var(--blue-dark)',outlookThisWeek)}
-        ${outlookBucket('Next 30 days','var(--gray-mid)',outlookNext30)}
-        ${outlookBucket('Next 60–90 days','var(--gray-mid)',outlookNext60to90)}
+        ${outlookBucket('Next 30 days','var(--teal)',outlookNext30)}
+        ${outlookBucket('Next 60–90 days','var(--purple)',outlookNext60to90)}
       </div>
     </div>`;
+  // v67a -- Related Work snapshot reworked from Plan/Comp/Overdue columns
+  // to Owner columns (Owner/Facilities Team/Elevator Company/Consultant/
+  // Other), per Misty's direct request: she wants the client to see at a
+  // glance whether something needs coordination with their own internal
+  // teams vs. the elevator company/consultant. Categories stay as rows.
+  // Each cell shows the item count for that category+owner, colored by the
+  // worst status present in that cell (Overdue > Planned > Complete) --
+  // same three-state status vocabulary the old Plan/Comp/Over columns
+  // used, just cross-tabbed against owner now. A legend at the bottom
+  // explains the color code since the column headers no longer state it
+  // directly. Card content is wrapped in a flex column with
+  // justify-content:center so it doesn't float in dead space at the top
+  // when this card is grid-stretched to match the taller outlook card
+  // next to it (confirmed live -- with only 4-6 categories the table was
+  // much shorter than the outlook card, leaving a large empty gap below).
+  function depCellColor(cell){
+    if(!cell||(!cell.planned&&!cell.complete&&!cell.overdue))return null;
+    if(cell.overdue>0)return {n:cell.planned+cell.complete+cell.overdue,fg:'var(--red)'};
+    if(cell.planned>0)return {n:cell.planned+cell.complete+cell.overdue,fg:'var(--amber)'};
+    return {n:cell.planned+cell.complete+cell.overdue,fg:'var(--green)'};
+  }
+  const DEP_OWNER_COL_LABEL={'Owner':'Owner','Facilities Team':'Facilities','Elevator Company':'Elev. co.','Consultant':'Consult.','Other':'Other'};
+  // v67a -- category icons now render in color (per Misty's direct
+  // request: "Related work icons should be in color"), one fixed identity
+  // color per category so each row reads distinctly at a glance. Reuses
+  // the existing badge palette (same colors as the stat header/other Ops
+  // Center badges) rather than introducing new hues. Falls back to
+  // gray-mid for any category not in this map (e.g. 'Other'/custom
+  // categories via the free-text field).
+  const DEP_CAT_ICON_COLOR={'Fire Life Safety':'var(--red)','HVAC':'var(--teal)','Electrical Upgrades':'var(--amber)','Controlled Access (Card Reader)':'var(--indigo)','Cab Interiors':'var(--purple)','Cab Flooring':'var(--purple)','Security Cameras':'var(--blue-dark)','Barricades':'var(--gray-mid)'};
   const relatedWorkCard=`
-    <div class="card" style="border-radius:12px">
-      ${panelTitle('Related work',null,{label:'View all',onclick:'openDepsPortfolioPanel()'})}
+    <div class="card" style="border-radius:12px;height:100%;display:flex;flex-direction:column">
+      ${panelTitle('Related Work',null,{label:'View all',onclick:'openDepsPortfolioPanel()'})}
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center">
       ${depsCatRows.length===0
         ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No related work logged across the portfolio yet.</div>`
         :`<table style="width:100%;border-collapse:collapse;font-size:11.5px">
-            <thead><tr><th style="text-align:left;padding:0 6px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Category</th><th style="text-align:right;padding:0 6px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--blue-dark);font-weight:700">Plan</th><th style="text-align:right;padding:0 6px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--green);font-weight:700">Comp</th><th style="text-align:right;padding:0 0 7px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--red);font-weight:700">Over</th></tr></thead>
-            <tbody>${depsCatRows.map((cat,i)=>{const c=depsByCategory[cat];const icon=DEP_CAT_ICON[cat]||'ti-affiliate';return `<tr><td style="padding:7px 6px 7px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};font-weight:600;color:var(--navy)"><i class="ti ${icon}" style="font-size:13px;color:var(--gray-mid);margin-right:5px"></i>${escHtml(cat)}</td><td style="text-align:right;padding:7px 6px 7px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--blue-dark)">${c.planned||''}</td><td style="text-align:right;padding:7px 6px 7px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--green)">${c.complete||''}</td><td style="text-align:right;padding:7px 0 7px;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--red);font-weight:${c.overdue>0?'700':'400'}">${c.overdue||''}</td></tr>`;}).join('')}</tbody>
-          </table>`
+            <thead><tr>
+              <th style="text-align:left;padding:0 6px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--blue-dark);font-weight:700">Category</th>
+              ${DEP_OWNER_COLS.map(oc=>`<th style="text-align:center;padding:0 4px 7px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">${escHtml(DEP_OWNER_COL_LABEL[oc])}</th>`).join('')}
+            </tr></thead>
+            <tbody>${depsCatRows.map((cat,i)=>{
+              const icon=DEP_CAT_ICON[cat]||'ti-affiliate';
+              const rowBorder=i>0?'border-top:1px solid var(--gray-xpale)':'';
+              const cells=DEP_OWNER_COLS.map(oc=>{
+                const info=depCellColor(depsByCategory[cat][oc]);
+                return `<td style="text-align:center;padding:7px 4px;${rowBorder};color:${info?info.fg:'var(--gray-light)'};font-weight:${info?700:400}">${info?info.n:'—'}</td>`;
+              }).join('');
+              const iconColor=DEP_CAT_ICON_COLOR[cat]||'var(--gray-mid)';
+              return `<tr><td style="padding:7px 6px 7px 0;${rowBorder};font-weight:600;color:var(--navy);white-space:nowrap"><i class="ti ${icon}" style="font-size:13px;color:${iconColor};margin-right:5px"></i>${escHtml(cat)}</td>${cells}</tr>`;
+            }).join('')}</tbody>
+          </table>
+          <div style="display:flex;align-items:center;gap:14px;margin-top:12px;padding-top:10px;border-top:1px solid var(--gray-xpale)">
+            <span style="font-size:10px;color:var(--gray-mid)">Status</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-mid)"><span style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block"></span>Complete</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-mid)"><span style="width:7px;height:7px;border-radius:50%;background:var(--amber);display:inline-block"></span>Planned</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-mid)"><span style="width:7px;height:7px;border-radius:50%;background:var(--red);display:inline-block"></span>Overdue</span>
+          </div>`
       }
+      </div>
     </div>`;
 
   // ── ROW 2: MILESTONES + MEETINGS + OWNER DECISIONS ──────────────────
   const milestonesCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Upcoming milestones')}
+      ${panelTitle('Upcoming Milestones')}
       ${upcomingMilestones.length===0
         ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing in the next 90 days.</div>`
         :upcomingMilestones.map(m=>{
@@ -38154,7 +38307,7 @@ function renderOpsCenter(){
     </div>`;
   const meetingsCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Upcoming meetings')}
+      ${panelTitle('Upcoming Meetings')}
       ${upcomingMeetings.length===0
         ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing scheduled.</div>`
         :upcomingMeetings.map(m=>`<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
@@ -38165,7 +38318,7 @@ function renderOpsCenter(){
     </div>`;
   const ownerDecisionsCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Owner decisions')}
+      ${panelTitle('Owner Decisions')}
       ${ownerDecisionItems.length===0
         ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing waiting on the owner.</div>`
         :ownerDecisionItems.slice(0,6).map(it=>{
@@ -38181,21 +38334,33 @@ function renderOpsCenter(){
     </div>`;
 
   // ── ROW 3: CHANGE ORDERS PENDING + APPROVED ─────────────────────────
+  // v67a -- date column added per Misty's direct request: Pending shows
+  // Submitted Date (c.date, the existing field), Approved shows both
+  // Submitted Date and Approved Date (c.approvedDate, new field --
+  // Change Order Savings Log previously had only one Date field, reused
+  // for both submission and approval and overwritten on status change, so
+  // there was no way to show a true approved-on date; a dedicated
+  // "Approved Date" Airtable field was added this round, set server-side
+  // when Status transitions to Approved -- see worker v44o. Pre-existing
+  // approved records won't have it retroactively and show 'Not recorded'.
   function coRow(c,approved){
+    const dateLine=approved
+      ?`Submitted ${c.date?fmtDateShort(c.date):'—'} · Approved ${c.approvedDate?fmtDateShort(c.approvedDate):'not recorded'}`
+      :`Submitted ${c.date?fmtDateShort(c.date):'—'}`;
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(c.property||'').replace(/'/g,"\\'")}')">
       ${smallBadge(approved?'ti-circle-check':'ti-file-invoice',approved?'var(--green-pale)':'var(--blue-pale)',approved?'var(--green)':'var(--blue-dark)')}
-      <div style="flex:1;min-width:0"><p style="font-size:12px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(c.description||'Change order')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(c.property||'')}</p></div>
+      <div style="flex:1;min-width:0"><p style="font-size:12px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(c.description||'Change order')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(c.property||'')} · ${dateLine}</p></div>
       <span style="font-size:11.5px;font-weight:700;color:${approved?'var(--green)':'var(--navy)'};white-space:nowrap;flex-shrink:0">${fmtBudget(Number(c.negotiatedAmount||c.originalAmount)||0)}</span>
     </div>`;
   }
   const coPendingCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Change orders pending',coPending.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${coPending.length}</span>`:'')}
+      ${panelTitle('Change Orders Pending',coPending.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${coPending.length}</span>`:'')}
       ${coPending.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing pending approval.</div>`:coPending.slice(0,6).map(c=>coRow(c,false)).join('')}
     </div>`;
   const coApprovedCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Change orders approved')}
+      ${panelTitle('Change Orders Approved')}
       ${coApproved.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">None approved yet.</div>`:coApproved.slice(0,6).map(c=>coRow(c,true)).join('')}
     </div>`;
 
