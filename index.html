@@ -1,4 +1,27 @@
 <!--
+pulse_v67e. Changes from v67d, this round. Requires no worker changes.
+One self-inflicted bug, found and fixed same-session: the v67d changelog
+comment added to the .main CSS block (documenting the sidebar-collapse
+width fix) was never closed with a closing comment marker, so every real
+CSS rule after it in that <style> block -- .main-inner, .mobile-topbar
+(including its own display:none), .mobile-topbar-logo, .mobile-topbar-logo
+i, .mobile-menu-btn -- got silently swallowed into the unterminated
+comment and never applied. node --check only validates the <script>
+blocks, not CSS inside <style> tags, so this shipped in v67d undetected.
+Effect: .mobile-topbar had no display:none to suppress it on desktop, so
+it rendered inline at the top of the content area -- a small floating
+PULSE logo plus a hamburger menu button, sitting right above "Dashboard".
+Misty reported this live ("gray floating PULSE + icon + gray box in the
+top right corner... this look strange"). Investigated against her actual
+live v67d session rather than guessed at: inspected the parsed CSSOM
+directly and found .mobile-topbar's rule text present in the raw
+stylesheet source but never registered as a real CSSOM rule -- traced
+that to the unclosed comment, confirmed by live-patching a corrective
+rule into her session and watching the floating element disappear before
+writing the real fix. Also re-swept the entire inline stylesheet
+programmatically for any other unclosed comments before calling this
+done -- none found; this was the only one.
+
 pulse_v67d. Changes from v67c, this round. Requires no worker changes.
 Four items from Misty's direct feedback on the v67c live screenshots:
 
@@ -2536,7 +2559,26 @@ visible next to the icon, so a duplicate tooltip would be redundant. */
    are adjacent siblings in the markup (nav#sidebar immediately followed
    by div.main), so a sibling selector keyed off .collapsed is enough --
    no JS/inline-style changes needed, matches the "one CSS class drives
-   it" approach the original collapse feature used.
+   it" approach the original collapse feature used. */
+/* v67e -- self-inflicted bug fixed: the comment directly above this one
+   was never closed with a closing star-slash in the v67d build, so every
+   real CSS rule after it -- .main-inner, .mobile-topbar (its display:none
+   included), .mobile-topbar-logo, .mobile-topbar-logo i, .mobile-menu-btn
+   -- got silently swallowed into the comment and never registered as
+   real CSS. node --check only validates the <script> blocks, not CSS
+   inside <style>, so this passed the standing syntax-verification step
+   without being caught. Effect: .mobile-topbar had no display:none to
+   suppress it, so it fell back to a <div>'s browser-default display:block
+   and rendered inline at the top of .main on desktop -- exactly the
+   floating PULSE-logo-plus-hamburger-button Misty reported live, reached
+   via her actual v67d session, confirmed by inspecting the live page's
+   parsed CSSOM directly (494 rules parsed with no syntax errors, but zero
+   top-level rule with selector text ".mobile-topbar" -- the rule text was
+   present in the source but never became a real rule). Root-caused before
+   touching anything further: dumped the raw <style> text and found the
+   unclosed /* immediately preceding .main-inner. Fixed by closing the
+   comment here; no other change needed since the rules below were always
+   correct, they just needed to stop being commentary. */
 .main-inner{flex:1;display:flex;flex-direction:column;}
 .mobile-topbar{display:none;background:var(--navy);padding:.75rem 1rem;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:30}
 .mobile-topbar-logo{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;color:white}
@@ -5875,7 +5917,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67d</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67e</div>
     </div>
   </nav>
 
