@@ -1,4 +1,77 @@
 <!--
+pulse_v66l. Changes from v66k, this round. Requires no worker changes.
+Full Operations Center rebuild, per Misty's explicit dissatisfaction with
+the prior version ("nothing like the inspiration photos... I hate the
+blandness") and several rounds of mockup alignment this session (visualize
+tool, matching Dashboard's real stat-card/panelTitle/badge visual language
+after a first attempt read too generic/CDS-styled). Locked layout: 5-stat
+header (Overdue dependencies, Due in 30 days, Change orders pending,
+Approved this month, Awaiting owner) + an Ask MARLI insight ribbon
+matching Dashboard's own, then four rows in a 2/3/2/3 card rhythm per
+Misty's direct call ("not everything has to be represented as three
+cards... visual variation... that's what Dashboard has right now"):
+  Row 1 (2, wide): 30/60/90 Day Outlook (dot timeline merging Dependencies
+    due dates, pending Change Order approvals, and Milestones) +
+    Dependencies & Coordination (kept this name -- Misty considered
+    "Related Work" but that term already means something else specific in
+    PULSE, a bid line-item category and a Unit Inventory budget field; see
+    the in-code comment above renderOpsCenter() for the real idea
+    underneath that naming question, parked as a future feature).
+  Row 2 (3): Upcoming Milestones (90-day window, matching the outlook
+    card) + Upcoming Meetings (new -- Misty caught this was missing) +
+    Owner Decisions (unifies Change Orders awaiting client approval with
+    Bid Rounds that are Published-but-undecided into one queue, per
+    Misty's framing that these are "Owner Dependencies" conceptually, not
+    a to-do list -- kept as a display-layer grouping over existing
+    CO_SAVINGS/Bid data rather than generating new Dependency records, per
+    her explicit call not to merge those tables and risk creating noise).
+  Row 3 (2, wide): Change Orders Pending + Change Orders Approved, from
+    window.CO_SAVINGS (status Pending/Approved).
+  Row 4 (3): Budget Overrun Watch (properties where Billing Log billed-to-
+    date exceeds the sum of their Scopes' approvedBudget field -- the
+    simple, unambiguous flag Misty chose over a billing-vs-progress-rate
+    signal) + Activity Feed (same field-update/PM-update merge Dashboard's
+    own Action Board already uses) + Bid Rounds Awaiting Review (new data
+    source, see below).
+No role gating on any of this -- confirmed directly with Misty this round
+("Everyone should see Dependencies and therefore everyone should see the
+Ops Center... probably best to just change Ops Center in place"), reversing
+the original admin-only framing the Dependencies section shipped with
+back in v66e.
+New portfolio-wide data source: window.BID_ROUNDS / window.BID_SUBMISSIONS,
+added to loadAllData()'s main Promise.all (2 more parallel Airtable
+fetches on every load, per Misty's explicit choice -- "Add Bid Rounds +
+Submissions to loadAllData()"). Bid Rounds/Submissions were previously
+fetched only on-demand inside renderBidsTab(), correct for that single-
+property view but leaving no portfolio-wide bid data anywhere in the app.
+This is a SEPARATE cache from the existing per-property BID_ROUNDS_CACHE/
+BID_SUBMISSIONS_CACHE globals renderBidsTab() already owns -- that
+function and its filtering logic are completely untouched.
+New slide-out: Dependencies & Coordination's "View all" opens
+deps-portfolio-panel (openDepsPortfolioPanel()), a 900px right-edge panel
+matching the vdatl-panel/edit-prop-panel pattern already used elsewhere in
+PULSE, per Misty's direct request ("I want the slider to open like
+billing tasks does on VDA Projects"). Originally scoped as either a
+property-grouped or category-grouped list, but Misty flagged the real
+scaling problem directly: "even in option B a list of 29 properties or 50
+properties would be too many... can the slider panel have a filter aspect
+to it or a search bar?" -- rebuilt as a single searchable/filterable feed
+instead (search by property or scope/project name, status chips defaulting
+to Overdue selected, category dropdown), so it stays usable regardless of
+portfolio size rather than scrolling through a wall of mostly-uninteresting
+rows. Rows show both property AND scope name, not just property, since
+Dependencies are scoped to a specific project/scope, not the property as a
+whole -- confirmed directly ("remember these are dependencies by
+projects").
+Also fixed in this round: getPropertyBilledAndBasis()'s own `basis` field
+(estimated+approved+awarded across the full unit-inventory pipeline) was
+deliberately NOT reused as Budget Overrun's denominator -- that's a much
+broader "potential investment" number than what "approved budget" means
+for an overrun flag. Used a direct sum of Scopes.approvedBudget instead,
+reusing only the `billed` half of that function (its lifetime-sum-across-
+Billing-Log logic was already correct).
+
+<!--
 pulse_v66k. Changes from v66j, this round. Requires no worker changes.
 Cash Flow Curve scenario sandbox fix, per Misty's direct request ("The
 cashflow adjusted scenario should also show me adjusted dollar amounts").
@@ -3281,12 +3354,24 @@ async function loadAllData() {
   // Loading in background - no overlay
   try {
     // Loading portfolio data...
-    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory, pmUpdates, meetingAttendeesRaw, dependencies] = await Promise.all([
+    // v66k-ops -- Bid Rounds/Bid Submissions added to the main load per
+    // Misty's explicit call ("Add Bid Rounds + Submissions to
+    // loadAllData()"). Previously fetched only on-demand, per-property,
+    // inside renderBidsTab() -- correct for that single-property view, but
+    // it meant there was no portfolio-wide bid data available anywhere in
+    // the app, which the new Operations Center "Bid Rounds Awaiting
+    // Review" card needs. This is a SEPARATE cache (window.BID_ROUNDS /
+    // window.BID_SUBMISSIONS) from the existing BID_ROUNDS_CACHE /
+    // BID_SUBMISSIONS_CACHE globals renderBidsTab() already owns --
+    // deliberately not touching that per-property code path or its
+    // filtering logic, since it works today and this is a portfolio-wide
+    // read-only rollup with different consumers.
+    const [props, subs, meets, actions, visits, docs, unitGroups, billingLog, milestones, clientComments, phaseSteps, coSavings, retainageReleases, scopes, unitInventory, pmUpdates, meetingAttendeesRaw, dependencies, bidRoundsAll, bidSubsAll] = await Promise.all([
       atGet('Properties'), atGet('Field Updates'),
       atGet('Meetings'), atGet('Action Items'), atGet('Site Visits'),
       atGet('Documents'), atGet('Unit Groups'), atGet('Billing Log'), atGet('Milestones'), atGet('Client Comments'),
       atGet('Phase Tasks'), atGet('Change Order Savings Log'), atGet('Retainage Releases'), atGet('Scopes'), atGet('Unit Inventory List'), atGet('PM Updates'),
-      atGet('Meeting Attendees'), atGet('Dependencies')
+      atGet('Meeting Attendees'), atGet('Dependencies'), atGet('Bid Rounds'), atGet('Bid Submissions')
     ]);
     console.log(`Loaded: ${props.length} properties, ${subs.length} submissions, ${meets.length} meetings, ${actions.length} actions, ${unitGroups.length} unit groups, ${billingLog.length} billing entries, ${milestones.length} milestones, ${phaseSteps.length} phase steps`);
     // v46a — Meeting Attendees was never fetched into memory at load, only
@@ -3955,6 +4040,31 @@ async function loadAllData() {
       due: r.fields['Due Date']||'',
       note: r.fields['Note']||'',
     })).sort((a,b)=>new Date(a.due||'9999-12-31')-new Date(b.due||'9999-12-31'));
+    // v66k-ops — portfolio-wide Bid Rounds/Submissions, separate from the
+    // per-property BID_ROUNDS_CACHE/BID_SUBMISSIONS_CACHE renderBidsTab()
+    // already owns (see the loadAllData() Promise.all comment above for
+    // why this is a second, additive cache rather than a shared one).
+    // Feeds Operations Center's "Bid Rounds Awaiting Review" card: a round
+    // counts as awaiting review when it has at least one Submission that's
+    // both Status='Submitted' and Visibility='Published' (published =
+    // visible to the client per the existing toggleBidRoundVisibility()
+    // workflow), and the round itself hasn't been marked Closed yet (a
+    // Closed round already has a final decision recorded, so it's no
+    // longer "awaiting" anything).
+    window.BID_ROUNDS = (bidRoundsAll||[]).map(r=>({
+      id: r.id,
+      property: resolvePropertyLink(r.fields['Property']),
+      scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      name: r.fields['Round Name']||'Untitled Round',
+      status: r.fields['Round Status']||'',
+    }));
+    window.BID_SUBMISSIONS = (bidSubsAll||[]).map(r=>({
+      id: r.id,
+      roundIds: r.fields['Bid Round']||[],
+      status: r.fields['Status']||'',
+      visibility: r.fields['Visibility']||'',
+      supplier: r.fields['Supplier Name']||'',
+    }));
     // v47a — VDA Project billing-tracking feature. Loaded fire-and-forget,
     // same pattern as backfillAllUnassignedUnits() below, so a slow VDA
     // Project table never blocks the rest of the app's initial render.
@@ -4765,6 +4875,48 @@ headings (e.g. "Log Change Order", "Edit Property"). -->
   </div>
 </div>
 
+<!-- v66k -- Operations Center's portfolio-wide Dependencies slide-out,
+per Misty's direct spec across several review rounds this session: "the
+slider to open like billing tasks does on VDA Projects" (same overlay +
+right-edge panel + navy header pattern as vdatl-panel), then refined to a
+single searchable/filterable feed rather than pre-grouped-by-property or
+pre-grouped-by-category lists, since either grouping breaks down once the
+portfolio grows past a handful of properties ("even in option B a list of
+29 properties or 50 properties would be too many... can the slider panel
+have a filter aspect to it or a search bar?"). Search matches property or
+scope name; status chips default to Overdue selected (the most actionable
+starting view) and can be toggled between Overdue/Planned/Complete;
+category filter narrows further. Rows show both property AND scope name
+per row, not just property, since a property can have multiple scopes/
+projects and a dependency is scoped to one specific project, not the
+property as a whole. -->
+<div id="deps-portfolio-overlay" onclick="closeDepsPortfolioPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="deps-portfolio-panel" style="display:none;position:fixed;top:0;right:0;width:640px;max-width:96vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div>
+      <div style="font-size:16px;font-weight:700;color:#85B7EB">Dependencies &amp; coordination</div>
+      <div style="font-size:12px;color:rgba(133,183,235,0.7)" id="deps-portfolio-subtitle"></div>
+    </div>
+    <button onclick="closeDepsPortfolioPanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px">
+    <div style="position:relative;margin-bottom:12px">
+      <i class="ti ti-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--gray-light);font-size:15px"></i>
+      <input class="form-input" id="deps-portfolio-search" placeholder="Search property or project" style="padding-left:34px" oninput="renderDepsPortfolioList()">
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      <span class="deps-portfolio-status-chip" data-status="Overdue" onclick="toggleDepsPortfolioStatusChip('Overdue')" style="font-size:11px;font-weight:700;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--red);color:#fff">Overdue</span>
+      <span class="deps-portfolio-status-chip" data-status="Planned" onclick="toggleDepsPortfolioStatusChip('Planned')" style="font-size:11px;font-weight:600;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--gray-pale);color:var(--gray-mid)">Planned</span>
+      <span class="deps-portfolio-status-chip" data-status="Complete" onclick="toggleDepsPortfolioStatusChip('Complete')" style="font-size:11px;font-weight:600;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--gray-pale);color:var(--gray-mid)">Complete</span>
+      <span style="width:1px;align-self:stretch;background:var(--border);margin:0 4px"></span>
+      <select class="form-input" id="deps-portfolio-category" style="font-size:11px;padding:5px 10px;width:auto;height:auto;border-radius:14px" onchange="renderDepsPortfolioList()">
+        <option value="">All categories</option>
+      </select>
+    </div>
+    <div id="deps-portfolio-list"></div>
+  </div>
+</div>
+
 <div id="billing-modal-overlay" onclick="closeBillingModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200"></div>
 <div id="billing-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border-radius:12px;padding:24px;width:420px;max-width:90vw;z-index:201;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -5348,7 +5500,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66l</div>
     </div>
   </nav>
 
@@ -15906,6 +16058,136 @@ async function deleteDepsBulk(){
     showToast('Could not delete these dependencies. Please try again.','error');
   }
 }
+
+// v66k -- Operations Center's portfolio-wide Dependencies slide-out. See
+// the markup comment above deps-portfolio-panel for the full design
+// rationale (search + filter over a flat feed, not pre-grouped lists,
+// per Misty's explicit scaling concern). Status chips default to Overdue
+// only selected on open; toggling a chip adds/removes it from the active
+// set rather than being a single-select radio, so e.g. Overdue+Planned
+// can be viewed together if useful. Category dropdown options are built
+// fresh from whatever categories actually exist in window.DEPENDENCIES
+// each time the panel opens, so a newly-added category never needs a
+// hardcoded update here.
+let depsPortfolioActiveStatuses=new Set(['Overdue']);
+function toggleDepsPortfolioStatusChip(status){
+  if(depsPortfolioActiveStatuses.has(status))depsPortfolioActiveStatuses.delete(status);
+  else depsPortfolioActiveStatuses.add(status);
+  const chip=document.querySelector(`.deps-portfolio-status-chip[data-status="${status}"]`);
+  if(chip){
+    const active=depsPortfolioActiveStatuses.has(status);
+    const colorMap={Overdue:'var(--red)',Planned:'var(--blue-dark)',Complete:'var(--green)'};
+    chip.style.background=active?colorMap[status]:'var(--gray-pale)';
+    chip.style.color=active?'#fff':'var(--gray-mid)';
+  }
+  renderDepsPortfolioList();
+}
+
+function openDepsPortfolioPanel(){
+  depsPortfolioActiveStatuses=new Set(['Overdue']);
+  [...document.querySelectorAll('.deps-portfolio-status-chip')].forEach(chip=>{
+    const status=chip.dataset.status;
+    const active=depsPortfolioActiveStatuses.has(status);
+    const colorMap={Overdue:'var(--red)',Planned:'var(--blue-dark)',Complete:'var(--green)'};
+    chip.style.background=active?colorMap[status]:'var(--gray-pale)';
+    chip.style.color=active?'#fff':'var(--gray-mid)';
+  });
+  const searchInput=document.getElementById('deps-portfolio-search');
+  if(searchInput)searchInput.value='';
+  const catSelect=document.getElementById('deps-portfolio-category');
+  if(catSelect){
+    const cats=[...new Set((window.DEPENDENCIES||[]).map(d=>depCategoryLabel(d)).filter(Boolean))].sort();
+    catSelect.innerHTML='<option value="">All categories</option>'+cats.map(c=>`<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+  }
+  renderDepsPortfolioList();
+  const overlay=document.getElementById('deps-portfolio-overlay');
+  const panel=document.getElementById('deps-portfolio-panel');
+  overlay.style.display='block';
+  panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
+}
+window.openDepsPortfolioPanel=openDepsPortfolioPanel;
+
+function closeDepsPortfolioPanel(){
+  const panel=document.getElementById('deps-portfolio-panel');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{
+    panel.style.display='none';
+    document.getElementById('deps-portfolio-overlay').style.display='none';
+  },300);
+}
+window.closeDepsPortfolioPanel=closeDepsPortfolioPanel;
+
+function renderDepsPortfolioList(){
+  const list=document.getElementById('deps-portfolio-list');
+  const subtitle=document.getElementById('deps-portfolio-subtitle');
+  if(!list)return;
+  // v66k -- fmtDate is scoped inside renderOpsCenter(), not global; this is
+  // a separate top-level function so it needs its own copy rather than
+  // referencing that closure variable (would throw ReferenceError -- caught
+  // before shipping by re-checking every helper this function calls
+  // against where it's actually defined).
+  const fmtDate=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'No due date';
+  const query=(document.getElementById('deps-portfolio-search')?.value||'').trim().toLowerCase();
+  const catFilter=document.getElementById('deps-portfolio-category')?.value||'';
+  const isConsultant=role==='consultant'&&!window._consultantUnrestricted;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const consultantProps=isConsultant?new Set(port.filter(p=>consultantSeesProperty(p.n)).map(p=>p.n)):null;
+
+  let deps=(window.DEPENDENCIES||[]).map(d=>{
+    const sc=(window.SCOPES||[]).find(s=>s.id===d.scopeId);
+    return{...d,_property:sc?.property||'',_scopeName:sc?.name||''};
+  });
+  if(isConsultant)deps=deps.filter(d=>consultantProps.has(d._property));
+  if(depsPortfolioActiveStatuses.size>0)deps=deps.filter(d=>depsPortfolioActiveStatuses.has(d.status));
+  if(catFilter)deps=deps.filter(d=>(depCategoryLabel(d)||'')===catFilter);
+  if(query)deps=deps.filter(d=>(d._property||'').toLowerCase().includes(query)||(d._scopeName||'').toLowerCase().includes(query));
+
+  if(subtitle)subtitle.textContent=`${deps.length} dependenc${deps.length===1?'y':'ies'} across ${new Set(deps.map(d=>d._property)).size} project${new Set(deps.map(d=>d._property)).size===1?'':'s'}`;
+
+  if(deps.length===0){
+    list.innerHTML='<div class="empty-state" style="padding:2rem"><i class="ti ti-link-off"></i><div class="empty-state-title">No matching dependencies</div><div class="empty-state-sub">Try a different search or filter.</div></div>';
+    return;
+  }
+
+  // Grouped under simple status section headers (Overdue first, then
+  // Planned, then Complete) rather than one flat list, so a mixed-status
+  // view (e.g. Overdue+Planned both checked) still reads with the more
+  // urgent items on top.
+  const order=['Overdue','Planned','Complete'];
+  const grouped={};
+  deps.forEach(d=>{if(!grouped[d.status])grouped[d.status]=[];grouped[d.status].push(d);});
+  order.forEach(st=>{if(grouped[st])grouped[st].sort((a,b)=>new Date(a.due||'9999-12-31')-new Date(b.due||'9999-12-31'));});
+
+  const DEP_CAT_ICON={'Fire Life Safety':'ti-flame','Controlled Access (Card Reader)':'ti-shield-lock','Cab Interiors':'ti-armchair','Barricades':'ti-fence','Security Cameras':'ti-video','Electrical Upgrades':'ti-bolt','HVAC':'ti-wind'};
+  const STATUS_COLOR={Overdue:'var(--red)',Planned:'var(--blue-dark)',Complete:'var(--green)'};
+  const STATUS_BG={Overdue:'var(--red-pale)',Planned:'var(--blue-pale)',Complete:'var(--green-pale)'};
+
+  list.innerHTML=order.filter(st=>grouped[st]&&grouped[st].length>0).map(st=>{
+    const items=grouped[st];
+    return `<div style="font-size:10px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;padding:14px 0 6px">${st}</div>
+      ${items.map(d=>{
+        const icon=DEP_CAT_ICON[depCategoryLabel(d)]||'ti-affiliate';
+        // Reuses depDueCountdown() (global, defined alongside deleteDep()
+        // for the per-property tab) so "8 days overdue" / "in 6 days"
+        // reads identically here as it does on that tab -- one
+        // implementation of what a countdown string means, not two.
+        const countdown=depDueCountdown(d);
+        const dueLabel=!d.due?'No due date':(countdown||fmtDate(d.due));
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="closeDepsPortfolioPanel();openProperty('${(d._property||'').replace(/'/g,"\\'")}')">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <div style="width:28px;height:28px;border-radius:8px;background:${STATUS_BG[st]};color:${STATUS_COLOR[st]};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0"><i class="ti ${icon}"></i></div>
+            <div style="min-width:0"><div style="font-size:12.5px;font-weight:600;color:var(--navy)">${escHtml(depCategoryLabel(d)||'Uncategorized')}</div><div style="font-size:11px;color:var(--gray-mid)">${escHtml(d._property||'Unknown property')}${d._scopeName?' · '+escHtml(d._scopeName):''}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+            <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;background:${STATUS_BG[st]};color:${STATUS_COLOR[st]};white-space:nowrap">${escHtml(dueLabel)}</span>
+            <i class="ti ti-chevron-right" style="color:var(--blue-dark);font-size:15px"></i>
+          </div>
+        </div>`;
+      }).join('')}`;
+  }).join('');
+}
+window.renderDepsPortfolioList=renderDepsPortfolioList;
 
 // ── BIDS / BID LEVELING (Build v27a) ─────────────────────────────────
 // State: bid rounds + submissions for the currently open property are
@@ -37492,21 +37774,45 @@ function renderGantt() {
   container.innerHTML = html;
 }
 
-// ── OPERATIONS CENTER ────────────────────────────────────────────────
+// ── OPERATIONS CENTER (v66k rebuild) ──────────────────────────────────
+// Full rebuild per Misty's direct spec, aligned across several mockup
+// review rounds this session (visualize tool, PULSE aesthetic pass after
+// the first attempt read too generic/CDS-styled rather than matching
+// Dashboard's own stat-card/panelTitle/badge visual language). Locked
+// layout: 5-stat header + Ask MARLI insight ribbon, then four rows in a
+// 2/3/2/3 card rhythm:
+//   Row 1 (2, wide): 30/60/90 Day Outlook + Dependencies & Coordination
+//     (Misty considered renaming this to "Related Work" this round, but
+//     "Related Work" already means something else specific in PULSE --
+//     a bid line-item category for subcontracted turnkey scope, and a
+//     Unit Inventory budget field ("Related Work Est.") -- so it stayed
+//     "Dependencies & Coordination" for now. Misty's real idea underneath
+//     the naming question: once a bid is awarded, that submission's own
+//     "Related Work" line items could auto-flow into Dependency records
+//     here, with the Elevator Company pre-filled as Coordination Owner
+//     instead of a manually re-typed entry. That's a real, separate
+//     feature (bid-award-to-dependency generation) -- scoped for a future
+//     round, not built as part of this layout pass.
+//   Row 2 (3): Upcoming Milestones + Upcoming Meetings + Owner Decisions
+//   Row 3 (2, wide): Change Orders Pending + Change Orders Approved
+//   Row 4 (3): Budget Overrun Watch + Activity Feed + Bid Rounds Awaiting Review
+// Reuses existing data prep above (overdue/next30/next60/next90/meetings/
+// port/propFilter/fmtDate) and existing helpers (depCategoryLabel,
+// getPropertyBilledAndBasis, escHtml, fmtCurrency/fmtBudget). New data
+// sources this round: window.CO_SAVINGS (Change Orders), window.SCOPES'
+// approvedBudget field (Budget Overrun denominator), window.BID_ROUNDS/
+// window.BID_SUBMISSIONS (new portfolio-wide loadAllData() fetch, see
+// that function's v66k-ops comment for why the per-property
+// BID_ROUNDS_CACHE couldn't be reused here).
 function renderOpsCenter(){
   const container=document.getElementById('opscenter-body');
   if(!container)return;
-  // v44d — Stamp last-seen the moment this view actually renders, then
-  // clear the nav badge. Items that were counted stay visible in the lists
-  // below (nothing here filters what's shown), but they won't count toward
-  // the badge again until something newer comes in after this timestamp.
   try{localStorage.setItem('pulse_opscenter_last_seen',String(Date.now()));}catch(e){}
   updateOpsCenterBadge();
   const today=new Date();today.setHours(0,0,0,0);
   const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
   const allActions=actionItems||(window.ACTION_ITEMS||[]);
 
-  // Consultant filtering — only show items for assigned properties
   const isConsultant=role==='consultant'&&!window._consultantUnrestricted;
   const consultantProps=isConsultant
     ? new Set(port.filter(p=>consultantSeesProperty(p.n)).map(p=>p.n))
@@ -37515,281 +37821,332 @@ function renderOpsCenter(){
 
   const openActions=allActions.filter(a=>(a.status==='Open'||a.status==='open')&&propFilter(a.property));
 
-  // Bucket actions by horizon
   const d30=new Date(today);d30.setDate(d30.getDate()+30);
   const d60=new Date(today);d60.setDate(d60.getDate()+60);
   const d90=new Date(today);d90.setDate(d90.getDate()+90);
 
-  // Build combined horizon items: actions + scheduled meetings + site visits
-  const horizonItems=[];
-  openActions.forEach(a=>{
-    if(a.due&&a.due!=='TBD') horizonItems.push({_type:'action',_date:new Date(a.due+'T12:00:00'),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''});
-  });
-  (meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)).forEach(m=>{
-    const d=new Date(m.date+'T12:00:00');
-    if(d>=today) horizonItems.push({_type:'meeting',_date:d,_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${escHtml(m.property||'—')} · ${m.date}${m.attClient?' · '+escHtml(m.attClient):''}`,_prop:m.property||'',_priority:'',_scopeId:m.scopeId||''});
-  });
-  // v58a -- Site Visits already carry a real Status field (Scheduled/
-  // Completed/Cancelled/Rescheduled, same shape as Meetings' Status,
-  // confirmed against the live Airtable schema) and it's already loaded
-  // into siteVisits[].status at fetch time -- it was simply never
-  // filtered on here, so a cancelled visit stayed in the 30/60/90 horizon
-  // exactly like a real upcoming one. Matches the same status==='Scheduled'
-  // check already used for meetings two lines up.
-  (siteVisits||[]).filter(v=>v.status==='Scheduled'&&v.date&&propFilter(v.property)).forEach(v=>{
-    const d=new Date(v.date+'T12:00:00');
-    if(d>=today) horizonItems.push({_type:'visit',_date:d,_label:'Site Visit — '+(v.property||'—'),_sub:`${escHtml(v.property||'—')} · ${v.date}${v.consultant?' · '+escHtml(v.consultant):''}`,_prop:v.property||'',_priority:''});
-  });
-
-  const overdueActionItems=openActions.filter(a=>a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today).map(a=>({_type:'action',_date:new Date(a.due+'T12:00:00'),_label:a.title||a.description||'Action',_sub:`${escHtml(a.property||'—')} · ${escHtml(a.owner||'—')} · Due: ${a.due}`,_prop:a.property||'',_priority:a.priority,_scopeId:a.scopeId||''}));
-  // v53b — meetings whose date passed with status still Scheduled (no
-  // minutes logged, not cancelled) were previously excluded from Operations
-  // Center entirely — the horizonItems build above only includes a meeting
-  // when d>=today, so an overdue one simply vanished from this view with no
-  // signal anywhere that it needed attention. Folded into the same overdue
-  // array as Action Items so it renders through the existing actionRow/
-  // typeBadge Meeting styling already used elsewhere on this page, and
-  // counts toward updateOpsCenterBadge the same way. Site Visits
-  // deliberately excluded this round — see the matching note on the
-  // Meetings & Actions tab badge in renderPropertyView; Site Visits has no
-  // Scheduled/Cancelled status concept yet, so there's no reliable way to
-  // tell an overdue-and-forgotten visit from one that simply happened.
-  const overdueMeetings=(meetings||[]).filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property)&&new Date(m.date+'T12:00:00')<today).map(m=>({_type:'meeting',_date:new Date(m.date+'T12:00:00'),_label:((m.type||'Meeting')+' — ')+m.property,_sub:`${escHtml(m.property||'—')} · ${m.date}${m.attClient?' · '+escHtml(m.attClient):''}`,_prop:m.property||'',_priority:'',_scopeId:m.scopeId||''}));
-  const overdue=overdueActionItems.concat(overdueMeetings).sort((a,b)=>a._date-b._date);
-  const next30=horizonItems.filter(i=>i._date>=today&&i._date<=d30).sort((a,b)=>a._date-b._date);
-  const next60=horizonItems.filter(i=>i._date>d30&&i._date<=d60).sort((a,b)=>a._date-b._date);
-  const next90=horizonItems.filter(i=>i._date>d60&&i._date<=d90).sort((a,b)=>a._date-b._date);
-
-  // v51e — T12:00:00 forces local-noon parsing, avoiding the UTC-midnight
-  // one-day-early rollback in timezones behind UTC.
   const fmtDate=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'No due date';
-  const priColor={High:'var(--red)',Medium:'var(--amber)',Low:'var(--blue-light)'};
-  const typeBadge=t=>t==='meeting'
-    ?`<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--blue-xpale);color:var(--blue-dark)">Meeting</span>`
-    :t==='visit'
-    ?`<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--green-pale);color:var(--green)">Site Visit</span>`
-    :`<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--gray-pale);color:var(--gray-mid)">Action</span>`;
-  const typeDot=t=>t==='meeting'?'var(--blue-dark)':t==='visit'?'var(--green)':'var(--indigo)';
-  const scopeTag=scopeId=>{if(!scopeId)return '';const sc=(window.SCOPES||[]).find(s=>s.id===scopeId);return sc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo);margin-right:4px">${escHtml(sc.name)}</span>`:'';}
+  const fmtDateShort=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+  const badge=(icon,bg,fg)=>`<div style="width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${bg}"><i class="ti ${icon}" style="font-size:18px;color:${fg}"></i></div>`;
+  const smallBadge=(icon,bg,fg)=>`<div style="width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${bg};color:${fg};font-size:13px"><i class="ti ${icon}"></i></div>`;
+  const panelTitle=(text,extra,link)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><p style="font-size:14px;font-weight:700;color:var(--navy);margin:0;display:flex;align-items:center;gap:7px">${escHtml(text)}${extra||''}</p>${link?`<a style="font-size:11.5px;color:var(--blue-dark);font-weight:600;cursor:pointer;display:flex;align-items:center;gap:3px;white-space:nowrap" onclick="${link.onclick}">${escHtml(link.label)}<i class="ti ti-arrow-right" style="font-size:12px"></i></a>`:''}</div>`;
 
-  function actionRow(h){
-    return `<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(h._prop||'').replace(/'/g,"\\'")}')">
-      <div class="action-dot" style="background:${h._type==='action'?(priColor[h._priority]||'var(--gray-mid)'):typeDot(h._type)}"></div>
-      <div class="action-desc" style="flex:1">
-        <strong>${escHtml(h._label)}</strong>
-        <br><span style="color:var(--gray-mid)">${h._sub}</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${scopeTag(h._scopeId)}${typeBadge(h._type)}</div>
+  // ── DEPENDENCIES (Related Work) ────────────────────────────────────
+  const allDeps=(window.DEPENDENCIES||[]).filter(d=>{
+    if(!isConsultant)return true;
+    const sc=(window.SCOPES||[]).find(s=>s.id===d.scopeId);
+    return sc?propFilter(sc.property):true;
+  });
+  const depsByCategory={};
+  allDeps.forEach(d=>{
+    const label=depCategoryLabel(d)||'Uncategorized';
+    if(!depsByCategory[label])depsByCategory[label]={planned:0,complete:0,overdue:0};
+    if(d.status==='Planned')depsByCategory[label].planned++;
+    else if(d.status==='Complete')depsByCategory[label].complete++;
+    else if(d.status==='Overdue')depsByCategory[label].overdue++;
+  });
+  const depsCatRows=Object.keys(depsByCategory).sort();
+  const depsOverdueCount=allDeps.filter(d=>d.status==='Overdue').length;
+  const DEP_CAT_ICON={'Fire Life Safety':'ti-flame','Controlled Access (Card Reader)':'ti-shield-lock','Cab Interiors':'ti-armchair','Barricades':'ti-fence','Security Cameras':'ti-video','Electrical Upgrades':'ti-bolt','HVAC':'ti-wind'};
+
+  // Due-in-30-days count across Dependencies, for the stat header.
+  const depsDueSoon=allDeps.filter(d=>{
+    if(d.status!=='Planned'||!d.due)return false;
+    const dd=new Date(d.due+'T12:00:00');
+    return dd>=today&&dd<=d30;
+  }).length;
+
+  // ── CHANGE ORDERS (CO_SAVINGS) ─────────────────────────────────────
+  const allCOs=(window.CO_SAVINGS||[]).filter(c=>propFilter(c.property));
+  const coPending=allCOs.filter(c=>c.status==='Pending').sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+  const coApproved=allCOs.filter(c=>c.status==='Approved').sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+  const coPendingTotal=coPending.reduce((s,c)=>s+(Number(c.negotiatedAmount||c.originalAmount)||0),0);
+  const _d30ago=new Date(today);_d30ago.setDate(_d30ago.getDate()-30);
+  const coApprovedThisMonth=coApproved.filter(c=>c.date&&new Date(c.date)>=_d30ago).length;
+
+  // ── BID ROUNDS AWAITING REVIEW ─────────────────────────────────────
+  // A round counts as awaiting review when it isn't Closed yet AND has at
+  // least one Submission that's both Status='Submitted' and
+  // Visibility='Published' (published = visible to the client already,
+  // per the existing toggleBidRoundVisibility() workflow) -- i.e. the
+  // client has real pricing to look at and no final decision is recorded.
+  const bidSubsByRound={};
+  (window.BID_SUBMISSIONS||[]).forEach(s=>{
+    (s.roundIds||[]).forEach(rid=>{
+      if(!bidSubsByRound[rid])bidSubsByRound[rid]=[];
+      bidSubsByRound[rid].push(s);
+    });
+  });
+  const bidRoundsAwaiting=(window.BID_ROUNDS||[]).filter(r=>{
+    if(r.status==='Closed')return false;
+    if(!propFilter(r.property))return false;
+    const subs=bidSubsByRound[r.id]||[];
+    return subs.some(s=>s.status==='Submitted'&&s.visibility==='Published');
+  });
+
+  // ── OWNER DECISIONS ─────────────────────────────────────────────────
+  // Unifies Change Orders awaiting client approval with Bid Rounds
+  // awaiting client review into one "waiting on someone outside PM/field"
+  // queue, per Misty's direct framing this session ("I don't think it's
+  // Owner Decisions but Owner Dependencies so they don't lose visibility"
+  // -- kept as a display-layer grouping over the existing CO_SAVINGS/
+  // Bid Rounds data rather than creating new Dependency records for these,
+  // per her explicit choice not to merge the underlying tables and risk
+  // this becoming noise).
+  const ownerDecisionItems=[
+    ...coPending.map(c=>({
+      kind:'co',label:`Approve change order`,sub:c.description||'',property:c.property,
+      date:c.date,amount:Number(c.negotiatedAmount||c.originalAmount)||0,
+    })),
+    ...bidRoundsAwaiting.map(r=>({
+      kind:'bid',label:'Review published bid',sub:r.name,property:r.property,date:null,amount:null,
+    })),
+  ];
+  const ageInDays=d=>{if(!d)return null;const dt=new Date(d+'T12:00:00');const diff=Math.round((today-dt)/86400000);return diff>=0?diff:null;};
+  ownerDecisionItems.forEach(it=>{it._age=ageInDays(it.date);});
+  ownerDecisionItems.sort((a,b)=>(b._age||0)-(a._age||0));
+
+  // ── BUDGET OVERRUN WATCH ────────────────────────────────────────────
+  // Billed-to-date exceeds approved budget, per Misty's explicit choice
+  // (the simple, unambiguous flag over a billing-vs-progress-rate signal).
+  // Denominator is a direct sum of Scopes.approvedBudget across a
+  // property's Scopes -- deliberately NOT getPropertyBilledAndBasis()'s
+  // own `basis` value, which sums estimated+approved+awarded across the
+  // full unit-inventory pipeline (a much broader "potential investment"
+  // number, not what "approved budget" means here). Only the `billed`
+  // half of that function is reused, since its lifetime-sum-across-
+  // Billing-Log logic is already correct and shouldn't be reimplemented.
+  const budgetOverruns=port.filter(p=>propFilter(p.n)&&p.st!=='Removed').map(p=>{
+    const propScopes=(window.SCOPES||[]).filter(s=>s.property===p.n);
+    const approvedBudget=propScopes.reduce((sum,s)=>sum+(Number(s.approvedBudget)||0),0);
+    if(approvedBudget<=0)return null;
+    const{billed}=getPropertyBilledAndBasis(p);
+    if(billed<=approvedBudget)return null;
+    const pctOver=Math.round(((billed-approvedBudget)/approvedBudget)*100);
+    return{property:p.n,billed,approvedBudget,pctOver};
+  }).filter(Boolean).sort((a,b)=>b.pctOver-a.pctOver);
+
+  // ── ACTIVITY FEED (reuses renderActionBoard's own merge pattern) ────
+  const recentFieldOnlyOC=(submissions||[]).filter(s=>s.reviewStatus==='approved'&&propFilter(s.property)).map(s=>({kind:'field',id:s.id,property:s.property,date:s.submittedAt}));
+  const recentPmOnlyOC=(window.PM_UPDATES||[]).filter(u=>u.status==='Published'&&propFilter(u.property)).map(u=>({kind:'pmupdate',id:u.id,property:u.property,date:u.published||u.created}));
+  const activityFeed=[...recentFieldOnlyOC,...recentPmOnlyOC].sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).slice(0,5);
+
+  // ── UPCOMING MILESTONES (90-day window, matching the outlook card) ──
+  const upcomingMilestones=(window.MILESTONES||[])
+    .filter(m=>propFilter(m.property)&&m.plannedDate&&m.status!=='Complete')
+    .map(m=>({...m,_date:new Date(m.plannedDate+'T12:00:00')}))
+    .filter(m=>m._date>=today&&m._date<=d90)
+    .sort((a,b)=>a._date-b._date)
+    .slice(0,6);
+
+  // ── UPCOMING MEETINGS ────────────────────────────────────────────────
+  const upcomingMeetings=(meetings||[])
+    .filter(m=>m.status==='Scheduled'&&m.date&&propFilter(m.property))
+    .map(m=>({...m,_date:new Date(m.date+'T12:00:00')}))
+    .filter(m=>m._date>=today)
+    .sort((a,b)=>a._date-b._date)
+    .slice(0,6);
+
+  // ── 30/60/90 DAY OUTLOOK (dot timeline) ──────────────────────────────
+  // Merges Dependencies (due dates), Change Orders pending (submitted
+  // date, shown as an approval-due marker), and Milestones into one
+  // date-sorted list, bucketed the same way the rest of this page already
+  // buckets by horizon (this week / next 30 / next 60-90).
+  const outlookItems=[];
+  allDeps.forEach(d=>{
+    if(d.status!=='Planned'||!d.due)return;
+    outlookItems.push({date:d.due,label:depCategoryLabel(d)||'Dependency',color:'var(--blue-dark)'});
+  });
+  coPending.forEach(c=>{
+    if(!c.date)return;
+    outlookItems.push({date:c.date,label:`CO approval — ${c.property||''}`,color:'var(--amber)'});
+  });
+  (window.MILESTONES||[]).forEach(m=>{
+    if(!propFilter(m.property)||!m.plannedDate||m.status==='Complete')return;
+    outlookItems.push({date:m.plannedDate,label:m.milestoneName||'Milestone',color:m.status==='At Risk'?'var(--red)':'var(--gray-light)'});
+  });
+  outlookItems.forEach(it=>{it._date=new Date(it.date+'T12:00:00');});
+  const _d7=new Date(today);_d7.setDate(_d7.getDate()+7);
+  const outlookThisWeek=outlookItems.filter(i=>i._date>=today&&i._date<=_d7).sort((a,b)=>a._date-b._date).slice(0,3);
+  const outlookNext30=outlookItems.filter(i=>i._date>_d7&&i._date<=d30).sort((a,b)=>a._date-b._date).slice(0,3);
+  const outlookNext60to90=outlookItems.filter(i=>i._date>d30&&i._date<=d90).sort((a,b)=>a._date-b._date).slice(0,3);
+
+  // ── STAT HEADER ───────────────────────────────────────────────────────
+  const statHeader=`
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:12px">
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-alert-triangle','var(--red-pale)','var(--red)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Overdue dependencies</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${depsOverdueCount}</p><p style="font-size:11px;color:${depsOverdueCount>0?'var(--red)':'var(--gray-mid)'};font-weight:${depsOverdueCount>0?600:400};margin-top:2px">${depsOverdueCount>0?'Needs attention':'None overdue'}</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-calendar-due','var(--amber-pale)','var(--amber)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Due in 30 days</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${depsDueSoon}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Dependencies</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-file-invoice','var(--blue-pale)','var(--blue-dark)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Change orders pending</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${coPending.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">${coPendingTotal>0?fmtBudget(coPendingTotal)+' awaiting approval':'None pending'}</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-circle-check','var(--green-pale)','var(--green)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Approved this month</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${coApprovedThisMonth}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Change orders</p></div></div>
+      <div class="stat-card" style="text-align:left;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:12px;padding:14px 16px;border-radius:12px">${badge('ti-user-check','var(--purple-pale)','var(--purple)')}<div style="min-width:0"><p style="font-size:11.5px;color:var(--gray-mid);font-weight:600;margin:0 0 2px;white-space:nowrap">Awaiting owner</p><p style="font-size:22px;font-weight:700;color:var(--navy);margin:0">${ownerDecisionItems.length}</p><p style="font-size:11px;color:var(--gray-mid);margin-top:2px">Change orders + bids</p></div></div>
     </div>`;
-  }
 
-  // v58a -- bare icon upgraded to the same icon-badge square used
-  // elsewhere in the polish pass (Analytics/Capital Plan/Budget Outlook),
-  // per the approved mockup. border-left accent color, the count pill,
-  // and the wrapping .card-header flex div (already correct here, avoids
-  // the space-between gap bug fixed elsewhere) are all untouched.
-  // `color` is always passed as a var(--x) string (see the 4 call sites
-  // below), so it can't be alpha-blended directly for the badge
-  // background -- mapped to each color's real pale variant already
-  // defined in :root instead (same red/amber/blue-dark/gray-mid set used
-  // by every call site here), falling back to gray-pale for anything
-  // unmapped rather than emitting an invalid CSS value.
-  const _sectionBadgeBg={'var(--red)':'var(--red-pale)','var(--amber)':'var(--amber-pale)','var(--blue-dark)':'var(--blue-pale)','var(--gray-mid)':'var(--gray-pale)'};
-  function actionSection(title,items,color,icon){
-    return `<div class="card" style="border-left:3px solid ${color}">
-      <div class="card-header">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:${_sectionBadgeBg[color]||'var(--gray-pale)'}"><i class="ti ${icon}" style="color:${color};font-size:15px"></i></div>
-          <div class="card-title">${title}</div>
-          <span style="background:${color};color:white;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px">${items.length}</span>
-        </div>
+  // ── ASK MARLI INSIGHT RIBBON ────────────────────────────────────────
+  const insightItems=[];
+  if(depsOverdueCount>0){
+    const worst=allDeps.filter(d=>d.status==='Overdue').sort((a,b)=>new Date(a.due||0)-new Date(b.due||0))[0];
+    const sc=worst?(window.SCOPES||[]).find(s=>s.id===worst.scopeId):null;
+    if(worst)insightItems.push({icon:'ti-alert-triangle',color:'var(--amber)',text:`${escHtml(depCategoryLabel(worst)||'A dependency')} coordination at ${escHtml(sc?.property||'a property')} is overdue.`});
+  }
+  if(ownerDecisionItems.length>0){
+    const oldest=ownerDecisionItems[0];
+    if(oldest._age!=null)insightItems.push({icon:'ti-info-circle',color:'var(--blue-dark)',text:`${escHtml(oldest.property||'A project')}'s ${escHtml(oldest.label.toLowerCase())} has waited ${oldest._age} day${oldest._age===1?'':'s'}.`});
+    else insightItems.push({icon:'ti-info-circle',color:'var(--blue-dark)',text:`${escHtml(oldest.property||'A project')} has a ${escHtml(oldest.label.toLowerCase())} waiting on the owner.`});
+  }
+  if(insightItems.length===0){
+    insightItems.push({icon:'ti-circle-check',color:'var(--green)',text:'Nothing overdue or waiting on the owner right now.'});
+  }
+  const insightRibbon=`
+    <div style="display:flex;align-items:center;background:var(--blue-xpale,#f0f7fe);border:1px solid var(--blue-pale);border-radius:12px;padding:12px 16px;margin-bottom:20px;gap:16px">
+      ${insightItems.slice(0,2).map((it,i,arr)=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--gray-dark);flex:1;${i<arr.length-1?'padding-right:16px;border-right:1px solid var(--blue-pale)':''}"><i class="ti ${it.icon}" style="font-size:15px;flex-shrink:0;margin-top:1px;color:${it.color}"></i>${it.text}</div>`).join('')}
+      <button class="btn" style="border-color:var(--blue-dark);color:var(--blue-dark);white-space:nowrap;font-weight:600;padding:8px 13px" onclick="askMarliActionBoard()"><i class="ti ti-sparkles"></i>Ask MARLI</button>
+    </div>`;
+
+  // ── ROW 1: 30/60/90 OUTLOOK + RELATED WORK ──────────────────────────
+  function outlookBucket(label,color,items){
+    return `<div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.04em;margin:${label==='This week'?'0':'10px'} 0 6px">${label}</div>
+      ${items.length===0?`<div style="font-size:11px;color:var(--gray-light);padding:2px 0 2px 4px">Nothing scheduled</div>`:items.map(it=>`
+      <div style="position:relative;padding:5px 0 5px 4px">
+        <div style="position:absolute;left:-18px;top:10px;width:9px;height:9px;border-radius:50%;background:${it.color};border:2px solid #fff;box-shadow:0 0 0 1px ${it.color}"></div>
+        <div style="font-size:11.5px;color:var(--gray-mid)">${fmtDateShort(it.date)} <span style="color:var(--navy);font-weight:600">${escHtml(it.label)}</span></div>
+      </div>`).join('')}`;
+  }
+  const outlookCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('30 / 60 / 90 day outlook')}
+      <div style="position:relative;padding-left:18px">
+        <div style="position:absolute;left:5px;top:4px;bottom:4px;width:2px;background:var(--border)"></div>
+        ${outlookBucket('This week','var(--blue-dark)',outlookThisWeek)}
+        ${outlookBucket('Next 30 days','var(--gray-mid)',outlookNext30)}
+        ${outlookBucket('Next 60–90 days','var(--gray-mid)',outlookNext60to90)}
       </div>
-      ${items.length===0
-        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No items in this window.</div>`
-        :items.map(actionRow).join('')
+    </div>`;
+  const relatedWorkCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Dependencies & coordination',null,{label:'View all',onclick:'openDepsPortfolioPanel()'})}
+      ${depsCatRows.length===0
+        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No related work logged across the portfolio yet.</div>`
+        :`<table style="width:100%;border-collapse:collapse;font-size:11.5px">
+            <thead><tr><th style="text-align:left;padding:0 6px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Category</th><th style="text-align:right;padding:0 6px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--blue-dark);font-weight:700">Plan</th><th style="text-align:right;padding:0 6px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--green);font-weight:700">Comp</th><th style="text-align:right;padding:0 0 7px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--red);font-weight:700">Over</th></tr></thead>
+            <tbody>${depsCatRows.map((cat,i)=>{const c=depsByCategory[cat];const icon=DEP_CAT_ICON[cat]||'ti-affiliate';return `<tr><td style="padding:7px 6px 7px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};font-weight:600;color:var(--navy)"><i class="ti ${icon}" style="font-size:13px;color:var(--gray-mid);margin-right:5px"></i>${escHtml(cat)}</td><td style="text-align:right;padding:7px 6px 7px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--blue-dark)">${c.planned||''}</td><td style="text-align:right;padding:7px 6px 7px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--green)">${c.complete||''}</td><td style="text-align:right;padding:7px 0 7px;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--red);font-weight:${c.overdue>0?'700':'400'}">${c.overdue||''}</td></tr>`;}).join('')}</tbody>
+          </table>`
       }
     </div>`;
-  }
 
-    // Recently added/removed
-  // v44c — replaced the v30e last-login-time filter entirely. That
-  // approach depended on window._prevLoginTime, which only ever got set on
-  // a fresh PIN login (doLogin()) — a session restored after a browser
-  // refresh (tryRestorePulseSession()) never set it at all, so any
-  // mid-session refresh silently reset this section back to "first login
-  // ever, show everything" for the rest of that session. Confirmed live:
-  // Misty had logged in and out repeatedly over several days and stale
-  // entries never cleared, because normal usage includes refreshes.
-  // Per Misty's direct call: drop the login-tracking dependency entirely
-  // and use a fixed rolling window instead — an add/remove simply falls
-  // off 4 days after the date of the action, same rolling-window pattern
-  // the Activity Feed already uses (7 days there). No session-state
-  // dependency left to break.
-  // v44g — fencepost fix. setDate(-4) + setHours(0,0,0,0) landed the cutoff
-  // at midnight 4 calendar days back, and the >= comparison against that
-  // midnight meant an item removed/added exactly 4 days ago was still
-  // included (its own date was >= the cutoff's midnight) — an effective
-  // 5-day window, not 4. Confirmed live: today 7/22, an item removed 7/18
-  // was still showing. Cutoff is now the exact moment 4*24h ago, compared
-  // with a strict > instead of >=, so an item falls off exactly 4 days
-  // after its action date, not 5.
-  const _recentCutoff=new Date(Date.now()-4*24*60*60*1000);
-  const recentAdded=[...port].filter(p=>{
-    if(!p.dateAdded||p.dateRemoved||p.st==='Removed'||!propFilter(p.n))return false;
-    return new Date(p.dateAdded)>_recentCutoff;
-  }).sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded)).slice(0,4);
-  const recentRemoved=[...port].filter(p=>{
-    if(!(p.dateRemoved||p.st==='Removed')||!propFilter(p.n))return false;
-    return p.dateRemoved&&new Date(p.dateRemoved)>_recentCutoff;
-  }).sort((a,b)=>new Date(b.dateRemoved||0)-new Date(a.dateRemoved||0)).slice(0,4);
-  // v51e — T12:00:00 forces local-noon parsing, avoiding the UTC-midnight
-  // one-day-early rollback in timezones behind UTC.
-  const fmtShort=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+  // ── ROW 2: MILESTONES + MEETINGS + OWNER DECISIONS ──────────────────
+  const milestonesCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Upcoming milestones')}
+      ${upcomingMilestones.length===0
+        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing in the next 90 days.</div>`
+        :upcomingMilestones.map(m=>{
+          const isRisk=m.status==='At Risk';
+          return `<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
+            ${smallBadge(isRisk?'ti-alert-triangle':'ti-progress',isRisk?'var(--amber-pale)':'var(--blue-pale)',isRisk?'var(--amber)':'var(--blue-dark)')}
+            <div style="min-width:0"><p style="font-size:12px;font-weight:600;margin:0;color:var(--navy)">${escHtml(m.property||'')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(m.milestoneName||'')}${isRisk?' (at risk)':''} · ${fmtDateShort(m.plannedDate)}</p></div>
+          </div>`;
+        }).join('')
+      }
+    </div>`;
+  const meetingsCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Upcoming meetings')}
+      ${upcomingMeetings.length===0
+        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing scheduled.</div>`
+        :upcomingMeetings.map(m=>`<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
+            ${smallBadge('ti-users','var(--indigo-pale)','var(--indigo)')}
+            <div style="min-width:0"><p style="font-size:12px;font-weight:600;margin:0;color:var(--navy)">${escHtml(m.type||'Meeting')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(m.property||'')} · ${fmtDateShort(m.date)}</p></div>
+          </div>`).join('')
+      }
+    </div>`;
+  const ownerDecisionsCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Owner decisions')}
+      ${ownerDecisionItems.length===0
+        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing waiting on the owner.</div>`
+        :ownerDecisionItems.slice(0,6).map(it=>{
+          const ageColor=it._age==null?'var(--gray-mid)':it._age>=7?'var(--red)':it._age>=3?'var(--amber)':'var(--gray-mid)';
+          const ageBg=it._age==null?'var(--gray-pale)':it._age>=7?'var(--red-pale)':it._age>=3?'var(--amber-pale)':'var(--gray-pale)';
+          return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(it.property||'').replace(/'/g,"\\'")}')">
+            ${smallBadge(it.kind==='bid'?'ti-building':'ti-file-invoice','var(--purple-pale)','var(--purple)')}
+            <div style="flex:1;min-width:0"><p style="font-size:12px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(it.label)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(it.property||'')}</p></div>
+            <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;background:${ageBg};color:${ageColor};white-space:nowrap;flex-shrink:0">${it._age!=null?it._age+' day'+(it._age===1?'':'s'):'—'}</span>
+          </div>`;
+        }).join('')
+      }
+    </div>`;
 
-  // Recent field updates — v50h, merged with Published PM Updates into one
-  // combined, date-sorted feed per direct instruction. Each entry keeps a
-  // 'kind' tag ('field'|'pmupdate') so the eye icon can open the right
-  // detail view and the row can carry the right onclick.
-  const recentFieldOnly=(submissions||[]).filter(s=>s.reviewStatus==='approved'&&propFilter(s.property)).map(s=>({kind:'field',id:s.id,property:s.property,date:s.submittedAt,by:s.consultant}));
-  const recentPmOnly=(window.PM_UPDATES||[]).filter(u=>u.status==='Published'&&propFilter(u.property)).map(u=>({kind:'pmupdate',id:u.id,property:u.property,date:u.published||u.created,by:u.author}));
-  const recentUpdates=[...recentFieldOnly,...recentPmOnly].sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).slice(0,4);
-
-  // Recent meetings
-  // v58a -- was showing every meeting regardless of status, so a
-  // cancelled meeting (e.g. Caribe Hilton, confirmed live) rendered with
-  // the same live-blue dot as a real scheduled one, no visual distinction
-  // at all. Now excludes Cancelled outright (matches the 30/60/90 panels'
-  // status==='Scheduled' standard above) rather than just de-emphasizing
-  // it, since a cancelled meeting isn't "recent activity" worth surfacing
-  // here -- it's covered by the property's own Meeting Log instead.
-  const recentMeetings=(meetings||[]).filter(m=>m.status!=='Cancelled'&&propFilter(m.property)).slice().reverse().slice(0,4);
-
-  // v66e — Dependencies & Coordination portfolio rollup, admin-only per
-  // Misty's direct spec ("map out an Ops Center tab for admin profile only
-  // for now"). Grouped by Category (Other rolls up under its own label —
-  // categoryOther values aren't further split, since with more than a
-  // couple of scopes a per-free-text breakdown would fragment into a long
-  // tail of one-off rows rather than a useful summary). Counts computed
-  // live from window.DEPENDENCIES on every render, nothing cached/stored —
-  // matches Misty's explicit call to skip a historical trend line for v1
-  // (no snapshot mechanism exists to feed one, and there's no clear
-  // operational need for it yet).
-  const isAdmin=role==='admin';
-  let depCoordSection='';
-  if(isAdmin){
-    const allDeps=window.DEPENDENCIES||[];
-    const byCategory={};
-    allDeps.forEach(d=>{
-      const label=depCategoryLabel(d)||'Uncategorized';
-      if(!byCategory[label])byCategory[label]={planned:0,complete:0,overdue:0};
-      if(d.status==='Planned')byCategory[label].planned++;
-      else if(d.status==='Complete')byCategory[label].complete++;
-      else if(d.status==='Overdue')byCategory[label].overdue++;
-    });
-    const catRows=Object.keys(byCategory).sort();
-    const totalOpen=allDeps.filter(d=>d.status==='Planned').length;
-    const totalOverdue=allDeps.filter(d=>d.status==='Overdue').length;
-    depCoordSection=`
-    <div style="margin-bottom:24px">
-      <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Dependencies &amp; Coordination <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">— admin only</span></div>
-      <div class="card">
-        <div class="card-header">
-          <div style="display:flex;align-items:center;gap:10px">
-            <div style="width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--blue-pale)"><i class="ti ti-affiliate" style="color:var(--blue-dark);font-size:15px"></i></div>
-            <div class="card-title">Dependencies by Category</div>
-          </div>
-          <div style="display:flex;gap:10px;font-size:11px">
-            <span style="color:var(--gray-mid)">${totalOpen} open</span>
-            ${totalOverdue>0?`<span style="color:var(--red);font-weight:700">${totalOverdue} overdue</span>`:''}
-          </div>
-        </div>
-        ${catRows.length===0
-          ?'<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No dependencies logged across the portfolio yet. Add them from a property\'s Dependencies tab.</div>'
-          :`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;font-size:9px;font-weight:700;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;padding:0 4px 6px;border-bottom:1px solid var(--border)">
-              <div>Category</div><div style="text-align:right">Planned</div><div style="text-align:right">Complete</div><div style="text-align:right">Overdue</div>
-            </div>
-            ${catRows.map(cat=>{const c=byCategory[cat];return `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;font-size:12px;padding:8px 4px;border-bottom:1px solid var(--gray-xpale)">
-              <div style="color:var(--navy);font-weight:600">${escHtml(cat)}</div>
-              <div style="text-align:right;color:var(--blue-dark)">${c.planned||''}</div>
-              <div style="text-align:right;color:var(--green)">${c.complete||''}</div>
-              <div style="text-align:right;color:var(--red);font-weight:${c.overdue>0?'700':'400'}">${c.overdue||''}</div>
-            </div>`;}).join('')}`
-        }
-      </div>
+  // ── ROW 3: CHANGE ORDERS PENDING + APPROVED ─────────────────────────
+  function coRow(c,approved){
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(c.property||'').replace(/'/g,"\\'")}')">
+      ${smallBadge(approved?'ti-circle-check':'ti-file-invoice',approved?'var(--green-pale)':'var(--blue-pale)',approved?'var(--green)':'var(--blue-dark)')}
+      <div style="flex:1;min-width:0"><p style="font-size:12px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(c.description||'Change order')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(c.property||'')}</p></div>
+      <span style="font-size:11.5px;font-weight:700;color:${approved?'var(--green)':'var(--navy)'};white-space:nowrap;flex-shrink:0">${fmtBudget(Number(c.negotiatedAmount||c.originalAmount)||0)}</span>
     </div>`;
   }
+  const coPendingCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Change orders pending',coPending.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${coPending.length}</span>`:'')}
+      ${coPending.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing pending approval.</div>`:coPending.slice(0,6).map(c=>coRow(c,false)).join('')}
+    </div>`;
+  const coApprovedCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Change orders approved')}
+      ${coApproved.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">None approved yet.</div>`:coApproved.slice(0,6).map(c=>coRow(c,true)).join('')}
+    </div>`;
+
+  // ── ROW 4: BUDGET OVERRUN + ACTIVITY FEED + BID ROUNDS AWAITING REVIEW ──
+  const budgetOverrunCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Budget overrun watch')}
+      ${budgetOverruns.length===0
+        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No properties over their approved budget.</div>`
+        :`<table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr><th style="text-align:left;padding:0 8px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Property</th><th style="text-align:right;padding:0 8px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Billed</th><th style="text-align:right;padding:0 8px 7px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Approved</th><th style="text-align:right;padding:0 0 7px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);font-weight:700">Over</th></tr></thead>
+            <tbody>${budgetOverruns.slice(0,6).map((b,i)=>`<tr style="cursor:pointer" onclick="openProperty('${b.property.replace(/'/g,"\\'")}')"><td style="padding:8px 8px 8px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};font-weight:600;color:var(--navy)"><i class="ti ti-alert-triangle" style="font-size:13px;color:var(--red);margin-right:5px"></i>${escHtml(b.property)}</td><td style="text-align:right;padding:8px 8px 8px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--gray-dark)">${fmtBudget(b.billed)}</td><td style="text-align:right;padding:8px 8px 8px 0;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--gray-mid)">${fmtBudget(b.approvedBudget)}</td><td style="text-align:right;padding:8px 0 8px;${i>0?'border-top:1px solid var(--gray-xpale)':''};color:var(--red);font-weight:700">+${b.pctOver}%</td></tr>`).join('')}</tbody>
+          </table>`
+      }
+    </div>`;
+  const activityFeedCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Activity feed')}
+      ${activityFeed.length===0
+        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No recent activity.</div>`
+        :activityFeed.map(u=>`<div style="display:flex;gap:9px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(u.property||'').replace(/'/g,"\\'")}')"><div style="width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;margin-top:1px;background:var(--blue-pale);color:var(--blue-dark)"><i class="ti ti-file-text"></i></div><p style="font-size:12px;margin:0;flex:1"><b style="color:var(--navy)">${escHtml(u.property||'')}</b><br><span style="color:var(--gray-mid)">${u.kind==='pmupdate'?'PM update':'Field update'} · ${fmtDateShort(u.date)}</span></p></div>`).join('')
+      }
+    </div>`;
+  const bidRoundsCard=`
+    <div class="card" style="border-radius:12px">
+      ${panelTitle('Bid rounds awaiting review')}
+      ${bidRoundsAwaiting.length===0
+        ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing published and awaiting a decision.</div>`
+        :bidRoundsAwaiting.slice(0,6).map(r=>`<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(r.property||'').replace(/'/g,"\\'")}')">
+            ${smallBadge('ti-building','var(--purple-pale)','var(--purple)')}
+            <div style="min-width:0"><p style="font-size:12px;font-weight:600;margin:0;color:var(--navy)">${escHtml(r.name)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(r.property||'')}</p></div>
+          </div>`).join('')
+      }
+    </div>`;
 
   container.innerHTML=`
-    ${depCoordSection}
-    <!-- ACTION PLAN -->
-    <div style="margin-bottom:8px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-        <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em">30/60/90 Day Action Plan</div>
-        ${(()=>{const sc=(window.SUGGESTED_ACTION_ITEMS||[]).filter(s=>s.status==='Open').length;return sc>0?`<span style="font-size:11px;color:var(--gray-mid);font-weight:400;cursor:pointer" onclick="gotoView('queue',null);setTimeout(()=>switchQueueTab('suggested',document.querySelector('#view-queue .tab-btn[onclick*=\\'suggested\\']')),300)">${sc} new MARLI suggestion${sc!==1?'s':''} &rarr;</span>`:'';})()}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-        ${actionSection('Overdue',overdue,'var(--red)','ti-alert-triangle')}
-        ${actionSection('30 Day',next30,'var(--amber)','ti-clock')}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-        ${actionSection('60 Day',next60,'var(--blue-dark)','ti-calendar-due')}
-        ${actionSection('90 Day',next90,'var(--gray-mid)','ti-calendar')}
-      </div>
-    </div>
-
-    <!-- PORTFOLIO ACTIVITY -->
-    <!-- v58a -- all 4 panel headers below upgraded from a bare inline
-    icon (or, for Recent Field Updates/Recent Meetings, no icon at all)
-    to the same icon-badge square used across the rest of this polish
-    pass, per the approved mockup. Every row's data, filter, sort, click
-    handler ,and onclick target is completely untouched -- markup/style
-    only. -->
-    <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">Portfolio Activity</div>
+    ${statHeader}
+    ${insightRibbon}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-      <div class="card">
-        <div class="card-header"><div style="display:flex;align-items:center;gap:10px"><div style="width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--green-pale)"><i class="ti ti-circle-plus" style="color:var(--green);font-size:15px"></i></div><div class="card-title">Recently Added</div></div></div>
-        ${recentAdded.length===0
-          ?'<div style="font-size:12px;color:var(--gray-mid)">No recently added properties.</div>'
-          :recentAdded.map(p=>`<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${p.n.replace(/'/g,"\\'")}')">
-            <div class="action-dot" style="background:var(--green)"></div>
-            <div class="action-desc"><strong>${escHtml(p.n)}</strong><br><span style="color:var(--gray-mid)">Added ${fmtShort(p.dateAdded)} · ${p.s||'—'} · ${escHtml(p.ec||'TBD')}</span></div>
-          </div>`).join('')
-        }
-      </div>
-      <div class="card">
-        <div class="card-header"><div style="display:flex;align-items:center;gap:10px"><div style="width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--red-pale)"><i class="ti ti-circle-minus" style="color:var(--red);font-size:15px"></i></div><div class="card-title">Recently Removed</div></div></div>
-        ${recentRemoved.length===0
-          ?'<div style="font-size:12px;color:var(--gray-mid)">No properties removed.</div>'
-          :recentRemoved.map(p=>`<div class="action-item-row">
-            <div class="action-dot" style="background:var(--red)"></div>
-            <div class="action-desc"><strong style="color:var(--gray-mid)">${escHtml(p.n)}</strong><br><span style="color:var(--gray-mid)">Removed ${fmtShort(p.dateRemoved)} · ${p.s||'—'}</span></div>
-          </div>`).join('')
-        }
-      </div>
+      ${outlookCard}
+      ${relatedWorkCard}
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-      <div class="card">
-        <div class="card-header"><div style="display:flex;align-items:center;gap:10px"><div style="width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--blue-pale)"><i class="ti ti-file-text" style="color:var(--blue-dark);font-size:15px"></i></div><div class="card-title">Recent Field Updates</div></div></div>
-        ${recentUpdates.length===0
-          ?'<div style="font-size:12px;color:var(--gray-mid)">No approved field updates yet.</div>'
-          :recentUpdates.map(s=>`<div class="action-item-row">
-            <div class="action-dot" style="background:var(--green)"></div>
-            <div class="action-desc" style="flex:1;cursor:pointer" onclick="openProperty('${(s.property||'').replace(/'/g,"\\'")}')"><strong>${escHtml(s.property)}</strong><br><span style="color:var(--gray-mid)">${s.kind==='pmupdate'?'PM Update':'Submitted'} ${fmtShort(s.date)} · ${s.by||'—'}</span></div>
-            <i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px;flex-shrink:0;cursor:pointer" onclick="event.stopPropagation();${s.kind==='pmupdate'?`previewPMUpdateDetail('${s.id}')`:`previewFieldUpdateDetail('${s.id}')`}"></i>
-          </div>`).join('')
-        }
-      </div>
-      <div class="card">
-        <div class="card-header"><div style="display:flex;align-items:center;gap:10px"><div style="width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--indigo-pale)"><i class="ti ti-users" style="color:var(--indigo);font-size:15px"></i></div><div class="card-title">Recent Meetings</div></div></div>
-        ${recentMeetings.length===0
-          ?'<div style="font-size:12px;color:var(--gray-mid)">No meetings logged yet.</div>'
-          :recentMeetings.map(m=>{const _mSc=m.scopeId?(window.SCOPES||[]).find(s=>s.id===m.scopeId):null;const _mScTag=_mSc?`<span style="font-size:9px;font-weight:600;padding:1px 7px;border-radius:8px;background:var(--blue-xpale);color:var(--indigo)">${escHtml(_mSc.name)}</span>`:'';return `<div class="action-item-row" style="cursor:pointer" onclick="openProperty('${(m.property||'').replace(/'/g,"\\'")}')">
-            <div class="action-dot" style="background:var(--blue-dark)"></div>
-            <div class="action-desc" style="flex:1"><strong>${escHtml(m.type||'Meeting')}: ${escHtml(m.property)}</strong><br><span style="color:var(--gray-mid)">${m.date}${m.elevco?' · '+escHtml(m.elevco):''}</span></div>
-            <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${_mScTag}<i class="ti ti-eye" style="color:var(--gray-mid);font-size:14px"></i></div>
-          </div>`}).join('')
-        }
-      </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
+      ${milestonesCard}
+      ${meetingsCard}
+      ${ownerDecisionsCard}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      ${coPendingCard}
+      ${coApprovedCard}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+      ${budgetOverrunCard}
+      ${activityFeedCard}
+      ${bidRoundsCard}
     </div>`;
 }
 
