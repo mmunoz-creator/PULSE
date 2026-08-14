@@ -1,4 +1,48 @@
 <!--
+pulse_v67c. Changes from v67b, this round. Requires no worker changes --
+both bugs below are frontend-only. Two live bugs reported and fixed,
+investigated against the real live site via Chrome automation rather than
+assumed from the report alone, per standing rule:
+
+  1. Pending Review showing tabs but a blank body underneath (reported by
+    Misty with a screenshot, reached via Property -> "Back to Casa Marina
+    Key..." -> Pending Review). Root cause: switchPropTab() -- the tab
+    switcher for a property's own Overview/Bids/Budget/etc. tabs, unrelated
+    to and pre-dating this session's work -- did a bare
+    document.querySelectorAll('.tab-content')/'.tab-btn' with no scoping,
+    so switching tabs inside ANY property also stripped the 'active' class
+    off Pending Review's own tab-content elements (queue-tab-approvals /
+    queue-tab-suggested), which share the same .tab-content class. The
+    queue view's own tab switcher (switchQueueTab, added when Suggested
+    Action Items was built) was already correctly scoped to #view-queue
+    for this exact reason; switchPropTab was the one place still unscoped.
+    Confirmed live: queue-tab-approvals had lost .active while its content
+    (already loaded and rendered, 3.6KB of real HTML) sat untouched and
+    hidden underneath -- not a data or render bug, purely a CSS/class-state
+    bug. Fixed by scoping switchPropTab's clear-active step to
+    #view-property, matching switchQueueTab's pattern.
+
+  2. Collapsed sidebar showing full label text wrapping inside the 64px
+    rail instead of icon-only (reported by Misty live, same session).
+    Root cause: the v67a collapse CSS rule
+    (.sidebar.collapsed .nav-item span:not(.nav-badge){display:none})
+    assumed each nav item's label text lived inside its own <span> --
+    it doesn't. Actual markup is <i>...</i>LabelText<span
+    class="nav-badge">...</span>, a bare text node with nothing for that
+    selector to match, so it silently hid nothing on every nav item that
+    doesn't carry a badge. Fixed in stampNavItemLabels() (already run
+    once per nav item to derive the collapsed-state tooltip's data-label)
+    by also wrapping that bare trailing text node in a real
+    <span class="nav-item-label"> at the same pass, and updating the CSS
+    selector to target it directly. Badge spans are left untouched by the
+    wrap and keep their own existing visibility rule, so collapsed-state
+    badge hiding is unaffected.
+
+  Both reproduced against the live site (elevatorpulse.com) via Chrome
+  automation before writing any fix, and re-verified live after, per
+  Misty's standing rule to investigate bugs against real code and real
+  data rather than assume the report is describing something else.
+
 pulse_v67b. Changes from v67a, this round. Requires worker_v44p (no code
 changes from v44o -- confirmed and documented, this feature's writes are
 already covered by the existing pm/admin role bypass). Related Work
@@ -2379,7 +2423,7 @@ appearing mid-transition while width is animating down from 235px. */
 .sidebar.collapsed .sidebar-role-tag,
 .sidebar.collapsed #sb-back-to-property,
 .sidebar.collapsed .nav-section-label,
-.sidebar.collapsed .nav-item span:not(.nav-badge),
+.sidebar.collapsed .nav-item .nav-item-label,
 .sidebar.collapsed .nav-badge,
 .sidebar.collapsed .sidebar-user .user-name,
 .sidebar.collapsed .sidebar-user .user-role-label,
@@ -5769,7 +5813,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67c</div>
     </div>
   </nav>
 
@@ -9707,8 +9751,28 @@ function renderUimTable(propName){
 }
 
 function switchPropTab(tab,btn){
-  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  // v67c — scoped to #view-property. This used to be a bare
+  // document.querySelectorAll('.tab-content'/'.tab-btn'), which reached
+  // every .tab-content on the whole page, not just this property view's
+  // own tabs. Pending Review's Approvals/Suggested Action Items tabs
+  // (queue-tab-approvals/queue-tab-suggested) also use the .tab-content
+  // class, so switching tabs inside any property (Overview, Bids, Budget,
+  // etc.) was silently stripping the 'active' class off whichever queue
+  // tab was current -- leaving Pending Review's content wrapper at
+  // display:none the next time a PM navigated there via the sidebar,
+  // with the data fully loaded and rendered into the DOM underneath but
+  // invisible until they happened to click Approvals/Suggested Action
+  // Items again to re-trigger switchQueueTab. Reported live by Misty
+  // (screenshot: Pending Review showing tabs but a blank body, reached
+  // right after "Back to Casa Marina Key..." -- i.e. from inside a
+  // property). Reproduced via Chrome automation against the live site:
+  // confirmed queue-tab-approvals had lost .active while its own content
+  // (3.6KB of real, already-rendered HTML) sat untouched underneath.
+  // switchQueueTab (added later, for the Suggested Action Items tab) was
+  // already correctly scoped to #view-queue for exactly this reason --
+  // this brings the older switchPropTab in line with that same pattern.
+  document.querySelectorAll('#view-property .tab-content').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('#view-property .tab-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('prop-tab-'+tab)?.classList.add('active');
   if(btn)btn.classList.add('active');
   if(tab==='milestones'&&currentProp)renderMilestones(currentProp);
@@ -38268,6 +38332,24 @@ function closeSidebar(){document.getElementById('sidebar').classList.remove('ope
 // working collapsed-state tooltip for free without a separate edit here.
 // Called once on load and again after setupPortal() swaps which role's
 // nav block is visible, since newly-shown buttons need the attribute too.
+// v67c -- fixed a real bug in this function found live: it only ever
+// derived data-label (for the collapsed-state hover tooltip) and assumed
+// the visible label text already sat inside a <span> that the collapse
+// CSS (.sidebar.collapsed .nav-item span:not(.nav-badge){display:none})
+// could hide. It doesn't -- every nav-item button's markup is
+// <i>...</i>LabelText<span class="nav-badge">...</span>, a bare text
+// node with no wrapping element of its own, which CSS has no way to
+// select. So collapsing the sidebar correctly hid section labels, the
+// logo, badges etc., but every nav item's label text stayed fully
+// visible and wrapped inside the 64px rail (reported live by Misty,
+// confirmed via Chrome automation: the DOM had .sidebar.collapsed
+// applied correctly, but no element matched the label-hiding selector).
+// Now wraps that bare trailing text node in a real
+// <span class="nav-item-label"> at stamp time, once per button (the
+// data-label attribute guard also now gates the wrap, so this stays a
+// true no-op on a button that's already been processed -- calling this
+// again after setupPortal() reveals a different role's nav block must
+// not double-wrap buttons stamped on a previous call).
 function stampNavItemLabels(){
   document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.hasAttribute('data-label'))return;
@@ -38275,6 +38357,20 @@ function stampNavItemLabels(){
     clone.querySelectorAll('.nav-badge').forEach(b=>b.remove());
     const label=(clone.textContent||'').trim();
     if(label)btn.setAttribute('data-label',label);
+    // Find the bare trailing text node (after the icon, before any
+    // .nav-badge span) and wrap it. Walks childNodes directly rather
+    // than textContent, since badge spans must stay outside the new
+    // wrapper -- badges have their own visibility rule
+    // (.sidebar.collapsed .nav-badge{display:none}) and must keep
+    // working independently of the label wrap.
+    for(const node of [...btn.childNodes]){
+      if(node.nodeType===Node.TEXT_NODE&&node.textContent.trim()){
+        const span=document.createElement('span');
+        span.className='nav-item-label';
+        span.textContent=node.textContent;
+        btn.replaceChild(span,node);
+      }
+    }
   });
 }
 function toggleSidebarCollapse(){
