@@ -1,4 +1,53 @@
 <!--
+pulse_v66m. Changes from v66l, this round. Requires no worker changes.
+5 items, capped per Misty's explicit instruction after reviewing the live
+Ops Center ("if so we'll cap the changes as these two plus the other 3"):
+
+  1-2. Renamed "Dependencies & Coordination" to "Related Work" in both
+    places Misty named: the Operations Center (card label, slide-out panel
+    header) and the Property Overview ribbon (tab label, card title inside
+    the tab). This reverses v66l's decision to keep the old name pending
+    the naming-collision question -- when re-raised after shipping, Misty
+    asked directly what the real risk was ("Is there a risk you see that
+    I'm missing?"). Explained the three actual uses of "related work" in
+    PULSE (a priced bid line-item category, a dollar Unit Inventory budget
+    field, and this no-dollar status/coordination tracker) and she made an
+    informed call to rename now anyway, since she's building the auto-flow
+    feature (bid-awarded line items becoming Dependency records) in a
+    separate chat -- "option 1 because I'm going to build the auto-flow
+    feature in a different chat." Internal identifiers (dependencies tab
+    key, renderDependenciesTab, prop-tab-dependencies, DEPENDENCIES table
+    name) are unchanged -- only the user-facing label moved.
+
+  3. Retainage Tracking card (Budget Performance tab) background changed
+    from var(--gray-xpale) to the default white .card background, matching
+    Budget Performance and Billing History alongside it.
+
+  4. Billing History card height now matches Budget Performance's,
+    regardless of row count. Per Misty: "Since there's a Show all entries
+    link anyway, I'd rather have the visual balance here." Budget
+    Performance's content is fixed/compact and doesn't grow with data,
+    while Billing History can show up to 6 preview rows, so rather than
+    CSS-stretching to the taller left column (which also includes
+    Retainage below Budget Performance), added syncBillingHistoryCardHeight()
+    -- measures budget-perf-card's real rendered height and applies it
+    directly to billing-history-card, with the table area scrolling
+    internally if 6 rows don't fit. Called at the end of renderBudgetTab
+    via requestAnimationFrame so it measures real post-render layout.
+
+  5. Pending Review badge -- investigated, not a bug. Traced
+    updateQueueBadge()/refreshQueue(): both correctly recount from
+    submissions.reviewStatus==='pending' and CO_SAVINGS.status==='Pending'
+    after every Approve/Return, and previewQueueItem() (the eye icon) is
+    read-only and never writes status. So the badge staying lit after
+    "seeing" an item via preview is correct -- the item is still genuinely
+    pending until approved or returned. Confirmed with Misty; no code
+    change made, left as an accurate backlog count rather than adding a
+    seen-but-not-actioned state that would make it lie about real pending
+    work.
+-->
+
+<!--
 pulse_v66l. Changes from v66k, this round. Requires no worker changes.
 Full Operations Center rebuild, per Misty's explicit dissatisfaction with
 the prior version ("nothing like the inspiration photos... I hate the
@@ -4894,7 +4943,7 @@ property as a whole. -->
 <div id="deps-portfolio-panel" style="display:none;position:fixed;top:0;right:0;width:640px;max-width:96vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
   <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
     <div>
-      <div style="font-size:16px;font-weight:700;color:#85B7EB">Dependencies &amp; coordination</div>
+      <div style="font-size:16px;font-weight:700;color:#85B7EB">Related work</div>
       <div style="font-size:12px;color:rgba(133,183,235,0.7)" id="deps-portfolio-subtitle"></div>
     </div>
     <button onclick="closeDepsPortfolioPanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
@@ -5500,7 +5549,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66m</div>
     </div>
   </nav>
 
@@ -5918,7 +5967,7 @@ from unitEffectiveValue() onto each checkbox). -->
             <button class="tab-btn" onclick="switchPropTab('phases',this)">Unit Phases</button>
             <button class="tab-btn" onclick="switchPropTab('budget',this)">Budget Performance</button>
             <button class="tab-btn" onclick="switchPropTab('changeorders',this)">Change Orders</button>
-            <button class="tab-btn" onclick="switchPropTab('dependencies',this)">Dependencies</button>
+            <button class="tab-btn" onclick="switchPropTab('dependencies',this)">Related Work</button>
             <button class="tab-btn" onclick="switchPropTab('fieldops',this)">Meetings &amp; Actions<span id="prop-fieldops-tab-badge" class="nav-badge hidden" style="background:var(--red);margin-left:6px">0</span><span id="prop-fieldops-rsvp-badge" class="nav-badge hidden" title="New RSVP responses" style="background:var(--green);margin-left:4px">0</span></button>
             <button class="tab-btn" onclick="switchPropTab('updates',this)">Field Updates</button>
             <button class="tab-btn" onclick="switchPropTab('docs',this)">Documents</button>
@@ -5946,17 +5995,25 @@ from unitEffectiveValue() onto each checkbox). -->
                 below Cash Flow Curve). Accounting purposes only; monitors
                 what the client (not VDA) withholds from and pays out to
                 the elevator company. -->
-                <div class="card" style="background:var(--gray-xpale)">
+                <div class="card">
                   <div class="card-header"><div><div class="card-title" style="font-size:13px">Retainage Tracking</div><div class="card-sub">Client cash flow — accounting reference only</div></div><button class="btn btn-add" id="prop-retainage-inline-btn" onclick="openRetainageReleaseForm()" style="font-size:12px">+ <i class="ti ti-cash"></i>Release</button></div>
                   <div id="retainage-detail"></div>
                   <div id="retainage-history-list"></div>
                 </div>
               </div>
-              <div>
-                <div class="card">
-                  <div class="card-header"><div class="card-title">Billing History</div><button class="btn btn-add" id="prop-billing-inline-btn" onclick="openBillingModal()" style="font-size:12px">+ <i class="ti ti-currency-dollar"></i>Billing</button></div>
-                  <div id="billing-history-list"></div>
-                </div>
+              <!-- v66m — Billing History card set to match Budget
+              Performance's height specifically (not the full left column,
+              which also includes Retainage). Per Misty: "Since there's a
+              Show all entries link anyway, I'd rather have the visual
+              balance here." Card height is synced to #budget-perf-card's
+              rendered height via JS (see syncBillingHistoryCardHeight,
+              called at the end of renderBudgetPerfTab) and the table area
+              scrolls internally if the 6 preview rows don't fit, so the
+              card's bottom edge lines up with Budget Performance's
+              regardless of row count. -->
+              <div class="card" id="billing-history-card" style="display:flex;flex-direction:column">
+                <div class="card-header"><div class="card-title">Billing History</div><button class="btn btn-add" id="prop-billing-inline-btn" onclick="openBillingModal()" style="font-size:12px">+ <i class="ti ti-currency-dollar"></i>Billing</button></div>
+                <div id="billing-history-list" style="overflow-y:auto;flex:1;min-height:0"></div>
               </div>
             </div>
             <!-- Billing entry form -->
@@ -6180,7 +6237,7 @@ from unitEffectiveValue() onto each checkbox). -->
                 <div class="card">
                   <div class="card-header">
                     <div>
-                      <div class="card-title">Dependencies &amp; Coordination</div>
+                      <div class="card-title">Related Work</div>
                       <div class="card-sub">Cross-trade coordination items for this scope</div>
                     </div>
                     <div style="display:flex;align-items:center;gap:8px">
@@ -18641,6 +18698,25 @@ function renderBudgetTab(p){
       </table>
       ${propReleases.length>RETAINAGE_PREVIEW_COUNT?`<button class="btn" style="width:100%;margin-top:8px;font-size:12px" onclick="openRetainageHistoryPopout('${p.n.replace(/'/g,"\\'")}')">Show all ${propReleases.length} entries</button>`:''}`;
   }
+  syncBillingHistoryCardHeight();
+}
+// v66m — Match Billing History's card height to Budget Performance's,
+// per Misty: "Since there's a Show all entries link anyway, I'd rather
+// have the visual balance here." Budget Performance's content is a fixed,
+// compact block (doesn't grow with data), while Billing History's table
+// can run to 6 rows -- so instead of stretching to the taller card (which
+// would include Retainage below Budget Performance in the left column),
+// this measures budget-perf-card's real rendered height directly and caps
+// Billing History to match it, letting the table scroll internally if the
+// 6 preview rows don't fit. requestAnimationFrame so the measurement runs
+// after both cards have their real content/layout, not the pre-render 0.
+function syncBillingHistoryCardHeight(){
+  requestAnimationFrame(()=>{
+    const src=document.getElementById('budget-perf-card');
+    const dst=document.getElementById('billing-history-card');
+    if(!src||!dst)return;
+    dst.style.height=src.offsetHeight+'px';
+  });
 }
 
 // ── CASH FLOW CURVE (v66a) ──────────────────────────────────────────
@@ -38023,7 +38099,7 @@ function renderOpsCenter(){
     </div>`;
   const relatedWorkCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Dependencies & coordination',null,{label:'View all',onclick:'openDepsPortfolioPanel()'})}
+      ${panelTitle('Related work',null,{label:'View all',onclick:'openDepsPortfolioPanel()'})}
       ${depsCatRows.length===0
         ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No related work logged across the portfolio yet.</div>`
         :`<table style="width:100%;border-collapse:collapse;font-size:11.5px">
