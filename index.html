@@ -1,4 +1,33 @@
 <!--
+pulse_v66k. Changes from v66j, this round. Requires no worker changes.
+Cash Flow Curve scenario sandbox fix, per Misty's direct request ("The
+cashflow adjusted scenario should also show me adjusted dollar amounts").
+buildCashFlowCheckpoints() already computed a correct dollarTarget for
+every scenario checkpoint (same basis.amount * (pct/100) math used for the
+real plan), but buildCashFlowSVG()'s scenario render branch only ever drew
+the purple dot and connecting line -- it never attached the $ text label
+the planned (gray) and actual (blue) series both already get. This was a
+missing render step, not a missing calculation. Fixed by adding the same
+fmtCurrency() label pattern to the scenario loop, in purple to match its
+own line/dot color, using the same first/middle/last anchor logic as every
+other label on this chart.
+Also handled a real collision case this surfaced: the scenario panel opens
+with every slider preset to the real plan's own percentages (see
+toggleCashFlowScenario), so on first open -- before anyone drags a slider
+-- the purple scenario dot sits at the exact same y-position as the gray
+planned dot for all 4 checkpoints, and both labels would render stacked on
+top of each other at the same y-7 offset. Now detects this (comparing the
+scenario pct against the real checkpoint's own pct, <0.5 difference) and
+drops the purple label to y+13 instead, matching the actual-series offset,
+until a slider is actually moved off the real value. A narrower, rarer
+case is not specifically handled: a checkpoint whose scenario pct happens
+to match the planned pct AND whose real billing has that checkpoint marked
+Complete could still see the purple label collide with the blue
+actual-series label (both would land at y+13). Left as-is rather than
+adding more speculative offset logic for a combination that may be
+uncommon in practice -- worth revisiting if it actually shows up live.
+
+<!--
 pulse_v66j. Changes from v66i, this round. Requires no new worker changes
 beyond worker_v44n_build.mjs (already required by v66i, for the consultant
 DELETE rule — still needed here since bulk delete uses the same atDelete
@@ -5319,7 +5348,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v66k</div>
     </div>
   </nav>
 
@@ -18514,15 +18543,48 @@ function buildCashFlowSVG(checkpoints,opts){
     svg+=`<text x="${x}" y="${y+13}" text-anchor="${anchorForIdx(i,checkpoints.length)}" font-size="7" font-weight="700" fill="var(--blue-dark)">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
   });
 
-  // scenario series (purple, dashed), only present when the sandbox is open
+  // scenario series (purple, dashed), only present when the sandbox is open.
+  // v66k -- dollarTarget was already computed correctly for every scenario
+  // checkpoint (buildCashFlowCheckpoints applies the same basis.amount *
+  // (pct/100) math regardless of whether pcts came from the real plan or
+  // the scenario sliders), but this render loop only ever drew the purple
+  // dot/line, never a $ label -- the planned (gray) and actual (blue)
+  // series both get an fmtCurrency() text label per point, the scenario
+  // series never did. Per Misty's direct request ("The cashflow adjusted
+  // scenario should also show me adjusted dollar amounts"), each scenario
+  // dot now gets its own purple $ label above the point, same placement
+  // pattern as the planned series' label (text sits above the dot since
+  // the scenario line, like the planned line, generally runs below the
+  // blue actual line for early checkpoints -- placing it above keeps it
+  // clear of the dot itself without a collision check). Anchor reuses the
+  // same first/middle/last start/middle/end logic as every other label on
+  // this chart so the two outermost scenario labels don't run off-canvas
+  // either.
   if(opts.scenarioCheckpoints){
     const scSeg=buildCashFlowSegments(opts.scenarioCheckpoints,()=>true); // scenario always has all 4, no real-data gating
     scSeg.segments.forEach(([a,b])=>{
       svg+=`<polyline points="${xForIdx(a)},${yForPct(opts.scenarioCheckpoints[a].pct)} ${xForIdx(b)},${yForPct(opts.scenarioCheckpoints[b].pct)}" fill="none" stroke="var(--purple)" stroke-width="2.5" stroke-dasharray="3,2"/>`;
     });
-    opts.scenarioCheckpoints.forEach(cp=>{
+    opts.scenarioCheckpoints.forEach((cp,i)=>{
       const x=xForIdx(cp.idx),y=yForPct(cp.pct);
+      const anchor=anchorForIdx(cp.idx,opts.scenarioCheckpoints.length);
       svg+=`<circle cx="${x}" cy="${y}" r="3" fill="var(--purple)"/>`;
+      // v66k -- the scenario panel opens with every slider preset to the
+      // real plan's own percentages (see toggleCashFlowScenario ->
+      // getCashFlowCheckpointPcts), so on first open, before anyone has
+      // dragged a slider, checkpoints[i].pct === opts.scenarioCheckpoints[i].pct
+      // for all 4 points -- both labels would land at the identical y-7
+      // offset and overlap illegibly. Detected by comparing this
+      // checkpoint's pct against the real (non-scenario) checkpoints[i]
+      // already in scope here; when they match within 0.5pt, the purple
+      // label drops below the dot (y+13, same offset the blue actual-series
+      // label already uses) instead of stacking on the gray one above it.
+      // Once a slider actually moves off the real value the two diverge and
+      // the purple label returns to its normal above-the-dot position.
+      const realPct=checkpoints[i]?checkpoints[i].pct:null;
+      const collidesWithPlanned=realPct!==null&&Math.abs(realPct-cp.pct)<0.5;
+      const labelY=collidesWithPlanned?y+13:y-7;
+      svg+=`<text x="${x}" y="${labelY}" text-anchor="${anchor}" font-size="7" font-weight="700" fill="var(--purple)">${escHtml(fmtCurrency(cp.dollarTarget))}</text>`;
     });
   }
 
