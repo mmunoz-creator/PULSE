@@ -1,4 +1,54 @@
 <!--
+pulse_v67d. Changes from v67c, this round. Requires no worker changes.
+Four items from Misty's direct feedback on the v67c live screenshots:
+
+  1. Collapsed sidebar wasn't actually reclaiming its freed width for the
+    content area -- .main's margin-left was hardcoded to the --sidebar-w
+    custom property, which the collapse toggle never touched (only
+    .sidebar's own width shrank to 64px). Misty: "the intent to collapse
+    the nav panel is to expand the view panel." Fixed with one sibling
+    rule, .sidebar.collapsed+.main{margin-left:64px} -- .sidebar and .main
+    are adjacent siblings in the markup, so this needed no JS changes,
+    same "one class drives it" approach as the rest of the collapse
+    feature.
+
+  2. "Budget overrun watch" title-cased to "Budget Overrun Watch",
+    matching the Activity Feed/Bid Rounds to Review fix from earlier this
+    session -- this one card's title was missed in that pass.
+
+  3. Change Orders Pending card had a large empty gap below its one row
+    when Change Orders Approved (its grid row-mate) had several rows --
+    CSS Grid's default align-items:stretch was forcing both cards in that
+    row to match the taller one's height, and Pending's plain (non-flex)
+    .card div was just leaving the extra space blank rather than
+    reflowing. Fixed with align-items:start on that specific grid row
+    only -- left the row above (Portfolio Outlook/Related Work) and below
+    (Budget Overrun/Activity Feed/Bid Rounds) alone since Misty didn't
+    flag those and at least one earlier pairing this session (Budget
+    Performance/Billing History) was deliberately height-matched at her
+    request, so stretch-by-default elsewhere is intentional, not an
+    oversight.
+    Also added a Submitted Date column on Pending rows specifically,
+    positioned to the left of the price as its own column rather than
+    stacked underneath it (which is how the v67a pass had left it, and
+    which is what Approved rows still do -- Approved shows two dates,
+    Submitted and Approved, where stacking still reads better).
+
+  4. Change Order client-visibility gap: Ops Center had no role check on
+    Change Orders at all -- every role, including client, saw every
+    Change Order regardless of status. Investigated rather than assumed:
+    Change Order Savings Log has no Visibility/Published field the way
+    Bid Submissions does, so there was no existing flag to filter on.
+    Checked with Misty what "approved and published to client" should
+    mean before building anything -- the existing Approve action already
+    opens a "Note to Client" modal, implying the client sees a Change
+    Order the moment it clears Approved, no separate publish step
+    intended. So rather than add a new Airtable field plus a Publish
+    toggle (an extra step a PM could forget), a client's Ops Center now
+    simply never receives Pending Change Orders in the first place --
+    filtered at the source (allCOs) so every downstream total/card stays
+    consistent. Every other role's view is unchanged.
+
 pulse_v67c. Changes from v67b, this round. Requires no worker changes --
 both bugs below are frontend-only. Two live bugs reported and fixed,
 investigated against the real live site via Chrome automation rather than
@@ -2418,6 +2468,7 @@ so any future nav item added to any of the four role blocks collapses
 correctly for free. overflow-x:hidden avoids a horizontal scrollbar
 appearing mid-transition while width is animating down from 235px. */
 .sidebar.collapsed{width:64px}
+.sidebar.collapsed+.main{margin-left:64px}
 .sidebar.collapsed .sidebar-logo-name,
 .sidebar.collapsed .sidebar-client-pill,
 .sidebar.collapsed .sidebar-role-tag,
@@ -2474,7 +2525,18 @@ visible next to the icon, so a duplicate tooltip would be redundant. */
 .logout-btn{width:100%;padding:6px;font-size:11px;color:rgba(255,255,255,.35);background:none;border:1px solid rgba(255,255,255,.1);border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .15s}
 .logout-btn:hover{color:rgba(255,255,255,.6)}
 /* MAIN */
-.main{flex:1;display:flex;flex-direction:column;margin-left:var(--sidebar-w);min-width:0;height:100vh;overflow-y:auto;}
+.main{flex:1;display:flex;flex-direction:column;margin-left:var(--sidebar-w);min-width:0;height:100vh;overflow-y:auto;transition:margin-left .22s ease}
+/* v67d -- the whole point of collapsing the sidebar to an icon rail is to
+   give the content area the reclaimed width back (Misty: "the intent to
+   collapse the nav panel is to expand the view panel"), but .main's
+   margin-left was hardcoded to the --sidebar-w custom property, which
+   toggleSidebarCollapse() never touches -- only .sidebar's own width
+   actually shrank to 64px, so collapsing left a dead 171px gap between
+   the rail and the content rather than reclaiming it. .sidebar and .main
+   are adjacent siblings in the markup (nav#sidebar immediately followed
+   by div.main), so a sibling selector keyed off .collapsed is enough --
+   no JS/inline-style changes needed, matches the "one CSS class drives
+   it" approach the original collapse feature used.
 .main-inner{flex:1;display:flex;flex-direction:column;}
 .mobile-topbar{display:none;background:var(--navy);padding:.75rem 1rem;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:30}
 .mobile-topbar-logo{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;color:white}
@@ -5813,7 +5875,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67c</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67d</div>
     </div>
   </nav>
 
@@ -38971,7 +39033,20 @@ function renderOpsCenter(){
   }).length;
 
   // ── CHANGE ORDERS (CO_SAVINGS) ─────────────────────────────────────
-  const allCOs=(window.CO_SAVINGS||[]).filter(c=>propFilter(c.property));
+  // v67d -- Ops Center previously showed every Change Order to every
+  // role, including client, with no visibility check at all (confirmed:
+  // no role gate existed anywhere in this block, and Change Order Savings
+  // Log has no Visibility/Published field the way Bid Submissions does).
+  // Checked what "approved and published to client" should actually mean
+  // with Misty before building anything: the existing Approve action
+  // already opens a modal asking the PM for an optional "Note to Client"
+  // -- that copy already implies the client sees it the moment it's
+  // approved, so rather than add a second, separate Publish step (a new
+  // Airtable field + toggle UI + an extra click a PM could forget), a
+  // client's Ops Center simply never sees Pending Change Orders at all --
+  // only ones that have cleared Approved. Every other role keeps seeing
+  // both Pending and Approved unchanged.
+  const allCOs=(window.CO_SAVINGS||[]).filter(c=>propFilter(c.property)&&(role!=='client'||c.status==='Approved'));
   const coPending=allCOs.filter(c=>c.status==='Pending').sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
   const coApproved=allCOs.filter(c=>c.status==='Approved').sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
   const coPendingTotal=coPending.reduce((s,c)=>s+(Number(c.negotiatedAmount||c.originalAmount)||0),0);
@@ -39267,17 +39342,29 @@ function renderOpsCenter(){
   // out of all the text." Reworked into its own dedicated right-aligned
   // column, stacked above the dollar amount, so it reads as a distinct
   // field rather than more running prose.
+  // v67d -- Pending rows: Submitted Date pulled out into its own column to
+  // the left of the price (Misty's direct request), rather than stacked
+  // underneath it like the v67a pass had it. Approved rows keep the
+  // stacked layout from v67a -- two dates (Submitted + Approved) stacked
+  // reads better than two side-by-side date columns would, and Misty's
+  // ask here was specifically about the Pending side.
   function coRow(c,approved){
-    const dateCol=approved
-      ?`<div style="font-size:10px;color:var(--gray-mid);white-space:nowrap;line-height:1.4">Submitted ${c.date?fmtDateShort(c.date):'—'}<br>Approved ${c.approvedDate?fmtDateShort(c.approvedDate):'not recorded'}</div>`
-      :`<div style="font-size:10px;color:var(--gray-mid);white-space:nowrap">Submitted ${c.date?fmtDateShort(c.date):'—'}</div>`;
+    if(approved){
+      const dateCol=`<div style="font-size:10px;color:var(--gray-mid);white-space:nowrap;line-height:1.4">Submitted ${c.date?fmtDateShort(c.date):'—'}<br>Approved ${c.approvedDate?fmtDateShort(c.approvedDate):'not recorded'}</div>`;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(c.property||'').replace(/'/g,"\\'")}')">
+        ${smallBadge('ti-circle-check','var(--green-pale)','var(--green)')}
+        <div style="flex:1;min-width:0"><p style="font-size:12px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(c.description||'Change order')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(c.property||'')}</p></div>
+        <div style="text-align:right;flex-shrink:0">
+          <span style="font-size:11.5px;font-weight:700;color:var(--green);white-space:nowrap;display:block">${fmtBudget(Number(c.negotiatedAmount||c.originalAmount)||0)}</span>
+          ${dateCol}
+        </div>
+      </div>`;
+    }
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="openProperty('${(c.property||'').replace(/'/g,"\\'")}')">
-      ${smallBadge(approved?'ti-circle-check':'ti-file-invoice',approved?'var(--green-pale)':'var(--blue-pale)',approved?'var(--green)':'var(--blue-dark)')}
+      ${smallBadge('ti-file-invoice','var(--blue-pale)','var(--blue-dark)')}
       <div style="flex:1;min-width:0"><p style="font-size:12px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(c.description||'Change order')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${escHtml(c.property||'')}</p></div>
-      <div style="text-align:right;flex-shrink:0">
-        <span style="font-size:11.5px;font-weight:700;color:${approved?'var(--green)':'var(--navy)'};white-space:nowrap;display:block">${fmtBudget(Number(c.negotiatedAmount||c.originalAmount)||0)}</span>
-        ${dateCol}
-      </div>
+      <div style="font-size:11px;color:var(--gray-mid);white-space:nowrap;flex-shrink:0">${c.date?fmtDateShort(c.date):'—'}</div>
+      <span style="font-size:11.5px;font-weight:700;color:var(--navy);white-space:nowrap;flex-shrink:0">${fmtBudget(Number(c.negotiatedAmount||c.originalAmount)||0)}</span>
     </div>`;
   }
   const coPendingCard=`
@@ -39294,7 +39381,7 @@ function renderOpsCenter(){
   // ── ROW 4: BUDGET OVERRUN + ACTIVITY FEED + BID ROUNDS AWAITING REVIEW ──
   const budgetOverrunCard=`
     <div class="card" style="border-radius:12px">
-      ${panelTitle('Budget overrun watch')}
+      ${panelTitle('Budget Overrun Watch')}
       ${budgetOverruns.length===0
         ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No properties over their approved budget.</div>`
         :`<table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -39335,7 +39422,7 @@ function renderOpsCenter(){
       ${meetingsCard}
       ${ownerDecisionsCard}
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;align-items:start">
       ${coPendingCard}
       ${coApprovedCard}
     </div>
