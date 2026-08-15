@@ -1,6 +1,6 @@
 <!--
 pulse_v67f. Changes from v67e, this round. Requires no worker changes.
-Two items, batched into one build per standing rule:
+Four items, batched into one build per standing rule:
 
   1. Change Order client-visibility correction. v67d's fix filtered a
     client's Ops Center to Status==='Approved' only, on the reasoning that
@@ -42,6 +42,35 @@ Two items, batched into one build per standing rule:
     from an initial 13px pass per Misty's direct ask ("font size of the
     summary totals to be bumped up") so it reads as the card's headline
     number, not secondary text.
+
+  3. Related Work card was misaligned against its row-mate, 30/60/90 Day
+    Outlook -- Misty flagged live via screenshot: "Category sub heading
+    should be on the same visual [line] as 'This Week' subheading."
+    Root cause: relatedWorkCard's content wrapper used
+    justify-content:center to avoid dead space when this card gets grid-
+    stretched to match the taller Outlook card (a deliberate v67a choice
+    at the time). Centering meant the "Category" table header floated
+    partway down the card instead of starting at the top, so it never
+    lined up with "This Week." Switched to justify-content:flex-start --
+    height:100% still keeps the two cards equal height, any leftover
+    space now falls below the legend instead of splitting above/below
+    the table.
+
+  4. Change Orders Pending card wasn't matching Change Orders Approved's
+    height -- Misty flagged live via screenshot and confirmed again in
+    Chrome directly: "Change Order Pending box should also be the same
+    height (top to bottom) as Change orders approved and right now it's
+    not." This grid row had align-items:start (a v67d fix for a different,
+    opposite complaint -- Grid's default stretch was leaving a large blank
+    gap below Pending's single row at the time). Removed align-items:start
+    so the row goes back to default stretch, and gave coPendingCard the
+    same height:100%/flex-column/justify-content:flex-start treatment as
+    the Related Work fix above, so the two boxes now bottom out at the
+    same line and Pending's leftover space reads as part of its own card
+    rather than a gap outside it. Verified live in Misty's own Chrome tab
+    (patched the grid + card styles in place, screenshotted, confirmed
+    both card outlines end at the same y position, then reverted the live
+    patch and wrote the real fix).
 
 pulse_v67e. Changes from v67d, this round. Requires no worker changes.
 One self-inflicted bug, found and fixed same-session: the v67d changelog
@@ -39317,11 +39346,16 @@ function renderOpsCenter(){
   // same three-state status vocabulary the old Plan/Comp/Over columns
   // used, just cross-tabbed against owner now. A legend at the bottom
   // explains the color code since the column headers no longer state it
-  // directly. Card content is wrapped in a flex column with
-  // justify-content:center so it doesn't float in dead space at the top
-  // when this card is grid-stretched to match the taller outlook card
-  // next to it (confirmed live -- with only 4-6 categories the table was
-  // much shorter than the outlook card, leaving a large empty gap below).
+  // directly.
+  // v67f -- Card content used to be centered (justify-content:center) in
+  // the extra vertical space when this card is grid-stretched to match
+  // the taller Outlook card next to it. Misty flagged live that this made
+  // the two cards look misaligned -- Related Work's "Category" sub-header
+  // sat lower than Outlook's "This Week" sub-header, instead of the two
+  // starting on the same line. Switched to justify-content:flex-start so
+  // both cards' first sub-heading row lines up; height:100% still keeps
+  // the cards equal height, any leftover space now simply falls below the
+  // legend instead of being split above and below the table.
   function depCellColor(cell){
     if(!cell||(!cell.planned&&!cell.complete&&!cell.overdue))return null;
     if(cell.overdue>0)return {n:cell.planned+cell.complete+cell.overdue,fg:'var(--red)'};
@@ -39340,7 +39374,7 @@ function renderOpsCenter(){
   const relatedWorkCard=`
     <div class="card" style="border-radius:12px;height:100%;display:flex;flex-direction:column">
       ${panelTitle('Related Work',null,{label:'View all',onclick:'openDepsPortfolioPanel()'})}
-      <div style="flex:1;display:flex;flex-direction:column;justify-content:center">
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-start">
       ${depsCatRows.length===0
         ?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">No related work logged across the portfolio yet.</div>`
         :`<table style="width:100%;border-collapse:collapse;font-size:11.5px">
@@ -39471,9 +39505,11 @@ function renderOpsCenter(){
       `</span>`;
   };
   const coPendingCard=`
-    <div class="card" style="border-radius:12px">
+    <div class="card" style="border-radius:12px;height:100%;display:flex;flex-direction:column">
       ${panelTitle('Change Orders Pending',coHeaderPills(coPending.length,coPendingTotal,'blue'))}
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-start">
       ${coPending.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing pending approval.</div>`:coPending.slice(0,6).map(c=>coRow(c,false)).join('')}
+      </div>
     </div>`;
   const coApprovedCard=`
     <div class="card" style="border-radius:12px">
@@ -39525,7 +39561,7 @@ function renderOpsCenter(){
       ${meetingsCard}
       ${ownerDecisionsCard}
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;align-items:start">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
       ${coPendingCard}
       ${coApprovedCard}
     </div>
