@@ -1,6 +1,6 @@
 <!--
 pulse_v67f. Changes from v67e, this round. Requires no worker changes.
-Six items, batched into one build per standing rule (items 4-6 are one
+Seven items, batched into one build per standing rule (items 4-6 are one
 continuous correction thread within this same round -- each caught live
 by Misty on the actual rendered page before this file was ever
 considered final):
@@ -109,6 +109,34 @@ considered final):
     (coTotalPill()), confirmed via AskUserQuestion rather than guessed
     from the screenshot alone since her two rounds of feedback on pill
     position read as contradictory without asking directly.
+
+  7. Change Order negative values (a credit, or a net cost increase)
+    were investigated per Misty's report from a prior session ("the
+    change order log does not accept negative values -- the last time
+    you tried to fix it, it didn't work"). Read the actual code and
+    tested live rather than assuming: the input parsing, live preview,
+    save, worker relay, and Airtable round-trip all already handle a
+    negative Original CO Amount / Final Amount correctly (confirmed by
+    creating a real -$500/-$200 test Change Order in Misty's live session
+    and verifying it saved and reloaded correctly, then deleting it with
+    her explicit confirmation). The real bug: "Savings Captured" (net =
+    Original minus Final) was floored with Math.max(0,...) and displayed
+    as a blank dash "&mdash;" the instant that net went negative, on the
+    individual CO card (background tint + value), the property-level
+    Change Orders tab summary bar, and both client-facing notification
+    emails (approval-required, and client-approved confirmation) -- so a
+    genuine credit/cost-increase looked like it had vanished rather than
+    being ignored. Confirmed the exact scope with Misty via
+    AskUserQuestion before touching anything, since the identical
+    Math.max(0,...) pattern also drives ~8 portfolio-wide/Analytics
+    Savings Captured rollups that were deliberately left untouched (a
+    portfolio-wide "money saved" headline going negative from one
+    cost-increase CO is a separate design question, not part of this
+    fix). Also fixed at the root: fmtCurrency() rendered a negative value
+    as "$-500" (hardcoded '$' before toLocaleString()'s own minus sign)
+    instead of the conventional "-$500" -- fixed once in the shared
+    formatter (95 call sites) rather than patched at each of the 4 scoped
+    display spots individually.
 
 pulse_v67e. Changes from v67d, this round. Requires no worker changes.
 One self-inflicted bug, found and fixed same-session: the v67d changelog
@@ -14706,9 +14734,21 @@ function fmtCurrency(val){
   if(val===null||val===undefined||val===''||isNaN(val))return '—';
   if(Number(val)===0)return '$0';
   const n=Number(val);
-  if(n>=999500)return '$'+(n/1000000).toFixed(1)+'M';
-  if(n>=1000)return '$'+(n/1000).toFixed(0)+'K';
-  return '$'+n.toLocaleString();
+  // v67f — negative values (a real Change Order credit/cost-increase net,
+  // task from Misty: "the change order log does not accept negative
+  // values") used to render as "$-500" — the leading '$' was hardcoded
+  // before the sign, so toLocaleString()'s own minus sign landed after
+  // it. Now formats the magnitude and places '-' before '$', the
+  // conventional "-$500" reading, for every caller of this shared
+  // formatter (95 call sites) rather than patching each display spot
+  // separately.
+  const neg=n<0;
+  const abs=Math.abs(n);
+  let out;
+  if(abs>=999500)out='$'+(abs/1000000).toFixed(1)+'M';
+  else if(abs>=1000)out='$'+(abs/1000).toFixed(0)+'K';
+  else out='$'+abs.toLocaleString();
+  return neg?'-'+out:out;
 }
 // Build v26c — billing percentage basis. Billing is against the awarded
 // contract amount, not the still-editable planning-stage Project Budget
@@ -16148,7 +16188,12 @@ function renderChangeOrdersTab(p){
   // of silently disappearing from every tab (see coScopeIds() note above).
   const cos=(window.CO_SAVINGS||[]).filter(c=>c.property===p.n&&coMatchesScope(c,scopeId));
   const approved=cos.filter(c=>c.status==='Approved'||c.status==='Client Approved');
-  const totalSavings=approved.reduce((a,c)=>a+Math.max(0,(parseFloat(c.originalAmount)||0)-(parseFloat(c.negotiatedAmount)||0)),0);
+  // v67f — was Math.max(0,...), flooring a net cost increase across this
+  // property's approved COs to $0 with no way to see the real number.
+  // Scoped fix, per Misty's direct confirmation: only this property-level
+  // summary bar and the individual CO card change: not the portfolio-wide
+  // Savings Captured KPI/Analytics rollups, which stay floored at zero.
+  const totalSavings=approved.reduce((a,c)=>a+((parseFloat(c.originalAmount)||0)-(parseFloat(c.negotiatedAmount)||0)),0);
   const totalOriginal=cos.reduce((a,c)=>a+c.originalAmount,0);
   const totalNegotiated=cos.reduce((a,c)=>a+c.negotiatedAmount,0);
   // Summary bar
@@ -16161,7 +16206,7 @@ function renderChangeOrdersTab(p){
       <div style="width:1px;background:var(--border)"></div>
       <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Negotiated Total</div><div style="font-size:16px;font-weight:700;color:var(--navy)">${fmtCurrency(totalNegotiated)}</div></div>
       <div style="width:1px;background:var(--border)"></div>
-      <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Savings Captured</div><div style="font-size:16px;font-weight:700;color:var(--green)">${totalSavings>0?fmtCurrency(totalSavings):'—'}</div></div>
+      <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--gray-mid)">Savings Captured</div><div style="font-size:16px;font-weight:700;color:${totalSavings>0?'var(--green)':totalSavings<0?'var(--red)':'var(--gray-mid)'}">${totalSavings!==0?fmtCurrency(totalSavings):'—'}</div></div>
       <div style="width:1px;background:var(--border)"></div>
       <div style="display:flex;gap:6px;align-items:center">
         <span style="font-size:10px;color:var(--amber);font-weight:600">${cos.filter(c=>c.status==='Pending').length} Pending</span>
@@ -16212,9 +16257,9 @@ function renderChangeOrdersTab(p){
           <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Final Amount</div>
           <div style="font-size:13px;font-weight:700;color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</div>
         </div>
-        <div style="background:${co.savings>0?'var(--green-pale)':'var(--gray-xpale)'};border-radius:6px;padding:8px 10px">
+        <div style="background:${co.savings>0?'var(--green-pale)':co.savings<0?'var(--red-pale)':'var(--gray-xpale)'};border-radius:6px;padding:8px 10px">
           <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Savings Captured</div>
-          <div style="font-size:13px;font-weight:700;color:${co.savings>0?'var(--green)':'var(--gray-mid)'}">${co.savings>0?fmtCurrency(co.savings):'—'}</div>
+          <div style="font-size:13px;font-weight:700;color:${co.savings>0?'var(--green)':co.savings<0?'var(--red)':'var(--gray-mid)'}">${co.savings!==0?fmtCurrency(co.savings):'—'}</div>
         </div>
       </div>
       ${(co.stHours!=null||co.otHours!=null||co.materialCost!=null||co.opClaimed!=null)?`<div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px;margin-bottom:8px">
@@ -19380,7 +19425,10 @@ async function clientApproveCO(coId){
     recipients=[{name:'PM User',email:'demo-pm@example.com'}];
   }
   if(recipients.length===0)return;
-  const savings=Math.max(0,(parseFloat(co.originalAmount)||0)-(parseFloat(co.negotiatedAmount)||0));
+  // v67f — was Math.max(0,...), same scoped fix as the CO card/summary
+  // bar: this email reflects one specific Change Order, so it should show
+  // that CO's real net (possibly negative), not floor it to a dash.
+  const savings=(parseFloat(co.originalAmount)||0)-(parseFloat(co.negotiatedAmount)||0);
   const htmlBody=buildPulseEmail({
     title:'Client approved',
     subtitle:{property:co.property,detail:'Change order approved by client'},
@@ -19389,7 +19437,7 @@ async function clientApproveCO(coId){
       ['Change Order',co.description||'&mdash;'],
       ['Original Amount',fmtCurrency(co.originalAmount)],
       ['Final Amount',`<span style="color:#185FA5;font-weight:bold">${fmtCurrency(co.negotiatedAmount)}</span>`],
-      ['Savings Captured',savings>0?`<span style="color:#3B6D11;font-weight:bold">${fmtCurrency(savings)}</span>`:'&mdash;'],
+      ['Savings Captured',savings!==0?`<span style="color:${savings>0?'#3B6D11':'#B91C1C'};font-weight:bold">${fmtCurrency(savings)}</span>`:'&mdash;'],
       ['Status','<span style="color:#3B6D11;font-weight:bold">Client Approved</span>'],
     ],
     footerNote:'',
@@ -19462,14 +19510,15 @@ async function notifyClientCO(coId){
   window._notifyClients=clients;
 
   // Populate modal
-  const savings=Math.max(0,(parseFloat(co.originalAmount)||0)-(parseFloat(co.negotiatedAmount)||0));
+  // v67f — was Math.max(0,...), same scoped fix as the CO card above.
+  const savings=(parseFloat(co.originalAmount)||0)-(parseFloat(co.negotiatedAmount)||0);
   document.getElementById('notify-client-co-summary').innerHTML=`
     <div style="font-weight:600;color:var(--navy);margin-bottom:6px">${co.property} — Change Order</div>
     <div style="color:var(--gray-mid);margin-bottom:4px">${escHtml(co.description)}</div>
     <div style="display:flex;gap:16px;margin-top:6px">
       <span><span style="color:var(--gray-mid)">Original:</span> <strong>${fmtCurrency(co.originalAmount)}</strong></span>
       <span><span style="color:var(--gray-mid)">Negotiated:</span> <strong style="color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</strong></span>
-      <span><span style="color:var(--gray-mid)">Savings:</span> <strong style="color:var(--green)">${savings>0?fmtCurrency(savings):'—'}</strong></span>
+      <span><span style="color:var(--gray-mid)">Savings:</span> <strong style="color:${savings>0?'var(--green)':savings<0?'var(--red)':'var(--gray-mid)'}">${savings!==0?fmtCurrency(savings):'—'}</strong></span>
     </div>`;
 
   document.getElementById('notify-client-recipients').innerHTML=clients.map(c=>`
@@ -19503,7 +19552,8 @@ async function sendCONotification(){
   const sendBtn=document.getElementById('notify-client-send-btn');
   if(sendBtn){sendBtn.disabled=true;sendBtn.innerHTML='<i class="ti ti-loader"></i> Sending…';}
 
-  const savings=Math.max(0,(parseFloat(co.originalAmount)||0)-(parseFloat(co.negotiatedAmount)||0));
+  // v67f — was Math.max(0,...), same scoped fix as the CO card above.
+  const savings=(parseFloat(co.originalAmount)||0)-(parseFloat(co.negotiatedAmount)||0);
 
   const htmlBody=buildPulseEmail({
     title:'Change order approval required',
@@ -19514,7 +19564,7 @@ async function sendCONotification(){
       ['Elevator Company',co.ec||'&mdash;'],
       ['Original Amount',fmtCurrency(co.originalAmount)],
       ['Final Amount',`<span style="color:#185FA5;font-weight:bold">${fmtCurrency(co.negotiatedAmount)}</span>`],
-      ['Savings Captured',savings>0?`<span style="color:#3B6D11;font-weight:bold">${fmtCurrency(savings)}</span>`:'&mdash;'],
+      ['Savings Captured',savings!==0?`<span style="color:${savings>0?'#3B6D11':'#B91C1C'};font-weight:bold">${fmtCurrency(savings)}</span>`:'&mdash;'],
       ['Date',co.date||'&mdash;'],
       ...(co.notes?[['Notes',co.notes]]:[]),
     ],
