@@ -1,9 +1,9 @@
 <!--
 pulse_v67f. Changes from v67e, this round. Requires no worker changes.
-Five items, batched into one build per standing rule (items 4 and 5 were
-found and fixed in the same round -- item 5 corrects a gap in item 4's
-first pass, caught live by Misty before this file was ever considered
-final):
+Six items, batched into one build per standing rule (items 4-6 are one
+continuous correction thread within this same round -- each caught live
+by Misty on the actual rendered page before this file was ever
+considered final):
 
   1. Change Order client-visibility correction. v67d's fix filtered a
     client's Ops Center to Status==='Approved' only, on the reasoning that
@@ -91,6 +91,24 @@ final):
     card styles and header markup in place, measured both cards'
     getBoundingClientRect().bottom (exact match), screenshotted, then
     reloaded to discard the live patch before writing the real fix.
+
+  6. Two more corrections, same round, both caught by Misty on the item-5
+    screenshots: (a) 30/60/90 Day Outlook and Related Work still weren't
+    the same height -- same root cause as item 5, only relatedWorkCard
+    had gotten height:100%/flex-column in an earlier pass, outlookCard
+    never did, so the grid stretch had nothing to make Outlook fill.
+    Measured live: 566.9px vs 581.9px bottom edge, a real ~15px gap, not
+    just a visual impression. Gave outlookCard the same height:100%/
+    flex-column treatment. (b) Pill placement, round 3 -- Misty: "I want
+    them separated. Count next to Heading. Leave total where it is now
+    on the far right edge." The count pill and total pill had been moving
+    as one unit across the last two passes (both left, then both right);
+    split them apart per her explicit instruction -- count pill now
+    renders inline right after the title text (its own coCountPill()),
+    total pill stays on the far right via justify-content:space-between
+    (coTotalPill()), confirmed via AskUserQuestion rather than guessed
+    from the screenshot alone since her two rounds of feedback on pill
+    position read as contradictory without asking directly.
 
 pulse_v67e. Changes from v67d, this round. Requires no worker changes.
 One self-inflicted bug, found and fixed same-session: the v67d changelog
@@ -39347,9 +39365,9 @@ function renderOpsCenter(){
       </div>`).join('')}`;
   }
   const outlookCard=`
-    <div class="card" style="border-radius:12px">
+    <div class="card" style="border-radius:12px;height:100%;display:flex;flex-direction:column">
       ${panelTitle('30 / 60 / 90 Day Outlook')}
-      <div style="position:relative;padding-left:18px">
+      <div style="position:relative;padding-left:18px;flex:1">
         <div style="position:absolute;left:5px;top:4px;bottom:4px;width:2px;background:var(--border)"></div>
         ${outlookBucket('This week','var(--blue-dark)',outlookThisWeek)}
         ${outlookBucket('Next 30 days','var(--teal)',outlookNext30)}
@@ -39515,26 +39533,27 @@ function renderOpsCenter(){
   // for Approved) so the pair reads as one unit at a glance -- the count
   // pill was previously red on the Pending card, changed to blue here to
   // match its own total pill rather than an unrelated urgency color.
-  // First pass routed the pills through panelTitle()'s `extra` param,
-  // which renders inline right next to the title text (left-aligned) --
-  // panelTitle only pushes its *link* param to the far right via
-  // justify-content:space-between, not `extra`. Misty flagged live via
-  // screenshot that the pills weren't sitting on the far right of the
-  // card the way the approved mockup showed them. Fixed by building a
-  // dedicated header row here (title left, pills right) instead of
-  // overloading panelTitle.
-  const coHeaderPills=(count,total,tint)=>{
+  // First pass routed both pills through panelTitle()'s `extra` param
+  // (left-aligned, next to the title). Second pass moved both pills as a
+  // group to the far right. Misty's final call, given directly
+  // (AskUserQuestion): split the two apart -- count pill stays next to
+  // the heading on the left, total pill stays where the second pass put
+  // it, on the far right.
+  const coCountPill=(count,tint)=>{
     if(count===0)return '';
     const bg=tint==='blue'?'var(--blue-pale)':'var(--green-pale)';
     const fg=tint==='blue'?'var(--blue-dark)':'var(--green)';
-    return `<span style="display:inline-flex;align-items:center;gap:6px">`+
-      `<span style="font-size:10px;font-weight:700;color:${fg};background:${bg};padding:2px 7px;border-radius:9px">${count}</span>`+
-      `<span style="font-size:17px;font-weight:700;color:${fg};background:${bg};padding:5px 12px;border-radius:8px">${fmtBudget(total)}</span>`+
-      `</span>`;
+    return `<span style="font-size:10px;font-weight:700;color:${fg};background:${bg};padding:2px 7px;border-radius:9px;margin-left:6px">${count}</span>`;
+  };
+  const coTotalPill=(count,total,tint)=>{
+    if(count===0)return '';
+    const bg=tint==='blue'?'var(--blue-pale)':'var(--green-pale)';
+    const fg=tint==='blue'?'var(--blue-dark)':'var(--green)';
+    return `<span style="font-size:17px;font-weight:700;color:${fg};background:${bg};padding:5px 12px;border-radius:8px">${fmtBudget(total)}</span>`;
   };
   const coCardHeader=(title,count,total,tint)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">`+
-    `<p style="font-size:14px;font-weight:700;color:var(--navy);margin:0">${escHtml(title)}</p>`+
-    coHeaderPills(count,total,tint)+
+    `<p style="font-size:14px;font-weight:700;color:var(--navy);margin:0;display:flex;align-items:center">${escHtml(title)}${coCountPill(count,tint)}</p>`+
+    coTotalPill(count,total,tint)+
     `</div>`;
   // v67f -- Change Orders Pending was given height:100%/flex-column to
   // stretch to match its taller Approved row-mate, but Approved itself
