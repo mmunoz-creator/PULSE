@@ -1,6 +1,9 @@
 <!--
 pulse_v67f. Changes from v67e, this round. Requires no worker changes.
-Four items, batched into one build per standing rule:
+Five items, batched into one build per standing rule (items 4 and 5 were
+found and fixed in the same round -- item 5 corrects a gap in item 4's
+first pass, caught live by Misty before this file was ever considered
+final):
 
   1. Change Order client-visibility correction. v67d's fix filtered a
     client's Ops Center to Status==='Approved' only, on the reasoning that
@@ -67,10 +70,27 @@ Four items, batched into one build per standing rule:
     same height:100%/flex-column/justify-content:flex-start treatment as
     the Related Work fix above, so the two boxes now bottom out at the
     same line and Pending's leftover space reads as part of its own card
-    rather than a gap outside it. Verified live in Misty's own Chrome tab
-    (patched the grid + card styles in place, screenshotted, confirmed
-    both card outlines end at the same y position, then reverted the live
-    patch and wrote the real fix).
+    rather than a gap outside it.
+
+  5. Correction to item 4 above, same round: the first pass only added
+    height:100%/flex-column to coPendingCard, not coApprovedCard, so the
+    grid's stretch had nothing to make Approved actually fill -- the two
+    boxes still ended at different heights. Misty caught this live
+    ("Cards end in different spot") with a screenshot showing Pending's
+    box clearly shorter. Fixed by giving coApprovedCard the identical
+    height:100%/flex-column/justify-content:flex-start treatment so both
+    cards genuinely stretch together. Also fixed in the same pass: the
+    count+total pills (item 2 above) were routed through panelTitle()'s
+    `extra` param, which renders inline next to the title text on the
+    left -- only panelTitle's `link` param gets pushed right via
+    justify-content:space-between. Misty flagged via the same screenshot
+    that the pills weren't on the far right of the card the way the
+    approved mockup showed. Replaced with a dedicated coCardHeader()
+    helper (title left, pills right) instead of overloading panelTitle.
+    Both fixes verified live in Misty's own Chrome tab -- patched the
+    card styles and header markup in place, measured both cards'
+    getBoundingClientRect().bottom (exact match), screenshotted, then
+    reloaded to discard the live patch before writing the real fix.
 
 pulse_v67e. Changes from v67d, this round. Requires no worker changes.
 One self-inflicted bug, found and fixed same-session: the v67d changelog
@@ -39495,26 +39515,48 @@ function renderOpsCenter(){
   // for Approved) so the pair reads as one unit at a glance -- the count
   // pill was previously red on the Pending card, changed to blue here to
   // match its own total pill rather than an unrelated urgency color.
+  // First pass routed the pills through panelTitle()'s `extra` param,
+  // which renders inline right next to the title text (left-aligned) --
+  // panelTitle only pushes its *link* param to the far right via
+  // justify-content:space-between, not `extra`. Misty flagged live via
+  // screenshot that the pills weren't sitting on the far right of the
+  // card the way the approved mockup showed them. Fixed by building a
+  // dedicated header row here (title left, pills right) instead of
+  // overloading panelTitle.
   const coHeaderPills=(count,total,tint)=>{
     if(count===0)return '';
     const bg=tint==='blue'?'var(--blue-pale)':'var(--green-pale)';
     const fg=tint==='blue'?'var(--blue-dark)':'var(--green)';
-    return `<span style="display:inline-flex;align-items:center;gap:6px;margin-left:4px">`+
+    return `<span style="display:inline-flex;align-items:center;gap:6px">`+
       `<span style="font-size:10px;font-weight:700;color:${fg};background:${bg};padding:2px 7px;border-radius:9px">${count}</span>`+
       `<span style="font-size:17px;font-weight:700;color:${fg};background:${bg};padding:5px 12px;border-radius:8px">${fmtBudget(total)}</span>`+
       `</span>`;
   };
+  const coCardHeader=(title,count,total,tint)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">`+
+    `<p style="font-size:14px;font-weight:700;color:var(--navy);margin:0">${escHtml(title)}</p>`+
+    coHeaderPills(count,total,tint)+
+    `</div>`;
+  // v67f -- Change Orders Pending was given height:100%/flex-column to
+  // stretch to match its taller Approved row-mate, but Approved itself
+  // never got the matching height:100% -- so the parent grid's default
+  // stretch had nothing to make Approved actually fill, and the two card
+  // boxes ended at different heights. Misty caught this live via
+  // screenshot ("Cards end in different spot"). Both cards now carry the
+  // same height:100%/flex-column treatment so they always bottom out
+  // together regardless of which one has more rows.
   const coPendingCard=`
     <div class="card" style="border-radius:12px;height:100%;display:flex;flex-direction:column">
-      ${panelTitle('Change Orders Pending',coHeaderPills(coPending.length,coPendingTotal,'blue'))}
+      ${coCardHeader('Change Orders Pending',coPending.length,coPendingTotal,'blue')}
       <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-start">
       ${coPending.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">Nothing pending approval.</div>`:coPending.slice(0,6).map(c=>coRow(c,false)).join('')}
       </div>
     </div>`;
   const coApprovedCard=`
-    <div class="card" style="border-radius:12px">
-      ${panelTitle('Change Orders Approved',coHeaderPills(coApproved.length,coApprovedTotal,'green'))}
+    <div class="card" style="border-radius:12px;height:100%;display:flex;flex-direction:column">
+      ${coCardHeader('Change Orders Approved',coApproved.length,coApprovedTotal,'green')}
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-start">
       ${coApproved.length===0?`<div style="font-size:12px;color:var(--gray-mid);padding:8px 0">None approved yet.</div>`:coApproved.slice(0,6).map(c=>coRow(c,true)).join('')}
+      </div>
     </div>`;
 
   // ── ROW 4: BUDGET OVERRUN + ACTIVITY FEED + BID ROUNDS AWAITING REVIEW ──
