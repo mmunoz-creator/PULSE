@@ -1,4 +1,59 @@
 <!--
+pulse_v67o. Changes from v67n, this round. No worker changes required.
+
+VT Glossary folded into AI Assistant, per Misty's direct request to reduce
+sidebar/nav density. Mocked up in three rounds first (simulated-chat feel,
+then the nav-density before/after, then the real slide-panel treatment)
+and approved before building. Removed the standalone "VT Glossary" nav
+button from Admin, PM, and Consultant sidebars (Client never had one) and
+the 3 matching Orientation Tour steps that pointed at it -- all 4 roles'
+existing "AI Assistant / MARLI" tour step already said "or look up VT
+terminology," so no tour copy needed rewriting there.
+
+VT Glossary's page (view-glossary, its header, and its dedicated
+page-body/card wrapper) is gone; the same table markup and all of its
+existing JS (VT_GLOSSARY, renderGlossary, filterGlossary,
+formatGlossaryTerm, same ids throughout) now live inside a slide-out panel
+using the app's real .panel-overlay/.slide-panel convention (same visual
+language as the Meeting panel), opened via a new dedicated
+openGlossaryPanel()/closeGlossaryPanel() pair -- deliberately not reusing
+the existing #panel-overlay/closePanel(), since that pair is hardcoded to
+the Meeting panel specifically and reusing it risked clobbering Meeting
+panel state.
+
+AI Assistant's chat page gained a second chip row, "Look up a term"
+(visually distinct purple chips vs. the existing blue portfolio-question
+chips), plus a "Browse all terms" chip that opens the new glossary panel
+directly -- the fallback for scanning the full list without a specific
+term in mind, the one thing a chat interface genuinely can't do well.
+
+New isGlossaryShapedQuestion()/lookupGlossaryTerm() intercept inside
+sendChat(), before it ever reaches sendDemoChat/sendLiveChat: a
+term-shaped question (chip click or free-typed) is answered locally from
+VT_GLOSSARY with zero API calls, no MARLI daily-question-limit spend, and
+no window._marliHistory pollution -- this is intentionally NOT MARLI, just
+a keyword match dressed in the same chat-bubble visual language
+(renderGlossaryChatAnswer(), same avatar/markup as a real MARLI reply,
+small artificial delay so it doesn't feel jarringly instant next to real
+answers in the same conversation). A real operational/how-to question
+("how long does a jack replacement take") gets the same decline-and-
+redirect response the real MARLI system prompt already gives for this
+case, kept consistent on purpose. Anything that doesn't match a term,
+including a term-shaped phrase with no glossary hit, falls through to
+real MARLI unchanged -- a genuine portfolio question can never be silently
+swallowed by this path. Chat intro text on the AI Assistant page updated
+to mention term lookups explicitly ("or ask about any VT industry term,
+like 'what's AHJ?'").
+
+Known side effect, flagged for Misty rather than silently absorbed: MARLI
+Insights' "VT Glossary lookup" category (vt_glossary tag, tallied
+server-side from real MARLI answers) will now undercount, since most
+glossary questions never reach the Worker at all anymore -- only ones this
+client-side heuristic fails to catch still flow through and get tagged
+normally.
+-->
+
+<!--
 pulse_v67n. Changes from v67m, this round. No worker changes required.
 
 Ops Center Row 2 dates right-justified for scannability. Misty's own idea,
@@ -3111,6 +3166,15 @@ visible next to the icon, so a duplicate tooltip would be redundant. */
 .chat-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px;border-top:1px solid var(--border);background:white;flex-shrink:0}
 .chip{font-size:11px;padding:4px 10px;border:1px solid var(--blue-light);border-radius:20px;color:var(--blue-dark);background:var(--blue-xpale);cursor:pointer;font-weight:500;transition:all .12s}
 .chip:hover{background:var(--blue-pale)}
+/* v67o -- VT term-lookup chip row, visually distinct (purple) from the
+portfolio-question chips above it so the two groups read as separate at a
+glance: one asks real MARLI, one is a local glossary lookup. */
+.chat-chip-row-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--gray-mid);padding:8px 14px 0;background:white;flex-shrink:0}
+.chip-glossary{font-size:11px;padding:4px 10px;border:1px solid var(--purple-light,#c9b8f5);border-radius:20px;color:var(--purple);background:var(--purple-pale);cursor:pointer;font-weight:500;transition:all .12s}
+.chip-glossary:hover{background:var(--purple-xpale,#f3ecfd)}
+.chip-glossary-browse{font-size:11px;padding:4px 10px;border:none;border-radius:20px;color:#fff;background:var(--navy);cursor:pointer;font-weight:600;transition:opacity .12s;display:inline-flex;align-items:center;gap:4px}
+.chip-glossary-browse:hover{opacity:0.85}
+.chip-glossary-browse i{font-size:11px}
 .chat-input-row{padding:10px;border-top:1px solid var(--border);display:flex;gap:8px;background:white;flex-shrink:0}
 .chat-input{flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;outline:none;transition:border .15s}
 .chat-input:focus{border-color:var(--blue-mid);box-shadow:0 0 0 3px rgba(55,138,221,.1)}
@@ -6126,7 +6190,6 @@ from unitEffectiveValue() onto each checkbox). -->
         <button class="nav-item" onclick="gotoView('marliinsights',this)"><i class="ti ti-shield-check"></i>MARLI Insights</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Reports</button>
-        <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
         <button class="nav-item" onclick="startTour('admin')"><i class="ti ti-route"></i>Orientation</button>
       </div>
     </div>
@@ -6166,7 +6229,6 @@ from unitEffectiveValue() onto each checkbox). -->
         <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
         <button class="nav-item" onclick="gotoView('charts',this)"><i class="ti ti-chart-dots"></i>Analytics</button>
         <button class="nav-item" onclick="gotoView('report',this)"><i class="ti ti-file-analytics"></i>Performance Reports</button>
-        <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
         <button class="nav-item" onclick="startTour('pm')"><i class="ti ti-route"></i>Orientation</button>
       </div>
     </div>
@@ -6202,7 +6264,6 @@ from unitEffectiveValue() onto each checkbox). -->
       <div class="nav-section">
         <div class="nav-section-label">Intelligence</div>
         <button class="nav-item" onclick="gotoView('chatbot',this)"><i class="ti ti-robot"></i>AI Assistant</button>
-        <button class="nav-item" onclick="gotoView('glossary',this)"><i class="ti ti-book"></i>VT Glossary</button>
         <button class="nav-item" onclick="startTour('consultant')"><i class="ti ti-route"></i>Orientation</button>
       </div>
     </div>
@@ -6270,7 +6331,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67n</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67o</div>
     </div>
   </nav>
 
@@ -7621,7 +7682,7 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
               <div class="chat-status"></div>
             </div>
-            <div class="chat-messages" id="chat-messages"><div class="chat-msg"><div class="msg-av ai-av ai-av-mascot"><img src="assets/marli-avatar.png" alt="MARLI" width="60" height="87"></div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — I'm MARLI, your Modernization Advisory assistant. I have full visibility into your Park Hotels &amp; Resorts portfolio. Ask me about any property, schedule risk, budget, milestones, or elevator company performance. For questions about how PULSE features work, tap the ? button in any view header to open the Help panel.</div></div></div>
+            <div class="chat-messages" id="chat-messages"><div class="chat-msg"><div class="msg-av ai-av ai-av-mascot"><img src="assets/marli-avatar.png" alt="MARLI" width="60" height="87"></div><div class="msg-bubble ai-bubble" id="chat-intro">Hi — I'm MARLI, your Modernization Advisory assistant. I have full visibility into your Park Hotels &amp; Resorts portfolio. Ask me about any property, schedule risk, budget, milestones, or elevator company performance — or ask about any VT industry term, like "what's AHJ?" For questions about how PULSE features work, tap the ? button in any view header to open the Help panel.</div></div></div>
             <div class="chat-chips" id="chat-chips">
               <span class="chip" onclick="askQ('Which properties are behind schedule?')">Behind schedule?</span>
               <span class="chip" onclick="askQ('Which properties are over budget?')">Over budget?</span>
@@ -7629,7 +7690,24 @@ from unitEffectiveValue() onto each checkbox). -->
               <span class="chip" onclick="askQ('List all Hawaii properties')">Hawaii portfolio</span>
               <span class="chip" onclick="askQ('Who are the VDA consultants and their assignments?')">Consultant assignments</span>
             </div>
-            <div class="chat-input-row"><input type="text" class="chat-input" id="chat-input" placeholder="Ask about any property, schedule, budget, milestones..." onkeydown="if(event.key==='Enter')sendChat()"><button class="chat-send" onclick="sendChat()"><i class="ti ti-send"></i>Ask</button></div>
+            <!-- v67o -- second chip row for VT term lookups, per Misty's
+            direct request to fold VT Glossary into AI Assistant instead
+            of keeping it as its own nav item. These route through
+            sendChat()'s isGlossaryShapedQuestion() intercept exactly like
+            typing the same question would -- no separate code path per
+            chip. "Browse all terms" doesn't ask anything; it opens the
+            VT Glossary slide-panel (openGlossaryPanel(), same searchable
+            table the old dedicated page used) for the case a chat can't
+            cover well: scanning the full list without a specific term in
+            mind yet. -->
+            <div class="chat-chip-row-label">Look up a term</div>
+            <div class="chat-chips" id="chat-chips-glossary">
+              <span class="chip chip-glossary" onclick="askQ('What is AHJ?')">What's AHJ?</span>
+              <span class="chip chip-glossary" onclick="askQ('Comb tooth?')">Comb tooth?</span>
+              <span class="chip chip-glossary" onclick="askQ('Cat 5 test?')">Cat 5 test?</span>
+              <span class="chip chip-glossary-browse" onclick="openGlossaryPanel()"><i class="ti ti-book"></i>Browse all terms</span>
+            </div>
+            <div class="chat-input-row"><input type="text" class="chat-input" id="chat-input" placeholder="Ask about any property, schedule, budget, or VT term..." onkeydown="if(event.key==='Enter')sendChat()"><button class="chat-send" onclick="sendChat()"><i class="ti ti-send"></i>Ask</button></div>
           </div>
         </div>
       </div>
@@ -7917,21 +7995,38 @@ from unitEffectiveValue() onto each checkbox). -->
         <div class="page-body" id="opscenter-body"></div>
       </div>
 
-      <div id="view-glossary" class="hidden">
-        <div class="page-header">
-          <div class="page-header-left"><h1>VT Glossary</h1><p>Vertical Transportation Terms &amp; Abbreviations</p></div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input type="text" id="glossary-search" class="form-input" placeholder="Search terms..." style="width:220px" oninput="filterGlossary(this.value)">
+      <!-- v67o -- VT Glossary demoted from its own top-level nav view to a
+      slide-out panel opened from AI Assistant ("Browse all terms"), per
+      Misty's direct request to reduce sidebar density without losing the
+      full-scan use case a chat interface can't cover. Uses the app's real
+      existing .panel-overlay/.slide-panel convention (same visual
+      language as the Meeting panel) but with its own dedicated
+      overlay/open-close functions (openGlossaryPanel/closeGlossaryPanel)
+      rather than reusing #panel-overlay/closePanel(), since that pair is
+      hardcoded to the Meeting panel specifically (closePanel() always
+      references #meeting-panel/#panel-head-title by id) -- reusing it
+      here would risk clobbering Meeting panel state if both were ever
+      triggered in the same session. Table markup, ids, and all glossary
+      JS (VT_GLOSSARY, renderGlossary, filterGlossary, formatGlossaryTerm)
+      are unchanged -- only the container around them moved. -->
+      <div class="panel-overlay" id="glossary-panel-overlay" onclick="closeGlossaryPanel()"></div>
+      <div class="slide-panel" id="glossary-panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-head-title">VT Glossary</div>
+            <div class="panel-head-sub">Vertical Transportation Terms &amp; Abbreviations</div>
           </div>
+          <button class="panel-close" onclick="closeGlossaryPanel()"><i class="ti ti-x"></i></button>
         </div>
-        <div class="page-body">
-          <div class="card">
-            <div id="glossary-table-wrap" class="table-wrap">
-              <table class="data-table" style="table-layout:fixed">
-                <thead><tr><th style="width:25%">Term / Abbreviation</th><th style="width:75%">Definition</th></tr></thead>
-                <tbody id="glossary-tbody"></tbody>
-              </table>
-            </div>
+        <div style="padding:14px 24px;border-bottom:1px solid var(--border)">
+          <input type="text" id="glossary-search" class="form-input" placeholder="Search terms..." style="width:100%" oninput="filterGlossary(this.value)">
+        </div>
+        <div class="panel-body">
+          <div id="glossary-table-wrap" class="table-wrap">
+            <table class="data-table" style="table-layout:fixed">
+              <thead><tr><th style="width:25%">Term / Abbreviation</th><th style="width:75%">Definition</th></tr></thead>
+              <tbody id="glossary-tbody"></tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -8969,7 +9064,10 @@ function gotoView(viewId,btn){
   // as renderDashboard() below did.
   if(viewId==='dashboard')renderActionBoard();
   if(viewId==='dashboard-archived')renderDashboard();
-  if(viewId==='glossary')renderGlossary();
+  // v67o -- 'glossary' is no longer a real gotoView() target; VT Glossary
+  // moved to a slide-panel opened via openGlossaryPanel(), which renders
+  // it directly. This dispatcher line is dead now, left removed rather
+  // than kept as a no-op.
   if(viewId==='schedule')renderGantt();
   if(viewId==='vdaproject')renderVdaProjects();
   if(viewId==='opscenter')renderOpsCenter();
@@ -14298,6 +14396,23 @@ function closePanel(clearDraft=true){
     document.getElementById('editing-draft-id').value='';
     document.getElementById('panel-head-title').textContent='Log meeting';
   }
+}
+// v67o -- dedicated open/close pair for the VT Glossary slide-panel,
+// separate from panel-overlay/closePanel() above since that pair is
+// hardcoded to the Meeting panel (#meeting-panel, #panel-head-title).
+// Renders the full unfiltered list fresh every open so a stale filtered
+// view from a prior visit never lingers, and clears the search box to
+// match.
+function openGlossaryPanel(){
+  const search=document.getElementById('glossary-search');
+  if(search)search.value='';
+  renderGlossary();
+  document.getElementById('glossary-panel-overlay').classList.add('open');
+  document.getElementById('glossary-panel').classList.add('open');
+}
+function closeGlossaryPanel(){
+  document.getElementById('glossary-panel-overlay').classList.remove('open');
+  document.getElementById('glossary-panel').classList.remove('open');
 }
 function populatePanelPropertyList(){
   const sel=document.getElementById('m-property');
@@ -39248,11 +39363,49 @@ function sendChat(){
   const msgs=document.getElementById('chat-messages');
   msgs.innerHTML+=`<div class="chat-msg user-msg"><div class="msg-av u-av">U</div><div class="msg-bubble u-bubble">${escHtml(msg)}</div></div>`;
   msgs.scrollTop=msgs.scrollHeight;
+  // v67o -- glossary-shaped questions are intercepted here, before ever
+  // reaching sendDemoChat/sendLiveChat, and answered locally from
+  // VT_GLOSSARY with no API call and no daily-question-limit spend. Only
+  // questions that actually read as a term lookup are intercepted (see
+  // isGlossaryShapedQuestion) -- anything else, including a term-shaped
+  // phrase that doesn't match anything in the glossary, falls through to
+  // real MARLI exactly as before, so a genuine portfolio question never
+  // gets silently swallowed by this path.
+  if(isGlossaryShapedQuestion(msg)){
+    const result=lookupGlossaryTerm(msg);
+    if(result){
+      renderGlossaryChatAnswer(result);
+      return;
+    }
+  }
   if(demoMode){
     sendDemoChat(msg);
   }else{
     sendLiveChat(msg);
   }
+}
+// v67o -- renders a local glossary answer as a real chat bubble, same
+// markup/avatar as sendLiveChat's, with a small artificial typing delay
+// so it doesn't feel jarringly instant next to real MARLI responses in
+// the same conversation. Never touches window._marliHistory or the daily
+// question counter -- this never happened as far as the real MARLI
+// endpoint or its rate limits are concerned.
+function renderGlossaryChatAnswer(result){
+  const msgs=document.getElementById('chat-messages');
+  const typId='t'+Date.now();
+  msgs.innerHTML+=`<div class="chat-msg" id="${typId}"><div class="msg-av ai-av ai-av-mascot"><img src="${MARLI_AVATAR_URI}" alt="MARLI"></div><div class="msg-bubble ai-bubble"><span style="color:var(--gray-light);font-style:italic">Looking that up...</span></div></div>`;
+  msgs.scrollTop=msgs.scrollHeight;
+  setTimeout(()=>{
+    const el=document.getElementById(typId);
+    if(!el)return;
+    const bubble=el.querySelector('.msg-bubble');
+    if(result.operational){
+      bubble.textContent="I don't have a real-world timeline or procedure for that — specifics vary by site conditions, contractor, and scope. Your VDA project manager or consultant is the right person to ask. I can define terms and abbreviations, but not walk through repair procedures.";
+    }else{
+      bubble.innerHTML=`<b>${escHtml(formatGlossaryTerm(result.term))}</b><br>${escHtml(result.def)}`;
+    }
+    msgs.scrollTop=msgs.scrollHeight;
+  },450);
 }
 
 function sendDemoChat(msg){
@@ -40722,6 +40875,56 @@ function filterGlossary(q){
   const s=q.toLowerCase();
   _glossaryFiltered=VT_GLOSSARY.filter(g=>g.term.toLowerCase().includes(s)||g.def.toLowerCase().includes(s)).sort((a,b)=>a.term.localeCompare(b.term));
   _renderGlossaryRows(_glossaryFiltered);
+}
+// v67o -- local (no-API-call) glossary lookup for AI Assistant's "Look up
+// a term" chips and free-text questions, per Misty's direct request: she
+// wants the chat *feel* of asking MARLI a term question without actually
+// spending a real API call on something that's really just a lookup
+// against this same 130-entry array. This is intentionally NOT MARLI --
+// it's a keyword match against VT_GLOSSARY, run entirely client-side.
+// isGlossaryShapedQuestion() decides whether a typed question should be
+// intercepted before ever reaching sendDemoChat/sendLiveChat; lookupGlossaryTerm()
+// does the actual matching and returns {term,def} or null.
+const GLOSSARY_QUESTION_PATTERNS=[/^what'?s\s+/i,/^what\s+is\s+/i,/^what\s+does\s+/i,/^whats\s+/i,/^define\s+/i,/^definition\s+of\s+/i];
+const GLOSSARY_OPERATIONAL_PATTERNS=[/how\s+long\s+does/i,/how\s+do\s+i/i,/how\s+to\s+/i,/what'?s\s+the\s+procedure/i,/steps?\s+(to|for)/i,/timeline\s+for/i];
+function isGlossaryShapedQuestion(msg){
+  const trimmed=(msg||'').trim();
+  if(!trimmed)return false;
+  if(GLOSSARY_OPERATIONAL_PATTERNS.some(p=>p.test(trimmed)))return true; // still glossary-shaped, just declined below
+  if(GLOSSARY_QUESTION_PATTERNS.some(p=>p.test(trimmed)))return true;
+  // A short, term-like fragment with no verb-y question shape (e.g. just
+  // "comb tooth" typed directly, or a chip's exact term text) also counts
+  // — anything under ~6 words with no sentence-ending punctuation reads
+  // as a lookup, not a real portfolio question.
+  const wordCount=trimmed.split(/\s+/).length;
+  return wordCount<=6 && !/[.!?]{1}\s*\S/.test(trimmed);
+}
+function lookupGlossaryTerm(msg){
+  const trimmed=(msg||'').trim();
+  if(GLOSSARY_OPERATIONAL_PATTERNS.some(p=>p.test(trimmed))){
+    return {operational:true};
+  }
+  let stripped=trimmed;
+  GLOSSARY_QUESTION_PATTERNS.forEach(p=>{stripped=stripped.replace(p,'');});
+  stripped=stripped.replace(/\bmean\??$/i,'').replace(/[?]+$/,'').trim();
+  const q=stripped.toLowerCase();
+  if(!q)return null;
+  const qWords=q.split(/\s+/).filter(w=>w.length>2);
+  let best=null,bestScore=0;
+  VT_GLOSSARY.forEach(g=>{
+    const termLower=g.term.toLowerCase();
+    const defLower=g.def.toLowerCase();
+    let score=0;
+    if(termLower===q)score+=100;
+    else if(termLower.includes(q)||q.includes(termLower))score+=40;
+    qWords.forEach(w=>{
+      if(termLower.includes(w))score+=8;
+      if(defLower.includes(w))score+=1;
+    });
+    if(score>bestScore){bestScore=score;best=g;}
+  });
+  if(best&&bestScore>=8)return {term:best.term,def:best.def};
+  return null;
 }
 function formatGlossaryTerm(term){
   // Normalize terms to "Full Term (ABBR)" format
@@ -42519,7 +42722,6 @@ const TOUR_STEPS = {
       'Step 2: Every Monday, PULSE automatically generates a report with an AI-written summary and emails it to you for review.',
       'Step 3: Review it, then forward it yourself by email if you want to share it with your client contact.'
     ]},
-    {target:'#nav-pm [onclick*="\'glossary\'"]',view:'glossary',title:'VT Glossary',body:['A searchable glossary of vertical transportation terms and abbreviations — handy if you run into unfamiliar industry language.']},
   ],
   admin: [
     {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
@@ -42615,7 +42817,6 @@ const TOUR_STEPS = {
       'Step 3: Review it, then forward it by email if you want to share it with a client contact.',
       'Step 4: Admin-only Weekly Report Feedback tab here lets you rate each week\'s AI-generated executive summary with a thumbs up or down, with an optional written note on a down vote, so the summary prompt can be tuned over time from real feedback instead of guesswork.'
     ]},
-    {target:'#nav-admin [onclick*="\'glossary\'"]',view:'glossary',title:'VT Glossary',body:['A searchable glossary of vertical transportation terms and abbreviations — handy if you run into unfamiliar industry language.']},
   ],
   consultant: [
     {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
@@ -42655,7 +42856,6 @@ const TOUR_STEPS = {
     ]},
     {target:'#nav-consultant [onclick*="\'calendar\'"]',view:'calendar',title:'Calendar',body:['Meetings, milestones, and key dates for your properties.','You can Cancel or Reschedule any Scheduled meeting or site visit from its detail popup, same as your PM - Cancel sets its status to Cancelled and emails every attendee, and Reschedule updates the date/time, resets every attendee\'s RSVP to Pending, and re-sends the invite.']},
     {target:'#nav-consultant [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your properties in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself.']},
-    {target:'#nav-consultant [onclick*="\'glossary\'"]',view:'glossary',title:'VT Glossary',body:['A searchable glossary of vertical transportation terms and abbreviations.']},
   ],
   client: [
     {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
