@@ -1,4 +1,50 @@
 <!--
+pulse_v67q. Changes from v67p, this round. No worker changes required.
+
+Change Order cards, on a property's Change Orders tab, made compact and
+split into three status sections. Misty flagged that cards were stacking
+up over time -- each ran 4+ visual blocks tall (header, then a 3-box
+stat grid for Original/Final/Savings each with its own padded background,
+then optional Line Items / Additional Considerations / notes blocks, then
+action buttons). Mocked up in stages and approved before building: first
+a single-line compact card style, then a Pending/Approved split with
+collapse, then corrected by Misty to three separate sections (Pending,
+Rejected, Approved) since a Rejected CO isn't "settled" the same way an
+Approved one is and mixing them would muddy the new negotiated-total
+figure, then a final round adding that negotiated-total summary to the
+Approved section header per Misty's direct request.
+
+renderChangeOrdersTab() now splits cos into pendingCOs/rejectedCOs/
+approvedCOs and renders three sections. Pending and Rejected always
+render in full, no collapse -- consistent with Misty's own earlier
+direction on the Properties table ("nobody wants to page-click to see if
+something's at risk" on a status-monitoring tool, v56b), and Rejected
+COs are typically few. Approved (which also includes Client Approved,
+preserving the v62j statusBadgeClass fix) shows its count plus negotiated
+total on the section header, then collapses beyond
+CO_APPROVED_PREVIEW_COUNT (6, matching BILLING_PREVIEW_COUNT's existing
+"Show all N" precedent on this same property page) with a "Show N more"
+toggle. Expand state is tracked per property+scope in
+window._coApprovedExpanded so switching properties/tabs doesn't leak
+state across unrelated CO lists.
+
+Each card is now a single line by default: title, Fast Track flag,
+elevator company/date/payment meta, and Original/Final/Savings inline on
+the right, with the status badge (or, for Pending, Approve/Reject
+buttons directly inline -- no click to reveal them) replacing what used
+to be a full row of its own. Anything conditional -- Line Items,
+Additional Considerations, notes, Edit/Notify Client/client-Approve
+buttons -- moves behind a "Details" expand on cards that actually have
+that content (toggleCOCardDetail()); a plain settled CO with nothing
+extra is now one line, full stop.
+
+New CSS classes only (.co-card-*, .co-card-section-*) -- did not touch
+.co-row or its co-approved/co-rejected/co-pending modifiers, since that
+class is shared with the Dependencies list (renderDependenciesTab) and
+changing it would have affected an unrelated feature.
+-->
+
+<!--
 pulse_v67p. Changes from v67o, this round. No worker changes required.
 
 MARLI's per-message avatar reverted from the full 60x87 mascot image to a
@@ -3269,6 +3315,35 @@ glance: one asks real MARLI, one is a local glossary lookup. */
 .co-row.co-rejected{opacity:.65;border-left:3px solid var(--red)}
 .co-row.co-approved{border-left:3px solid var(--green)}
 .co-row.co-pending{border-left:3px solid var(--amber)}
+/* v67q -- compact Change Order cards, per Misty's direct request: cards
+were stacking up over time and each ran 4+ visual blocks tall (header,
+then a 3-box stat grid, then optional Line Items / Additional
+Considerations / notes blocks, then action buttons). Mocked up in two
+rounds (compact single-line card, then Pending/Rejected/Approved split
+with collapse) and approved before building. Distinct classes from
+.co-row above since that class is shared with the Dependencies list
+(renderDependenciesTab reuses .co-row directly) and must not change
+there. */
+.co-card-section-label{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-mid);margin:14px 0 8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.co-card-section-label:first-child{margin-top:0}
+.co-card-section-label .co-card-count{background:var(--gray-pale);color:var(--gray-mid);font-size:9.5px;padding:1px 7px;border-radius:10px;font-weight:700;margin-left:6px}
+.co-card-section-label.co-section-pending .co-card-count{background:#FEF3C7;color:var(--amber)}
+.co-card-section-label.co-section-rejected .co-card-count{background:#FEE2E2;color:var(--red)}
+.co-card-section-total{text-transform:none;letter-spacing:0;font-weight:600;color:var(--gray-dark)}
+.co-card-compact{border:1px solid var(--border);border-left:3px solid var(--green);border-radius:8px;padding:9px 12px;margin-bottom:6px;background:white}
+.co-card-compact.co-card-pending{border-left-color:var(--amber)}
+.co-card-compact.co-card-rejected{border-left-color:var(--red);opacity:.75}
+.co-card-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.co-card-title{font-size:12.5px;font-weight:600;color:var(--navy)}
+.co-card-meta{font-size:10.5px;color:var(--gray-mid);margin-top:1px}
+.co-card-amounts{display:flex;gap:14px;align-items:center;flex-shrink:0}
+.co-card-amt{text-align:right}
+.co-card-amt-label{font-size:8.5px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.03em}
+.co-card-amt-val{font-size:12.5px;font-weight:700;color:var(--navy)}
+.co-card-amt-val.blue{color:var(--blue-dark)}
+.co-card-expand{font-size:10.5px;color:var(--blue-dark);cursor:pointer;margin-top:6px;display:flex;align-items:center;gap:3px}
+.co-card-detail{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)}
+.co-card-show-more{width:100%;margin-top:4px;padding:8px;font-size:11.5px;font-weight:600;color:var(--blue-dark);background:var(--gray-xpale);border:1px dashed var(--border);border-radius:8px;cursor:pointer;text-align:center}
 .budget-track{height:10px;background:var(--gray-pale);border-radius:5px;overflow:hidden}
 .budget-fill{height:100%;border-radius:5px;transition:width .4s}
 /* DOCUMENT FOLDERS */
@@ -6381,7 +6456,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67p</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67q</div>
     </div>
   </nav>
 
@@ -16612,44 +16687,45 @@ function renderChangeOrdersTab(p){
     list.innerHTML='<div class="empty-state" style="padding:2rem"><i class="ti ti-file-invoice"></i><div class="empty-state-title">No Change Orders</div><div class="empty-state-sub">Log a change order when the contractor issues a scope change</div></div>';
     return;
   }
-  list.innerHTML=cos.map(co=>{
-    const statusClass=co.status==='Approved'||co.status==='Client Approved'?'co-approved':co.status==='Rejected'?'co-rejected':'co-pending';
-    // v62j — task #45 fix. The old ternary checked
-    // (status==='Approved'||status==='Client Approved') FIRST, so the
-    // later status==='Client Approved'?'co-status-client' branch could
-    // never fire — Client Approved always rendered the same green
-    // co-status-approved badge as a plain Approved CO. co-status-client
-    // (a distinct blue badge) existed in CSS but had never actually
-    // displayed. Client Approved is now checked before the combined
-    // Approved/Client Approved condition.
+  // v67q -- compact card layout, split into three sections (Pending,
+  // Rejected, Approved) per Misty's direct correction: a Rejected CO
+  // isn't "settled" the same way an Approved one is, so they don't share
+  // a section or get folded into the same negotiated-total figure.
+  // Pending and Rejected always render in full -- Misty's own precedent
+  // from removing Properties table pagination ("nobody wants to
+  // page-click to see if something's at risk" on a status tool) applies
+  // here too, and Rejected COs are usually few. Only Approved (which
+  // also includes Client Approved -- see the v62j comment preserved
+  // below on statusBadgeClass) collapses beyond CO_APPROVED_PREVIEW_COUNT,
+  // matching the existing Billing/Retainage "Show all N" precedent on
+  // this same property page (BILLING_PREVIEW_COUNT, ~line 20243).
+  const CO_APPROVED_PREVIEW_COUNT=6;
+  const pendingCOs=cos.filter(c=>c.status==='Pending');
+  const rejectedCOs=cos.filter(c=>c.status==='Rejected');
+  const approvedCOs=cos.filter(c=>c.status==='Approved'||c.status==='Client Approved');
+  const approvedNegotiatedTotal=approvedCOs.reduce((a,c)=>a+(c.negotiatedAmount||0),0);
+  // expand state persists per-property/scope while switching tabs, resets
+  // if you leave and come back to a different property (module-level
+  // object, not full page state) -- intentionally simple, no need for
+  // this to survive a reload.
+  window._coApprovedExpanded=window._coApprovedExpanded||{};
+  const expandKey=`${p.n}::${scopeId||''}`;
+  const isExpanded=!!window._coApprovedExpanded[expandKey];
+
+  function coCardHtml(co){
+    // v62j — task #45 fix, preserved from the old card layout. The old
+    // ternary checked (status==='Approved'||status==='Client Approved')
+    // FIRST, so the later status==='Client Approved'?'co-status-client'
+    // branch could never fire — Client Approved always rendered the same
+    // green co-status-approved badge as a plain Approved CO. Client
+    // Approved is checked before the combined Approved/Client Approved
+    // condition here too.
     const statusBadgeClass=co.status==='Client Approved'?'co-status-client':co.status==='Approved'?'co-status-approved':co.status==='Rejected'?'co-status-rejected':'co-status-pending';
+    const cardStateClass=co.status==='Rejected'?'co-card-rejected':co.status==='Pending'?'co-card-pending':'';
     const isLocked=co.status==='Rejected';
     const canNotify=co.status==='Approved';
-    return `<div class="co-row ${statusClass}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px">
-        <div style="flex:1">
-          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(co.description)}</div>
-          <div style="font-size:11px;color:var(--gray-mid)">${co.ec||'—'} · Logged by ${co.loggedBy||'—'} · ${co.date?new Date(co.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}${co.paymentResp?` · Payment: ${escHtml(co.paymentResp)}`:''}</div>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-          ${co.fastTrack?'<span class="co-status-client" style="background:#EDE9FE;color:#5B21B6">Fast Track</span>':''}
-          <span class="${statusBadgeClass}">${co.status}</span>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
-        <div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Original CO Amount</div>
-          <div style="font-size:13px;font-weight:700;color:var(--navy)">${fmtCurrency(co.originalAmount)}</div>
-        </div>
-        <div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Final Amount</div>
-          <div style="font-size:13px;font-weight:700;color:var(--blue-dark)">${fmtCurrency(co.negotiatedAmount)}</div>
-        </div>
-        <div style="background:${co.savings>0?'var(--green-pale)':co.savings<0?'var(--red-pale)':'var(--gray-xpale)'};border-radius:6px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--gray-mid);margin-bottom:2px">Savings Captured</div>
-          <div style="font-size:13px;font-weight:700;color:${co.savings>0?'var(--green)':co.savings<0?'var(--red)':'var(--gray-mid)'}">${co.savings!==0?fmtCurrency(co.savings):'—'}</div>
-        </div>
-      </div>
+    const hasDetail=!!(co.stHours!=null||co.otHours!=null||co.materialCost!=null||co.opClaimed!=null||co.additionalConsiderations||co.notes||canEdit||(role==='client'&&co.status==='Approved'));
+    const detailBody=`
       ${(co.stHours!=null||co.otHours!=null||co.materialCost!=null||co.opClaimed!=null)?`<div style="background:var(--gray-xpale);border-radius:6px;padding:8px 10px;margin-bottom:8px">
         <div style="font-size:9px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Line Items <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">— reference only, not validated against Contract Rates</span></div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;font-size:11px;color:var(--gray-dark)">
@@ -16672,9 +16748,70 @@ function renderChangeOrdersTab(p){
       </div>`:''}
       ${role==='client'&&co.status==='Approved'?`<div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-success" style="font-size:10px;padding:2px 8px" onclick="clientApproveCO('${co.id}')"><i class="ti ti-check"></i>Approve</button>
-      </div>`:''}
+      </div>`:''}`;
+    return `<div class="co-card-compact ${cardStateClass}">
+      <div class="co-card-top">
+        <div>
+          <span class="co-card-title">${escHtml(co.description)}</span>${co.fastTrack?'<span class="co-status-client" style="background:#EDE9FE;color:#5B21B6;margin-left:6px">Fast Track</span>':''}
+          <div class="co-card-meta">${co.ec||'—'}${co.status==='Pending'||co.status==='Rejected'?'':` · Logged by ${co.loggedBy||'—'}`} · ${co.date?new Date(co.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}${co.paymentResp?` · Payment: ${escHtml(co.paymentResp)}`:''}</div>
+        </div>
+        <div class="co-card-amounts">
+          <div class="co-card-amt"><div class="co-card-amt-label">Orig</div><div class="co-card-amt-val">${fmtCurrency(co.originalAmount)}</div></div>
+          <div class="co-card-amt"><div class="co-card-amt-label">Final</div><div class="co-card-amt-val blue">${co.status==='Rejected'?'—':fmtCurrency(co.negotiatedAmount)}</div></div>
+          <div class="co-card-amt"><div class="co-card-amt-label">Saved</div><div class="co-card-amt-val" style="${co.savings>0?'color:var(--green)':co.savings<0?'color:var(--red)':''}">${co.savings!==0&&co.status!=='Rejected'?fmtCurrency(co.savings):'—'}</div></div>
+          ${co.status==='Pending'&&canEdit?`<div class="co-card-actions" style="display:flex;gap:6px">
+            <button class="btn btn-success" style="font-size:10px;padding:3px 9px" onclick="updateCOStatus('${co.id}','Approved')"><i class="ti ti-check"></i>Approve</button>
+            <button class="btn btn-delete" style="font-size:10px;padding:3px 9px" onclick="updateCOStatus('${co.id}','Rejected')">Reject</button>
+          </div>`:`<span class="${statusBadgeClass}">${co.status}</span>`}
+        </div>
+      </div>
+      ${hasDetail&&co.status!=='Pending'?`<div class="co-card-expand" onclick="toggleCOCardDetail(this)"><i class="ti ti-chevron-right" style="font-size:11px"></i> Details</div>
+      <div class="co-card-detail hidden">${detailBody}</div>`:''}
+      ${hasDetail&&co.status==='Pending'?`<div class="co-card-detail" style="border-top:none;margin-top:6px;padding-top:0">${detailBody}</div>`:''}
     </div>`;
-  }).join('');
+  }
+
+  const sections=[];
+  if(pendingCOs.length){
+    sections.push(`<div class="co-card-section-label co-section-pending">Pending<span class="co-card-count">${pendingCOs.length}</span></div>`);
+    sections.push(pendingCOs.map(coCardHtml).join(''));
+  }
+  if(rejectedCOs.length){
+    sections.push(`<div class="co-card-section-label co-section-rejected">Rejected<span class="co-card-count">${rejectedCOs.length}</span></div>`);
+    sections.push(rejectedCOs.map(coCardHtml).join(''));
+  }
+  if(approvedCOs.length){
+    sections.push(`<div class="co-card-section-label">Approved<span class="co-card-count">${approvedCOs.length}</span><span class="co-card-section-total">${fmtCurrency(approvedNegotiatedTotal)} negotiated</span></div>`);
+    const visibleApproved=isExpanded?approvedCOs:approvedCOs.slice(0,CO_APPROVED_PREVIEW_COUNT);
+    sections.push(visibleApproved.map(coCardHtml).join(''));
+    const remaining=approvedCOs.length-CO_APPROVED_PREVIEW_COUNT;
+    if(remaining>0){
+      sections.push(isExpanded?
+        `<div class="co-card-show-more" onclick="toggleCOApprovedExpand('${expandKey.replace(/'/g,"\\'")}')"><i class="ti ti-chevron-up" style="font-size:12px;vertical-align:-1px"></i> Show fewer</div>`:
+        `<div class="co-card-show-more" onclick="toggleCOApprovedExpand('${expandKey.replace(/'/g,"\\'")}')"><i class="ti ti-chevron-down" style="font-size:12px;vertical-align:-1px"></i> Show ${remaining} more approved change order${remaining!==1?'s':''}</div>`);
+    }
+  }
+  list.innerHTML=sections.join('');
+}
+// v67q -- expand/collapse the optional detail block (Line Items,
+// Additional Considerations, notes, action buttons) on a single compact
+// CO card. Pure DOM toggle, no re-render, so it doesn't disturb the
+// Approved section's expand state.
+function toggleCOCardDetail(el){
+  const detail=el.nextElementSibling;
+  if(!detail)return;
+  detail.classList.toggle('hidden');
+  const icon=el.querySelector('i');
+  if(icon)icon.className=detail.classList.contains('hidden')?'ti ti-chevron-right':'ti ti-chevron-down';
+}
+// v67q -- expand/collapse the Approved section beyond the 6-card preview.
+// Keyed by property+scope so switching tabs/properties doesn't leak
+// expand state across unrelated CO lists; re-renders via
+// renderChangeOrdersTab so the button label and card set stay in sync.
+function toggleCOApprovedExpand(expandKey){
+  window._coApprovedExpanded=window._coApprovedExpanded||{};
+  window._coApprovedExpanded[expandKey]=!window._coApprovedExpanded[expandKey];
+  if(currentProp)renderChangeOrdersTab(currentProp);
 }
 
 // ── DEPENDENCIES & COORDINATION (Build v66e) ──────────────────────────
