@@ -1,4 +1,33 @@
 <!--
+pulse_v67k. Changes from v67j, this round. No worker changes required.
+
+Two Dashboard/Budget Outlook changes, batched per Misty's direct request:
+
+1. Dashboard's header "Export" button removed. Misty pointed out the
+Dashboard already has a working Print/PDF button and wasn't sure what a
+separate Export button would even do -- it was a stub since it shipped
+(exportActionBoardCSV() just toasted "Export coming soon"), and real
+export/report functionality already lives on Budget Outlook and the
+property-level Cash Flow Curve. Deleted the button and its stub function
+rather than leave dead UI in place. Ops Center's own header Export button
+(exportOpsCenterCSV(), a separate v66m addition mirroring Dashboard's old
+button) was not touched -- Misty's ask was specifically about Dashboard.
+
+2. Portfolio Cash Flow Curve (Budget Outlook tab) gained a real Export
+button, matching the existing per-scope Cash Flow Curve's export pattern
+(same XLSX library, same missing-library error handling, same
+book/sheet/filename shape). New exportPortfolioCashFlowCurve() reuses
+buildPortfolioCashFlowData() (the same function the chart itself calls) so
+the export can never drift from what's drawn. Row grain is one real
+calendar month per row (this chart plots real month-buckets, not
+checkpoint position like the per-scope card), with that month's own
+planned/actual dollar delta plus each series' running cumulative total --
+mirrors exactly what the chart's polylines plot. Respects the current
+boFilter pill (all/capital/active) since the chart itself does, and the
+filename records which filter was active at export time.
+-->
+
+<!--
 pulse_v67j. Changes from v67i, this round. No worker changes required.
 
 Milestones tab subline fixed to PM-only. Misty logged in as Consultant on
@@ -6190,7 +6219,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67j</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67k</div>
     </div>
   </nav>
 
@@ -6345,7 +6374,6 @@ from unitEffectiveValue() onto each checkbox). -->
           <div class="page-header-left"><h1>Dashboard</h1><p id="actionboard-sub">Park Hotels &amp; Resorts &middot; Elevator Modernization Program</p></div>
           <div class="header-actions no-print">
             <button class="btn" onclick="showToast('Filters coming soon','info')"><i class="ti ti-adjustments-horizontal"></i>Filters</button>
-            <button class="btn" onclick="exportActionBoardCSV()"><i class="ti ti-download"></i>Export</button>
             <button class="btn btn-primary" onclick="printActionBoard()"><i class="ti ti-printer"></i>Print / PDF</button>
             <span id="actionboard-asof" style="font-size:11.5px;color:var(--gray-mid);display:flex;align-items:center;gap:5px"></span>
           </div>
@@ -7262,9 +7290,12 @@ from unitEffectiveValue() onto each checkbox). -->
                   <div class="card-title">Portfolio Cash Flow Curve</div>
                   <div class="card-sub" id="portfolio-cashflow-sub">Planned vs. billed, summed across scopes</div>
                 </div>
-                <div style="display:flex;gap:14px;font-size:10.5px;color:var(--gray-mid);align-items:center">
-                  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gray-light);margin-right:5px"></span>Planned</span>
-                  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-right:5px"></span>Actual</span>
+                <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+                  <div style="display:flex;gap:14px;font-size:10.5px;color:var(--gray-mid);align-items:center">
+                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gray-light);margin-right:5px"></span>Planned</span>
+                    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-right:5px"></span>Actual</span>
+                  </div>
+                  <button class="btn btn-add no-print" id="portfolio-cashflow-export-btn" onclick="exportPortfolioCashFlowCurve()" style="font-size:12px"><i class="ti ti-file-spreadsheet"></i>Export</button>
                 </div>
               </div>
               <div id="portfolio-cashflow-svg-wrap" style="margin-top:14px;overflow-x:auto"></div>
@@ -15727,10 +15758,11 @@ function askMarliActionBoard(){
   // props-why-panel element) instead of silently no-op'ing.
   propsAskMarli('Summarize what needs my attention across the portfolio this week','dashboard-why-panel');
 }
-function exportActionBoardCSV(){
-  showToast('Export coming soon','info');
-}
-// v66m — Ops Center header actions, mirroring Dashboard's exportActionBoardCSV/
+// v67k — Dashboard's Export button removed per Misty's direct request
+// (real report/export functionality already lives on Budget Outlook and
+// the property-level Cash Flow Curve; this stub duplicated Print/PDF
+// without doing anything). exportActionBoardCSV() removed with it.
+// v66m — Ops Center header actions, mirroring Dashboard's old exportActionBoardCSV/
 // printActionBoard exactly (same "coming soon" stub for Export, same
 // print-active class toggle for Print/PDF).
 function exportOpsCenterCSV(){
@@ -20743,6 +20775,44 @@ function renderPortfolioCashFlowCurve(){
       `<span style="color:var(--green)">All ${scopes.length} scopes have at least one planned checkpoint date.</span>`;
     footer.innerHTML=`<div style="font-size:11px">${plannedNote}</div>`;
   }
+}
+
+// v67k — Portfolio Cash Flow Curve export, added per Misty's direct
+// request ("we probably need an export at the portfolio cashflow curve").
+// Mirrors exportCashFlowCurve()'s XLSX pattern (same library, same
+// error-handling for a missing XLSX global, same book/sheet/filename
+// shape) but the row grain here is a real calendar month rather than a
+// per-scope checkpoint, since that's what this chart actually plots --
+// one row per month with that month's own delta (from buildPortfolioCashFlowData's
+// plannedByMonth/actualByMonth) plus the running cumulative total for
+// both series, matching what the chart itself draws.
+function exportPortfolioCashFlowCurve(){
+  if(typeof XLSX==='undefined'){showToast('Excel export library failed to load — check your connection and try again','error');return;}
+  const{scopes,plannedByMonth,actualByMonth}=buildPortfolioCashFlowData();
+  const allMonthKeys=[...new Set([...Object.keys(plannedByMonth),...Object.keys(actualByMonth)])].sort();
+  if(allMonthKeys.length===0){showToast('No scopes with real checkpoint dates yet under this filter','warn');return;}
+  const rows=[['Month','Planned $ (this month)','Planned $ (cumulative)','Actual $ (this month)','Actual $ (cumulative)']];
+  let plannedCum=0, actualCum=0;
+  allMonthKeys.forEach(key=>{
+    const plannedDelta=plannedByMonth[key]||0;
+    const actualDelta=actualByMonth[key]||0;
+    if(plannedByMonth[key]!=null)plannedCum+=plannedDelta;
+    if(actualByMonth[key]!=null)actualCum+=actualDelta;
+    rows.push([
+      _cfYearMonthLabel(key),
+      plannedByMonth[key]!=null?Math.round(plannedDelta):'',
+      plannedByMonth[key]!=null?Math.round(plannedCum):'',
+      actualByMonth[key]!=null?Math.round(actualDelta):'',
+      actualByMonth[key]!=null?Math.round(actualCum):''
+    ]);
+  });
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:14},{wch:20},{wch:22},{wch:18},{wch:20}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Portfolio Cash Flow');
+  const filterLabel=boFilter==='all'?'All Scheduled':boFilter==='capital'?'Capital Plan':'Active Properties';
+  const fname=`Portfolio Cash Flow Curve - ${filterLabel} - ${scopes.length} scopes.xlsx`.replace(/[\\/:*?"<>|]/g,'');
+  XLSX.writeFile(wb,fname);
 }
 
 // v51k — status-string-to-badge-markup map factored out of renderHealthBadge
