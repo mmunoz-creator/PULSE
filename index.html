@@ -1,4 +1,39 @@
 <!--
+pulse_v67i. Changes from v67h, this round. Requires worker changes
+(worker_v44t_build.mjs).
+
+Portfolio Cash Flow Curve bug fix -- real bug, not a misread. Misty flagged
+the chart live (Budget Outlook tab): the Actual line sat flat at $0 from
+Oct 2022 through mid-2025, both lines ran out to Oct 2026, and the footer
+said only 7 of 73 scopes had any planned checkpoint dates -- "can't be
+correct." Investigated against live Airtable data (not assumed wrong)
+before touching anything. Root cause: two real scopes -- Hilton Denver
+City Center "SE14/15/16" and Hilton Orlando Lake Buena Vista "Fire/Service
+Overlay" -- have real Milestone checkpoint dates on file (a Completion
+Date as far back as 2022-10-31, a Planned Date as far out as 2026-10-12)
+but no Contract Award Value and no Planned Budget set on either scope, so
+getBillingBasis() correctly returns $0 for both. getCashFlowEligibleScopes()
+let both scopes through anyway, so buildPortfolioCashFlowData() still
+bucketed their real dates into the chart's month axis with a $0 dollar
+delta each -- stretching the x-axis out to both extremes while
+contributing nothing to the y-axis, exactly the flat-then-rise-then-flat
+shape in Misty's screenshot.
+
+Fix: getCashFlowEligibleScopes() now excludes any scope whose
+getBillingBasis() basis is not greater than $0, on top of its existing
+Complete/Removed-property and boFilter branches -- a scope with no real
+dollar basis has nothing to plot on a dollar chart and can no longer widen
+its timeline for free. The chart's own "N scopes" subtitle count shrinks
+to match automatically, since it already reads scopes.length from this
+same filtered array. Same fix applied to buildRedesignedPortfolioReportHTML's
+own inline copy of this logic (the redesigned Performance Report's
+portfolio cash flow curve, added last round) and to the Worker's
+buildPortfolioCashFlowDeltas (worker_v44t_build.mjs) -- three call sites,
+one root cause, all three needed the same guard since none of them
+previously checked basis before bucketing dates.
+-->
+
+<!--
 pulse_v67h. Changes from v67g, this round. Requires worker changes
 (worker_v44s_build.mjs).
 
@@ -6135,7 +6170,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67h</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67i</div>
     </div>
   </nav>
 
@@ -20524,6 +20559,26 @@ function exportCashFlowCurve(){
 // 'active' branches ~line 22799) but applied directly to Scopes, since
 // the checkpoint curve operates at scope grain, not per-unit-allocation
 // grain like the year-bucket table does.
+// v67i -- real bug found live (Misty flagged the Portfolio Cash Flow
+// Curve's x-axis running Oct 2022 to Oct 2026 against her own read of the
+// Budget Outlook tab, "can't be correct"). Root cause confirmed against
+// live Airtable data, not assumed: two real scopes (Hilton Denver City
+// Center "SE14/15/16", Hilton Orlando Lake Buena Vista "Fire/Service
+// Overlay") have real checkpoint milestone dates on file (one Completion
+// Date as far back as 2022-10-31, one Planned Date as far out as
+// 2026-10-12) but NO Contract Award Value and NO Planned Budget set --
+// getBillingBasis() returns $0 for both. This function let those
+// zero-basis scopes through, so buildPortfolioCashFlowData() still
+// bucketed their real dates into the chart's month axis with a $0 dollar
+// delta -- stretching the x-axis out to both extremes while contributing
+// nothing to the y-axis, exactly the flat-then-rise-then-flat shape Misty
+// screenshotted. A scope with no real dollar basis has nothing to plot on
+// a dollar chart and shouldn't be able to widen its timeline. Now
+// excluded here (both the boFilter==='capital'/'active'/'all' branches
+// stay unchanged; this new check applies on top of all three), so the
+// "N scopes" count in the chart's own subtitle/footer also shrinks to
+// match automatically, since that count reads scopes.length from this
+// same filtered array.
 function getCashFlowEligibleScopes(){
   const _propByName={};
   (window.PORTFOLIO||[]).forEach(p=>{_propByName[p.n]=p;});
@@ -20532,6 +20587,7 @@ function getCashFlowEligibleScopes(){
     if(sc.status==='Complete')return false;
     const prop=_propByName[sc.property];
     if(prop&&(prop.st==='Complete'||prop.st==='Removed'))return false;
+    if(prop&&!(getBillingBasis(prop,sc).amount>0))return false;
     if(boFilter==='capital')return !(sc.contractAwardValue>0);
     if(boFilter==='active')return _activePropNames.has(sc.property);
     return true;
@@ -38649,10 +38705,17 @@ function buildRedesignedPortfolioReportHTML(propNames){
   // Portfolio cash flow curve (real calendar months) — report-scoped port
   // of buildPortfolioCashFlowData, filtered to propNames rather than
   // getCashFlowEligibleScopes()'s Budget Outlook tab filter.
+  // v67i -- same zero-basis-scope fix as getCashFlowEligibleScopes()
+  // (real bug, confirmed against live Airtable data): a scope with no
+  // Contract Award Value and no Planned Budget contributes $0 to every
+  // checkpoint delta, but its real Milestone dates could still stretch
+  // this chart's month axis for free. Skipped below via the
+  // getBillingBasis(...).amount>0 guard before any date gets bucketed.
   const plannedByMonth={},actualByMonth={};
   scopesInScope.forEach(sc=>{
     const prop=port.find(p=>p.n===sc.property);
     if(!prop)return;
+    if(!(getBillingBasis(prop,sc).amount>0))return;
     const checkpoints=buildCashFlowCheckpoints(prop,sc,sc.id);
     let prevPct=0;
     checkpoints.forEach(cp=>{
