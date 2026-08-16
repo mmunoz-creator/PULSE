@@ -1,4 +1,26 @@
 <!--
+pulse_v67l. Changes from v67k, this round. No worker changes required.
+
+Documents > Performance Reports "Open" button fixed -- real bug, not a
+misread. Misty (Consultant role) flagged the square-with-arrow icon button
+next to each report row doing nothing. Investigated against real code:
+that button and the row itself both call openSavedReport(id), which only
+toggles report-library-view/report-reader-view's display -- but those two
+elements live inside view-report (the dedicated Performance Reports page),
+not view-documents (where the Documents > Performance Reports folder
+actually renders). Clicking Open from Documents populated
+report-reader-view with the real report content correctly, but that
+element stayed hidden the whole time since view-report itself was never
+made the active top-level view -- so nothing appeared to happen. Every
+other call site (the Performance Reports page itself, and right after
+generating a new report) already had view-report active when calling this
+function, which is why the bug only showed up from the Documents entry
+point. Fix: openSavedReport() now calls gotoView('report') first, so it
+always lands on a visible page no matter which view it's called from --
+harmless no-op when already on Performance Reports.
+-->
+
+<!--
 pulse_v67k. Changes from v67j, this round. No worker changes required.
 
 Two Dashboard/Budget Outlook changes, batched per Misty's direct request:
@@ -6219,7 +6241,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67k</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67l</div>
     </div>
   </nav>
 
@@ -37754,6 +37776,23 @@ window.deleteReport=deleteReport;
 function openSavedReport(id){
   const doc=(window.DOCUMENTS_LIVE||[]).find(d=>d.id===id)||savedReports.find(r=>r.id===id);
   if(!doc)return;
+  // v67l -- real bug: the Documents > Performance Reports folder
+  // (renderDocFolders(), docNavLevel==='reports') lists the same reports
+  // and calls this same function, but that folder lives on view-documents,
+  // a different top-level view than view-report (which is what actually
+  // contains report-library-view/report-reader-view). Misty flagged the
+  // Open button there doing nothing -- confirmed against real code: this
+  // function only ever toggled visibility *within* view-report, so calling
+  // it from view-documents populated report-reader-view correctly but that
+  // element stayed hidden the whole time since view-report itself was
+  // never shown. Every other call site (Performance Reports page itself,
+  // right after generating a report) already had view-report active, so
+  // this was silently correct there and only broke for the Documents entry
+  // point. Fix: route through gotoView('report') first so this always
+  // lands on a visible page regardless of where it's called from -- a
+  // no-op when already on view-report, since gotoView() re-shows the view
+  // it's already showing.
+  gotoView('report');
   document.getElementById('report-library-view').style.display='none';
   document.getElementById('report-reader-view').style.display='';
   document.getElementById('report-reader-title').textContent=doc.name||'Performance Report';
