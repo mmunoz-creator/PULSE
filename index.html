@@ -1,5 +1,64 @@
 <!--
-pulse_v67q. Changes from v67p, this round. No worker changes required.
+pulse_v67r. Changes from v67q, this round. Airtable schema change: added
+"% Complete" (Number, integer 0-100, blank allowed) to Unit Groups
+(fldOVxFHav1fHnTO9), confirmed explicitly with Misty before creating it.
+No worker changes required -- this feature is entirely client-side, same
+as the portfolio Schedule it's modeled on.
+
+New property-level Schedule view, per Misty's direct request. Same
+visual language as the existing portfolio Schedule (reuses
+ganttHealthColor, derivePhaseStatus, getPhaseScheduleStatus,
+getProjectDates, and the shared .gantt-wrap/.gantt-row/.gantt-bars/
+.gantt-today-line/.gantt-grid-line CSS scaffolding unchanged), scoped to
+one property, nested Scope -> Phase (one level deeper than the portfolio
+view's Property -> Phase). Reached via a new "Property Schedule" button
+on the property Overview tab's header bar (renderPropertyOverview's
+headerBar), placed after Manage Projects per Misty's explicit choice
+between two mocked options -- deliberately does not touch the existing
+Edit Property/Manage Projects button pair. Visible to all roles including
+Client, confirmed directly -- this is a view-only page with no edit
+controls of its own.
+
+Built against real live Airtable data throughout the mockup process (New
+York Hilton Midtown's actual 3 Scopes and 18 real Unit Group phase
+records), which surfaced a real case the mockups had to account for:
+2 of that property's 3 Scopes have zero phases yet (still Capital Plan
+stage). Those render with a "No phases yet" row plus an "+ Add Phase"
+shortcut wired to the existing jumpToAddPhaseWithUnits() flow -- no new
+creation logic, just a shortcut into the real one.
+
+New "% Complete" field is PM-editable via a new input on the existing
+Edit Phase form (Unit Phases tab), added in the same row as # Units in
+Phase. Left blank by default and intentionally never coerced to 0 --
+pctComplete is stored as null when genuinely not entered, distinct from
+an explicit 0, all the way through loadAllData's mapping, pollPhases'
+45-second-poll remapping, both local phase-creation paths, and the Edit
+Phase save. On the property Schedule's bars this renders as two visibly
+different states: no track at all for "not entered" (identical to how
+every Gantt bar has always rendered), vs. a two-tone progress track
+(light gray track + solid blue fill + numeric label) for a phase with a
+real percentage. This two-tone treatment replaced an initial subtle
+white-tint-overlay version per Misty's direct correction after the first
+mockup round -- the corrected version moves the phase's status color to
+a thin left-edge accent so status and progress don't compete for the
+same visual space.
+
+Each Scope header row shows a rollup: phase completion count, plus an
+average % Complete computed ONLY across phases that actually have a
+number entered (never silently averaging blanks in as zero), with a
+plain-language note of how many phases that average covers, per Misty's
+follow-up request after her own "is this the best we can do?" prompt.
+
+All phases always render on this view, no collapse behind a "Show more"
+-- unlike this same round's Change Order cards, a Gantt genuinely needs
+every phase visible for the timeline to read correctly, and Misty's own
+requirement that this view be printable settled the question outright:
+printPropertySchedule() mirrors the portfolio Schedule's real
+printGantt() mechanism exactly (toggle a print-active class, call
+window.print(), matching print-active CSS branch added alongside
+view-schedule's own), and a phase collapsed behind a click at the moment
+of printing would silently vanish from the printed page -- full render
+avoids that failure mode outright.
 
 Change Order cards, on a property's Change Orders tab, made compact and
 split into three status sections. Misty flagged that cards were stacking
@@ -3541,7 +3600,14 @@ there. */
   #view-budgetoutlook.print-active{display:block!important;overflow:visible!important;height:auto!important}
   #view-budgetoutlook.print-active .table-wrap{overflow:visible!important}
   #view-schedule.print-active{display:block!important}
-  [id^="view-"]:not(#view-report):not(#view-dashboard.print-active):not(#view-charts.print-active):not(#view-budgetoutlook.print-active):not(#view-schedule.print-active):not(#view-portfolio.print-active):not(#view-capital.print-active){display:none!important}
+  /* v67r -- property-level Schedule, same print-active branch pattern as
+  the portfolio Schedule directly above (reuses printGantt()'s exact
+  toggle-class-then-window.print() mechanism, just against this view's
+  own id). Added to the print-active-in-good-standing list AND the big
+  exclusion selector below it -- both must be updated together or this
+  view either never shows on print or is stuck always-visible on print. */
+  #view-property-schedule.print-active{display:block!important}
+  [id^="view-"]:not(#view-report):not(#view-dashboard.print-active):not(#view-charts.print-active):not(#view-budgetoutlook.print-active):not(#view-schedule.print-active):not(#view-property-schedule.print-active):not(#view-portfolio.print-active):not(#view-capital.print-active){display:none!important}
   /* v49d — Custom Report Builder. body.custom-report-print-mode is added
   only while printCustomReport() runs, letting several views be visible at
   once (unlike every single-view print function above, which only ever
@@ -3723,6 +3789,38 @@ there. */
 .gantt-bar:hover{opacity:.85}
 .gantt-today-line{position:absolute;top:0;bottom:0;width:2px;background:var(--red);opacity:.7;z-index:5;pointer-events:none}
 .gantt-grid-line{position:absolute;top:0;bottom:0;width:1px;background:var(--border);z-index:1;pointer-events:none}
+/* v67r -- property-level Schedule additions. Scope (project) header row +
+Phase rows nested underneath, plus the two-tone % Complete progress track.
+Kept as new classes rather than overloading .gantt-prop-header/.gantt-bar,
+since the portfolio Gantt's own rows/bars must keep rendering exactly as
+they do today -- this view reuses the shared .gantt-wrap/.gantt-row/
+.gantt-bars/.gantt-today-line/.gantt-grid-line scaffolding but needed its
+own label and bar-fill treatment. --gray-track added to :root's variable
+set alongside the app's existing --gray-* scale. */
+:root{--gray-track:#E4E2DB}
+.gantt-row.scope-header{background:var(--gray-pale);min-height:44px}
+.gantt-row.scope-empty{background:var(--gray-xpale);min-height:28px}
+.scope-header .gantt-row-label{white-space:normal;height:auto;padding-top:5px;padding-bottom:5px;cursor:default}
+.scope-header .gantt-row-label:hover{color:var(--navy)}
+.scope-rollup{font-size:9.5px;color:var(--gray-dark);margin-top:2px;white-space:normal}
+.scope-rollup-track{position:absolute;height:5px;background:var(--gray-track);border-radius:3px}
+.scope-rollup-fill{position:absolute;left:0;top:0;bottom:0;background:var(--blue-dark);border-radius:3px}
+.phase-row .gantt-row-label{padding-left:26px;color:var(--gray-mid);font-size:11px;cursor:pointer}
+.empty-scope-note{font-size:10.5px;color:var(--gray-mid);font-style:italic}
+.add-phase-link{font-size:10.5px;color:var(--blue-dark);font-weight:600;cursor:pointer;margin-left:6px;display:inline-flex;align-items:center;gap:2px}
+.add-phase-link:hover{text-decoration:underline}
+/* Two-tone progress track. Bar background becomes the light gray "track"
+(has-pct modifier only -- a phase with no % entered keeps the original
+solid-status-color .gantt-bar look untouched, so blank vs. entered-0%
+stay visually distinct per Misty's direct correction on the mockup). */
+.gantt-bar.has-pct{background:var(--gray-track)!important;padding-right:28px}
+.gantt-bar-fill{position:absolute;left:0;top:0;bottom:0;background:var(--blue-dark);border-radius:3px 0 0 3px}
+.gantt-bar-label{position:relative;z-index:1;color:var(--navy)}
+.gantt-bar-pct{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:9.5px;font-weight:800;z-index:2;color:var(--navy)}
+.pct-input-demo{display:inline-flex;align-items:center;gap:4px;background:white;border:1px solid var(--blue-dark);border-radius:5px;padding:0 5px;font-size:9.5px;color:var(--blue-dark);font-weight:700}
+.legend{display:flex;gap:14px;flex-wrap:wrap;padding:12px 0 4px;border-top:1px solid var(--border);margin-top:8px}
+.legend span{font-size:10px;color:var(--gray-mid);display:flex;align-items:center;gap:4px}
+.legend .sw{width:12px;height:12px;border-radius:2px;display:inline-block}
 /* v65f -- task #46. Normal (non-print) app view: hide the 3 heat map
 tabs that aren't the currently active one. Action Board's real on-screen
 behavior is unchanged from before this fix (still one tab visible at a
@@ -4557,6 +4655,15 @@ async function loadAllData() {
       phaseTasks: r.fields['Phase Tasks']?r.fields['Phase Tasks'].split(',').map(s=>s.trim()).filter(Boolean):[],
       // v55o — optimistic-locking conflict detection (task #90).
       conflictTs: r.fields['Unit Groups Last Modified']||'',
+      // v67r — new "% Complete" field on Unit Groups (Airtable field
+      // fldOVxFHav1fHnTO9, added this round per Misty's direct request
+      // for a property-level Gantt with visible phase progress). Left as
+      // null, not 0, when the field is genuinely blank in Airtable — a
+      // PM entering an explicit 0 must render differently from a phase
+      // nobody's touched yet (empty progress track vs. no track at all).
+      // Do not coerce with ||0 here the way most numeric fields in this
+      // mapping do; that would make blank and 0 indistinguishable again.
+      pctComplete: r.fields['% Complete']===undefined||r.fields['% Complete']===null||r.fields['% Complete']===''?null:parseInt(r.fields['% Complete']),
     }));
     // Phase Steps
     window.PHASE_STEPS = phaseSteps.map(r=>({
@@ -6456,7 +6563,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67q</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67r</div>
     </div>
   </nav>
 
@@ -7074,7 +7181,13 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
               <div class="two-col" style="gap:12px">
                 <div class="form-group"><label class="form-label"># Units in Phase <span style="font-size:10px;color:var(--gray-mid)">(auto-counted)</span></label><input class="form-input" type="number" id="edit-phase-units" readonly style="background:var(--gray-xpale);color:var(--gray-mid);cursor:default"></div>
-                <div class="form-group"></div>
+                <!-- v67r -- % Complete, new field per Misty's direct request
+                for the property-level Schedule view. PM-editable, blank
+                allowed on purpose -- leaving it empty (rather than typing 0)
+                is how a phase renders as "nobody's entered progress yet"
+                instead of "entered, genuinely zero," so this input is
+                intentionally NOT given a default value or min-required. -->
+                <div class="form-group"><label class="form-label">% Complete <span style="font-size:10px;color:var(--gray-mid)">(optional)</span></label><input class="form-input" type="number" id="edit-phase-pct-complete" min="0" max="100" step="1" placeholder="Not entered"></div>
               </div>
               <!-- v36p — Unit Phase Picker, Edit Phase version. Same picker
               as Add Phase, pre-checked from this phase's real linkedUnitIds.
@@ -8095,6 +8208,34 @@ from unitEffectiveValue() onto each checkbox). -->
           </div>
         </div>
         <div class="page-body" id="gantt-body" style="overflow-x:auto"></div>
+      </div>
+
+      <!-- PROPERTY-LEVEL SCHEDULE -->
+      <!-- v67r -- new, per Misty's direct request: same visual language as
+      the portfolio Schedule above, scoped to one property, nested one
+      level (Scope, then its Phases underneath), reachable via a
+      "Property Schedule" button on the property Overview tab's header
+      bar (renderPropertyOverview's headerBar, appended after Manage
+      Projects per Misty's placement choice). All phases always render,
+      no collapse -- both so the timeline reads correctly at a glance and
+      so printPropertySchedule() (mirrors printGantt() exactly) never
+      silently omits a phase that happened to be collapsed at print time. -->
+      <div id="view-property-schedule" class="hidden" style="background:#fff">
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="back-btn no-print" onclick="closePropertyScheduleView()"><i class="ti ti-arrow-left"></i>Back</button>
+            <h1 id="prop-schedule-title">Property Schedule</h1>
+            <p id="prop-schedule-subtitle">Projects and phases</p>
+          </div>
+          <div class="header-actions no-print">
+            <button class="btn" onclick="propGanttPrev()"><i class="ti ti-chevron-left"></i></button>
+            <span id="prop-gantt-month-label" style="font-size:13px;font-weight:600;color:var(--navy);min-width:160px;text-align:center"></span>
+            <button class="btn" onclick="propGanttNext()"><i class="ti ti-chevron-right"></i></button>
+            <button class="btn" onclick="propGanttToday()">Today</button>
+            <button class="btn btn-primary no-print" onclick="printPropertySchedule()"><i class="ti ti-printer"></i>Print / PDF</button>
+          </div>
+        </div>
+        <div class="page-body" id="prop-gantt-body" style="overflow-x:auto"></div>
       </div>
 
       <!-- OPERATIONS CENTER -->
@@ -12522,6 +12663,11 @@ function renderScopeCards(p){
     <span style="margin-left:auto;display:flex;gap:8px">
       ${canEdit?`<button class="btn btn-edit" onclick="openEditPropertyPanel()" style="font-size:12px"><i class="ti ti-pencil"></i>Edit Property</button>`:''}
       ${manageBtn}
+      <!-- v67r -- Property Schedule button, per Misty's direct placement
+      choice (Option B: appended after Manage Projects, not touching the
+      existing Edit Property/Manage Projects pair). Visible to all roles
+      including Client, confirmed directly -- this is a view-only page. -->
+      <button class="btn" style="font-size:12px;background:var(--navy);color:white;border:none;font-weight:600" onclick="openPropertySchedule()"><i class="ti ti-calendar-stats"></i>Property Schedule</button>
       ${role==='client'?`<button class="btn btn-success" onclick="openClientUnitInventoryView('${p.n.replace(/'/g,"\\'")}')"><i class="ti ti-list-details"></i>View Unit Inventory</button>`:''}
     </span>
   </div>`;
@@ -12834,6 +12980,10 @@ async function confirmDemoteScope(){
       actualStart:'',actualCompletion:'',notes:'',
       productType:type,unitNames:sortUnitsByName(grp).map(u=>u.name).filter(Boolean).join(', '),
       linkedUnitIds,phaseTasks:selectedTasks,phaseOrder:nextPhaseOrder,
+      // v67r — explicit null (not omitted), matching the shape every
+      // other Unit Group object has. A brand-new phase genuinely has no
+      // % Complete entered yet, same as the blank-in-Airtable case.
+      pctComplete:null,
     }]);
     // v51g — create real Phase Tasks records for the checked tasks, same
     // pattern saveNewPhase() already uses, seeded with this phase's own
@@ -22900,6 +23050,9 @@ async function _doSaveNewPhase(linkedUnitIds,pickedUnits,unitNames,units,planned
     productType,unitNames,linkedUnitIds,
     phaseTasks:selectedMs,
     phaseOrder:nextPhaseOrder,
+    // v67r — explicit null, matching every other Unit Group object's
+    // shape. A brand-new phase has no % Complete entered yet.
+    pctComplete:null,
   };
   // v50c — strip any of these units out of whatever OTHER phase on this
   // property currently claims them, so a move via the picker doesn't
@@ -22991,6 +23144,10 @@ function openEditPhaseForm(id,propName){
   document.getElementById('edit-phase-actual-start').value=ph.actualStart||'';
   document.getElementById('edit-phase-actual-end').value=ph.actualCompletion||'';
   document.getElementById('edit-phase-notes').value=ph.notes||'';
+  // v67r — pctComplete is null (not 0) when genuinely blank, per the
+  // loadAllData/pollPhases mapping — leave the input empty in that case
+  // rather than showing a misleading "0".
+  document.getElementById('edit-phase-pct-complete').value=(ph.pctComplete===null||ph.pctComplete===undefined)?'':ph.pctComplete;
   // Show warning if tasks have started
   const warningEl=document.getElementById('edit-phase-started-warning');
   if(warningEl)warningEl.style.display=hasStarted?'block':'none';
@@ -23279,17 +23436,24 @@ async function _doSaveEditPhase(id,idx,ph,name,linkedUnitIds,pickedUnits,unitNam
     }
   }
   editPhaseFailCount+=taskDateFollowFailCount;
+  // v67r — % Complete, read directly from the form here rather than
+  // threaded through saveEditPhase()/_doSaveEditPhase()'s already-long
+  // positional-argument chain. Empty input -> null (genuinely not
+  // entered), not 0 -- matches the pctComplete convention used
+  // everywhere else this field is read (loadAllData, pollPhases).
+  const pctInputRaw=document.getElementById('edit-phase-pct-complete').value;
+  const pctComplete=pctInputRaw===''?null:Math.max(0,Math.min(100,parseInt(pctInputRaw)||0));
   window.UNIT_GROUPS[idx]={...ph,phase:name,units,unitNames,linkedUnitIds,productType,
     plannedStart,plannedCompletion:plannedEnd,
     actualStart,actualCompletion:actualEnd,
-    notes,phaseTasks:selectedSteps};
+    notes,phaseTasks:selectedSteps,pctComplete};
   if(!demoMode){
     const mainRes=await atUpdate('Unit Groups',id,{
       'Phase Name':name,'Units in Phase':units,'Linked Units':linkedUnitIds,
       'Product Type':productType,'Phase Tasks':selectedSteps.join(', '),
       'Planned Start':plannedStart||null,'Planned Completion':plannedEnd||null,
       'Actual Start':actualStart||null,'Actual Completion':actualEnd||null,
-      'Notes':notes||'',
+      'Notes':notes||'','% Complete':pctComplete,
     });
     if(!mainRes)editPhaseFailCount++;
     // v55o — capture the fresh Last Modified timestamp so the next edit's
@@ -37704,6 +37868,12 @@ async function pollPhases(){
       // every ~45s, so omitting this would blank conflictTs on every poll tick
       // and make the very next edit look falsely conflicted.
       conflictTs: r.fields['Unit Groups Last Modified']||'',
+      // v67r — same reasoning as conflictTs directly above: pollPhases()
+      // reassigns UNIT_GROUPS wholesale every ~45s, so % Complete must be
+      // mapped here too or it would blank out on the very next poll tick
+      // after a PM enters it. null (not 0) for genuinely blank, matching
+      // the initial-load mapping at ~line 4526.
+      pctComplete: r.fields['% Complete']===undefined||r.fields['% Complete']===null||r.fields['% Complete']===''?null:parseInt(r.fields['% Complete']),
     }));
     window.PHASE_STEPS=(phaseSteps||[]).map(r=>({
       id: r.id,
@@ -40353,6 +40523,203 @@ function renderGantt() {
 
   html += `</div>`;
   container.innerHTML = html;
+}
+
+// ── PROPERTY-LEVEL SCHEDULE (v67r) ─────────────────────────────────────
+// New per Misty's direct request: same visual language as the portfolio
+// Gantt directly above (reuses ganttHealthColor, derivePhaseStatus,
+// getPhaseScheduleStatus, getProjectDates unchanged), scoped to one
+// property, nested Scope -> Phase. Own independent month-window state
+// (propGanttWindowStart, separate from ganttWindowStart) so paging this
+// view never moves the portfolio Schedule's position or vice versa.
+// Mocked up across several rounds (initial layout, then a corrected
+// two-tone % Complete bar treatment, then Scope-level rollup + blank-vs-
+// explicit-0% distinction + Add Phase shortcut on empty scopes) and
+// approved before building. All phases always render, no collapse -- see
+// the view-property-schedule HTML comment for why.
+let propGanttWindowStart = null;
+function propGanttInit(){
+  if(!propGanttWindowStart){
+    const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-2);d.setHours(0,0,0,0);
+    propGanttWindowStart=d;
+  }
+}
+function propGanttPrev(){propGanttInit();propGanttWindowStart=new Date(propGanttWindowStart);propGanttWindowStart.setMonth(propGanttWindowStart.getMonth()-3);renderPropertySchedule();}
+function propGanttNext(){propGanttInit();propGanttWindowStart=new Date(propGanttWindowStart);propGanttWindowStart.setMonth(propGanttWindowStart.getMonth()+3);renderPropertySchedule();}
+function propGanttToday(){propGanttWindowStart=null;propGanttInit();renderPropertySchedule();}
+
+// v67r -- entry point, called from the "Property Schedule" button added to
+// renderPropertyOverview's headerBar (after Manage Projects, per Misty's
+// placement choice). Visible to all roles including Client -- confirmed
+// directly, this is a view-only page with no edit controls of its own
+// (phase % Complete is still only editable via the existing Edit Phase
+// form on the Unit Phases tab, not from here).
+function openPropertySchedule(){
+  if(!currentProp)return;
+  propGanttWindowStart=null;
+  document.querySelectorAll('[id^="view-"]').forEach(v=>v.classList.add('hidden'));
+  document.getElementById('view-property-schedule').classList.remove('hidden');
+  const titleEl=document.getElementById('prop-schedule-title');
+  const subEl=document.getElementById('prop-schedule-subtitle');
+  if(titleEl)titleEl.textContent=currentProp.n+' — Schedule';
+  if(subEl)subEl.textContent='Projects and phases';
+  renderPropertySchedule();
+}
+function closePropertyScheduleView(){
+  document.querySelectorAll('[id^="view-"]').forEach(v=>v.classList.add('hidden'));
+  document.getElementById('view-property').classList.remove('hidden');
+}
+function printPropertySchedule(){
+  const el=document.getElementById('view-property-schedule');
+  if(el)el.classList.add('print-active');
+  window.print();
+  setTimeout(()=>el?.classList.remove('print-active'),1000);
+}
+
+function renderPropertySchedule(){
+  propGanttInit();
+  const container=document.getElementById('prop-gantt-body');
+  if(!container||!currentProp)return;
+  const propName=currentProp.n;
+  const today=new Date();today.setHours(0,0,0,0);
+
+  const endMonth=new Date(propGanttWindowStart);
+  endMonth.setMonth(endMonth.getMonth()+GANTT_MONTHS-1);
+  const monthNames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const lbl=document.getElementById('prop-gantt-month-label');
+  if(lbl)lbl.textContent=`${monthNames[propGanttWindowStart.getMonth()]} ${propGanttWindowStart.getFullYear()} — ${monthNames[endMonth.getMonth()]} ${endMonth.getFullYear()}`;
+
+  // v56b -- same sort order the Overview tab's own scope pills/cards use
+  // (sortScopesForTabs), so this view's Scope order never disagrees with
+  // what's shown elsewhere on the property page.
+  const scopes=sortScopesForTabs((window.SCOPES||[]).filter(s=>s.property===propName));
+
+  if(scopes.length===0){
+    container.innerHTML='<div class="empty-state" style="padding:3rem"><i class="ti ti-calendar-off"></i><div class="empty-state-title">No Projects Yet</div><div class="empty-state-sub">Use Manage Projects on the Overview tab to add one</div></div>';
+    return;
+  }
+
+  const months=[];
+  for(let i=0;i<GANTT_MONTHS;i++){const m=new Date(propGanttWindowStart);m.setMonth(m.getMonth()+i);months.push(m);}
+  const totalW=GANTT_MONTHS*GANTT_MONTH_W;
+
+  function dateToX(date){
+    if(!date)return null;
+    const d=new Date(date);d.setHours(0,0,0,0);
+    const windowEnd=new Date(propGanttWindowStart);windowEnd.setMonth(windowEnd.getMonth()+GANTT_MONTHS);
+    const totalMs=windowEnd-propGanttWindowStart;
+    const offsetMs=d-propGanttWindowStart;
+    return (offsetMs/totalMs)*totalW;
+  }
+  function dateInWindow(start,end){
+    if(!start&&!end)return false;
+    const windowEnd=new Date(propGanttWindowStart);windowEnd.setMonth(windowEnd.getMonth()+GANTT_MONTHS);
+    const s=start?new Date(start):propGanttWindowStart;
+    const e=end?new Date(end):windowEnd;
+    return s<windowEnd&&e>propGanttWindowStart;
+  }
+  const todayX=dateToX(today);
+  const gridLines=months.map((_,i)=>`<div class="gantt-grid-line" style="left:${i*GANTT_MONTH_W}px"></div>`).join('');
+  const todayLine=(todayX!==null&&todayX>=0&&todayX<=totalW)?`<div class="gantt-today-line" style="left:${todayX}px"></div>`:'';
+
+  let html=`<div class="gantt-wrap"><div class="gantt-header-row">
+    <div class="gantt-label-col">Project / Phase</div>
+    <div class="gantt-timeline-col">${months.map(m=>`<div class="gantt-month-cell" style="width:${GANTT_MONTH_W}px">${monthNames[m.getMonth()]} ${m.getFullYear()}</div>`).join('')}</div>
+  </div>`;
+
+  scopes.forEach(sc=>{
+    // v56b -- same sort order the Unit Phases tab uses (getOrderedPhases),
+    // so this view's phase order under a Scope never disagrees with the
+    // Unit Phases tab's own ordering.
+    const phases=getOrderedPhases(propName,sc.id);
+    // Scope-level rollup, per Misty's direct request: count plus average
+    // % Complete, computed ONLY across phases that actually have a number
+    // entered -- never silently treats a blank as 0, which would make the
+    // average misleadingly low on a mostly-not-yet-tracked project. The
+    // "X of Y have % entered" note keeps that scope of the average honest
+    // rather than implying it covers every phase.
+    const phasesComplete=phases.filter(ph=>derivePhaseStatus(ph.id,propName,ph.phase)==='Complete').length;
+    const pctEntries=phases.filter(ph=>ph.pctComplete!=null);
+    const avgPct=pctEntries.length>0?Math.round(pctEntries.reduce((a,ph)=>a+ph.pctComplete,0)/pctEntries.length):null;
+    const rollupLine=phases.length>0?
+      `<div class="scope-rollup">${phasesComplete} of ${phases.length} phase${phases.length!==1?'s':''} complete${avgPct!=null?` · <b>${avgPct}% avg</b> <span style="font-weight:400;color:var(--gray-mid)">(${pctEntries.length} of ${phases.length} ${pctEntries.length===1?'has':'have'} % entered)</span>`:''}</div>`:'';
+    const rollupTrack=(phases.length>0&&avgPct!=null)?
+      `<div class="scope-rollup-track" style="left:12px;right:12px;top:auto;bottom:6px;transform:none;position:absolute"><div class="scope-rollup-fill" style="width:${avgPct}%"></div></div>`:'';
+
+    html+=`<div class="gantt-row scope-header">
+      <div class="gantt-row-label">
+        <div><i class="ti ti-folder" style="font-size:11px;margin-right:4px;color:var(--blue-dark)"></i>${escHtml(sc.name||'Unnamed Project')} <span style="font-weight:400;color:var(--gray-mid)">· ${escHtml(sc.ec||'TBD')} · ${escHtml(sc.status||'Capital Plan')}</span></div>
+        ${rollupLine}
+      </div>
+      <div class="gantt-bars" style="position:relative">${gridLines}${todayLine}${rollupTrack}</div>
+    </div>`;
+
+    if(phases.length===0){
+      // v67r -- Add Phase shortcut, per Misty's direct request rather than
+      // a dead-end "no phases yet" row. Reuses the exact same creation
+      // flow the Unit Phases tab's own Add Phase already uses (no new
+      // creation logic here) -- jumpToAddPhaseWithUnits already accepts a
+      // scopeId, this just calls it and then routes back to the Unit
+      // Phases tab, since phase creation itself doesn't happen on this
+      // view.
+      html+=`<div class="gantt-row scope-empty">
+        <div class="gantt-row-label"><span class="empty-scope-note">No phases yet</span> <span class="add-phase-link" onclick="jumpToAddPhaseWithUnits('${sc.id.replace(/'/g,"\\'")}',[],'${propName.replace(/'/g,"\\'")}')"><i class="ti ti-plus" style="font-size:10px"></i> Add Phase</span></div>
+        <div class="gantt-bars">${gridLines}${todayLine}</div>
+      </div>`;
+      return;
+    }
+
+    phases.forEach(ph=>{
+      const start=ph.actualStart||ph.plannedStart;
+      const end=ph.actualCompletion||ph.plannedCompletion;
+      const health=ganttHealthColor(propName,ph);
+      const inWin=start&&end&&dateInWindow(start,end);
+      const label=escHtml((ph.phase||'').replace(/^Phase \d+ — /,''));
+      let barHtml='';
+      if(inWin){
+        const x1=Math.max(0,dateToX(start));
+        const x2=Math.min(totalW,dateToX(end));
+        const w=Math.max(4,x2-x1);
+        const tooltip=`${escHtml(ph.phase)} — ${start} → ${end} — ${escHtml(health.label)}${ph.pctComplete!=null?` · ${ph.pctComplete}% complete`:''}`;
+        // v67r -- two-tone progress track, corrected per Misty's direct
+        // feedback on the mockup (initial version was a subtle white-tint
+        // overlay, hard to read; this is a real track+fill, same idea as
+        // .prog-bar/.prog-fill used elsewhere in the app e.g. property
+        // budget cards). Status color moves to a left-edge accent border
+        // instead of the bar's whole background when a % is present, so
+        // status and progress don't compete for the same space. A phase
+        // with pctComplete===null (nothing entered) renders exactly like
+        // the portfolio Gantt's bars always have -- solid status color,
+        // no track -- so "not entered" and "entered, 0%" stay visually
+        // distinct, not the same as each other.
+        if(ph.pctComplete!=null){
+          barHtml=`<div class="gantt-bar has-pct" style="left:${x1}px;width:${w}px;border-left:3px solid ${health.bg}" title="${tooltip}" onclick="closePropertyScheduleView();openEditPhaseForm('${ph.id}','${propName.replace(/'/g,"\\'")}');switchPropTab('phases',document.querySelector('.tab-btn[onclick*=\\'phases\\']'))">
+            <div class="gantt-bar-fill" style="width:${ph.pctComplete}%"></div>
+            <span class="gantt-bar-label">${w>60?label:''}</span>
+            ${w>34?`<span class="gantt-bar-pct">${ph.pctComplete}%</span>`:''}
+          </div>`;
+        }else{
+          barHtml=`<div class="gantt-bar" style="left:${x1}px;width:${w}px;background:${health.bg}" title="${tooltip}" onclick="closePropertyScheduleView();openEditPhaseForm('${ph.id}','${propName.replace(/'/g,"\\'")}');switchPropTab('phases',document.querySelector('.tab-btn[onclick*=\\'phases\\']'))">
+            ${w>60?label:''}
+          </div>`;
+        }
+      }
+      html+=`<div class="gantt-row phase-row">
+        <div class="gantt-row-label"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${health.bg};margin-right:5px;vertical-align:middle"></span>${label}${ph.pctComplete!=null?` <span class="pct-input-demo" style="border-color:${ph.pctComplete===0?'var(--gray-mid)':'var(--blue-dark)'};color:${ph.pctComplete===0?'var(--gray-mid)':'var(--blue-dark)'}">${ph.pctComplete}%</span>`:''}</div>
+        <div class="gantt-bars">${gridLines}${todayLine}${barHtml}</div>
+      </div>`;
+    });
+  });
+
+  html+=`<div class="legend">
+    <span><span class="sw" style="background:var(--blue-dark)"></span>On Track</span>
+    <span><span class="sw" style="background:var(--red)"></span>At Risk</span>
+    <span><span class="sw" style="background:#0E7C7B"></span>Ahead</span>
+    <span><span class="sw" style="background:var(--green)"></span>Complete</span>
+    <span><span class="sw" style="background:var(--gray-light)"></span>Not Started</span>
+    <span style="margin-left:auto"><span style="display:inline-block;width:2px;height:12px;background:var(--red);vertical-align:middle;margin-right:4px"></span>Today</span>
+  </div></div>`;
+  container.innerHTML=html;
 }
 
 // ── OPERATIONS CENTER (v66k rebuild) ──────────────────────────────────
