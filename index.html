@@ -1,4 +1,70 @@
 <!--
+pulse_v68a. Changes from v67s, this round. No worker changes required --
+still paired with worker_v44x_build.mjs, unchanged. Entirely client-side.
+
+Property Schedule: unit names added as a subline under each phase label,
+per Misty's direct request off a live screenshot of New York Hilton
+Midtown's 18-phase schedule (every phase reading as bare "Phase N" with
+no way to tell what's actually in it without opening the phase). Mocked
+up first (mockup_schedule_unit_subline.html) against that exact
+property's real live Unit Groups data before writing any code -- that
+data showed the cached "Unit Names" string blank on every one of the
+property's real phases, so the mockup deliberately exercised the
+fallback path rather than the happy path. Misty approved as-is.
+
+renderPropertySchedule()'s phase loop now computes displayUnitNames per
+phase, reusing the exact same fallback the Unit Phases tab's own phase
+cards already use (~line 21969): prefer the cached ph.unitNames string,
+and when it's blank, derive it live from ph.linkedUnitIds against
+window.UNIT_INVENTORY instead of leaving the subline empty. Renders "No
+units selected" only when a phase genuinely has nothing linked, so that
+reads as a real state rather than a rendering gap. No new data and no
+schema change -- everything needed was already on the phase object.
+
+New CSS: .phase-row.has-unit-subline (min-height 44px, up from the base
+36px) and .phase-row.has-unit-subline .gantt-row-label (white-space:normal,
+height:auto) so the wrapped second line has room without overriding the
+base .gantt-row-label's single-line behavior used elsewhere (portfolio
+Gantt, Scope header rows). .phase-unit-subline is the small/italic/muted
+subline text style itself. .gantt-bar needed no changes -- it's already
+positioned via top:50%/translateY(-50%), so it re-centers automatically
+in the taller row.
+
+pulse_v67s. Changes from v67r, this round. Paired with
+worker_v44x_build.mjs (this round's real work is mostly Worker-side; the
+client change is one line at each of MARLI's 3 real /marli call sites).
+
+MARLI personalization, round one of two, per Misty's direct request:
+"I'd like to see her refer to user name, then profile." Mocked up first
+(mockup_marli_name_profile_focus.html) against real live Airtable data for
+consultant Paul Parios's 3 actual assigned properties before writing any
+code, per standing convention. Misty approved the mockup as-is.
+
+This round: (1) name -- every /marli call now sends userName, sourced
+from currentConsultantName for role=consultant (matches the identity the
+rest of the app already uses for that role -- see propertyConsultants(),
+canEdit gates, etc.) or window._userName for every other role. Worker
+uses it to open with the person's real name and reuse it naturally, not
+mechanically. (2) profile-scoped data -- consultant sessions now get a
+snapshot filtered to their real assigned properties before MARLI ever
+sees it, instead of the full portfolio. (3) a real prioritization
+instruction -- "what should I focus on" had no prompt guidance at all
+before this; nothing told her how to rank or summarize urgency. All three
+changes are Worker-side (buildMarliSnapshot, buildMarliSystemPrompt,
+handleMarliQuery) -- see worker_v44x_build.mjs's own header for the full
+mechanics and the real Scopes-level VDA Consultant field this scoping
+keys on (Properties.VDA Consultant is a stale fallback only, per the
+existing v31r client-side comment on propertyConsultants() -- the Worker
+now mirrors that exact precedence rather than the flatter logic the
+approved mockup implied).
+
+PM and Client roles are unaffected beyond the name greeting -- PM has no
+"assigned PM" concept in the schema today (portfolio-wide access is by
+design), and Client is already scoped to one client's whole portfolio, so
+there is no narrower "their properties" subset to filter to yet. Flagged
+to Misty as a separate, later decision if she wants PM scoping -- would
+need a new assignment field, a real schema change.
+
 pulse_v67r. Changes from v67q, this round. Airtable schema change: added
 "% Complete" (Number, integer 0-100, blank allowed) to Unit Groups
 (fldOVxFHav1fHnTO9), confirmed explicitly with Misty before creating it.
@@ -3806,6 +3872,14 @@ set alongside the app's existing --gray-* scale. */
 .scope-rollup-track{position:absolute;height:5px;background:var(--gray-track);border-radius:3px}
 .scope-rollup-fill{position:absolute;left:0;top:0;bottom:0;background:var(--blue-dark);border-radius:3px}
 .phase-row .gantt-row-label{padding-left:26px;color:var(--gray-mid);font-size:11px;cursor:pointer}
+/* v68a -- unit-name subline under each phase label. Row/label both need
+white-space:normal (base .gantt-row-label is nowrap+ellipsis, built for a
+single line) plus a taller min-height so the wrapped second line has
+room; .gantt-bar re-centers on its own since it's already positioned via
+top:50%/translateY(-50%), so no bar-position changes were needed. */
+.phase-row.has-unit-subline{min-height:44px}
+.phase-row.has-unit-subline .gantt-row-label{white-space:normal;height:auto;padding-top:6px;padding-bottom:6px}
+.phase-unit-subline{font-size:9.5px;color:var(--gray-light);font-style:italic;margin-top:1px;white-space:normal}
 .empty-scope-note{font-size:10.5px;color:var(--gray-mid);font-style:italic}
 .add-phase-link{font-size:10.5px;color:var(--blue-dark);font-weight:600;cursor:pointer;margin-left:6px;display:inline-flex;align-items:center;gap:2px}
 .add-phase-link:hover{text-decoration:underline}
@@ -6563,7 +6637,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v67r</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68a</div>
     </div>
   </nav>
 
@@ -16374,7 +16448,7 @@ async function propsAskMarli(question,panelId){
     const response=await workerFetch(`${WORKER_URL}/marli`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({recordId,query:question,role,history:[]})
+      body:JSON.stringify({recordId,query:question,role,history:[],userName:(role==='consultant'?currentConsultantName:window._userName)||null})
     });
     const data=await response.json();
     if(data.ok){
@@ -39808,7 +39882,7 @@ async function sendLiveChat(msg){
     const response=await workerFetch(`${WORKER_URL}/marli`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({recordId,query:msg,role,history:historyToSend})
+      body:JSON.stringify({recordId,query:msg,role,history:historyToSend,userName:(role==='consultant'?currentConsultantName:window._userName)||null})
     });
     const data=await response.json();
     const el=document.getElementById(typId);
@@ -39901,7 +39975,7 @@ async function analyticsAskMarliSend(){
     const response=await workerFetch(`${WORKER_URL}/marli`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({recordId,query:msg,role,history:historyToSend})
+      body:JSON.stringify({recordId,query:msg,role,history:historyToSend,userName:(role==='consultant'?currentConsultantName:window._userName)||null})
     });
     const data=await response.json();
     const typEl=document.getElementById(typId);
@@ -40675,6 +40749,26 @@ function renderPropertySchedule(){
       const health=ganttHealthColor(propName,ph);
       const inWin=start&&end&&dateInWindow(start,end);
       const label=escHtml((ph.phase||'').replace(/^Phase \d+ — /,''));
+      // v68a -- unit names as a subline under the phase label, per Misty's
+      // direct request off a live screenshot (New York Hilton Midtown's
+      // 18-phase schedule, all reading as bare "Phase N" with no way to
+      // tell what's in each one without opening it). Mocked up first
+      // against that exact property's real live data
+      // (mockup_schedule_unit_subline.html) before writing any code.
+      // Same displayUnitNames fallback the Unit Phases tab's own phase
+      // cards already use (~line 21969): prefer the cached ph.unitNames
+      // string, and when it's blank -- which live data showed is the
+      // common case for this property's phases -- derive it live from
+      // ph.linkedUnitIds against window.UNIT_INVENTORY instead of
+      // leaving the subline empty. "No units selected" only when a phase
+      // genuinely has nothing linked, so that reads as a real state
+      // rather than a rendering gap.
+      const displayUnitNames=(ph.unitNames&&ph.unitNames.trim())
+        ?ph.unitNames
+        :(ph.linkedUnitIds&&ph.linkedUnitIds.length>0
+          ?sortUnitsByName((window.UNIT_INVENTORY||[]).filter(u=>ph.linkedUnitIds.includes(u.id))).map(u=>u.name).filter(Boolean).join(', ')
+          :'');
+      const unitSubline=`<div class="phase-unit-subline">${escHtml(displayUnitNames||'No units selected')}</div>`;
       let barHtml='';
       if(inWin){
         const x1=Math.max(0,dateToX(start));
@@ -40704,8 +40798,11 @@ function renderPropertySchedule(){
           </div>`;
         }
       }
-      html+=`<div class="gantt-row phase-row">
-        <div class="gantt-row-label"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${health.bg};margin-right:5px;vertical-align:middle"></span>${label}${ph.pctComplete!=null?` <span class="pct-input-demo" style="border-color:${ph.pctComplete===0?'var(--gray-mid)':'var(--blue-dark)'};color:${ph.pctComplete===0?'var(--gray-mid)':'var(--blue-dark)'}">${ph.pctComplete}%</span>`:''}</div>
+      html+=`<div class="gantt-row phase-row has-unit-subline">
+        <div class="gantt-row-label">
+          <div><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${health.bg};margin-right:5px;vertical-align:middle"></span>${label}${ph.pctComplete!=null?` <span class="pct-input-demo" style="border-color:${ph.pctComplete===0?'var(--gray-mid)':'var(--blue-dark)'};color:${ph.pctComplete===0?'var(--gray-mid)':'var(--blue-dark)'}">${ph.pctComplete}%</span>`:''}</div>
+          ${unitSubline}
+        </div>
         <div class="gantt-bars">${gridLines}${todayLine}${barHtml}</div>
       </div>`;
     });
