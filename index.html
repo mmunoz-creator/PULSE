@@ -1,4 +1,155 @@
 <!--
+pulse_v68e. Changes from v68d, this round. No worker changes required --
+still paired with worker_v45a_build.mjs, unchanged. Entirely client-side.
+
+Added an Orientation Tour Budget Outlook step for PM and expanded Client's
+existing one, per Misty's direct request ("Let's add Budget Outlook for PM
+and Client if there's not one").
+
+PM: had none at all -- confirmed, not assumed, before adding. Placed right
+where v68d's removed Capital Plan steps used to sit, matching the real
+sidebar order (Dashboard, Properties, Budget Outlook, VDA Project -- line
+~6667). Since PM has real edit/export/import capability here (Reforecast,
+Export for Data Entry, Import Unit Updates, all PM/Admin-only per
+renderBudgetOutlook's role toggle), the new step covers more than a
+one-liner: the 3-stage breakdown plus VDA toggle, then Reforecast/Export
+for Data Entry/Import Unit Updates.
+
+Client: already had a step (added in v68c when Client's broken Capital
+Plan selector was retargeted here), but it was a bare one-line placeholder
+never expanded. Confirmed what Client actually sees before writing it:
+only the Export Report button (PM/Admin's Export for Data Entry and
+Import Unit Updates are both role-gated away from Client), and Reforecast
+has no role gate on opening it, so Client can view it like every other
+role even though saving is a PM workflow in practice. Expanded to 2 steps,
+matching the read-only framing Client's other tour steps already use
+(e.g. VDA Project's "This is a read-only view for you").
+-->
+
+<!--
+pulse_v68d. Changes from v68c, this round. Paired with worker_v45a_build.mjs
+(worker version bumped per Misty's direct instruction, no worker code
+changes this round -- see that file's own changelog).
+
+Two corrections to what v68c shipped, both caught by Misty:
+
+1. PM's 3 Capital Plan-titled Orientation Tour steps (Capital Plan/
+   Projects/Unit Inventory & Phases) removed outright, not reworded.
+   v68c had reworded PM's Step 1 text (the stale "+ Create Property"
+   claim) on the assumption PM's Capital Plan selector was merely stale,
+   like Admin's -- wrong. Confirmed directly this round: PM's sidebar has
+   never had a Capital Plan nav item at all (v67a removed it from PM,
+   Consultant, AND Client -- Admin is the only role that kept it; see the
+   real #nav-pm markup's own comment, "hide it from PM/Consultant/Client
+   view"). All 3 of PM's Capital Plan-targeted steps had dangling
+   selectors matching nothing, the same class of bug as Consultant's
+   step fixed in v68c, not the stale-content class PM's Step 1 was
+   mistakenly treated as. Removed all 3, same treatment as Consultant's
+   removed step.
+
+2. Capital Plan's global Help button removed entirely, per Misty's direct
+   choice. Since Capital Plan is Admin-only (confirmed above), and Admin
+   doesn't need a Help button on that page, 'capital' removed from
+   HELP_ENABLED_VIEWS. The page's topicMap and HELP_VIEW_META entries for
+   'capital' are left in place (dead but harmless -- updateGlobalHelpBtn's
+   visibility check gates on HELP_ENABLED_VIEWS first, so the button
+   simply never shows, regardless of what those other two objects still
+   contain). help:capital's KV content, drafted in batch 1, is now
+   unused; left as-is in the Worker's HELP_KEYS rather than pulled, since
+   removing it wasn't part of what Misty asked for here.
+
+Also confirmed while investigating: PM's tour has no Budget Outlook step
+at all (Consultant/Client's now-removed-or-retargeted Capital Plan steps
+had no PM equivalent to check against). Not fixed this round -- flagging
+it rather than folding it in unasked, since Misty's ask this round was
+specifically the 2 corrections above.
+-->
+
+<!--
+pulse_v68c. Changes from v68b, this round. Paired with worker_v44y_build.mjs
+(the Worker's HELP_KEYS array needed one new entry -- see that file's own
+changelog).
+
+Help KV / Orientation Tour pass 3 -- the mechanical code fixes flagged by
+the original Help KV audit (2026-08-16) and re-confirmed by this round's
+reverify pass, now that the content-drafting rounds (batches 1-3) are
+complete. Re-verified every item against real v68b code before writing
+anything, per standing rule.
+
+1. Five broken Orientation Tour Capital Plan selectors, two different
+   root causes:
+   - PM and Admin's "Capital Plan" step (Step 1 of 3 each) said 'Click
+     "+ Create Property" to open the New Property panel' -- that button
+     moved to the Properties tab header in v60b. Selector itself was
+     valid (both roles still have a Capital Plan nav item), only the
+     body text was stale. Reworded to point to the Properties tab.
+   - Consultant's and Client's Capital Plan steps had a genuinely
+     dangling selector -- Capital Plan was removed entirely from both
+     sidebars in v67a, confirmed via direct DOM check (#nav-consultant
+     and #nav-client have no capital-targeted button at all), so the
+     tour had nothing to highlight for that step. Consultant's sidebar
+     also has no Budget Outlook nav item to retarget to (only Client
+     does) -- confirmed before proposing a fix, per Misty's direct
+     choice: Consultant's step removed outright, Client's step
+     retargeted to its real Budget Outlook nav item (checked first that
+     no other Client tour step already targets budgetoutlook, to avoid
+     a duplicate).
+
+2. Four thin/stale Operations Center and Performance Reports tour steps,
+   rewritten to match the real current pages (per this round's own
+   help:opscenter and help:report content, see below):
+   - PM and Admin's Ops Center Step 3 claimed "The 30/60/90 Day Action
+     Plan buckets everything by due date" -- stale pre-v66l-rebuild
+     wording. Real page has a 5-stat header, an Ask MARLI insight
+     ribbon, and four rows of cards, of which the 30/60/90 Outlook is
+     one card, not the whole page's structure. Rewritten to name the
+     real structure.
+   - Consultant's and Client's Ops Center steps were one vague sentence
+     each, no structure mentioned. Rewritten with real detail, scoped to
+     what each role actually sees (Consultant's stays scoped to their
+     assigned properties).
+   - PM, Admin, and Client's Performance Reports steps never mentioned
+     the v67h two-page redesign (Snapshot + Coordination Detail pages).
+     Added a step to each describing it. Also caught and fixed, while
+     editing Client's version, an unrelated stale claim in Client's old
+     Step 2 ("your report includes the underlying data, but not a
+     written summary") -- confirmed against buildRedesignedPropertyReportHTML/
+     buildRedesignedPortfolioReportHTML that there's no role-based
+     exclusion of the MARLI narrative for Client, so that claim was
+     simply wrong; removed rather than carried forward.
+
+3. Performance Reports (viewId 'report') help routing -- confirmed still
+   missing all 3 required pieces in v68b, exactly as both the original
+   audit and this round's reverify found. Added 'report' to
+   HELP_ENABLED_VIEWS, a topicMap entry (report: 'report'), and a
+   HELP_VIEW_META['report'] entry (sub-text matches the real on-screen
+   page-header <p> text, "Generated weekly and on-demand", same
+   convention as every other entry). The Help button now appears on this
+   page for every role. New help:report KV content authored to go with
+   it (Worker HELP_KEYS updated to match, see worker_v44y changelog).
+
+4. help:property-dependencies wiring -- closes the loop on batch 1's new
+   KV key (the Related Work / Dependencies tab never had its own help
+   content, silently fell back to property-overview's). Fixed
+   PROP_TAB_HELP_MAP's dependencies entry from 'property-overview' to
+   'property-dependencies'. Added a HELP_VIEW_META['property-dependencies']
+   entry (sub: "Related Work tab") and a HELP_TAB_LABELS entry (label
+   "Related Work", matching the real on-screen tab button text). Added
+   'property-dependencies' to all 7 existing property-detail tabs arrays
+   (property-overview/milestones/budget/bids/phases/changeorders/
+   fieldops all shared one identical 7-item array literal; now 8 items)
+   so the drawer's tab-pill row can reach it from any property-detail
+   tab, same as the other 7.
+
+This closes out the full 3-pass Help KV / Orientation Tour rewrite plan:
+pass 1 (verify), pass 2 (draft content in batches 1-3, covering all 22
+original keys plus the new property-dependencies and report keys), and
+this pass 3 (code fixes). No further known gaps in this system as of
+this round.
+
+-->
+
+<!--
 pulse_v68b. Changes from v68a, this round. No worker changes required --
 still paired with worker_v44x_build.mjs, unchanged. Entirely client-side.
 
@@ -6666,7 +6817,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68b</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68e</div>
     </div>
   </nav>
 
@@ -9234,7 +9385,21 @@ function setupPortal(){
 // Gantt/timeline view) was incorrectly showing that same content instead
 // of its own. See topicMap below for the matching schedule/calendar
 // topic split.
-const HELP_ENABLED_VIEWS = new Set(['dashboard','dashboard-archived','charts','portfolio','capital','scorecard','pmupdates','clientprojectupdates','vdaproject','queue','opscenter','schedule','calendar','properties','budgetoutlook']);
+// v68c -- 'report' added. Performance Reports had no help wiring at all in
+// any of the 3 places this feature needs it (this Set, topicMap, and
+// HELP_VIEW_META below) -- confirmed still true as of v68b. The global
+// Help button never appeared on that page for any role regardless of
+// whether help:report KV content existed. All 3 places fixed together
+// this round, plus a new help:report KV key authored to go with it.
+// v68d -- 'capital' removed, per Misty's direct choice. Capital Plan is
+// visible to Admin only (v67a removed the nav item from PM/Consultant/
+// Client -- confirmed at #nav-pm/#nav-consultant/#nav-client markup, none
+// have a capital-targeted button). Misty confirmed Admin doesn't need a
+// Help button on that page. help:capital's KV content (drafted in batch 1)
+// is now unused -- left in the Worker's HELP_KEYS array rather than
+// pulled, since a stray fetched-but-unrouted key is harmless and pulling
+// it isn't part of what Misty asked for here.
+const HELP_ENABLED_VIEWS = new Set(['dashboard','dashboard-archived','charts','portfolio','scorecard','pmupdates','clientprojectupdates','vdaproject','queue','opscenter','schedule','calendar','properties','budgetoutlook','report']);
 
 function updateGlobalHelpBtn(viewId) {
   const btn = document.getElementById('global-help-btn');
@@ -9298,6 +9463,10 @@ function updateGlobalHelpBtn(viewId) {
     schedule: 'schedule',
     calendar: 'calendar',
     properties: 'properties',
+    // v68c -- Performance Reports never had a topicMap entry, one of the
+    // 3 missing pieces (see HELP_ENABLED_VIEWS above) that kept the Help
+    // button from ever appearing on this page.
+    report: 'report',
   };
   // v58s -- fallback below changed from 'dashboard' to 'actionboard' to
   // match: handleHelpBtnClick() falls back to this same default when
@@ -9590,7 +9759,12 @@ const PROP_TAB_HELP_MAP={
   bids:'property-bids',
   phases:'property-phases',
   changeorders:'property-changeorders',
-  dependencies:'property-overview',
+  // v68c -- Related Work tab (Dependencies) never had its own help key,
+  // silently fell back to property-overview's content and tab highlight,
+  // same class of gap property-phases/changeorders/fieldops had before
+  // v64h fixed those three. Now points at the new help:property-
+  // dependencies key.
+  dependencies:'property-dependencies',
   fieldops:'property-fieldops',
   updates:'property-overview',
   docs:'property-overview'
@@ -40190,10 +40364,10 @@ const HELP_VIEW_META = {
   // pill row can reach the three tabs added this pass instead of only
   // ever showing Overview/Milestones/Budget/Bids. See the three new
   // entries below for those keys' own title/sub.
-  'property-overview':  { title: 'Property Detail',   sub: 'Overview tab',                             tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
-  'property-milestones':{ title: 'Property Detail',   sub: 'Milestones tab',                           tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
-  'property-budget':    { title: 'Property Detail',   sub: 'Budget Performance tab',                   tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
-  'property-bids':      { title: 'Property Detail',   sub: 'Bids tab',                                 tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
+  'property-overview':  { title: 'Property Detail',   sub: 'Overview tab',                             tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] },
+  'property-milestones':{ title: 'Property Detail',   sub: 'Milestones tab',                           tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] },
+  'property-budget':    { title: 'Property Detail',   sub: 'Budget Performance tab',                   tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] },
+  'property-bids':      { title: 'Property Detail',   sub: 'Bids tab',                                 tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] },
   // v49a — new entries for the four new help keys (help:vdaproject,
   // help:queue, help:opscenter, help:calendar), matching sub-text to the
   // real on-screen page-header <p> text for each view so the drawer
@@ -40231,6 +40405,11 @@ const HELP_VIEW_META = {
   'actionboard':         { title: 'Dashboard',         sub: 'Action items, priority properties, and construction status in one view', tabs: null },
   'properties':          { title: 'Properties',        sub: 'Real-time view of your elevator modernization program',   tabs: null },
   'portfolio':           { title: 'Portfolio View',    sub: 'Every property in one list',               tabs: null },
+  // v68c -- new entry, matches real on-screen page-header <p> text exactly
+  // (line ~7465), same convention as every entry above. Third and final
+  // piece of the Performance Reports help-routing fix, alongside
+  // HELP_ENABLED_VIEWS and topicMap above.
+  'report':              { title: 'Performance Reports', sub: 'Generated weekly and on-demand',          tabs: null },
   // v64h -- new entries for the Client's "Project Updates" page (was
   // reusing 'pmupdates' meta+content, confirmed live to be PM-authoring-
   // perspective content on a page the Client role can't post to), and for
@@ -40243,9 +40422,16 @@ const HELP_VIEW_META = {
   // drawer's tab-pill row can navigate between any of them, not just the
   // original 4.
   'clientprojectupdates':{ title: 'Project Updates',   sub: 'Status updates from your VDA project team', tabs: null },
-  'property-phases':      { title: 'Property Detail',  sub: 'Unit Phases tab',                          tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
-  'property-changeorders':{ title: 'Property Detail',  sub: 'Change Orders tab',                        tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] },
-  'property-fieldops':    { title: 'Property Detail',  sub: 'Meetings & Actions tab',                   tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-fieldops'] }
+  'property-phases':      { title: 'Property Detail',  sub: 'Unit Phases tab',                          tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] },
+  'property-changeorders':{ title: 'Property Detail',  sub: 'Change Orders tab',                        tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] },
+  // v68c -- new entry. Related Work tab never had a help:* key or meta
+  // entry at all, silently fell back to property-overview's content and
+  // tab highlight (see PROP_TAB_HELP_MAP fix above). Same class of gap
+  // property-phases/changeorders/fieldops had before v64h fixed those
+  // three, closed the same way: real key, real meta entry, added to every
+  // tabs array above and below so the drawer's pill row can reach it.
+  'property-dependencies':{ title: 'Property Detail',  sub: 'Related Work tab',                         tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] },
+  'property-fieldops':    { title: 'Property Detail',  sub: 'Meetings & Actions tab',                   tabs: ['property-overview','property-milestones','property-budget','property-bids','property-phases','property-changeorders','property-dependencies','property-fieldops'] }
 };
 
 // v64h -- added labels for the three tabs added this pass (Unit Phases,
@@ -40258,6 +40444,10 @@ const HELP_TAB_LABELS = {
   'property-bids':        'Bids',
   'property-phases':      'Unit Phases',
   'property-changeorders':'Change Orders',
+  // v68c -- new label, matches the real on-screen tab button text
+  // ("Related Work", confirmed line ~7086), same convention as every
+  // entry above.
+  'property-dependencies':'Related Work',
   'property-fieldops':    'Meetings & Actions'
 };
 
@@ -43338,24 +43528,29 @@ const TOUR_STEPS = {
   pm: [
     {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
     {target:'#nav-pm [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — stat tiles, open action items, priority properties needing attention, a construction heat map, and recent field activity across your properties, all in one working view.']},
-    {target:'#nav-pm [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:[
-      'Step 1: Capital Plan is where every property starts - it is the only way to add a new property to PULSE. Click "+ Create Property" to open the New Property panel: enter the property name, city, state, asset type, and priority, then set unit counts using the Unit Detail tile row (Elevator, Escalator, WC Lift, Other). Total is always auto-computed from those tiles, never entered by hand.',
-      'Step 2: From the New Property panel you can click "Create Unit Inventory" to pre-populate real Unit Inventory List rows from your tile counts, which opens Manage Unit Inventory so you can detail each one now. Or click "Continue To Project" to move straight into Set Up Projects and detail the units later.',
-      'Step 3: Continue To Project opens Set Up Projects, where you define one or more projects for the property in the same flow - Project Name, Year, VDA Consultant, VDA Project #, and Client Project #. Assign units to each project with checkboxes; the units are a shared pool, so checking a unit that is already assigned to another project moves it there instead of duplicating it.',
-      'Step 4: Once saved, the property shows up here in Capital Plan, organized into year bands by budget. Click a year band to expand it and see individual project line items. Use Print/PDF to export a year\'s view for sharing outside PULSE.'
-    ]},
-    {target:'#nav-pm [onclick*="\'capital\'"]',view:'capital',title:'Projects',body:[
-      'Step 1: Every property starts with at least one project created during Set Up Projects. Each row you see here is a project, not a property.',
-      'Step 2: If a property needs additional projects later - phased capital planned expenditure - "Split into Projects" on the property row allows for that separation. A project becomes active when you enter its Modernization Survey Date. For properties already in the active portfolio, use the "Manage Projects" button on any project card in the Overview tab. Enter the Modernization Survey Date for any project still listed as "Capital Plan" and that project graduates.',
-      'Step 3: Once split, each project gets its own milestone tracker, bid rounds, and billing — all viewable via the project tab switcher across the Milestones, Bids, Budget Performance, and Change Orders tabs. Projects that haven\'t graduated yet remain in Capital Plan until their survey date is entered.',
-      'Step 4: A property with one project keeps things simple — no tab switcher appears. Split only when the work genuinely separates into distinct contracts.'
-    ]},
-    {target:'#nav-pm [onclick*="\'capital\'"]',view:'capital',title:'Unit Inventory & Phases',body:[
-      'Step 1: For a property that already exists, open it, click Edit Property, and click Manage Unit Inventory to fill in or fix Device Location, Unit Type, Equipment Type, and cost estimates on any unit — no need to touch Airtable directly.',
-      'Step 2: With units entered, go to the Phases tab (selecting the right project tab first if there’s more than one), and click Add Phase. Check the units this phase covers, and select the milestone tasks. Product Type is no longer picked by hand — it is derived automatically from the checked units’ own Equipment Type — and PULSE pre-fills the standard checklist for that type.',
-      'Step 3: This is how construction-level tracking — tasks, dates, status — gets attached to real units. You can come back and edit any of it later: Manage Unit Inventory to fix a unit’s fields, Edit Phase to change a phase’s linked units or dates.',
-      'Step 4: MARLI may suggest a phase here — a banner above the phase list flags groups of units sharing Equipment Type and CapEx Year that are not yet grouped into a phase (or sitting in the wrong one). Accept opens Add Phase pre-filled with those units, or Dismiss to clear it.',
-      'Step 5: A project no longer needed on its own can be folded into another one — click the corner-arrow icon next to a project’s edit pencil on its card to Demote it into unit phases under a different project on the same property, grouped automatically by Equipment Type.'
+    // v68d -- all 3 Capital Plan-titled steps (Capital Plan/Projects/Unit
+    // Inventory & Phases) removed outright, same fix as Consultant's step
+    // in v68c. Misty caught what v68c missed: PM's sidebar has never had
+    // a Capital Plan nav item either (v67a removed it from PM/Consultant/
+    // Client, Admin only kept it -- confirmed directly at the real
+    // #nav-pm markup, line ~6615, comment says exactly "hide it from
+    // PM/Consultant/Client view"). These 3 steps' selectors were dangling,
+    // matching nothing, not just describing a stale button like I first
+    // diagnosed in v68c -- that earlier fix (rewording Step 1's "+ Create
+    // Property" text) was treating the wrong kind of bug. Removed rather
+    // than retargeted.
+    // v68e -- Budget Outlook step added here, filling the gap the note
+    // above used to flag. Confirmed PM's sidebar has a real Budget
+    // Outlook nav item (line ~6667, sits between Properties and VDA
+    // Project in the real sidebar order -- same slot this step now
+    // occupies in the tour). PM has real edit/export/import capability
+    // here (Reforecast, Export for Data Entry, Import Unit Updates all
+    // PM/Admin-only, confirmed against renderBudgetOutlook/
+    // exportBudgetOutlookDataEntry/openImportUnitUpdatesModal), so this
+    // step is more detailed than Client's read-only one-liner.
+    {target:'#nav-pm [onclick*="\'budgetoutlook\'"]',view:'budgetoutlook',title:'Budget Outlook',body:[
+      'Step 1: Award and estimate spend by year, across every project — Total Work Est., Client Budget, and Award Value, plus an optional VDA Project toggle.',
+      'Step 2: Reforecast lets you move a not-yet-awarded project to a different program year. Export for Data Entry and Import Unit Updates round-trip a spreadsheet for bulk edits — export includes a Valid Values reference sheet, import matches rows back to existing units by a hidden ID and never creates new ones.'
     ]},
     {target:'#nav-pm [onclick*="\'vdaproject\'"]',view:'vdaproject',title:'VDA Project',body:[
       'Step 1: VDA Project tracks billing agreements separately from modernization projects. One VDA Project Number can cover one or more properties and units - it is the true billing unit for consulting and PM fees. Project Value is never typed in - it is always the live sum of the task lines on that agreement.',
@@ -43389,7 +43584,7 @@ const TOUR_STEPS = {
     {target:'#nav-pm [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:[
       'Step 1: A working view of day-to-day activity — open actions, upcoming meetings and site visits, recent field updates, and portfolio changes all in one place.',
       'Step 2: Items tagged to a project show a project badge so you can see at a glance which contract they belong to.',
-      'Step 3: The 30/60/90 Day Action Plan buckets everything by due date so you always know what needs attention now vs. what\'s coming.',
+      'Step 3: A 5-stat header up top gives you overdue dependencies, items due soon, and change orders at a glance. Below that, four rows of cards cover the 30/60/90 Day Outlook, Related Work coordination, Owner Decisions waiting on approval, and recent portfolio activity, all in one working view.',
     ]},
     {target:'#nav-pm [onclick*="\'queue\'"]',view:'queue',title:'Pending Review',body:[
       'Step 1: Pending Review has two tabs. Approvals is where consultants\' weekly field updates land for your review - Approve publishes the update and archives it to Documents automatically, and Return with Note sends it back to the consultant with your feedback for revision.',
@@ -43415,7 +43610,8 @@ const TOUR_STEPS = {
     {target:'#nav-pm [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
       'Step 1: Generate a report anytime, on demand, for any property or your full portfolio.',
       'Step 2: Every Monday, PULSE automatically generates a report with an AI-written summary and emails it to you for review.',
-      'Step 3: Review it, then forward it yourself by email if you want to share it with your client contact.'
+      'Step 3: Every report is two pages: a Snapshot page with an AI-written narrative, scorecard tiles, and Cash Flow Curve, and a Coordination Detail page with a 30/60/90 outlook and Related Work coordination.',
+      'Step 4: Review it, then forward it yourself by email if you want to share it with your client contact.'
     ]},
   ],
   admin: [
@@ -43428,7 +43624,7 @@ const TOUR_STEPS = {
       'Step 3: Use Print/PDF to export the current view for sharing outside PULSE.'
     ]},
     {target:'#nav-admin [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:[
-      'Step 1: Capital Plan is where every property starts - it is the only way to add a new property to PULSE. Click "+ Create Property" to open the New Property panel: enter the property name, city, state, asset type, and priority, then set unit counts using the Unit Detail tile row (Elevator, Escalator, WC Lift, Other). Total is always auto-computed from those tiles, never entered by hand.',
+      'Step 1: Capital Plan is where every property\'s projects live, organized by year. New properties are added from the Properties tab, not from here. Click "+ Create Property" there to open the New Property panel: enter the property name, city, state, asset type, and priority, then set unit counts using the Unit Detail tile row (Elevator, Escalator, WC Lift, Other). Total is always auto-computed from those tiles, never entered by hand.',
       'Step 2: From the New Property panel you can click "Create Unit Inventory" to pre-populate real Unit Inventory List rows from your tile counts, which opens Manage Unit Inventory so you can detail each one now. Or click "Continue To Project" to move straight into Set Up Projects and detail the units later.',
       'Step 3: Continue To Project opens Set Up Projects, where you define one or more projects for the property in the same flow - Project Name, Year, VDA Consultant, VDA Project #, and Client Project #. Assign units to each project with checkboxes; the units are a shared pool, so checking a unit that is already assigned to another project moves it there instead of duplicating it.',
       'Step 4: Once saved, the property shows up here in Capital Plan, organized into year bands by budget across the portfolio. Click a year band to expand it and see individual project line items. Use Print/PDF to export a year\'s view for sharing outside PULSE.'
@@ -43479,7 +43675,7 @@ const TOUR_STEPS = {
     {target:'#nav-admin [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:[
       'Step 1: A working view of day-to-day activity — open actions, upcoming meetings and site visits, recent field updates, and portfolio changes all in one place.',
       'Step 2: Items tagged to a project show a project badge so you can see at a glance which contract they belong to.',
-      'Step 3: The 30/60/90 Day Action Plan buckets everything by due date so you always know what needs attention now vs. what\'s coming.',
+      'Step 3: A 5-stat header up top gives you overdue dependencies, items due soon, and change orders at a glance. Below that, four rows of cards cover the 30/60/90 Day Outlook, Related Work coordination, Owner Decisions waiting on approval, and recent portfolio activity, all in one working view.',
     ]},
     {target:'#nav-admin [onclick*="\'queue\'"]',view:'queue',title:'Pending Review',body:[
       'Step 1: Pending Review has two tabs. Approvals is where consultants\' weekly field updates land for review across the program - Approve publishes the update and archives it to Documents automatically, and Return with Note sends it back to the consultant with feedback for revision.',
@@ -43509,14 +43705,20 @@ const TOUR_STEPS = {
     {target:'#nav-admin [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
       'Step 1: Generate a report anytime, on demand, for any property or the full portfolio.',
       'Step 2: Every Monday, PULSE automatically generates a report with an AI-written summary and emails it out for review.',
-      'Step 3: Review it, then forward it by email if you want to share it with a client contact.',
-      'Step 4: Admin-only Weekly Report Feedback tab here lets you rate each week\'s AI-generated executive summary with a thumbs up or down, with an optional written note on a down vote, so the summary prompt can be tuned over time from real feedback instead of guesswork.'
+      'Step 3: Every report is two pages: a Snapshot page with an AI-written narrative, scorecard tiles, and Cash Flow Curve, and a Coordination Detail page with a 30/60/90 outlook and Related Work coordination.',
+      'Step 4: Review it, then forward it by email if you want to share it with a client contact.',
+      'Step 5: Admin-only Weekly Report Feedback tab here lets you rate each week\'s AI-generated executive summary with a thumbs up or down, with an optional written note on a down vote, so the summary prompt can be tuned over time from real feedback instead of guesswork.'
     ]},
   ],
   consultant: [
     {target:null,title:'Welcome to PULSE',body:['Welcome to PULSE. This quick tour walks through where everything lives. You can skip ahead or revisit any section later from Orientation in the sidebar.']},
     {target:'#nav-consultant [onclick*="\'dashboard\'"]',view:'dashboard',title:'Dashboard',body:['Your home base — open action items, priority properties, and a construction heat map for the properties you’re working on, plus recent activity.']},
-    {target:'#nav-consultant [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:['View budget and capital planning by year across your properties.']},
+    // v68c -- Capital Plan step removed. Consultant's sidebar has never had
+    // a Capital Plan nav item (removed v67a) and, unlike Client, has no
+    // Budget Outlook nav item to retarget to either -- Consultant simply
+    // has no budget-pipeline page. The old step's target selector matched
+    // nothing, a real dangling-selector bug, not just stale copy. Removed
+    // outright rather than retargeted, per Misty's direct choice.
     {target:'#nav-consultant [onclick*="\'documents\'"]',view:'documents',title:'Documents',body:['Your submitted field updates, meeting minutes, and closed actions are archived here automatically.']},
     {target:'.tab-btn[onclick*="milestones"]',title:'Projects',isPropertyDetail:true,propTab:'milestones',body:[
       'Step 1: The Overview tab shows a card for each project — consultant, elevator company, budget, rates, and milestone progress at a glance. Single-project properties show one full-width card.',
@@ -43538,7 +43740,7 @@ const TOUR_STEPS = {
       'Step 2: If a PM returns one with a note, you can edit and resubmit it directly from this list.',
       'Step 3: If you flagged a follow-up action on a submission, you’ll see a small icon here once your PM has reviewed it — letting you know it was seen.'
     ]},
-    {target:'#nav-consultant [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:['A working view of recent activity across your properties — open actions, upcoming meetings, and recent field updates, with project badges showing which contract each item belongs to.']},
+    {target:'#nav-consultant [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:['A working view of your properties: a stat header for overdue items and change orders, a 30/60/90 day outlook, Related Work coordination, and recent activity, all scoped to the properties you\'re assigned to.']},
     {target:'#nav-consultant [onclick*="\'comments\'"]',view:'comments',title:'Client Comments',body:['Client-raised questions and flags relevant to your properties.']},
     // v42h — Consultant's "PM Updates" tour step removed along with the
     // nav item itself (see nav-consultant above) — Consultant no longer
@@ -43559,7 +43761,25 @@ const TOUR_STEPS = {
       'Step 1: Visual breakdowns of portfolio performance — completion forecasts, spend, contractor performance, and more.',
       'Step 2: Click any bar or segment to see the properties (and, on Forecasted Spend, the units and dollar amounts) behind that number.'
     ]},
-    {target:'#nav-client [onclick*="\'capital\'"]',view:'capital',title:'Capital Plan',body:['View budget and capital planning by year across your portfolio - every property starts here before it becomes an active project.']},
+    // v68c -- retargeted from Capital Plan to Budget Outlook. Capital Plan
+    // was removed from Client's sidebar in v67a, this step's old selector
+    // matched nothing (a real dangling-selector bug). Client does have a
+    // real Budget Outlook nav item, so this step now points there instead
+    // of being removed outright, per Misty's direct choice. No other step
+    // in this tour already targets budgetoutlook -- checked to avoid a
+    // duplicate before making this change.
+    // v68e -- expanded from a one-line placeholder (added when this step
+    // was retargeted here from a broken Capital Plan selector in v68c).
+    // Confirmed what Client actually sees: the Export Report button
+    // (relabeled from PM/Admin's "Export Client Report", same file either
+    // way), no Export for Data Entry or Import Unit Updates (both
+    // PM/Admin-only, confirmed at renderBudgetOutlook's role toggle).
+    // Reforecast has no role gate on opening it -- Client can view it like
+    // everyone else, only saving is a PM workflow in practice.
+    {target:'#nav-client [onclick*="\'budgetoutlook\'"]',view:'budgetoutlook',title:'Budget Outlook',body:[
+      'Step 1: Award and estimate spend by year, across your full portfolio — Total Work Est., Client Budget, and Award Value, plus an optional VDA Project toggle.',
+      'Step 2: Export Report downloads the full breakdown as a spreadsheet. This is a read-only view for you; your VDA project team manages reforecasting and reconciliation imports.'
+    ]},
     {target:'#nav-client [onclick*="\'vdaproject\'"]',view:'vdaproject',title:'VDA Project',body:['A portfolio-wide view of VDA billing agreements - project number, status, project value, and linked properties. This is a read-only view for you; your VDA project team manages these agreements.']},
     {target:'.tab-row',title:'Property Detail',isPropertyDetail:true,propTab:'overview',body:[
       'Step 1: Opening any property gives you the same full detail view your VDA project team works from — organized into tabs across the top.',
@@ -43584,7 +43804,7 @@ const TOUR_STEPS = {
       'Step 3: You can see each contractor’s total price, schedule, and maintenance pricing side-by-side in the Bid Leveling view.'
     ]},
     {target:'#nav-client [onclick*="\'schedule\'"]',view:'schedule',title:'Schedule',body:['A timeline view of milestones and phase progress across properties.']},
-    {target:'#nav-client [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:['A working view of recent activity across your portfolio.']},
+    {target:'#nav-client [onclick*="\'opscenter\'"]',view:'opscenter',title:'Operations Center',body:['A working view of your portfolio: overdue items and change orders at a glance, a 30/60/90 day outlook, and recent activity, all in one place.']},
     {target:'#nav-client [onclick*="\'comments\'"]',view:'comments',title:'Comments & Flags',body:[
       'Step 1: This is your direct line to raise a question or concern about any property.',
       'Step 2: Raise a flag, describe what you’re seeing, and your VDA project team will be notified to respond.',
@@ -43596,8 +43816,8 @@ const TOUR_STEPS = {
     {target:'#nav-client [onclick*="\'chatbot\'"]',view:'chatbot',title:'AI Assistant / MARLI',body:['MARLI is your AI assistant — ask her questions about your portfolio in plain language, or look up VT terminology. If you ask how to use a PULSE feature, MARLI will point you to the right spot in this tour rather than explain it herself.']},
     {target:'#nav-client [onclick*="\'report\'"]',view:'report',title:'Performance Reports',body:[
       'Step 1: Generate a report anytime, on demand, for any property or your full portfolio.',
-      'Step 2: Your report includes the underlying data, but not a written summary.',
-      'Step 3: Want a quick summary in plain language? Ask MARLI directly — just describe what you’d like to know.'
+      'Step 2: Every report is two pages: a Snapshot page with an AI-written narrative, scorecard tiles, and Cash Flow Curve, and a Coordination Detail page with a 30/60/90 outlook and Related Work coordination.',
+      'Step 3: Have a question about what you\'re seeing? Ask MARLI directly — just describe what you’d like to know.'
     ]},
   ]
 };
