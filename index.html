@@ -1,4 +1,50 @@
 <!--
+pulse_v68f. Changes from v68e, this round. No worker changes required --
+still paired with worker_v45a_build.mjs, unchanged. Entirely client-side.
+
+CRITICAL fix. Scope Status <-> Unit Status circular dependency, confirmed
+live on Casa Marina Key West's "PE6 & PE7" scope: the Overview card showed
+100%/Complete while its own Milestones tab showed only 9 of 14 done (M1-M9
+Complete, M10 In Progress, M11-M14 Not Started).
+
+Root cause, two sites, one shared defect -- both trusted a scope's own
+Status field as evidence for what Status should be, instead of checking
+real Milestone/Unit data every time:
+
+1. deriveAndWriteScopeStatus's allUnitsComplete override (v37d) forced
+   Status='Complete' whenever every linked unit's own Status read
+   Complete, with no check against what Milestones actively say. Once a
+   scope's units went stale at Complete (traced to the v63l/task #34 bug
+   window), this override and computeDerivedUnitStatus (Unit Inventory
+   tab -- derives a unit's Status FROM scope.status) locked together: any
+   one-sided correction (unit Status alone, or Scope Status alone) got
+   silently reverted the next time either function ran. Fixed: the
+   override now only fires when Milestones aren't actively contradicting
+   it -- no real Milestone data yet (the original v37d onboarding case),
+   or Milestones themselves already justify Complete. Real, tracked
+   Milestones that disagree now win, matching the same principle already
+   applied to fastTrackedComplete/On Hold in this same function.
+
+2. getMilestoneCategoryForScope's first line returned 'Complete'
+   immediately whenever scope.status already read Complete, without ever
+   checking real Milestone completion. This function is what the
+   read-only drift-check banner (Scope Card, "Status says X but
+   milestones show Y") calls to get an independent read -- so this
+   shortcut is why the banner never fired for PE6 & PE7 even while Status
+   sat wrong. Removed outright; the complete>=expectedTotal check just
+   below is the honest test and already covers both legitimate Complete
+   cases the shortcut also caught (verified against Casa Marina's
+   "Completed Project" scope, the real backfilled-complete case this
+   shortcut existed for -- no regression).
+
+Portfolio-wide data sweep (all 86 Scopes, cross-referenced against linked
+Unit Inventory statuses) found PE6 & PE7 as the only scope with this
+corrupted signature; the fix corrected its Scope Status (Construction)
+and both units' Status (Active) directly in Airtable, written in the
+order that survives the (now-fixed) derivation logic.
+-->
+
+<!--
 pulse_v68e. Changes from v68d, this round. No worker changes required --
 still paired with worker_v45a_build.mjs, unchanged. Entirely client-side.
 
@@ -6817,7 +6863,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68e</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68f</div>
     </div>
   </nav>
 
@@ -12118,7 +12164,31 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // v37d — Units-Complete override takes priority over whatever Milestones
   // alone would have derived, since real completed-unit data is more
   // trustworthy than an untouched Milestones list for pre-existing work.
-  if(allUnitsComplete)newStatus='Complete';
+  // v68f — CRITICAL fix, live bug confirmed on Casa Marina Key West's
+  // "PE6 & PE7" scope. This override previously fired unconditionally
+  // whenever every linked unit's Status field read Complete, with zero
+  // regard for what Milestones actively say — including when Milestones
+  // ARE being tracked and show real, contradicting progress (M1-M9
+  // Complete, M10 In Progress, M11-M14 Not Started, yet both units'
+  // Status had gone stale at Complete). Confirmed live: this scope's
+  // Overview card showed 100%/Complete while its own Milestones tab
+  // showed 9 of 14. Worse, this override and computeDerivedUnitStatus()
+  // (Unit Inventory tab — derives a unit's Status FROM scope.status
+  // whenever scope.status is anything other than Capital Plan/Complete)
+  // read from each other with no independent tiebreaker: once both sides
+  // land on Complete by any path — this scope's case traced back to the
+  // v63l/task #34 bug window — they lock together permanently, and a
+  // direct one-sided data correction (unit Status alone) gets silently
+  // reverted the next time this function runs and re-cascades the stale
+  // scope Status back down. Fix: only trust allUnitsComplete when
+  // Milestones aren't actively contradicting it — i.e. when there's no
+  // real Milestone data yet (the original v37d onboarding case this
+  // override exists for) or when Milestones themselves already justify
+  // Complete (newStatus, computed just above from real milestone data,
+  // already says so). When real, tracked Milestones say otherwise, they
+  // win — matching the same "real tracked progress outranks a shortcut"
+  // principle already applied to fastTrackedComplete/On Hold above.
+  if(allUnitsComplete&&(msData.length===0||newStatus==='Complete'))newStatus='Complete';
   const statusChanged=scope.status!==newStatus;
   if(statusChanged){
     // v37g — Status Changed Date, stamped alongside every real status
@@ -24570,7 +24640,29 @@ function isBackfilledComplete(scope,msData){
 }
 function getMilestoneCategoryForScope(scope){
   if(!scope)return'Pre-Construction';
-  if(scope.status==='Complete')return'Complete';
+  // v68f — CRITICAL fix. This early return trusted scope.status==='Complete'
+  // as proof of Complete, without ever checking real Milestone completion —
+  // meaning a scope whose Status field went stale/wrong at Complete (see the
+  // v68f fix on deriveAndWriteScopeStatus's allUnitsComplete override, same
+  // root cause) had that wrong value silently confirmed right back by this
+  // function, every time it was called. That includes the read-only drift-
+  // check banner (Scope Card render, "Status says X but milestones show Y"),
+  // which calls this function specifically to get an INDEPENDENT read on
+  // what Milestones justify — so this shortcut is why the drift banner
+  // never fired for Casa Marina Key West's "PE6 & PE7" scope even while its
+  // Status sat wrong at Complete with only 9 of 14 real milestones done.
+  // Removed outright rather than reworked: the complete>=expectedTotal check
+  // three lines below is the real, honest test, and already covers both
+  // legitimate Complete cases this shortcut also caught — genuinely all-14-
+  // complete scopes, and backfilled/bulk-imported ones (isBackfilledComplete,
+  // just above) where every Milestone's own Status field says Complete even
+  // with no dates behind them, since that check counts each MILESTONE's own
+  // Status, not the Scope's. Verified against Casa Marina's "Completed
+  // Project" scope (the real backfilled case this shortcut existed for):
+  // all 14 Milestone records read Status=Complete, so complete>=expectedTotal
+  // is still true and this still correctly returns 'Complete' via the honest
+  // path — no regression, just no more free pass for a Status that hasn't
+  // earned it.
   const ms=getMilestonesForProp(scope.property,scope.id);
   const complete=ms.filter(m=>m.status==='Complete').length;
   const expectedTotal=MILESTONES_DEF.length;
