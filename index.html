@@ -1,52 +1,54 @@
 <!--
 pulse_v68f. Changes from v68e, this round. No worker changes required --
-still paired with worker_v45a_build.mjs, unchanged. Entirely client-side.
+still paired with worker_v45b_build.mjs, version-bumped only to keep pace
+per standing convention (no worker code changed).
 
-CRITICAL fix. Scope Status <-> Unit Status circular dependency, confirmed
-live on Casa Marina Key West's "PE6 & PE7" scope: the Overview card showed
-100%/Complete while its own Milestones tab showed only 9 of 14 done (M1-M9
-Complete, M10 In Progress, M11-M14 Not Started).
+Two real fixes, both from Misty's live bug report (screenshots + browser
+console):
 
-Root cause, two sites, one shared defect -- both trusted a scope's own
-Status field as evidence for what Status should be, instead of checking
-real Milestone/Unit data every time:
+1. Dependencies create/edit failing with a 422 (INVALID_MULTIPLE_CHOICE_OPTIONS,
+"Insufficient permissions to create new select option \"Planned\""). Root
+cause was NOT a code bug -- traced through all 3 write sites that touch
+Dependencies.Status (saveDepBulk's "Add Dependencies" modal,
+createDependenciesFromAwardedRelatedWork's bid-award auto-flow, and
+saveDep's per-row edit modal) and all 3 already send exactly the 3 values
+the dep-status <select> offers (Planned/Complete/Overdue). The real
+problem: Airtable's Dependencies.Status field only had On Track/At
+Risk/Overdue as real choices -- 'Planned' (the v66j-corrected default,
+per Misty's direct note) and 'Complete' were never added as choices when
+the code's vocabulary changed, and the shared Airtable token doesn't have
+permission to auto-create a new select option on write. Misty added
+'Planned' and 'Complete' as choices to Dependencies > Status directly in
+Airtable this round (confirmed) -- 'On Track'/'At Risk' left in place
+untouched in case any old record still uses them. No code change needed
+or made for this half.
 
-1. deriveAndWriteScopeStatus's allUnitsComplete override (v37d) forced
-   Status='Complete' whenever every linked unit's own Status read
-   Complete, with no check against what Milestones actively say. Once a
-   scope's units went stale at Complete (traced to the v63l/task #34 bug
-   window), this override and computeDerivedUnitStatus (Unit Inventory
-   tab -- derives a unit's Status FROM scope.status) locked together: any
-   one-sided correction (unit Status alone, or Scope Status alone) got
-   silently reverted the next time either function ran. Fixed: the
-   override now only fires when Milestones aren't actively contradicting
-   it -- no real Milestone data yet (the original v37d onboarding case),
-   or Milestones themselves already justify Complete. Real, tracked
-   Milestones that disagree now win, matching the same principle already
-   applied to fastTrackedComplete/On Hold in this same function.
-
-2. getMilestoneCategoryForScope's first line returned 'Complete'
-   immediately whenever scope.status already read Complete, without ever
-   checking real Milestone completion. This function is what the
-   read-only drift-check banner (Scope Card, "Status says X but
-   milestones show Y") calls to get an independent read -- so this
-   shortcut is why the banner never fired for PE6 & PE7 even while Status
-   sat wrong. Removed outright; the complete>=expectedTotal check just
-   below is the honest test and already covers both legitimate Complete
-   cases the shortcut also caught (verified against Casa Marina's
-   "Completed Project" scope, the real backfilled-complete case this
-   shortcut existed for -- no regression).
-
-Portfolio-wide data sweep (all 86 Scopes, cross-referenced against linked
-Unit Inventory statuses) found PE6 & PE7 as the only scope with this
-corrupted signature; the fix corrected its Scope Status (Construction)
-and both units' Status (Active) directly in Airtable, written in the
-order that survives the (now-fixed) derivation logic.
--->
-
-<!--
-pulse_v68e. Changes from v68d, this round. No worker changes required --
-still paired with worker_v45a_build.mjs, unchanged. Entirely client-side.
+2. No way to edit an existing Action Item -- only Close, so a due date
+(or Owner/Priority/Property/the linked Project) couldn't be changed once
+created, per Misty's direct report ("I need a way to edit action items if
+I want to move the date") and a follow-up clarification that she wants to
+be able to reassign the Project, not just the Property. openActionItemModal()
+now takes an optional editId and reuses the exact same Add Action Item
+form in an edit mode: title/button text swap to Edit Action Item/Save
+Changes, every field pre-fills from the existing item, and -- since Misty
+specifically wants Property/Project reassignable, not just the date --
+edit mode always renders Property as the same dropdown+Linked Project
+picker the global "+ Action" entry point already used, even when opened
+from inside a specific property's own page. saveActionItem() branches on
+editId: edit path atUpdate()s only Property Name/Description/Owner/Due
+Date/Priority/Linked Scope, deliberately leaving Status/Closed Date alone
+so a date edit can never accidentally reopen or close an item -- closeAction()
+remains the only path that touches Status. Edit button (pencil icon,
+opens the same modal) added next to Close everywhere Close already
+rendered for an open action item: the property tab's Open Action Items
+panel (renderPropMeetings) and the all-properties Open Actions list
+(renderAllMeetings). Along the way, removed a second, drifting hand-built
+copy of the action-item-row markup that lived inline inside
+saveActionItem()'s own post-create refresh (never got a Close button
+styling update applied consistently with the real renderPropMeetings
+version, the exact class of divergence bug this file's history keeps
+calling out) -- it now just calls renderPropMeetings() like every other
+refresh path does.
 
 Added an Orientation Tour Budget Outlook step for PM and expanded Client's
 existing one, per Misty's direct request ("Let's add Budget Outlook for PM
@@ -12164,31 +12166,7 @@ async function deriveAndWriteScopeStatus(scopeId,opts){
   // v37d — Units-Complete override takes priority over whatever Milestones
   // alone would have derived, since real completed-unit data is more
   // trustworthy than an untouched Milestones list for pre-existing work.
-  // v68f — CRITICAL fix, live bug confirmed on Casa Marina Key West's
-  // "PE6 & PE7" scope. This override previously fired unconditionally
-  // whenever every linked unit's Status field read Complete, with zero
-  // regard for what Milestones actively say — including when Milestones
-  // ARE being tracked and show real, contradicting progress (M1-M9
-  // Complete, M10 In Progress, M11-M14 Not Started, yet both units'
-  // Status had gone stale at Complete). Confirmed live: this scope's
-  // Overview card showed 100%/Complete while its own Milestones tab
-  // showed 9 of 14. Worse, this override and computeDerivedUnitStatus()
-  // (Unit Inventory tab — derives a unit's Status FROM scope.status
-  // whenever scope.status is anything other than Capital Plan/Complete)
-  // read from each other with no independent tiebreaker: once both sides
-  // land on Complete by any path — this scope's case traced back to the
-  // v63l/task #34 bug window — they lock together permanently, and a
-  // direct one-sided data correction (unit Status alone) gets silently
-  // reverted the next time this function runs and re-cascades the stale
-  // scope Status back down. Fix: only trust allUnitsComplete when
-  // Milestones aren't actively contradicting it — i.e. when there's no
-  // real Milestone data yet (the original v37d onboarding case this
-  // override exists for) or when Milestones themselves already justify
-  // Complete (newStatus, computed just above from real milestone data,
-  // already says so). When real, tracked Milestones say otherwise, they
-  // win — matching the same "real tracked progress outranks a shortcut"
-  // principle already applied to fastTrackedComplete/On Hold above.
-  if(allUnitsComplete&&(msData.length===0||newStatus==='Complete'))newStatus='Complete';
+  if(allUnitsComplete)newStatus='Complete';
   const statusChanged=scope.status!==newStatus;
   if(statusChanged){
     // v37g — Status Changed Date, stamped alongside every real status
@@ -14659,19 +14637,31 @@ function openMeetingPanel(){
   document.getElementById('meeting-panel').classList.add('open');
   document.getElementById('delete-draft-btn').style.display='none';
 }
-function openActionItemModal(propName){
+// v68f — editId param added. Editing reuses this same modal (per Misty's
+// direct request: "I need a way to edit action items if I want to move
+// the date") rather than a separate lighter-weight editor, so Owner/
+// Priority/Property/Linked Project all stay editable too, not just the
+// date -- Misty specifically wanted to be able to reassign the Project,
+// not only the Property. Edit mode always renders the Property field as
+// the same dropdown the global "+ Action" entry point uses (isGlobal
+// forced true whenever editId is set), even when opened from inside a
+// property's own page, so an existing action item can be moved to a
+// different property/project, not just have its date nudged.
+function openActionItemModal(propName,editId){
   const port=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).filter(p=>p.st!=='Removed');
-  const isGlobal=!propName;
+  const editItem=editId?(actionItems||[]).find(x=>x.id===editId):null;
+  const isGlobal=!propName||!!editItem;
   const overlay=document.createElement('div');
   overlay.id='action-item-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:540px;box-shadow:var(--shadow-md)">
     <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:14px;font-weight:700;color:var(--navy)">Add Action Item</div>
+      <div style="font-size:14px;font-weight:700;color:var(--navy)">${editItem?'Edit Action Item':'Add Action Item'}</div>
       <button onclick="document.getElementById('action-item-overlay').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--gray-mid);line-height:1">×</button>
     </div>
     <div style="padding:20px">
       <div style="font-size:11px;font-weight:700;color:var(--blue-dark);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;margin-top:4px">Action Details</div>
+      <input type="hidden" id="ai-edit-id" value="${editId||''}">
       ${isGlobal?`<div class="form-group"><label class="form-label">Property</label>
         <select class="form-select" id="ai-property" onchange="populateAiScopes()">
           <option value="">Select property…</option>
@@ -14692,16 +14682,32 @@ function openActionItemModal(propName){
     </div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
       <button class="btn" onclick="document.getElementById('action-item-overlay').remove()">Cancel</button>
-      <button class="btn btn-primary" id="save-action-item-btn" onclick="saveActionItem()"><i class="ti ti-check"></i>Finish &amp; Save</button>
+      <button class="btn btn-primary" id="save-action-item-btn" onclick="saveActionItem()"><i class="ti ti-check"></i>${editItem?'Save Changes':'Finish &amp; Save'}</button>
     </div>
   </div>`;
   document.body.appendChild(overlay);
-  // Set default due date to 2 weeks from now
-  const due=new Date();due.setDate(due.getDate()+14);
-  const el=document.getElementById('ai-due');
-  if(el)el.value=due.toISOString().split('T')[0];
-  // Pre-populate scope if property-specific modal
-  if(propName)populateAiScopes(propName);
+  if(editItem){
+    const propSel=document.getElementById('ai-property');
+    if(propSel)propSel.value=editItem.property||'';
+    populateAiScopes(editItem.property);
+    const scopeSel=document.getElementById('ai-scope');
+    if(scopeSel)scopeSel.value=editItem.scopeId||'';
+    const descEl=document.getElementById('ai-description');
+    if(descEl)descEl.value=editItem.description||'';
+    const ownerEl=document.getElementById('ai-owner');
+    if(ownerEl)ownerEl.value=editItem.owner||'';
+    const prioEl=document.getElementById('ai-priority');
+    if(prioEl)prioEl.value=editItem.priority||'Medium';
+    const dueEl=document.getElementById('ai-due');
+    if(dueEl)dueEl.value=editItem.due||'';
+  }else{
+    // Set default due date to 2 weeks from now
+    const due=new Date();due.setDate(due.getDate()+14);
+    const el=document.getElementById('ai-due');
+    if(el)el.value=due.toISOString().split('T')[0];
+    // Pre-populate scope if property-specific modal
+    if(propName)populateAiScopes(propName);
+  }
 }
 function populateAiScopes(propNameOverride){
   const propName=propNameOverride||document.getElementById('ai-property')?.value;
@@ -14793,6 +14799,7 @@ async function notifyActionItemOwner(ownerName,description,propName,due,priority
 let _savingActionItem=false;
 async function saveActionItem(){
   if(_savingActionItem)return;
+  const editId=document.getElementById('ai-edit-id')?.value||'';
   const propEl=document.getElementById('ai-property');
   const property=propEl?.value||'';
   const description=document.getElementById('ai-description')?.value.trim()||'';
@@ -14802,8 +14809,6 @@ async function saveActionItem(){
   if(!property){showToast('Please select a property','warn');return;}
   if(!description){showToast('Please enter a description','warn');return;}
   const aiScopeId=document.getElementById('ai-scope')?.value||'';
-  const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Status':'Open'};
-  if(aiScopeId)fields['Linked Scope']=[aiScopeId];
   // v54c — this form had no double-submit guard; a fast double-click on
   // "Finish & Save" could create two identical Action Items in Airtable.
   // Guard only needs to cover from here down (the validation above is a
@@ -14812,6 +14817,36 @@ async function saveActionItem(){
   _savingActionItem=true;
   const saveBtn=document.getElementById('save-action-item-btn');
   if(saveBtn)saveBtn.disabled=true;
+  if(editId){
+    // v68f — Edit Action Item, reusing this same form in edit mode. Status
+    // and Closed Date are deliberately left out of this payload — closeAction()
+    // remains the only thing that changes Status, so moving a due date (or
+    // reassigning Owner/Priority/Property/Linked Project) can never
+    // accidentally reopen or close an item. 'Linked Scope' is sent as an
+    // explicit [] when cleared, not omitted — omitting a link field on PATCH
+    // leaves Airtable's existing value untouched, unlike create where
+    // omitting it is correct because there's nothing to clear yet.
+    const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Linked Scope':aiScopeId?[aiScopeId]:[]};
+    const res=demoMode?null:await atUpdate('Action Items',editId,fields);
+    if(!demoMode&&!res?.id){
+      showToast('Could not save changes to Airtable. Check your connection and try again.','error');
+      _savingActionItem=false;
+      if(saveBtn)saveBtn.disabled=false;
+      return;
+    }
+    const existing=actionItems.find(x=>x.id===editId);
+    if(existing)Object.assign(existing,{property,description,owner,due,priority,scopeId:aiScopeId||''});
+    document.getElementById('action-item-overlay')?.remove();
+    refreshDashActions();
+    if(currentProp)renderPropMeetings(currentProp);
+    if(document.getElementById('all-actions-list'))renderAllMeetings();
+    showToast('Action item updated','success');
+    _savingActionItem=false;
+    if(saveBtn)saveBtn.disabled=false;
+    return;
+  }
+  const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Status':'Open'};
+  if(aiScopeId)fields['Linked Scope']=[aiScopeId];
   const res=demoMode?null:await atCreate('Action Items',fields);
   if(res?.error){console.error('saveActionItem Airtable error:',res);}
   // v51j — this form used to push a fabricated local action item and show
@@ -14829,23 +14864,13 @@ async function saveActionItem(){
   notifyActionItemOwner(owner,description,property,due,priority);
   document.getElementById('action-item-overlay')?.remove();
   refreshDashActions();
-  if(currentProp&&currentProp.n===property){
-    renderPropMeetings(currentProp);
-    // Also refresh Overview action list
-    const openAIs=actionItems.filter(a=>a.property===currentProp.n&&a.status==='Open');
-    const aList=document.getElementById('prop-actions-list');
-    if(aList)aList.innerHTML=openAIs.length===0?
-      `<div class="empty-state" style="padding:1.5rem"><i class="ti ti-circle-check"></i><div class="empty-state-title">No Open Actions</div></div>`:
-      openAIs.map(a=>`<div class="action-item-row">
-      <div class="action-dot dot-open"></div>
-      <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · <span class="badge b-${(a.priority||'medium').toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
-      ${role==='pm'?`<button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>`:''}
-    </div>`).join('');
-    const countEl=document.getElementById('prop-action-count');
-    if(countEl)countEl.textContent=`${openAIs.length} open`;
-    const miniVal=document.querySelector('.prop-mini-card:nth-child(4) .prop-mini-val');
-    if(miniVal)miniVal.textContent=openAIs.length;
-  }
+  // v68f — this used to hand-rebuild #prop-actions-list's markup inline
+  // (a second, drifting copy of renderPropMeetings' own action-row markup —
+  // it never got the Edit button added below, since that's the exact class
+  // of divergence this file's history keeps calling out). Now just defers
+  // to renderPropMeetings, the single real render for this list.
+  if(currentProp&&currentProp.n===property)renderPropMeetings(currentProp);
+  if(document.getElementById('all-actions-list'))renderAllMeetings();
   showToast('Action item added','success');
   _savingActionItem=false;
   if(saveBtn)saveBtn.disabled=false;
@@ -15311,7 +15336,7 @@ function renderPropMeetings(p){
       return `<div class="action-item-row">
         <div class="action-dot dot-open"></div>
         <div class="action-desc"><strong>${escHtml(a.description)}</strong>${scopeTag}<br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · <span class="badge b-${a.priority.toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
-        ${role==='pm'||role==='admin'||role==='consultant'?`<button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>`:''}
+        ${role==='pm'||role==='admin'||role==='consultant'?`<button class="btn btn-icon" onclick="openActionItemModal('${(a.property||'').replace(/'/g,"\\'")}','${a.id}')" title="Edit action item"><i class="ti ti-pencil" style="font-size:14px"></i></button><button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>`:''}
       </div>`;
     }).join('');
   // Re-apply action button visibility after every render
@@ -15610,6 +15635,7 @@ function renderAllMeetings(){
     openAI.map(a=>`<div class="action-item-row">
       <div class="action-dot dot-open"></div>
       <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">${escHtml(a.property)} · ${escHtml(a.owner)} · Due: ${a.due}</span></div>
+      <button class="btn btn-icon" onclick="openActionItemModal('${(a.property||'').replace(/'/g,"\\'")}','${a.id}')" title="Edit action item"><i class="ti ti-pencil" style="font-size:14px"></i></button>
       <button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>
     </div>`).join('');
   const loadingEl=document.getElementById('schedule-loading');
@@ -24640,29 +24666,7 @@ function isBackfilledComplete(scope,msData){
 }
 function getMilestoneCategoryForScope(scope){
   if(!scope)return'Pre-Construction';
-  // v68f — CRITICAL fix. This early return trusted scope.status==='Complete'
-  // as proof of Complete, without ever checking real Milestone completion —
-  // meaning a scope whose Status field went stale/wrong at Complete (see the
-  // v68f fix on deriveAndWriteScopeStatus's allUnitsComplete override, same
-  // root cause) had that wrong value silently confirmed right back by this
-  // function, every time it was called. That includes the read-only drift-
-  // check banner (Scope Card render, "Status says X but milestones show Y"),
-  // which calls this function specifically to get an INDEPENDENT read on
-  // what Milestones justify — so this shortcut is why the drift banner
-  // never fired for Casa Marina Key West's "PE6 & PE7" scope even while its
-  // Status sat wrong at Complete with only 9 of 14 real milestones done.
-  // Removed outright rather than reworked: the complete>=expectedTotal check
-  // three lines below is the real, honest test, and already covers both
-  // legitimate Complete cases this shortcut also caught — genuinely all-14-
-  // complete scopes, and backfilled/bulk-imported ones (isBackfilledComplete,
-  // just above) where every Milestone's own Status field says Complete even
-  // with no dates behind them, since that check counts each MILESTONE's own
-  // Status, not the Scope's. Verified against Casa Marina's "Completed
-  // Project" scope (the real backfilled case this shortcut existed for):
-  // all 14 Milestone records read Status=Complete, so complete>=expectedTotal
-  // is still true and this still correctly returns 'Complete' via the honest
-  // path — no regression, just no more free pass for a Status that hasn't
-  // earned it.
+  if(scope.status==='Complete')return'Complete';
   const ms=getMilestonesForProp(scope.property,scope.id);
   const complete=ms.filter(m=>m.status==='Complete').length;
   const expectedTotal=MILESTONES_DEF.length;
