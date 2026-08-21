@@ -1,9 +1,41 @@
 <!--
-pulse_v68h. Changes from v68g, this round. No worker code changes required
--- still paired with worker_v45d_build.mjs, version-bumped only to keep
-pace per standing convention (both fixes below are entirely client-side).
+pulse_v68i. Changes from v68h, this round. No worker code changes required
+-- still paired with worker_v45e_build.mjs, version-bumped only to keep
+pace per standing convention (this round's addition is entirely
+client-side, reusing the already-allowed 'PM Updates' table/fields).
 
-Two real fixes, both from Misty's live bug report (screenshots):
+Added a property-level PM Update, per Misty's direct request ("under the
+PM profile I want to be able to submit a property level PM update, under
+the 'Field Update' section of the property... it would just be a button").
+Confirmed the exact shape before building: a "+ PM Update" button (role
+gated to admin/pm/consultant via the existing pmuCanAuthor(), same as the
+standalone PM Updates page) on the property page's Field Updates tab,
+opening a slide-in panel styled like the app's existing Edit Property /
+Configure Project panels (translateX slide-out + dimmed overlay) rather
+than a modal, per Misty's explicit request for "a slider." The panel is a
+deliberate near-duplicate of the standalone PM Updates page's composer
+(new ppmu- prefixed IDs and a new ppmuCreate() function, confirmed with
+Misty as the preferred approach over a shared refactor, to keep zero
+regression risk to the already-working standalone page this round) --
+same Project/phase/status/comment-type fields, same flag-a-follow-up-
+action block, same Save Draft/Publish to Client actions, but with no
+property picker (fixed to whichever property page it was opened from) and
+the Project Phase field driven by the same locked PMU_PHASE_MAP added in
+v68h. Confirmed with Misty that posting from this panel should also show
+up in that Field Updates tab's own feed: renderPropUpdates() now merges
+window.PM_UPDATES for the current property into the existing consultant
+Field Update submissions list, sorted by date, each PM Update card
+carrying a distinct "PM Update" badge so the two are never visually
+confused. Same Published-only visibility rule for the client role that
+the standalone PM Updates feed already uses. See openPropPMUpdatePanel()/
+closePropPMUpdatePanel()/onPpmuScopeChange()/ppmuCreate(), all placed
+directly after the standalone composer's pmuCreate()/saveDraftPMUpdate()/
+publishNewPMUpdate() for locality.
+
+---
+
+pulse_v68h (folded in below, unchanged) -- changes from v68g. Two real
+fixes, both from Misty's live bug report (screenshots):
 
 1. Hilton Denver City Center's SE14/SE15/SE16 project card claimed "All
 milestones complete" while the Milestones tab genuinely showed M14 still
@@ -36,7 +68,7 @@ the separate Edit PM Update modal (pmue- prefixed) was confirmed as a
 distinct field set and deliberately left untouched, since Misty's request
 was specifically about "when I submit a new update."
 
-Also per Misty's report this round: the v68g file's internal build badge
+Also per Misty's report that round: the v68g file's internal build badge
 was still showing v68f live even though the delivered file (confirmed via
 its raw GitHub content matching exactly) had v68g hardcoded and the
 Delete VDA Project code in it. That's a deploy/publish-side issue, not
@@ -6448,6 +6480,63 @@ property as a whole. -->
   </div>
 </div>
 
+<!-- v68i — PROPERTY-SCOPED PM UPDATE PANEL. Per Misty's direct request:
+"under the PM profile I want to be able to submit a property level PM
+update, under the Field Update section of the property" -- confirmed as a
+button (+ PM Update) on the property page's Field Updates tab that opens
+this slide-in panel, mirroring the composer on the standalone PM Updates
+nav page but scoped to the current property (no property picker -- the
+property is fixed to whichever property page you're on). Deliberately a
+near-duplicate of #pmu-composer/pmuCreate() rather than a shared refactor
+of that code -- Misty's explicit choice, to keep zero regression risk to
+the already-working standalone PM Updates page this round. All element
+IDs here use the ppmu- prefix (vs. pmu- on the standalone page) so both
+composers can exist in the DOM at the same time without collision. Same
+slide-out mechanism as Edit Property above (translateX panel + dimmed
+overlay). See openPropPMUpdatePanel()/closePropPMUpdatePanel()/
+ppmuCreate() near renderPropUpdates(). Per Misty's explicit confirmation,
+posting from here also shows up in this tab's own Field Update History
+feed (merged with consultant Field Update submissions, labeled distinctly
+so the two aren't confused) -- see renderPropUpdates(). -->
+<div id="ppmu-overlay" onclick="closePropPMUpdatePanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="ppmu-panel" style="display:none;position:fixed;top:0;right:0;width:640px;max-width:95vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div><div style="font-size:16px;font-weight:700;color:#85B7EB">New PM Update</div><div id="ppmu-property-label" style="font-size:12px;color:#5C89B8;margin-top:2px"></div></div>
+    <button onclick="closePropPMUpdatePanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px">
+    <div class="form-group"><label class="form-label">Project (optional)</label><select class="form-select" id="ppmu-scope" onchange="onPpmuScopeChange()"><option value="">All Projects</option></select>
+      <div id="ppmu-scope-vdanum" style="font-size:11px;color:var(--gray-mid);margin-top:4px;display:none"><i class="ti ti-hash" style="font-size:11px"></i> <span id="ppmu-scope-vdanum-text"></span></div>
+    </div>
+    <div id="ppmu-structured-fields" style="display:none">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Project phase</label><input class="form-input" type="text" id="ppmu-phase-display" readonly style="background:var(--gray-pale);color:var(--gray-mid)"><input type="hidden" id="ppmu-phase" value=""></div>
+        <div class="form-group"><label class="form-label">Progress status</label><select class="form-select" id="ppmu-status"><option>Not Started</option><option selected>In Progress</option><option>Complete</option></select></div>
+      </div>
+      <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="ppmu-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
+    </div>
+    <div class="form-group"><label class="form-label">Update</label><textarea class="form-input" id="ppmu-text" rows="4" placeholder="What's the latest on this property?"></textarea></div>
+    <div class="form-group" style="margin-top:8px;padding-top:12px;border-top:1px solid var(--border)">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:var(--navy)">
+        <input type="checkbox" id="ppmu-draft-action-toggle" onchange="document.getElementById('ppmu-draft-action-fields').style.display=this.checked?'block':'none'">
+        Flag a follow-up action for review
+      </label>
+      <div id="ppmu-draft-action-fields" style="display:none;margin-top:10px">
+        <div class="form-group"><label class="form-label">Description</label><input class="form-input" type="text" id="ppmu-draft-action-desc" placeholder="e.g. Schedule punch list walkthrough"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Owner</label><input class="form-input" type="text" id="ppmu-draft-action-owner" placeholder="e.g. Sarah Chen"></div>
+          <div class="form-group"><label class="form-label">Priority</label><select class="form-select" id="ppmu-draft-action-priority"><option>Low</option><option selected>Medium</option><option>High</option></select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Due date</label><input class="form-input" type="date" id="ppmu-draft-action-due"></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn" id="ppmu-save-draft-btn" onclick="ppmuCreate('Draft')"><i class="ti ti-device-floppy"></i>Save Draft</button>
+      <button class="btn btn-primary" id="ppmu-publish-btn" onclick="ppmuCreate('Published')"><i class="ti ti-send"></i>Publish to Client</button>
+    </div>
+  </div>
+</div>
+
 <!-- v47a — CONFIGURE VDA PROJECT PANEL (create-only). Same slide-out
 mechanism as Edit Property above (translateX panel + dimmed overlay). -->
 <div id="cvp-overlay" onclick="closeConfigureVdaPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
@@ -6940,7 +7029,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68h</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68i</div>
     </div>
   </nav>
 
@@ -7694,7 +7783,7 @@ from unitEffectiveValue() onto each checkbox). -->
             </div>
           </div>
           <div id="prop-tab-updates" class="tab-content">
-            <div class="card"><div class="card-header"><div class="card-title">Field Update History</div><div style="display:flex;align-items:center;gap:8px"><span id="prop-update-count" class="badge b-cip">0 updates</span><button class="btn btn-add" id="prop-fieldupdate-inline-btn" onclick="gotoView('submit',null)" style="font-size:12px">+ <i class="ti ti-file-plus"></i>Field Update</button></div></div><div id="prop-updates-list"><div class="empty-state"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates yet</div></div></div></div>
+            <div class="card"><div class="card-header"><div class="card-title">Field Update History</div><div style="display:flex;align-items:center;gap:8px"><span id="prop-update-count" class="badge b-cip">0 updates</span><button class="btn btn-add" id="prop-pmupdate-inline-btn" onclick="openPropPMUpdatePanel()" style="font-size:12px;display:none">+ <i class="ti ti-broadcast"></i>PM Update</button><button class="btn btn-add" id="prop-fieldupdate-inline-btn" onclick="gotoView('submit',null)" style="font-size:12px">+ <i class="ti ti-file-plus"></i>Field Update</button></div></div><div id="prop-updates-list"><div class="empty-state"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates yet</div></div></div></div>
           </div>
           <div id="prop-tab-docs" class="tab-content">
             <div id="prop-single-folder"></div>
@@ -35790,13 +35879,45 @@ function previewFieldUpdateCard(subId){
 }
 
 function renderPropUpdates(p){
+  const pmuBtn=document.getElementById('prop-pmupdate-inline-btn');
+  if(pmuBtn)pmuBtn.style.display=pmuCanAuthor()?'':'none';
   const propUpdates=submissions.filter(s=>s.property===p.n);
-  document.getElementById('prop-update-count').textContent=propUpdates.length+' update'+(propUpdates.length!==1?'s':'');
-  const visible=role==='client'?propUpdates.filter(s=>s.reviewStatus==='approved'):propUpdates;
+  // v68i — PM Updates posted against this property (either from the new
+  // property-panel composer or the standalone PM Updates page) are merged
+  // into this same feed, per Misty's explicit confirmation. Client role
+  // only ever sees Published PM Updates, same visibility rule the
+  // standalone PM Updates page's feed already uses (renderPMUpdates()) --
+  // Draft items are internal-only by definition. Each merged entry carries
+  // _kind so the card template below can render it distinctly and never
+  // be confused with a consultant Field Update submission.
+  const propPmUpdates=(window.PM_UPDATES||[]).filter(u=>u.property===p.n&&(role!=='client'||u.status==='Published'));
+  const total=propUpdates.length+propPmUpdates.length;
+  document.getElementById('prop-update-count').textContent=total+' update'+(total!==1?'s':'');
+  const visibleFieldUpdates=(role==='client'?propUpdates.filter(s=>s.reviewStatus==='approved'):propUpdates)
+    .map(s=>({_kind:'field',_date:s.submittedAt||'',s}));
+  const visiblePmUpdates=propPmUpdates.map(u=>({_kind:'pmu',_date:(u.status==='Published'&&u.published)?u.published:u.created,u}));
+  const merged=visibleFieldUpdates.concat(visiblePmUpdates).sort((a,b)=>(a._date||'').localeCompare(b._date||''));
   const el=document.getElementById('prop-updates-list');if(!el)return;
-  if(visible.length===0){el.innerHTML=`<div class="empty-state" style="padding:1.5rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates yet</div></div>`;return;}
+  if(merged.length===0){el.innerHTML=`<div class="empty-state" style="padding:1.5rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates yet</div></div>`;return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
-  el.innerHTML=visible.slice().reverse().map(s=>`<div class="update-card">
+  el.innerHTML=merged.slice().reverse().map(item=>{
+    if(item._kind==='pmu'){
+      const u=item.u;
+      const scope=(window.SCOPES||[]).find(sc=>sc.id===u.scopeId);
+      const scopeLabel=escHtml(scope?scope.name||'Project':'');
+      const dateFmt=item._date?new Date(item._date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+      const statusBadge=u.status==='Published'?'<span class="badge b-approved">Published</span>':'<span class="badge b-pending">Draft</span>';
+      return `<div class="update-card">
+        <div class="update-card-header">
+          <div class="update-card-title"><span class="badge b-nac" style="margin-right:6px"><i class="ti ti-broadcast" style="font-size:11px"></i> PM Update</span>${scopeLabel||'All Projects'}</div>
+          ${statusBadge}
+        </div>
+        <div class="update-card-meta">${escHtml(u.author||'PULSE Team')} · ${dateFmt}</div>
+        <div class="update-card-body">${escHtml(u.text)}</div>
+      </div>`;
+    }
+    const s=item.s;
+    return `<div class="update-card">
     <div class="update-card-header">
       <div class="update-card-title">Week of ${s.week} · ${escHtml(s.units)}</div>
       <div style="display:flex;align-items:center;gap:6px">
@@ -35808,7 +35929,8 @@ function renderPropUpdates(p){
     <div class="update-card-meta">${escHtml(s.phase)} · ${escHtml(s.status)} · ${s.submittedAt}</div>
     <div class="update-card-body">${escHtml(s.notes)}</div>
     <div class="update-card-tags"><span class="badge b-nac">${escHtml(s.commentType)}</span><span class="badge b-nac">${escHtml(s.issueStatus)}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
-  </div>`).join('');
+  </div>`;
+  }).join('');
 }
 
 // QUEUE
@@ -37700,6 +37822,167 @@ async function pmuCreate(status){
 }
 function saveDraftPMUpdate(){pmuCreate('Draft');}
 function publishNewPMUpdate(){pmuCreate('Published');}
+
+// v68i — property-scoped PM Update composer (slide-in panel on the
+// property page's Field Updates tab). Deliberate near-duplicate of
+// pmuPopulateScopes/onPmuScopeChange/pmuCreate above rather than a shared
+// refactor -- Misty's explicit choice this round, to keep zero regression
+// risk to the already-working standalone PM Updates page. Property is
+// fixed to currentProp (no picker -- see openPropPMUpdatePanel()), so
+// there's no ppmu-property select to populate here, unlike pmuPopulateScopes.
+function openPropPMUpdatePanel(){
+  const p=currentProp;if(!p)return;
+  const panel=document.getElementById('ppmu-panel');
+  const overlay=document.getElementById('ppmu-overlay');
+  if(!panel||!overlay)return;
+  document.getElementById('ppmu-property-label').textContent=p.n;
+  const scopeSel=document.getElementById('ppmu-scope');
+  const scopes=(window.SCOPES||[]).filter(s=>s.property===p.n);
+  scopeSel.innerHTML='<option value="">All Projects</option>'+
+    scopes.map(s=>`<option value="${s.id}">${(s.name||'Project').replace(/</g,'&lt;')}</option>`).join('');
+  document.getElementById('ppmu-text').value='';
+  document.getElementById('ppmu-draft-action-toggle').checked=false;
+  document.getElementById('ppmu-draft-action-fields').style.display='none';
+  ['ppmu-draft-action-desc','ppmu-draft-action-owner','ppmu-draft-action-due'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('ppmu-draft-action-priority').value='Medium';
+  onPpmuScopeChange();
+  overlay.style.display='block';
+  panel.style.display='block';
+  requestAnimationFrame(()=>{panel.style.transform='translateX(0)';});
+}
+function closePropPMUpdatePanel(){
+  const panel=document.getElementById('ppmu-panel');
+  const overlay=document.getElementById('ppmu-overlay');
+  if(!panel||!overlay)return;
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{
+    panel.style.display='none';
+    overlay.style.display='none';
+  },300);
+}
+function onPpmuScopeChange(){
+  const scopeSel=document.getElementById('ppmu-scope');
+  const scopeId=scopeSel?.value||'';
+  const scope=scopeId?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  const structuredFields=document.getElementById('ppmu-structured-fields');
+  const vdaWrap=document.getElementById('ppmu-scope-vdanum');
+  const vdaText=document.getElementById('ppmu-scope-vdanum-text');
+  if(structuredFields)structuredFields.style.display=scope?'block':'none';
+  if(vdaWrap&&vdaText){
+    if(scope){
+      vdaText.textContent=`VDA Project #${scope.vdaNum||'—'}`;
+      vdaWrap.style.display='block';
+    }else{
+      vdaWrap.style.display='none';
+    }
+  }
+  const phaseHidden=document.getElementById('ppmu-phase');
+  const phaseDisplay=document.getElementById('ppmu-phase-display');
+  if(phaseHidden&&phaseDisplay){
+    const mappedPhase=scope?(PMU_PHASE_MAP[scope.status]||'Pre-Construction'):'';
+    phaseHidden.value=mappedPhase;
+    phaseDisplay.value=mappedPhase;
+  }
+}
+let _savingPpmuCreate=false;
+async function ppmuCreate(status){
+  if(_savingPpmuCreate)return;
+  const p=currentProp;if(!p)return;
+  const propName=p.n;
+  const scopeId=document.getElementById('ppmu-scope')?.value||'';
+  const text=document.getElementById('ppmu-text')?.value.trim();
+  if(!text){showToast('Enter an update','warn');return;}
+  const hasProject=!!scopeId;
+  const scope=hasProject?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  const appliesToWholeProject=hasProject;
+  const linkedUnitIds=[];
+  const units=hasProject?'All':'';
+  const phase=hasProject?document.getElementById('ppmu-phase').value:'';
+  const progressStatus=hasProject?document.getElementById('ppmu-status').value:'';
+  const commentType=hasProject?document.getElementById('ppmu-comment-type').value:'';
+  const hasDraftAction=document.getElementById('ppmu-draft-action-toggle').checked;
+  const draftAction=hasDraftAction?{
+    description:document.getElementById('ppmu-draft-action-desc').value.trim(),
+    owner:document.getElementById('ppmu-draft-action-owner').value.trim(),
+    priority:document.getElementById('ppmu-draft-action-priority').value,
+    due:document.getElementById('ppmu-draft-action-due').value,
+  }:null;
+  if(hasDraftAction&&!draftAction.description){showToast('Please enter a description for the follow-up action, or uncheck the flag','warn');return;}
+  const authorName=role==='consultant'?(currentConsultantName||'Consultant'):(window._userName||'PM User');
+  const todayStr=new Date().toISOString().split('T')[0];
+  const fields={
+    'Property Name':propertyNameToLink(propName),
+    'Author':authorName,
+    'Update Text':text,
+    'Status':status,
+    'Created Date':todayStr,
+  };
+  if(scopeId)fields['Linked Scope']=[scopeId];
+  if(status==='Published')fields['Published Date']=todayStr;
+  if(hasProject){
+    fields['Units Updated']=units;
+    fields['Project Phase']=phase;
+    fields['Progress Status']=progressStatus;
+    fields['Comment Type']=commentType;
+    fields['Applies to Whole Project']=appliesToWholeProject;
+  }
+  if(hasDraftAction){
+    fields['Draft Action Description']=draftAction.description;
+    fields['Draft Action Owner']=draftAction.owner||null;
+    fields['Draft Action Priority']=draftAction.priority;
+    fields['Draft Action Due']=draftAction.due||null;
+  }
+  _savingPpmuCreate=true;
+  const draftBtn=document.getElementById('ppmu-save-draft-btn');
+  const publishBtn=document.getElementById('ppmu-publish-btn');
+  if(draftBtn)draftBtn.disabled=true;
+  if(publishBtn)publishBtn.disabled=true;
+  const res=await atCreate('PM Updates',fields);
+  if(!res){
+    showToast('Error saving update','error');
+    _savingPpmuCreate=false;
+    if(draftBtn)draftBtn.disabled=false;
+    if(publishBtn)publishBtn.disabled=false;
+    return;
+  }
+  const newId=res.records?.[0]?.id||res.id;
+  window.PM_UPDATES=window.PM_UPDATES||[];
+  const newUpdate={
+    id:newId,property:propName,scopeId,author:authorName,text,status,
+    created:todayStr,published:status==='Published'?todayStr:'',
+    units,phase,progressStatus,commentType,appliesToWholeProject,linkedUnitIds,
+  };
+  window.PM_UPDATES.unshift(newUpdate);
+  let draftActionSaveFailed=false;
+  if(status==='Published'){
+    await archivePMUpdateToDocuments(newUpdate);
+    if(hasDraftAction){
+      const aiFields={'Property Name':propertyNameToLink(propName),'Description':draftAction.description,'Owner':draftAction.owner||'','Due Date':draftAction.due||null,'Priority':draftAction.priority||'Medium','Status':'Open'};
+      if(scopeId)aiFields['Linked Scope']=[scopeId];
+      const aiRes=await atCreate('Action Items',aiFields);
+      if(!aiRes?.records?.[0]?.id){
+        draftActionSaveFailed=true;
+        console.error('ppmuCreate: follow-up Action Item failed to save',draftAction);
+      }else{
+        const aiId=aiRes.records[0].id;
+        actionItems.push({id:aiId,property:propName,description:draftAction.description,owner:draftAction.owner||'',due:draftAction.due||'TBD',priority:draftAction.priority||'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
+        if(draftAction.owner)notifyActionItemOwner(draftAction.owner,draftAction.description,propName,draftAction.due,draftAction.priority);
+        refreshDashActions();
+      }
+    }
+  }
+  if(draftActionSaveFailed){
+    showToast('Update published, but the follow-up action item failed to save. Check your connection and add it manually.','error');
+  }else{
+    showToast(status==='Published'?(hasDraftAction?'Update published, action item created':'Update published'):'Draft saved','success');
+  }
+  closePropPMUpdatePanel();
+  renderPropUpdates(p);
+  if(document.getElementById('pmu-feed'))renderPMUpdates();
+  _savingPpmuCreate=false;
+  if(draftBtn)draftBtn.disabled=false;
+  if(publishBtn)publishBtn.disabled=false;
+}
 async function publishPMUpdate(id){
   const u=(window.PM_UPDATES||[]).find(x=>x.id===id);
   if(!u)return;
