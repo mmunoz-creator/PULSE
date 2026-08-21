@@ -1,10 +1,54 @@
 <!--
-pulse_v68i. Changes from v68h, this round. No worker code changes required
--- still paired with worker_v45e_build.mjs, version-bumped only to keep
-pace per standing convention (this round's addition is entirely
-client-side, reusing the already-allowed 'PM Updates' table/fields).
+pulse_v68j. Changes from v68i, this round. No worker code changes required
+-- still paired with worker_v45f_build.mjs, version-bumped only to keep
+pace per standing convention (both fixes below are purely client-side
+rendering/filtering changes, no new or changed Airtable writes).
 
-Added a property-level PM Update, per Misty's direct request ("under the
+Two fixes, both direct follow-ups to v68i's property-level PM Update
+feature, from Misty's live screenshot of a property's Field Updates tab:
+
+1. Consultant Field Update cards were showing a blank "Week of ·" heading
+for older records where Airtable's Report Week field was never filled in
+(confirmed as genuinely blank legacy data, not a code bug -- the current
+submit form still writes Report Week on every new submission). Per
+Misty's direct request ("make the Date the heading because it looks silly
+and unnecessary"), the "Week of" phrasing is dropped entirely -- card
+headings are now a plain formatted date, falling back to the Submitted
+date when Report Week is blank (same fallback pattern already used by the
+Activity Feed's fmtWeek at line ~32278). New fmtFieldUpdateDate() helper,
+used by renderPropUpdates()'s Field Update card template. The merged PM
+Update card in that same list already showed a formatted date with no
+"Week of" wording, so it needed no heading change -- only reflowed
+slightly to match the new Field Update card's layout (date first, PM
+Update badge alongside it).
+
+2. That same Field Updates tab could run very long once a property has
+years of history -- Misty asked to "collapse some of this or organize by
+years." Confirmed the shape with her directly: show the 5 most recent
+entries (Field Updates and PM Updates merged, same list from v68i) and
+collapse the rest behind a "Show N more" button, rather than year-grouping
+or a filter dropdown. New _propUpdatesShowAll flag + togglePropUpdatesShowAll(),
+reset to collapsed whenever a different property is opened (openProperty()) --
+it's a per-view convenience, not saved state.
+
+Also per Misty's direct follow-up request: once a PM Update is captured
+permanently on its property's Field Updates tab (v68i), the standalone PM
+Updates page's own feed only needs to show the last 2 weeks of activity --
+confirmed with Misty this is a display filter only, nothing deleted. The
+Airtable record is completely untouched: it stays in window.PM_UPDATES,
+still shows on the property tab forever (no age filter there), and is
+still archived to Documents on publish exactly as before
+(archivePMUpdateToDocuments, unchanged). renderPMUpdates() now filters to
+entries within 14 days of their submitted/published date before rendering
+the feed. Deliberately NOT applied to the Draft-count nav badge
+(updatePMUpdatesBadge()) -- that's a "work still pending" counter, and an
+old unpublished Draft should keep nagging a PM to publish or discard it,
+not silently disappear from the count.
+
+---
+
+pulse_v68i (folded in below, unchanged) -- changes from v68h. Added a
+property-level PM Update, per Misty's direct request ("under the
 PM profile I want to be able to submit a property level PM update, under
 the 'Field Update' section of the property... it would just be a button").
 Confirmed the exact shape before building: a "+ PM Update" button (role
@@ -7029,7 +7073,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68i</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68j</div>
     </div>
   </nav>
 
@@ -9884,6 +9928,10 @@ function openProperty(name){
   const prop=port.find(p=>p.n===name);if(!prop)return;
   console.log('openProperty: id='+prop.id+' name='+prop.n);
   currentProp=prop;
+  // v68j -- "Show more" state on the Field Updates tab's card list is a
+  // per-view convenience, not saved state; reset so a fresh property
+  // always opens collapsed to the most recent 5.
+  _propUpdatesShowAll=false;
   // v42l — remember the open property (viewId 'property' plus its name) so
   // a refresh can restore straight back into this property's detail view
   // instead of landing on Dashboard. See gotoView()'s matching save and
@@ -35878,6 +35926,26 @@ function previewFieldUpdateCard(subId){
   document.body.appendChild(overlay);
 }
 
+// v68j — plain formatted-date heading, shared by renderPropUpdates()'s
+// Field Update cards and anywhere else that needs to turn a raw
+// Report-Week/Submitted-Date ISO string into a display date. Falls back to
+// submittedAt when Report Week is blank (legacy records -- confirmed with
+// Misty these are old submissions with a genuinely blank Report Week
+// field, not a code bug), same fallback already used by the Activity
+// Feed's fmtWeek/feedItems.push at line ~32280. Per Misty's direct
+// request ("make the Date the heading because it looks silly and
+// unnecessary") the "Week of" phrasing is dropped entirely here -- just
+// the formatted date.
+function fmtFieldUpdateDate(s){
+  const raw=s.week||s.submittedAt||'';
+  if(!raw)return '—';
+  try{return new Date(raw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}catch(e){return raw;}
+}
+let _propUpdatesShowAll=false;
+function togglePropUpdatesShowAll(){
+  _propUpdatesShowAll=!_propUpdatesShowAll;
+  if(currentProp)renderPropUpdates(currentProp);
+}
 function renderPropUpdates(p){
   const pmuBtn=document.getElementById('prop-pmupdate-inline-btn');
   if(pmuBtn)pmuBtn.style.display=pmuCanAuthor()?'':'none';
@@ -35900,37 +35968,48 @@ function renderPropUpdates(p){
   const el=document.getElementById('prop-updates-list');if(!el)return;
   if(merged.length===0){el.innerHTML=`<div class="empty-state" style="padding:1.5rem"><i class="ti ti-file-off"></i><div class="empty-state-title">No updates yet</div></div>`;return;}
   const scl={pending:'b-pending',approved:'b-approved',returned:'b-returned'};
-  el.innerHTML=merged.slice().reverse().map(item=>{
+  // v68j — per Misty's direct request ("show recent 5 which and collapse
+  // the rest"): most-recent-first list, only the first 5 rendered by
+  // default, the remainder behind a "Show more" toggle. _propUpdatesShowAll
+  // is reset on tab switch (not persisted across properties) since it's a
+  // per-view convenience, not saved state.
+  const mostRecentFirst=merged.slice().reverse();
+  const shown=_propUpdatesShowAll?mostRecentFirst:mostRecentFirst.slice(0,5);
+  const hiddenCount=mostRecentFirst.length-shown.length;
+  el.innerHTML=shown.map(item=>{
     if(item._kind==='pmu'){
       const u=item.u;
       const scope=(window.SCOPES||[]).find(sc=>sc.id===u.scopeId);
       const scopeLabel=escHtml(scope?scope.name||'Project':'');
-      const dateFmt=item._date?new Date(item._date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+      const dateFmt=item._date?new Date(item._date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
       const statusBadge=u.status==='Published'?'<span class="badge b-approved">Published</span>':'<span class="badge b-pending">Draft</span>';
       return `<div class="update-card">
         <div class="update-card-header">
-          <div class="update-card-title"><span class="badge b-nac" style="margin-right:6px"><i class="ti ti-broadcast" style="font-size:11px"></i> PM Update</span>${scopeLabel||'All Projects'}</div>
+          <div class="update-card-title">${dateFmt}<span class="badge b-nac" style="margin-left:8px"><i class="ti ti-broadcast" style="font-size:11px"></i> PM Update${scopeLabel?' · '+scopeLabel:''}</span></div>
           ${statusBadge}
         </div>
-        <div class="update-card-meta">${escHtml(u.author||'PULSE Team')} · ${dateFmt}</div>
+        <div class="update-card-meta">${escHtml(u.author||'PULSE Team')}</div>
         <div class="update-card-body">${escHtml(u.text)}</div>
       </div>`;
     }
     const s=item.s;
     return `<div class="update-card">
     <div class="update-card-header">
-      <div class="update-card-title">Week of ${s.week} · ${escHtml(s.units)}</div>
+      <div class="update-card-title">${fmtFieldUpdateDate(s)}</div>
       <div style="display:flex;align-items:center;gap:6px">
         <span class="badge ${scl[s.reviewStatus]}">${s.reviewStatus}</span>
         <button class="btn btn-icon" onclick="previewFieldUpdateCard('${s.id}')" title="Preview"><i class="ti ti-eye" style="font-size:14px"></i></button>
         <button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:14px"></i></button>
       </div>
     </div>
-    <div class="update-card-meta">${escHtml(s.phase)} · ${escHtml(s.status)} · ${s.submittedAt}</div>
+    <div class="update-card-meta">${escHtml(s.units)} · ${escHtml(s.phase)} · ${escHtml(s.status)}</div>
     <div class="update-card-body">${escHtml(s.notes)}</div>
     <div class="update-card-tags"><span class="badge b-nac">${escHtml(s.commentType)}</span><span class="badge b-nac">${escHtml(s.issueStatus)}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
   </div>`;
-  }).join('');
+  }).join('')
+  +(mostRecentFirst.length>5?`<div style="text-align:center;margin-top:8px">
+      <button class="btn" onclick="togglePropUpdatesShowAll()">${_propUpdatesShowAll?'Show less':`Show ${hiddenCount} more`}</button>
+    </div>`:'');
 }
 
 // QUEUE
@@ -37516,7 +37595,22 @@ function renderPMUpdates(){
   // Client role only ever sees Published updates -- Draft items are
   // internal-only by definition.
   const all=(window.PM_UPDATES||[]).slice();
-  const visible=role==='client'?all.filter(u=>u.status==='Published'):all;
+  const statusFiltered=role==='client'?all.filter(u=>u.status==='Published'):all;
+  // v68j -- per Misty's direct request: once a PM Update is captured
+  // permanently on its property's Field Updates tab (see renderPropUpdates(),
+  // v68i), this standalone feed only needs to show the last 2 weeks --
+  // display filter only, confirmed with Misty. The Airtable record is
+  // never touched here: it's untouched in window.PM_UPDATES, still shows
+  // on the property tab forever, and is still archived to Documents on
+  // publish (archivePMUpdateToDocuments). Same dateLabel logic as the card
+  // template below (published date once published, else created date).
+  const cutoff=new Date();cutoff.setDate(cutoff.getDate()-14);
+  const visible=statusFiltered.filter(u=>{
+    const dateLabel=(u.status==='Published'&&u.published)?u.published:u.created;
+    if(!dateLabel)return true;
+    const d=new Date(dateLabel+'T12:00:00');
+    return isNaN(d.getTime())||d>=cutoff;
+  });
   if(visible.length===0){
     feed.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-broadcast-off"></i><div class="empty-state-title">No updates yet</div></div>`;
     updatePMUpdatesBadge();
