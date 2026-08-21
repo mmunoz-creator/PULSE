@@ -1,7 +1,82 @@
 <!--
-pulse_v68f. Changes from v68e, this round. No worker changes required --
-still paired with worker_v45b_build.mjs, version-bumped only to keep pace
-per standing convention (no worker code changed).
+pulse_v68h. Changes from v68g, this round. No worker code changes required
+-- still paired with worker_v45d_build.mjs, version-bumped only to keep
+pace per standing convention (both fixes below are entirely client-side).
+
+Two real fixes, both from Misty's live bug report (screenshots):
+
+1. Hilton Denver City Center's SE14/SE15/SE16 project card claimed "All
+milestones complete" while the Milestones tab genuinely showed M14 still
+In Progress. Confirmed as the known standing-backlog bug from the
+2026-08-16 brief: the property Overview scope card's VDA Milestones badge
+checked (s.status==='Complete'||s.isCompleteBucket) -- the Scope-level
+Status field, which can read Complete while real milestones underneath
+aren't -- instead of the real weighted percentage (msPct, already
+computed two lines above it in the same function for the progress bar's
+width/color). Now checks msPct===100. No new calculation added, single
+occurrence in the file, no other display had this bug.
+
+2. PM Updates' New Update composer had two issues per Misty's direct
+request. First: "Applies to Whole Project" checkbox and the Linked Units
+picker removed entirely -- this composer only needs Property + Project,
+no per-unit tracking. Confirmed with Misty that every project-linked PM
+Update should still be recorded as whole-project under the hood (fields
+sent to Airtable unchanged: 'Applies to Whole Project':true, 'Units
+Updated':'All'), so nothing downstream (exports, reports) sees a change
+-- only the UI lost the checkbox/picker. Second: Project Phase no longer
+a manual pick (was defaulting to "Construction" regardless of the
+project's real status, causing exactly the divergent-entries problem
+Misty flagged) -- now a locked, read-only field that derives from the
+selected project's live Scope status the moment a project is chosen,
+via a confirmed mapping (PMU_PHASE_MAP): Capital Plan and
+Pre-Construction both map to Pre-Construction, Construction maps to
+itself, Project Closeout and Complete both map to Closeout. Scoped
+strictly to the New Update composer (pmu- prefixed elements/functions) --
+the separate Edit PM Update modal (pmue- prefixed) was confirmed as a
+distinct field set and deliberately left untouched, since Misty's request
+was specifically about "when I submit a new update."
+
+Also per Misty's report this round: the v68g file's internal build badge
+was still showing v68f live even though the delivered file (confirmed via
+its raw GitHub content matching exactly) had v68g hardcoded and the
+Delete VDA Project code in it. That's a deploy/publish-side issue, not
+a code issue -- nothing in this file addresses it, flagged in the
+continuity brief for Misty to chase down on her deploy pipeline.
+
+---
+
+pulse_v68g (folded in below, unchanged) -- changes from v68f. pm/admin
+already bypass the Worker's roleMayWrite()/roleFieldsAllowed() entirely,
+and all 4 tables that round's cascade touches (VDA Project, Task Line,
+Amendment History, Invoice Entries) plus Scopes were already in
+ALLOWED_TABLES, so no server-side change was needed for it either.
+
+Added Delete VDA Project, per Misty's direct request ("we need a way to
+delete VDA Projects from the VDA Project tab. That workflow is missing"),
+built to match deleteProperty()/confirmDeleteProperty()'s exact pattern
+per Misty's explicit direction ("just like deleting a property"): a
+Delete Project button in the VDA Project tab's header (canEdit-gated,
+same vdaCanEdit() PM/Admin check as Import/Configure Project) opens a
+modal with a dropdown of every agreement, Cancel/Delete buttons, and a
+warning that this is permanent. Confirming cascades: Invoice Entries,
+Task Lines, and Amendment History under that agreement are hard-deleted
+(failedSteps-tracked, same honest-toast pattern as deleteProperty(), not
+a silent claim of success), then the VDA Project record itself.
+
+Two things this cascade had to account for that Property's own doesn't:
+Invoice Entries link to a Task Line, not directly to VDA Project, so they
+have to be found via this project's own Task Line ids first, not a direct
+match. And Scopes reference a VDA Project by a plain-text 'VDA Project
+Number' field, not a real link -- confirmed by testing, deleting the VDA
+Project record alone does NOT clear this field, and
+autoCreateVdaProjectsFromScopes() (runs on every VDA Project tab load)
+would silently recreate a bare-bones replacement the next time anyone
+opened the tab, since it treats any Scope with a VDA Project Number and
+no matching VDA Project record as needing one auto-created. Per Misty's
+explicit confirmation, Delete now also blanks 'VDA Project Number' on
+every Scope that had it, so those Scopes become unassigned rather than
+pointing at a deleted agreement, and the reconcile job has nothing left
+to recreate from.
 
 Two real fixes, both from Misty's live bug report (screenshots + browser
 console):
@@ -6865,7 +6940,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68f</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68h</div>
     </div>
   </nav>
 
@@ -6966,6 +7041,12 @@ from unitEffectiveValue() onto each checkbox). -->
             Project/Task Line records, stages a review screen, writes on
             explicit confirm via the normal atCreate/atUpdate calls. -->
             <button class="btn no-print" id="vda-import-btn" onclick="openVdaImportModal()" style="display:none"><i class="ti ti-file-import"></i>Import</button>
+            <!-- v68g — Delete VDA Project, per Misty's direct request
+            ("we need a way to delete VDA Projects from the VDA Project
+            tab. That workflow is missing"). Same PM/Admin gate as Import/
+            Configure Project (vdaCanEdit()), and the same btn-delete
+            styling deleteProperty()'s header button uses. -->
+            <button class="btn btn-delete no-print" id="vda-delete-btn" onclick="deleteVdaProject()" style="display:none"><i class="ti ti-trash"></i>Delete Project</button>
             <button class="btn btn-primary no-print" id="vda-configure-btn" onclick="openConfigureVdaPanel()" style="display:none"><i class="ti ti-plus"></i>Configure Project</button>
           </div>
         </div>
@@ -8359,18 +8440,20 @@ from unitEffectiveValue() onto each checkbox). -->
               </div>
             </div>
             <div id="pmu-structured-fields" style="display:none">
-              <div class="form-group">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
-                  <input type="checkbox" id="pmu-whole-project" onchange="togglePmuWholeProject()">
-                  Applies to Whole Project
-                </label>
-              </div>
-              <div class="form-group" id="pmu-units-group">
-                <label class="form-label">Linked Units</label>
-                <div id="pmu-units-list" style="max-height:140px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
-              </div>
+              <!-- v68h — Applies to Whole Project checkbox + Linked Units
+              picker removed per Misty's direct request: this composer only
+              ever needs Property + Project, no per-unit tracking. Every PM
+              Update against a project is now implicitly whole-project (see
+              pmuCreate() — still writes 'Applies to Whole Project':true and
+              'Units Updated':'All' under the hood, per Misty's explicit
+              confirmation, so existing reports/exports reading those fields
+              see no change). pmu-phase is no longer a manual pick — it's a
+              locked, read-only display driven by the selected project's
+              live Scope status (see onPmuScopeChange()/PMU_PHASE_MAP),
+              per Misty's direct request to stop divergent Project Phase
+              entries between PM Updates and the Scope's real status. -->
               <div class="form-row">
-                <div class="form-group"><label class="form-label">Project phase</label><select class="form-select" id="pmu-phase"><option>Pre-Construction</option><option selected>Construction</option><option>Post Construction</option><option>Closeout</option></select></div>
+                <div class="form-group"><label class="form-label">Project phase</label><input class="form-input" type="text" id="pmu-phase-display" readonly style="background:var(--gray-pale);color:var(--gray-mid)"><input type="hidden" id="pmu-phase" value=""></div>
                 <div class="form-group"><label class="form-label">Progress status</label><select class="form-select" id="pmu-status"><option>Not Started</option><option selected>In Progress</option><option>Complete</option></select></div>
               </div>
               <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="pmu-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
@@ -12892,7 +12975,17 @@ function renderScopeCards(p){
         ${scopeUnitChipsHtml(s)}
         <div style="border-top:0.5px solid var(--border);padding-top:10px">
           <div style="font-size:10px;color:var(--gray-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">VDA Milestones</div>
-          ${(s.status==='Complete'||s.isCompleteBucket)?`
+          <!-- v68h — was (s.status==='Complete'||s.isCompleteBucket), the
+          known standing-backlog bug (2026-08-16 brief): the Scope-level
+          Status field can read 'Complete' (or isCompleteBucket true) while
+          real milestones underneath are still open — confirmed live on
+          Hilton Denver City Center's SE14/SE15/SE16 card, M14 genuinely
+          In Progress per the Milestones tab while this badge claimed all
+          complete. Now checks msPct===100, the same real weighted
+          percentage already computed above for the progress bar/color on
+          the branch just below — no new calculation, just using the
+          number that was already right there. -->
+          ${msPct===100?`
           <div style="font-size:11px;color:#15803d;display:flex;align-items:center;gap:5px"><i class="ti ti-circle-check" style="font-size:13px"></i>All milestones complete</div>
           `:`
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
@@ -37232,12 +37325,31 @@ function pmuPopulateScopes(){
     scopes.map(s=>`<option value="${s.id}"${s.id===current?' selected':''}>${(s.name||'Project').replace(/</g,'&lt;')}</option>`).join('');
   onPmuScopeChange();
 }
+// v68h — Project phase now derives from the selected project's live Scope
+// status instead of a manually-picked default, per Misty's direct request
+// to stop divergent Project Phase entries between PM Updates and the
+// Scope's real status elsewhere in the app. Locked/read-only, per Misty's
+// explicit confirmation — pmu-phase-display shows the mapped label,
+// pmu-phase (hidden) carries the real value pmuCreate() reads. Scope
+// status vocabulary (Capital Plan/Pre-Construction/Construction/Project
+// Closeout/Complete) doesn't line up 1:1 with this form's 4-value Project
+// Phase vocabulary (Pre-Construction/Construction/Post Construction/
+// Closeout — Post Construction has no live-status equivalent and is left
+// unreachable from this composer now), so PMU_PHASE_MAP is the agreed
+// mapping, confirmed with Misty before building: Capital Plan and
+// Pre-Construction both map to Pre-Construction, Construction maps to
+// itself, Project Closeout and Complete both map to Closeout.
+const PMU_PHASE_MAP={
+  'Capital Plan':'Pre-Construction',
+  'Pre-Construction':'Pre-Construction',
+  'Construction':'Construction',
+  'Project Closeout':'Closeout',
+  'Complete':'Closeout',
+};
 // v42r — same pattern as onSubmitScopeChange() on the Consultant form:
 // selecting "All Projects" keeps this a simple freeform post (structured
 // fields hidden — pmu-structured-fields), selecting a real project reveals
-// the unit picker/phase/status/comment-type fields and shows its VDA
-// Project #. Changing the project clears any checked units, since they'd
-// no longer be valid against the newly-selected project's unit list.
+// the phase/status/comment-type fields and shows its VDA Project #.
 function onPmuScopeChange(){
   const scopeSel=document.getElementById('pmu-scope');
   const scopeId=scopeSel?.value||'';
@@ -37254,55 +37366,15 @@ function onPmuScopeChange(){
       vdaWrap.style.display='none';
     }
   }
-  pmuUnitAssign={};
-  if(scope)renderPmuUnitsList();
+  const phaseHidden=document.getElementById('pmu-phase');
+  const phaseDisplay=document.getElementById('pmu-phase-display');
+  if(phaseHidden&&phaseDisplay){
+    const mappedPhase=scope?(PMU_PHASE_MAP[scope.status]||'Pre-Construction'):'';
+    phaseHidden.value=mappedPhase;
+    phaseDisplay.value=mappedPhase;
+  }
 }
 window.onPmuScopeChange=onPmuScopeChange;
-// v42r — unit-linking state for the PM Updates composer, same pattern as
-// fuUnitAssign for the Consultant form (Field Update submissions).
-let pmuUnitAssign={};
-function renderPmuUnitsList(){
-  const listEl=document.getElementById('pmu-units-list');
-  if(!listEl)return;
-  const propName=document.getElementById('pmu-property')?.value||'';
-  const scopeId=document.getElementById('pmu-scope')?.value||'';
-  if(!propName||!scopeId){
-    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a project first.</div>';
-    return;
-  }
-  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName&&u.scopeId===scopeId).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
-  if(units.length===0){
-    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units linked to this project in Unit Inventory List yet.</div>';
-    return;
-  }
-  listEl.innerHTML=units.map(u=>{
-    const checked=!!pmuUnitAssign[u.id];
-    const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
-    return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
-      <input type="checkbox" ${checked?'checked':''} onchange="togglePmuUnit('${u.id}',this.checked)">
-      <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
-      ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
-    </label>`;
-  }).join('');
-}
-window.renderPmuUnitsList=renderPmuUnitsList;
-function togglePmuUnit(unitId,checked){
-  if(checked)pmuUnitAssign[unitId]=true;
-  else delete pmuUnitAssign[unitId];
-}
-window.togglePmuUnit=togglePmuUnit;
-function togglePmuWholeProject(){
-  const whole=document.getElementById('pmu-whole-project').checked;
-  const group=document.getElementById('pmu-units-group');
-  if(whole){
-    pmuUnitAssign={};
-    group.style.display='none';
-  }else{
-    group.style.display='block';
-    renderPmuUnitsList();
-  }
-}
-window.togglePmuWholeProject=togglePmuWholeProject;
 function renderPMUpdates(){
   const composer=document.getElementById('pmu-composer');
   const sub=document.getElementById('pmu-header-sub');
@@ -37513,19 +37585,16 @@ async function pmuCreate(status){
   if(!text){showToast('Enter an update','warn');return;}
   const hasProject=!!scopeId;
   const scope=hasProject?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
-  const appliesToWholeProject=hasProject&&document.getElementById('pmu-whole-project').checked;
-  const linkedUnitIds=hasProject&&!appliesToWholeProject?Object.keys(pmuUnitAssign):[];
-  let units='';
-  if(hasProject){
-    units='All';
-    if(!appliesToWholeProject&&linkedUnitIds.length>0){
-      const unitNames=sortUnitNames(linkedUnitIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)?.name).filter(Boolean));
-      if(unitNames.length>0)units=unitNames.join(', ');
-    }else if(!appliesToWholeProject&&linkedUnitIds.length===0){
-      alert('Please check at least one unit, or select "Applies to Whole Project".');
-      return;
-    }
-  }
+  // v68h — Applies to Whole Project / Linked Units removed from this
+  // composer per Misty's direct request (no per-unit tracking needed
+  // here). Every project-linked PM Update is now implicitly whole-project;
+  // per Misty's explicit confirmation this is still recorded on the
+  // Airtable record (appliesToWholeProject unconditionally true, units
+  // unconditionally 'All') so anything downstream reading those fields
+  // sees no change from before.
+  const appliesToWholeProject=hasProject;
+  const linkedUnitIds=[];
+  const units=hasProject?'All':'';
   const phase=hasProject?document.getElementById('pmu-phase').value:'';
   const progressStatus=hasProject?document.getElementById('pmu-status').value:'';
   const commentType=hasProject?document.getElementById('pmu-comment-type').value:'';
@@ -37554,7 +37623,8 @@ async function pmuCreate(status){
     fields['Progress Status']=progressStatus;
     fields['Comment Type']=commentType;
     fields['Applies to Whole Project']=appliesToWholeProject;
-    if(linkedUnitIds.length>0)fields['Linked Units']=linkedUnitIds;
+    // 'Linked Units' deliberately never sent from this composer — see the
+    // v68h note above onPmuScopeChange().
   }
   if(hasDraftAction){
     fields['Draft Action Description']=draftAction.description;
@@ -37618,8 +37688,6 @@ async function pmuCreate(status){
   document.getElementById('pmu-draft-action-fields').style.display='none';
   ['pmu-draft-action-desc','pmu-draft-action-owner','pmu-draft-action-due'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('pmu-draft-action-priority').value='Medium';
-  pmuUnitAssign={};
-  document.getElementById('pmu-whole-project').checked=false;
   if(draftActionSaveFailed){
     showToast('Update published, but the follow-up action item failed to save. Check your connection and add it manually.','error');
   }else{
@@ -37655,8 +37723,12 @@ async function unpublishPMUpdate(id){
 
 // v50g — Edit PM Update modal. See the markup comment above #pmue-overlay
 // for why this is a separate field set rather than repointing the New
-// Update composer. pmueUnitAssign mirrors pmuUnitAssign's shape/purpose,
-// scoped to this modal only.
+// Update composer. pmueUnitAssign is scoped to this modal only.
+// v68h note: the New Update composer's own equivalent (pmuUnitAssign) was
+// removed when Applies to Whole Project/Linked Units were dropped from
+// that composer per Misty's direct request — this modal was intentionally
+// left untouched, out of scope for that change (Misty's request was
+// specifically about "when I submit a new update").
 let pmueUnitAssign={};
 function openEditPMUpdateModal(id){
   const u=(window.PM_UPDATES||[]).find(x=>x.id===id);
@@ -42006,6 +42078,8 @@ function renderVdaProjects(){
   if(cfgBtn)cfgBtn.style.display=canEdit?'':'none';
   const importBtn=document.getElementById('vda-import-btn');
   if(importBtn)importBtn.style.display=canEdit?'':'none';
+  const delBtn=document.getElementById('vda-delete-btn');
+  if(delBtn)delBtn.style.display=canEdit?'':'none';
 
   const projects=window.VDA_PROJECTS||[];
   const taskLines=window.VDA_TASK_LINES||[];
@@ -42160,6 +42234,153 @@ function renderVdaProjects(){
   }).join('');
 }
 window.renderVdaProjects=renderVdaProjects;
+
+// v68g — Delete VDA Project, per Misty's direct request. Modeled directly
+// on deleteProperty()/confirmDeleteProperty()'s pattern (same modal shape,
+// same failedSteps-tracked-cascade approach, same synchronous overlay
+// removal before any await so a second click is physically impossible).
+// Two things Property's own cascade doesn't have to worry about, both
+// confirmed with Misty before building:
+//
+// 1. Invoice Entries don't link to VDA Project directly -- they link to a
+// Task Line ('Linked Task Line'), which links to the VDA Project. So the
+// cascade has to delete Invoice Entries by first collecting this
+// project's Task Line ids, not by a direct vdaId match the way Task Line/
+// Amendment History rows themselves can be matched.
+//
+// 2. Scopes reference a VDA Project by a plain text 'VDA Project Number'
+// field, not a real Airtable link -- deleting the VDA Project record does
+// NOT clear that field automatically. Without explicitly blanking it here,
+// autoCreateVdaProjectsFromScopes() (runs on every VDA Project tab load)
+// would silently recreate a bare-bones replacement the next time anyone
+// opens this tab, since it treats any Scope with a VDA Project Number that
+// has no matching VDA Project record as one that needs auto-creating.
+// Per Misty's explicit confirmation, Delete clears this field on every
+// Scope that had it, so those Scopes become unassigned/unbilled rather
+// than pointing at a deleted agreement -- someone can reassign them to a
+// different VDA Project Number later.
+function deleteVdaProject(){
+  const projects=[...(window.VDA_PROJECTS||[])].sort((a,b)=>{
+    const na=parseFloat(a.number),nb=parseFloat(b.number);
+    const aNum=!isNaN(na),bNum=!isNaN(nb);
+    if(aNum&&bNum)return na-nb;
+    if(aNum)return -1;
+    if(bNum)return 1;
+    return (a.number||'').localeCompare(b.number||'');
+  });
+  if(projects.length===0){showToast('No VDA Project agreements to delete','warn');return;}
+  const options=projects.map(p=>{
+    const label=(p.number?'VDA Project #'+p.number:'No number assigned')+(p.nickname?' — '+p.nickname:'');
+    return `<option value="${p.id}">${escHtml(label)}</option>`;
+  }).join('');
+  const overlay=document.createElement('div');
+  overlay.id='delete-vda-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`<div style="background:white;border-radius:12px;width:100%;max-width:420px;box-shadow:var(--shadow-md);padding:24px">
+    <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:6px"><i class="ti ti-trash" style="color:var(--red);margin-right:6px"></i>Delete VDA Project</div>
+    <div style="font-size:12px;color:var(--gray-mid);margin-bottom:16px">Select the agreement to delete. This will permanently remove the VDA Project and all its Task Lines, Amendment History, and Invoice Entries, and unassign it from any linked Scopes. This cannot be undone.</div>
+    <div class="form-group" style="margin-bottom:20px">
+      <label class="form-label">VDA Project</label>
+      <select class="form-input" id="delete-vda-select">${options}</select>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('delete-vda-overlay').remove()">Cancel</button>
+      <button class="btn btn-delete" onclick="confirmDeleteVdaProject()"><i class="ti ti-trash"></i>Delete</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+let _deletingVdaProject=false;
+async function confirmDeleteVdaProject(){
+  if(_deletingVdaProject)return;
+  const vdaId=document.getElementById('delete-vda-select')?.value;
+  if(!vdaId)return;
+  document.getElementById('delete-vda-overlay')?.remove();
+  _deletingVdaProject=true;
+  const project=(window.VDA_PROJECTS||[]).find(p=>p.id===vdaId);
+  const label=project?(project.number?'VDA Project #'+project.number:'This VDA Project'):'This VDA Project';
+  console.log('[deleteVdaProject] starting delete for:',vdaId,label);
+
+  const failedSteps=[];
+  if(!demoMode){
+    showToast(`Deleting ${label} and all associated records...`,'info');
+
+    const myTaskLines=(window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId);
+    const myTaskLineIds=new Set(myTaskLines.map(t=>t.id));
+    const myAmendments=(window.VDA_AMENDMENTS||[]).filter(a=>a.vdaId===vdaId);
+    const myInvoices=(window.VDA_INVOICES||[]).filter(inv=>myTaskLineIds.has(inv.taskLineId));
+    const myScopes=(window.SCOPES||[]).filter(s=>project&&s.vdaNum&&project.number&&s.vdaNum.trim().toLowerCase()===String(project.number).trim().toLowerCase());
+
+    // Invoice Entries first (child of Task Line), then Task Line, then
+    // Amendment History -- order doesn't matter to Airtable itself since
+    // none of these are the parent the others depend on for existing, but
+    // deleting the deepest child first matches the same "children before
+    // parent" convention deleteProperty() uses (Bid Submissions before Bid
+    // Rounds).
+    const deleteSteps=[
+      {records:myInvoices,   table:'Invoice Entries'},
+      {records:myTaskLines,  table:'Task Line'},
+      {records:myAmendments, table:'Amendment History'},
+    ];
+    for(const {records,table} of deleteSteps){
+      let tableFailed=false;
+      for(const r of records){
+        if(!r.id||!r.id.startsWith('rec'))continue;
+        try{
+          const result=await atDelete(table,r.id);
+          if(!result)tableFailed=true;
+        }catch(e){console.warn(`Failed to delete ${table} record ${r.id}`,e);tableFailed=true;}
+      }
+      if(tableFailed)failedSteps.push(table);
+    }
+
+    // Unassign Scopes -- clear 'VDA Project Number' so the reconcile job
+    // (autoCreateVdaProjectsFromScopes, runs on every tab load) has
+    // nothing left to recreate this agreement from.
+    let scopesFailed=false;
+    for(const s of myScopes){
+      if(!s.id||!s.id.startsWith('rec'))continue;
+      try{
+        const result=await atUpdate('Scopes',s.id,{'VDA Project Number':''});
+        if(!result)scopesFailed=true;
+      }catch(e){console.warn(`Failed to clear VDA Project Number on Scope ${s.id}`,e);scopesFailed=true;}
+    }
+    if(scopesFailed)failedSteps.push('Scopes (VDA Project Number)');
+
+    // The VDA Project record itself, last.
+    if(project?.id){
+      const delResult=await atDelete('VDA Project',project.id);
+      if(!delResult){
+        console.warn('VDA Project delete failed for',project.id);
+        failedSteps.push('VDA Project record');
+      }
+    }
+    console.log('[deleteVdaProject] cascade delete sequence complete');
+  }
+
+  // In-memory cleanup, mirrors the Airtable-side deletes above.
+  const myTaskLineIdsLocal=new Set((window.VDA_TASK_LINES||[]).filter(t=>t.vdaId===vdaId).map(t=>t.id));
+  window.VDA_INVOICES=(window.VDA_INVOICES||[]).filter(inv=>!myTaskLineIdsLocal.has(inv.taskLineId));
+  window.VDA_TASK_LINES=(window.VDA_TASK_LINES||[]).filter(t=>t.vdaId!==vdaId);
+  window.VDA_AMENDMENTS=(window.VDA_AMENDMENTS||[]).filter(a=>a.vdaId!==vdaId);
+  if(project&&project.number){
+    (window.SCOPES||[]).forEach(s=>{
+      if(s.vdaNum&&s.vdaNum.trim().toLowerCase()===String(project.number).trim().toLowerCase())s.vdaNum='';
+    });
+  }
+  window.VDA_PROJECTS=(window.VDA_PROJECTS||[]).filter(p=>p.id!==vdaId);
+  (window._vdaExpandedCards||(window._vdaExpandedCards=new Set())).delete(vdaId);
+
+  if(failedSteps.length>0){
+    showToast(`${label} deleted, but some related records may remain: ${failedSteps.join(', ')}. Contact IT if this needs cleanup.`,'error');
+  }else{
+    showToast(`${label} and all associated records deleted`,'success');
+  }
+  renderVdaProjects();
+  _deletingVdaProject=false;
+}
+window.deleteVdaProject=deleteVdaProject;
+window.confirmDeleteVdaProject=confirmDeleteVdaProject;
 
 // v58x — task #48. Per-card expand/collapse state, keyed by VDA Project
 // record id, held on window so it survives the innerHTML re-render that
