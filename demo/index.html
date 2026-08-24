@@ -2912,7 +2912,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">demo-v1g (v50j base)</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">demo-v1h (v50j base)</div>
     </div>
   </nav>
 
@@ -4385,6 +4385,69 @@ const CLIENTS={park:'Park Hotels & Resorts',diamond:'Diamond Rock Hospitality',w
 let demoMode=false;
 let demoRole='pm';
 
+// demo-v1h -- Demo Data Depth round. Scope: seeded sample data was too
+// thin to look realistic in a walkthrough (most detail-level arrays were
+// empty or barely populated), even though every consuming render
+// function already worked correctly. Demo mode only ever offers PM and
+// Client at login (Admin/Consultant unreachable), so this round is
+// scoped entirely to what those two roles can see.
+//
+// 3 showcase properties given full realistic depth -- picked because
+// they already had the most existing partial seed data across multiple
+// arrays: Store #101 (New York), Store #142 (Chicago), Store #531
+// (Atlanta). Seeded/expanded for these 3 only:
+//   - window.MILESTONES -- previously never seeded (stayed permanently
+//     []). Full 14-milestone sets per property, real dates/status mix,
+//     with milestones 4/6/10/14 (the Cash Flow Curve's
+//     CASHFLOW_CHECKPOINT_MS) carrying real plannedDate/completionDate/
+//     status so the curve actually draws.
+//   - window.UNIT_INVENTORY -- previously never seeded. Real per-unit
+//     records matching each property's existing DEMO_PORTFOLIO units
+//     count, with awardValue driving scopeUnitBudgetTotal()/Budget
+//     Outlook's 3-stage waterfall.
+//   - Scope contractAwardValue/approvedBudget -- previously unset/0 on
+//     all 3 showcase Scopes. Real values so Scorecard's Budget Variance/
+//     CO Impact KPIs and Ops Center's Budget Overrun Watch stop excluding
+//     these properties.
+//   - window.CO_SAVINGS -- 5 new entries across the 3 properties (co5-9),
+//     adding a Rejected example (previously only Approved/Pending/Client
+//     Approved existed anywhere in the demo).
+//   - window.BILLING_LOG -- the single billing entry each of these 3
+//     properties had (dbl1/dbl2/dbl6) replaced with a real 7-entry
+//     history apiece, enough to exercise the Budget tab's "Show all N
+//     entries" popout. Every other property's single billing entry is
+//     untouched.
+//   - window.DOCUMENTS_LIVE -- 15 new documents across the 3 properties,
+//     spanning all 4 SUBFOLDERS (Field Updates/PM Updates/Meeting
+//     Minutes/Closed Actions).
+//   - meetings/actionItems/submissions -- additional records over a
+//     realistic multi-month cadence for the 3 properties.
+//   - window.CLIENT_COMMENTS and window.PM_UPDATES -- both previously
+//     completely unseeded (stayed permanently []) for every property.
+//     Real threaded flag/reply content and published status updates
+//     across the 3 showcase properties, since both PM and Client roles
+//     rely on this content and neither had anything to show before.
+//
+// Portfolio-wide (applies to all 15 DEMO_PORTFOLIO properties, not just
+// the 3 showcase ones): every active Scope now has a real retainagePct
+// (5%) so the amber "Retainage % not set" warning no longer fires
+// anywhere in the demo portfolio -- cheap, high-visibility fix per the
+// approved plan.
+//
+// Also fixed: Store #823's bid round existed in the portfolio-wide
+// window.BID_ROUNDS (feeding Ops Center's "awaiting review" card) with no
+// matching entry in the separate BID_ROUNDS_DEMO/BID_SUBMISSIONS_DEMO
+// cache the property's own Bids tab reads from -- added the matching
+// cache entries so clicking through from Ops Center no longer shows an
+// empty Bids tab.
+//
+// Explicitly out of scope this round, confirmed and unchanged:
+// CAPITAL_PLAN_DEMO's 8 properties (Capital Plan/Portfolio View are
+// Admin-only, unreachable by either demo role -- seeding depth there
+// would be invisible effort), MARLI Insights (also Admin-only,
+// unreachable), and all ~12 non-showcase DEMO_PORTFOLIO properties beyond
+// the portfolio-wide retainagePct fix above.
+//
 // demo-v1f -- Print / PDF buttons on the Milestone Report and saved-report
 // reader views stay visible (Misty's explicit call: keep them present for
 // show), but the demo has no print/export functionality at all, so this
@@ -4697,6 +4760,329 @@ function enterDemo(){
     {id:'co3',property:'Store #142',description:'Owner requested additional floor landings not in original contract scope',originalAmount:35000,negotiatedAmount:35000,savings:0,status:'Pending',ec:'Schindler',loggedBy:'Marcus Webb',date:'2026-05-01',notes:'Under review — evaluating whether scope is legitimate'},
     {id:'co4',property:'Store #055',description:'Upgraded motor controls requested by owner for energy efficiency compliance',originalAmount:15000,negotiatedAmount:11200,savings:3800,status:'Client Approved',ec:'Kone',loggedBy:'Marcus Webb',date:'2026-03-10',approvedDate:'2026-03-18',notes:'Client authorized payment on 2026-03-18'},
   ];
+  // demo-v1h -- Scope-level dollar fields for the 3 showcase Scopes.
+  // contractAwardValue/approvedBudget were never set on the DEMO_PORTFOLIO
+  // active-Scope seed above (contractAwardValue undefined, approvedBudget
+  // stuck at 0), so getBillingBasis() had nothing to key off and
+  // Scorecard's Budget Variance/CO Impact KPIs (both require
+  // sc.contractAwardValue) plus Ops Center's Budget Overrun Watch (reads
+  // sc.approvedBudget) always excluded these properties. Contract Award
+  // Value matches the sum of each property's awarded units above
+  // (scopeUnitBudgetTotal falls back to this exact field whenever no unit
+  // is awarded yet, and per-unit awards win once any exist -- see that
+  // function's comment) rounded to a clean contract figure; Approved
+  // Budget is a client-approved number, set slightly above Contract Award
+  // Value as is typical once a small owner contingency is folded in.
+  [
+    {n:'Store #101',award:3900000,approved:4050000},
+    {n:'Store #142',award:2650000,approved:2750000},
+    {n:'Store #531',award:1350000,approved:1400000},
+  ].forEach(r=>{
+    const sc=window.SCOPES.find(s=>s.id==='demo_sc_active_'+r.n);
+    if(sc){sc.contractAwardValue=r.award;sc.approvedBudget=r.approved;}
+  });
+
+  // demo-v1h -- item 9 (portfolio-wide, all 15 DEMO_PORTFOLIO properties,
+  // not just the 3 showcase ones): real retainagePct on every active
+  // Scope so the amber "Retainage % not set" warning (renderBudgetTab,
+  // ~line 11587) stops firing across the whole demo portfolio. Cheap,
+  // high-visibility fix per the approved plan -- 5% is a standard
+  // retainage rate and applies uniformly since no property-specific
+  // retainage terms exist in this demo's fictional data.
+  window.SCOPES.filter(s=>s.id.startsWith('demo_sc_active_')).forEach(s=>{
+    if(s.retainagePct==null)s.retainagePct=5;
+  });
+  // demo-v1h -- window.MILESTONES was never seeded in demo mode (stayed
+  // permanently []), so the Milestones tab tracker, Cash Flow Curve
+  // (buildCashFlowCheckpoints keys off milestoneNumber 4/6/10/14 --
+  // CASHFLOW_CHECKPOINT_MS), and Performance Reports' Milestone Report
+  // table all rendered empty for every demo property even though the
+  // display code itself works fine. Seeded here for the 3 showcase
+  // properties only (Store #101, #142, #531) -- full 14-milestone sets,
+  // one per Scope (demo_sc_active_Store #10x), matching the exact field
+  // shape the live Airtable loader maps to (see window.MILESTONES = ...
+  // near the top of the file). Demo mode never calls
+  // recalculateAllMilestoneStatuses() (see that function's !demoMode
+  // guard), so these status values are the literal source of truth for
+  // every phase-linked milestone (M6/M10) too -- no separate PHASE_STEPS
+  // recompute happens under them. Dates are kept loosely consistent with
+  // each property's existing PHASE_STEPS/UNIT_GROUPS seed data (dps*/dug*
+  // above) where those already exist, without editing that data.
+  window.MILESTONES=[
+    // Store #101 -- On Track. Phase 1 (Passenger Elevators) In Progress
+    // per dug1/dps1-8 above (Installation: Hoistway Equipment in progress
+    // as of dps4). M1-M6 Complete, M7 (25% Construction) In Progress,
+    // M8-M14 Not Started.
+    {id:'dms101-1',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:1,milestoneName:'Modernization Survey',status:'Complete',plannedDate:'2024-06-01',actualDate:'2024-06-10',completionDate:'2024-06-10',variance:null,notes:'Initial survey complete.'},
+    {id:'dms101-2',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:2,milestoneName:'Technical Specification',status:'Complete',plannedDate:'2024-08-01',actualDate:'2024-08-05',completionDate:'2024-08-20',variance:null,notes:''},
+    {id:'dms101-3',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:3,milestoneName:'RFP / Bid Process',status:'Complete',plannedDate:'2024-09-01',actualDate:'2024-09-10',completionDate:'2024-09-15',variance:null,notes:'Otis selected.'},
+    {id:'dms101-4',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:4,milestoneName:'Contract Award',status:'Complete',plannedDate:'2024-11-01',actualDate:'2024-11-01',completionDate:'2024-11-01',variance:null,notes:'Contract executed with Otis.'},
+    {id:'dms101-5',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:5,milestoneName:'Submittal Drawing Review',status:'Complete',plannedDate:'2025-01-01',actualDate:'2025-06-10',completionDate:'2025-07-20',variance:null,notes:''},
+    {id:'dms101-6',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:6,milestoneName:'First Phase Start',status:'Complete',plannedDate:'2025-10-01',actualDate:'2025-10-10',completionDate:'2025-11-15',variance:null,notes:'Mobilization complete, PE1 hoistway work underway.'},
+    {id:'dms101-7',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:7,milestoneName:'25% Construction',status:'In Progress',plannedDate:'2026-01-15',actualDate:'2025-11-15',completionDate:'',variance:null,notes:'PE1 and PE2 hoistway equipment installation underway.'},
+    {id:'dms101-8',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:8,milestoneName:'50% Construction',status:'Not Started',plannedDate:'2026-03-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms101-9',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:9,milestoneName:'75% Construction',status:'Not Started',plannedDate:'2026-05-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms101-10',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:10,milestoneName:'Final Phase Complete',status:'Not Started',plannedDate:'2026-08-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms101-11',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:11,milestoneName:'Punch Lists Complete',status:'Not Started',plannedDate:'2026-08-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms101-12',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:12,milestoneName:'Inspections Complete (AHJ)',status:'Not Started',plannedDate:'2026-09-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms101-13',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:13,milestoneName:'Owner Acceptance',status:'Not Started',plannedDate:'2026-09-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms101-14',property:'Store #101',scopeId:'demo_sc_active_Store #101',milestoneNumber:14,milestoneName:'Closeout Documentation',status:'Not Started',plannedDate:'2026-10-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    // Store #142 -- Behind schedule, recovery plan active. Mobilization
+    // In Progress per dps22-24 above (permit delays). M1-M5 Complete,
+    // M6 (First Phase Start) In Progress, M7-M14 Not Started.
+    {id:'dms142-1',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:1,milestoneName:'Modernization Survey',status:'Complete',plannedDate:'2024-08-01',actualDate:'2024-08-20',completionDate:'2024-08-20',variance:null,notes:''},
+    {id:'dms142-2',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:2,milestoneName:'Technical Specification',status:'Complete',plannedDate:'2024-10-01',actualDate:'2024-10-15',completionDate:'2024-11-01',variance:null,notes:''},
+    {id:'dms142-3',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:3,milestoneName:'RFP / Bid Process',status:'Complete',plannedDate:'2024-11-15',actualDate:'2024-12-01',completionDate:'2024-12-20',variance:null,notes:'Schindler selected.'},
+    {id:'dms142-4',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:4,milestoneName:'Contract Award',status:'Complete',plannedDate:'2024-12-01',actualDate:'2025-01-15',completionDate:'2025-01-15',variance:null,notes:'Delayed 6 weeks -- owner legal review.'},
+    {id:'dms142-5',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:5,milestoneName:'Submittal Drawing Review',status:'Complete',plannedDate:'2025-04-01',actualDate:'2025-08-20',completionDate:'2025-09-10',variance:null,notes:'Delayed by city permit review.'},
+    {id:'dms142-6',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:6,milestoneName:'First Phase Start',status:'In Progress',plannedDate:'2025-08-01',actualDate:'2025-11-15',completionDate:'',variance:null,notes:'Mobilization underway, running behind original plan -- recovery plan submitted and approved.'},
+    {id:'dms142-7',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:7,milestoneName:'25% Construction',status:'Not Started',plannedDate:'2026-02-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms142-8',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:8,milestoneName:'50% Construction',status:'Not Started',plannedDate:'2026-04-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms142-9',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:9,milestoneName:'75% Construction',status:'Not Started',plannedDate:'2026-06-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms142-10',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:10,milestoneName:'Final Phase Complete',status:'Not Started',plannedDate:'2026-10-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms142-11',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:11,milestoneName:'Punch Lists Complete',status:'Not Started',plannedDate:'2026-10-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms142-12',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:12,milestoneName:'Inspections Complete (AHJ)',status:'Not Started',plannedDate:'2026-11-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms142-13',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:13,milestoneName:'Owner Acceptance',status:'Not Started',plannedDate:'2026-11-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms142-14',property:'Store #142',scopeId:'demo_sc_active_Store #142',milestoneNumber:14,milestoneName:'Closeout Documentation',status:'Not Started',plannedDate:'2026-12-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    // Store #531 -- Behind schedule, labor shortage, recovery plan
+    // submitted per dug5 above. M1-M4 Complete, M5 (Submittal Drawing
+    // Review) Complete, M6 (First Phase Start) In Progress, M7-M14 Not
+    // Started -- one stage earlier than #142, consistent with the
+    // property's own later dateAdded (2025-01-15).
+    {id:'dms531-1',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:1,milestoneName:'Modernization Survey',status:'Complete',plannedDate:'2025-02-01',actualDate:'2025-02-10',completionDate:'2025-02-10',variance:null,notes:''},
+    {id:'dms531-2',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:2,milestoneName:'Technical Specification',status:'Complete',plannedDate:'2025-03-15',actualDate:'2025-03-20',completionDate:'2025-04-05',variance:null,notes:''},
+    {id:'dms531-3',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:3,milestoneName:'RFP / Bid Process',status:'Complete',plannedDate:'2025-04-15',actualDate:'2025-04-25',completionDate:'2025-05-10',variance:null,notes:'Kone selected.'},
+    {id:'dms531-4',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:4,milestoneName:'Contract Award',status:'Complete',plannedDate:'2025-05-01',actualDate:'2025-06-01',completionDate:'2025-06-01',variance:null,notes:'Contract executed with Kone.'},
+    {id:'dms531-5',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:5,milestoneName:'Submittal Drawing Review',status:'Complete',plannedDate:'2025-07-01',actualDate:'2025-09-15',completionDate:'2025-09-30',variance:null,notes:'Delayed -- resource conflict with Store #101 crew.'},
+    {id:'dms531-6',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:6,milestoneName:'First Phase Start',status:'In Progress',plannedDate:'2025-09-01',actualDate:'2025-10-10',completionDate:'',variance:null,notes:'Mobilized, but crew size below plan -- labor shortage recovery plan submitted 2026-06-08.'},
+    {id:'dms531-7',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:7,milestoneName:'25% Construction',status:'At Risk',plannedDate:'2026-01-15',actualDate:'',completionDate:'',variance:null,notes:'At risk pending recovery plan crew ramp-up.'},
+    {id:'dms531-8',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:8,milestoneName:'50% Construction',status:'Not Started',plannedDate:'2026-04-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms531-9',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:9,milestoneName:'75% Construction',status:'Not Started',plannedDate:'2026-06-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms531-10',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:10,milestoneName:'Final Phase Complete',status:'Not Started',plannedDate:'2026-09-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms531-11',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:11,milestoneName:'Punch Lists Complete',status:'Not Started',plannedDate:'2026-09-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms531-12',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:12,milestoneName:'Inspections Complete (AHJ)',status:'Not Started',plannedDate:'2026-10-01',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms531-13',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:13,milestoneName:'Owner Acceptance',status:'Not Started',plannedDate:'2026-10-15',actualDate:'',completionDate:'',variance:null,notes:''},
+    {id:'dms531-14',property:'Store #531',scopeId:'demo_sc_active_Store #531',milestoneNumber:14,milestoneName:'Closeout Documentation',status:'Not Started',plannedDate:'2026-11-01',actualDate:'',completionDate:'',variance:null,notes:''},
+  ];
+  // demo-v1h -- window.UNIT_INVENTORY was never seeded in demo mode
+  // (stayed permanently []), so Budget Outlook's 3-stage waterfall
+  // (unitBudgetStage/rollupUnitsByStage), scopeUnitBudgetTotal(), and the
+  // property Units tab all rendered empty for every demo property. Seeded
+  // here for the 3 showcase properties only, one record per unit matching
+  // each property's existing DEMO_PORTFOLIO `units` count exactly (Store
+  // #101: 12, #142: 8, #531: 5). Unit names match the unitNames already
+  // seeded on window.UNIT_GROUPS above (dug1/dug2/dug3/dug5) so the Units
+  // tab and the Phases tab agree on what each unit is called. awardValue
+  // is the field scopeUnitBudgetTotal()/unitEffectiveValue() read for
+  // dollar value per unit (see unitBudgetStage()); the per-property sum of
+  // awardValue is kept close to (not exceeding) that property's
+  // DEMO_PORTFOLIO budget field, matching the Scope-level
+  // contractAwardValue set alongside this block. status uses the same
+  // Active/Planned/Complete vocabulary already read elsewhere (see
+  // unitLifecycleBucket, populatePortfolio unit rollups).
+  window.UNIT_INVENTORY=[
+    // Store #101 -- 12 units (8 Elev / 4 Esc), $4.2M budget. Phase 1
+    // (PE1-PE8) in progress -- PE1/PE2 complete per submissions ds1 notes,
+    // PE3 mobilizing, PE4-PE8 active/planned. Phase 2 (E1-E4) not started.
+    {id:'dui101-1',name:'PE1',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:1,status:'Complete',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:340000},
+    {id:'dui101-2',name:'PE2',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:1,status:'Complete',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:340000},
+    {id:'dui101-3',name:'PE3',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:1,status:'Active',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:345000},
+    {id:'dui101-4',name:'PE4',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Active',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:345000},
+    {id:'dui101-5',name:'PE5',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:350000,awardValue:0},
+    {id:'dui101-6',name:'PE6',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:350000,awardValue:0},
+    {id:'dui101-7',name:'PE7',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:352000,awardValue:0},
+    {id:'dui101-8',name:'PE8',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:352000,awardValue:0},
+    {id:'dui101-9',name:'E1',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'2027',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:265000,awardValue:0},
+    {id:'dui101-10',name:'E2',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'2027',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:265000,awardValue:0},
+    {id:'dui101-11',name:'E3',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Level 2-3',unitType:'Escalator',equipmentType:'Escalator',priority:4,status:'Planned',capexYear:'2027',vdaRecYear:'2027',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:268000,awardValue:0},
+    {id:'dui101-12',name:'E4',property:'Store #101',scopeId:'demo_sc_active_Store #101',deviceLocation:'Level 2-3',unitType:'Escalator',equipmentType:'Escalator',priority:4,status:'Planned',capexYear:'2027',vdaRecYear:'2027',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:268000,awardValue:0},
+    // Store #142 -- 8 units (6 Elev / 2 Esc), $2.8M budget. Mobilization
+    // in progress, none complete yet -- recovery plan active per dug3.
+    {id:'dui142-1',name:'EL1',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:1,status:'Active',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:310000},
+    {id:'dui142-2',name:'EL2',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:1,status:'Active',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:310000},
+    {id:'dui142-3',name:'EL3',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:315000,awardValue:0},
+    {id:'dui142-4',name:'EL4',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:315000,awardValue:0},
+    {id:'dui142-5',name:'EL5',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:318000,awardValue:0},
+    {id:'dui142-6',name:'EL6',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:318000,awardValue:0},
+    {id:'dui142-7',name:'ESC1',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:245000,awardValue:0},
+    {id:'dui142-8',name:'ESC2',property:'Store #142',scopeId:'demo_sc_active_Store #142',deviceLocation:'Level 2-3',unitType:'Escalator',equipmentType:'Escalator',priority:4,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:245000,awardValue:0},
+    // Store #531 -- 5 units (4 Elev / 1 Esc), $1.4M budget. Mobilized,
+    // labor shortage slowing progress -- none complete yet.
+    {id:'dui531-1',name:'EL1',property:'Store #531',scopeId:'demo_sc_active_Store #531',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:1,status:'Active',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:265000},
+    {id:'dui531-2',name:'EL2',property:'Store #531',scopeId:'demo_sc_active_Store #531',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:1,status:'Active',capexYear:'2025',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:0,awardValue:265000},
+    {id:'dui531-3',name:'EL3',property:'Store #531',scopeId:'demo_sc_active_Store #531',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:268000,awardValue:0},
+    {id:'dui531-4',name:'EL4',property:'Store #531',scopeId:'demo_sc_active_Store #531',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:268000,awardValue:0},
+    {id:'dui531-5',name:'ESC1',property:'Store #531',scopeId:'demo_sc_active_Store #531',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:3,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:212000,awardValue:0},
+  ];
+  // demo-v1h -- additional Change Orders for the 3 showcase properties
+  // (co1/co2 already existed for Store #101, co3 for Store #142 -- both
+  // preserved as-is above). Adds a realistic status mix per property and
+  // at least one Rejected example (co8, Store #531) per the approved
+  // plan -- the existing seed had Approved/Pending/Client Approved but no
+  // Rejected anywhere. Same field shape as the existing co1-co4 entries.
+  window.CO_SAVINGS=window.CO_SAVINGS.concat([
+    {id:'co5',property:'Store #101',description:'Expedited shipping surcharge for PE3/PE4 controller hardware to hold schedule',originalAmount:9500,negotiatedAmount:9500,savings:0,status:'Client Approved',ec:'Otis',loggedBy:'Sarah Chen',date:'2026-05-10',approvedDate:'2026-05-18',notes:'Client authorized to protect PE3 mobilization date.'},
+    {id:'co6',property:'Store #101',description:'Owner-requested destination dispatch upgrade, not in original scope',originalAmount:62000,negotiatedAmount:44000,savings:18000,status:'Pending',ec:'Otis',loggedBy:'Sarah Chen',date:'2026-06-01',notes:'Awaiting owner budget sign-off.'},
+    {id:'co7',property:'Store #142',description:'Additional fire alarm interface work discovered behind existing machine room wall',originalAmount:18500,negotiatedAmount:14200,savings:4300,status:'Approved',ec:'Schindler',loggedBy:'Marcus Webb',date:'2026-02-14',approvedDate:'2026-02-20',notes:'Unforeseen condition; approved after field verification.'},
+    {id:'co8',property:'Store #531',description:'Owner requested premium cab interior package not included in base contract',originalAmount:27000,negotiatedAmount:27000,savings:0,status:'Rejected',ec:'Kone',loggedBy:'Marcus Webb',date:'2026-04-02',notes:'Owner declined -- scope deferred to a future capital cycle.'},
+    {id:'co9',property:'Store #531',description:'Overtime labor premium to recover schedule after crew shortage',originalAmount:31000,negotiatedAmount:24500,savings:6500,status:'Approved',ec:'Kone',loggedBy:'Marcus Webb',date:'2026-06-05',approvedDate:'2026-06-12',notes:'Tied to labor shortage recovery plan (see action item da3).'},
+  ]);
+  // demo-v1h -- Billing Log for the 3 showcase properties replaced with a
+  // real multi-entry history (7 entries each) instead of the single entry
+  // each had before. getPropertyBilledAndBasis() sums every entry's
+  // billedYTD across the property's lifetime (see that function's own
+  // comment, ~line 13316: "billed sums every real Billing Log entry
+  // (lifetime, not just the latest)") -- so despite the field's "YTD"
+  // name, each entry here is an incremental per-invoice-period billed
+  // amount, not a running cumulative snapshot. 7 entries (>
+  // BILLING_PREVIEW_COUNT=6) so the Budget tab's "Show all N entries"
+  // popout actually has something to expand. Other properties' single
+  // billing entries (dbl3/4/5/7/8/9) are left untouched per the approved
+  // plan. dbl1/dbl2/dbl6 (the old single entries for these 3 properties)
+  // are removed here and replaced by the fuller histories below.
+  window.BILLING_LOG=window.BILLING_LOG.filter(b=>!['dbl1','dbl2','dbl6'].includes(b.id)).concat([
+    // Store #101 -- steady progress billing, PE1/PE2 complete, PE3/PE4
+    // active. Sums to $1,560,000 lifetime billed (~40% of $3.9M award).
+    {id:'dbl101-1',property:'Store #101',billedYTD:180000,entryDate:'2025-12-05',invoiceMonth:'Nov 2025',notes:'Mobilization and initial hoistway demolition billing',loggedBy:'PM User'},
+    {id:'dbl101-2',property:'Store #101',billedYTD:210000,entryDate:'2026-01-08',invoiceMonth:'Dec 2025',notes:'PE1 hoistway equipment installation progress',loggedBy:'PM User'},
+    {id:'dbl101-3',property:'Store #101',billedYTD:240000,entryDate:'2026-02-05',invoiceMonth:'Jan 2026',notes:'PE1 substantial completion, PE2 hoistway underway',loggedBy:'PM User'},
+    {id:'dbl101-4',property:'Store #101',billedYTD:260000,entryDate:'2026-03-05',invoiceMonth:'Feb 2026',notes:'PE1 final inspection, PE2 electrical & fixtures',loggedBy:'PM User'},
+    {id:'dbl101-5',property:'Store #101',billedYTD:250000,entryDate:'2026-04-06',invoiceMonth:'Mar 2026',notes:'PE2 substantial completion',loggedBy:'PM User'},
+    {id:'dbl101-6',property:'Store #101',billedYTD:230000,entryDate:'2026-05-06',invoiceMonth:'Apr 2026',notes:'PE1/PE2 punch list closeout, PE3 mobilization',loggedBy:'PM User'},
+    {id:'dbl101-7',property:'Store #101',billedYTD:190000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Progress billing through PE2 completion',loggedBy:'PM User'},
+    // Store #142 -- slower billing pace reflecting the schedule delay and
+    // recovery plan. Sums to $780,000 lifetime billed (~29% of $2.65M award).
+    {id:'dbl142-1',property:'Store #142',billedYTD:70000,entryDate:'2025-12-10',invoiceMonth:'Nov 2025',notes:'Mobilization billing, delayed start from permit review',loggedBy:'PM User'},
+    {id:'dbl142-2',property:'Store #142',billedYTD:90000,entryDate:'2026-01-12',invoiceMonth:'Dec 2025',notes:'Demolition and machine room prep',loggedBy:'PM User'},
+    {id:'dbl142-3',property:'Store #142',billedYTD:110000,entryDate:'2026-02-10',invoiceMonth:'Jan 2026',notes:'EL1 machine room equipment installation',loggedBy:'PM User'},
+    {id:'dbl142-4',property:'Store #142',billedYTD:140000,entryDate:'2026-03-10',invoiceMonth:'Feb 2026',notes:'EL1/EL2 hoistway progress, recovery plan crew added',loggedBy:'PM User'},
+    {id:'dbl142-5',property:'Store #142',billedYTD:150000,entryDate:'2026-04-10',invoiceMonth:'Mar 2026',notes:'EL1/EL2 electrical & system upgrades underway',loggedBy:'PM User'},
+    {id:'dbl142-6',property:'Store #142',billedYTD:130000,entryDate:'2026-05-08',invoiceMonth:'Apr 2026',notes:'Continued EL1/EL2 installation progress',loggedBy:'PM User'},
+    {id:'dbl142-7',property:'Store #142',billedYTD:90000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Partial billing — schedule delay',loggedBy:'PM User'},
+    // Store #531 -- labor shortage slowing pace mid-stream. Sums to
+    // $555,000 lifetime billed (~41% of $1.35M award).
+    {id:'dbl531-1',property:'Store #531',billedYTD:60000,entryDate:'2025-11-08',invoiceMonth:'Oct 2025',notes:'Mobilization billing',loggedBy:'PM User'},
+    {id:'dbl531-2',property:'Store #531',billedYTD:75000,entryDate:'2025-12-08',invoiceMonth:'Nov 2025',notes:'EL1 hoistway demolition and equipment delivery',loggedBy:'PM User'},
+    {id:'dbl531-3',property:'Store #531',billedYTD:90000,entryDate:'2026-01-09',invoiceMonth:'Dec 2025',notes:'EL1 installation progress',loggedBy:'PM User'},
+    {id:'dbl531-4',property:'Store #531',billedYTD:100000,entryDate:'2026-02-09',invoiceMonth:'Jan 2026',notes:'EL1/EL2 installation, ahead of the revised recovery pace',loggedBy:'PM User'},
+    {id:'dbl531-5',property:'Store #531',billedYTD:95000,entryDate:'2026-03-09',invoiceMonth:'Feb 2026',notes:'Labor shortage begins impacting crew size',loggedBy:'PM User'},
+    {id:'dbl531-6',property:'Store #531',billedYTD:80000,entryDate:'2026-04-08',invoiceMonth:'Mar 2026',notes:'Reduced crew — billing pace slowed',loggedBy:'PM User'},
+    {id:'dbl531-7',property:'Store #531',billedYTD:55000,entryDate:'2026-06-01',invoiceMonth:'May 2026',notes:'Partial billing — labor recovery plan in effect',loggedBy:'PM User'},
+  ]);
+  // demo-v1h -- additional Documents for the 3 showcase properties across
+  // multiple subfolders (SUBFOLDERS = Field Updates/PM Updates/Meeting
+  // Minutes/Closed Actions), matching the existing ddoc1-4 record shape
+  // exactly. Field Update / Meeting Minutes / Closed Actions entries link
+  // to the new dm*/da*/ds* records added below via _submissionId/
+  // _meetingId/_actionId, same convention as the existing seed. PM
+  // Updates entries link to the new window.PM_UPDATES records via
+  // _pmUpdateId, mirroring archivePMUpdateToDocuments()'s real behavior.
+  window.DOCUMENTS_LIVE=window.DOCUMENTS_LIVE.concat([
+    // Store #101
+    {id:'ddoc5',name:'Store #101 — Field Update 2026-06-08',property:'Store #101',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-06-09',uploadedBy:'Sarah Chen',notes:'Week of June 8',_submissionId:'ds4'},
+    {id:'ddoc6',name:'Store #101 — Field Update 2026-06-15',property:'Store #101',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-06-16',uploadedBy:'Sarah Chen',notes:'Week of June 15',_submissionId:'ds5'},
+    {id:'ddoc7',name:'Store #101 — PM Update 2026-08-05',property:'Store #101',type:'PM Update',subfolder:'PM Updates',visibility:'Public',uploaded:'2026-08-05',uploadedBy:'PM User',notes:'Published status update',_pmUpdateId:'dpmu1'},
+    {id:'ddoc8',name:'Store #101 — Monthly Performance Review 2026-06-10',property:'Store #101',type:'Meeting Minutes',subfolder:'Meeting Minutes',visibility:'Public',uploaded:'2026-06-10',uploadedBy:'System',notes:'Monthly Performance Review · 2026-06-10',_meetingId:'dm1'},
+    {id:'ddoc9',name:'Store #101 — Progress Review 2026-06-17',property:'Store #101',type:'Meeting Minutes',subfolder:'Meeting Minutes',visibility:'Internal',uploaded:'2026-06-17',uploadedBy:'System',notes:'Progress Review · 2026-06-17',_meetingId:'dm6'},
+    {id:'ddoc10',name:'Store #101 — Closed Action: Confirm PE3 staging area',property:'Store #101',type:'Closed Actions Report',subfolder:'Closed Actions',visibility:'Public',uploaded:'2026-06-13',uploadedBy:'Sarah Chen',notes:'Owner: Sarah Chen · Priority: Medium · Due: 2026-06-12',_actionId:'da2',_action:{description:'Confirm PE3 staging area with mall management',owner:'Sarah Chen',priority:'Medium',due:'2026-06-12',closedDate:'2026-06-13',property:'Store #101'}},
+    // Store #142
+    {id:'ddoc11',name:'Store #142 — Field Update 2026-06-08',property:'Store #142',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-06-09',uploadedBy:'Marcus Webb',notes:'Week of June 8',_submissionId:'ds6'},
+    {id:'ddoc12',name:'Store #142 — PM Update 2026-08-10',property:'Store #142',type:'PM Update',subfolder:'PM Updates',visibility:'Public',uploaded:'2026-08-10',uploadedBy:'PM User',notes:'Published status update',_pmUpdateId:'dpmu2'},
+    {id:'ddoc13',name:'Store #142 — Progress Review 2026-06-03',property:'Store #142',type:'Meeting Minutes',subfolder:'Meeting Minutes',visibility:'Public',uploaded:'2026-06-03',uploadedBy:'System',notes:'Progress Review · 2026-06-03',_meetingId:'dm2'},
+    {id:'ddoc14',name:'Store #142 — Client Update 2026-06-20',property:'Store #142',type:'Meeting Minutes',subfolder:'Meeting Minutes',visibility:'Internal',uploaded:'2026-06-20',uploadedBy:'System',notes:'Client Update · 2026-06-20',_meetingId:'dm7'},
+    {id:'ddoc15',name:'Store #142 — Closed Action: Submit revised schedule',property:'Store #142',type:'Closed Actions Report',subfolder:'Closed Actions',visibility:'Public',uploaded:'2026-06-14',uploadedBy:'Marcus Webb',notes:'Owner: Tom Brady · Priority: High · Due: 2026-06-15',_actionId:'da1',_action:{description:'Submit revised schedule to PM by June 15',owner:'Tom Brady',priority:'High',due:'2026-06-15',closedDate:'2026-06-14',property:'Store #142'}},
+    // Store #531
+    {id:'ddoc16',name:'Store #531 — Field Update 2026-06-01',property:'Store #531',type:'Field Update',subfolder:'Field Updates',visibility:'Public',uploaded:'2026-06-02',uploadedBy:'Marcus Webb',notes:'Week of June 1',_submissionId:'ds7'},
+    {id:'ddoc17',name:'Store #531 — PM Update 2026-08-12',property:'Store #531',type:'PM Update',subfolder:'PM Updates',visibility:'Public',uploaded:'2026-08-12',uploadedBy:'PM User',notes:'Published status update',_pmUpdateId:'dpmu3'},
+    {id:'ddoc18',name:'Store #531 — Recovery Planning Session 2026-05-20',property:'Store #531',type:'Meeting Minutes',subfolder:'Meeting Minutes',visibility:'Public',uploaded:'2026-05-20',uploadedBy:'System',notes:'Recovery Planning Session · 2026-05-20',_meetingId:'dm8'},
+    {id:'ddoc19',name:'Store #531 — Closed Action: Order barricade relocation',property:'Store #531',type:'Closed Actions Report',subfolder:'Closed Actions',visibility:'Public',uploaded:'2026-06-05',uploadedBy:'Marcus Webb',notes:'Owner: Marcus Webb · Priority: High · Due: 2026-06-08',_actionId:'da6',_action:{description:'Relocate barricades ahead of PE3 mobilization',owner:'Marcus Webb',priority:'High',due:'2026-06-08',closedDate:'2026-06-05',property:'Store #531'}},
+  ]);
+  // demo-v1h -- additional meetings for the 3 showcase properties, real
+  // weekly/monthly cadence over several months. Matches the existing
+  // dm1-dm7 field shape exactly.
+  meetings=meetings.concat([
+    {id:'dm8',property:'Store #531',date:'2026-05-20',type:'Recovery Planning Session',elevco:'Kone',format:'In-person',attVDA:'Marcus Webb',attElev:'Steve Martin (Kone)',attClient:'',agenda:'Review labor shortage impact, present recovery plan options',notes:'Agreed to add second crew shift starting June 1. Owner briefed on 6-week schedule impact.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
+    {id:'dm9',property:'Store #101',date:'2026-03-12',type:'Progress Review',elevco:'Otis',format:'Zoom',attVDA:'Sarah Chen',attElev:'John Smith (Otis PM)',attClient:'Karen Lee',agenda:'PE1 completion review, PE2 kickoff',notes:'PE1 substantially complete. PE2 hoistway work begins next week.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
+    {id:'dm10',property:'Store #142',date:'2026-01-15',type:'Kickoff',elevco:'Schindler',format:'In-person',attVDA:'Marcus Webb',attElev:'Tom Brady (Schindler)',attClient:'David Abraham',agenda:'Contract award kickoff, mobilization planning',notes:'Contract executed. Mobilization targeted for August, pending final permit approval.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
+    {id:'dm11',property:'Store #531',date:'2026-07-08',type:'Progress Review',elevco:'Kone',format:'Zoom',attVDA:'Marcus Webb',attElev:'Steve Martin (Kone)',attClient:'',agenda:'Recovery plan check-in, EL1/EL2 status',notes:'Second crew shift in place. EL1 back on track, EL2 catching up.',published:true,visibility:'Published',isDraft:false,status:'Logged'},
+    {id:'dm12',property:'Store #101',date:'2026-08-19',type:'Monthly Performance Review',elevco:'Otis',format:'Zoom',attVDA:'Sarah Chen',attElev:'John Smith (Otis PM)',attClient:'Karen Lee',agenda:'PE3/PE4 status, PE5-PE8 procurement timeline',notes:'',published:false,visibility:'Internal',isDraft:false,status:'Scheduled'},
+    {id:'dm13',property:'Store #142',date:'2026-08-26',type:'Progress Review',elevco:'Schindler',format:'In-person',attVDA:'Marcus Webb',attElev:'Tom Brady (Schindler)',attClient:'',agenda:'EL1/EL2 installation status, recovery plan tracking',notes:'',published:false,visibility:'Internal',isDraft:false,status:'Scheduled'},
+  ]);
+
+  // demo-v1h -- additional action items for the 3 showcase properties.
+  // Matches the existing da1-da5 field shape exactly.
+  actionItems=actionItems.concat([
+    {id:'da6',property:'Store #531',meetingId:'dm8',description:'Relocate barricades ahead of PE3 mobilization',owner:'Marcus Webb',due:'2026-06-08',priority:'High',status:'Closed',closedDate:'2026-06-05'},
+    {id:'da7',property:'Store #101',meetingId:'dm9',description:'Coordinate PE2 crane delivery with mall loading dock schedule',owner:'Sarah Chen',due:'2026-03-20',priority:'Medium',status:'Closed',closedDate:'2026-03-18'},
+    {id:'da8',property:'Store #142',meetingId:'dm10',description:'Finalize night-work permit with city building department',owner:'Marcus Webb',due:'2026-07-15',priority:'High',status:'Open'},
+    {id:'da9',property:'Store #531',meetingId:'dm11',description:'Confirm second crew shift staffing through project completion',owner:'Steve Martin',due:'2026-08-01',priority:'Medium',status:'Open'},
+    {id:'da10',property:'Store #101',meetingId:'',description:'Order long-lead escalator components for Phase 2',owner:'Sarah Chen',due:'2026-09-15',priority:'Low',status:'Open'},
+  ]);
+
+  // demo-v1h -- additional field-update submissions for the 3 showcase
+  // properties (ds4-ds7), referenced by the new Documents entries above.
+  // Matches the existing ds1-ds3 field shape exactly.
+  submissions=submissions.concat([
+    {id:'ds4',atId:null,property:'Store #101',week:'2026-06-08',units:'PE3',phase:'Construction',status:'In Progress',notes:'PE3 hoistway demolition underway. PE4 crew starting prep work.',commentType:'General',issueStatus:'None',savings:'',submittedAt:'June 9, 2026',reviewStatus:'approved',consultant:'Sarah Chen'},
+    {id:'ds5',atId:null,property:'Store #101',week:'2026-06-15',units:'PE3, PE4',phase:'Construction',status:'In Progress',notes:'PE3 hoistway equipment install started. PE4 demolition complete.',commentType:'General',issueStatus:'None',savings:'',submittedAt:'June 16, 2026',reviewStatus:'approved',consultant:'Sarah Chen'},
+    {id:'ds6',atId:null,property:'Store #142',week:'2026-06-08',units:'EL1, EL2',phase:'Construction',status:'In Progress',notes:'EL1 machine room equipment set. EL2 hoistway demolition underway. Recovery plan crew fully staffed.',commentType:'General',issueStatus:'None',savings:'',submittedAt:'June 9, 2026',reviewStatus:'approved',consultant:'Marcus Webb'},
+    {id:'ds7',atId:null,property:'Store #531',week:'2026-06-01',units:'EL1, EL2',phase:'Construction',status:'Behind',notes:'EL1 installation continuing despite reduced crew. EL2 mobilization delayed one week. Second shift starts next week per recovery plan.',commentType:'Issue',issueStatus:'Open',savings:'',submittedAt:'June 2, 2026',reviewStatus:'approved',consultant:'Marcus Webb'},
+  ]);
+  // demo-v1h -- window.CLIENT_COMMENTS and window.PM_UPDATES were both
+  // completely unseeded in demo mode (stayed permanently []), so the
+  // Client Comments view (renderCommentsView) and PM Updates / Project
+  // Updates feed (renderPMUpdates for PM, renderClientProjectUpdates for
+  // Client) rendered empty for both demo roles -- the only two roles this
+  // demo build ever shows. Seeded here for the 3 showcase properties.
+  //
+  // CLIENT_COMMENTS: field shape matches submitFlag()/addReply() exactly
+  // (threadId groups a flag + its replies; authorRole is 'client' or
+  // 'pm'; created is a full ISO datetime string, same as
+  // new Date().toISOString() produces at runtime). One open thread, one
+  // resolved thread, one internal PM-only thread with no client party.
+  window.CLIENT_COMMENTS=[
+    {id:'dcc1',property:'Store #101',threadId:'thread-101-a',authorRole:'client',authorName:'Demo Retail — Capital Projects',message:'Can we get a firm date for PE3 completion? We have a store remodel that depends on it.',flagType:'Schedule',status:'Open',visibility:'Published',created:'2026-06-05T14:30:00.000Z',read:true,readByPM:true,readByClient:true,readByConsultant:false},
+    {id:'dcc2',property:'Store #101',threadId:'thread-101-a',authorRole:'pm',authorName:'Pulse — Project Manager',message:'PE3 hoistway install is underway now. Current target is early August, assuming no inspection delays. Will confirm once PE3 adjusting starts.',flagType:'Schedule',status:'Open',visibility:'Published',created:'2026-06-06T09:15:00.000Z',read:true,readByPM:true,readByClient:true,readByConsultant:false},
+    {id:'dcc3',property:'Store #142',threadId:'thread-142-a',authorRole:'client',authorName:'Demo Retail — Capital Projects',message:'We noticed the schedule slipped again this month. What is being done to recover?',flagType:'Schedule',status:'Resolved',visibility:'Published',created:'2026-03-02T11:00:00.000Z',read:true,readByPM:true,readByClient:true,readByConsultant:false},
+    {id:'dcc4',property:'Store #142',threadId:'thread-142-a',authorRole:'pm',authorName:'Pulse — Project Manager',message:'A formal recovery plan was submitted and approved in February -- added a second install crew and a 3-week schedule buffer. We are tracking to the recovered dates now.',flagType:'Schedule',status:'Resolved',visibility:'Published',created:'2026-03-04T13:20:00.000Z',read:true,readByPM:true,readByClient:true,readByConsultant:false},
+    {id:'dcc5',property:'Store #531',threadId:'thread-531-a',authorRole:'client',authorName:'Demo Retail — Capital Projects',message:'Understand there is a labor shortage on this job. Will this affect our opening timeline for the remodel?',flagType:'General',status:'Open',visibility:'Published',created:'2026-06-10T16:45:00.000Z',read:false,readByPM:true,readByClient:false,readByConsultant:false},
+    {id:'dcc6',property:'Store #101',threadId:'thread-101-b',authorRole:'pm',authorName:'Pulse — Project Manager',message:'Flagging internally -- night-only install windows are getting tighter with the holiday freight schedule starting in Q4. Will need to discuss extended hours with the client soon.',flagType:'General',status:'Open',visibility:'PM Only',created:'2026-07-15T10:00:00.000Z',read:true,readByPM:true,readByClient:false,readByConsultant:false},
+  ];
+
+  // PM_UPDATES: field shape matches pmuCreate()/the live Airtable loader
+  // mapping exactly (see window.PM_UPDATES = pmUpdates.map(...) near the
+  // top of the file). renderClientProjectUpdates() only shows Published
+  // entries within a rolling 30-day window of "today" -- published dates
+  // below are set within that window (today is 2026-08-24 per session
+  // context) so the Client Project Updates feed actually has content, not
+  // just the PM-facing feed (which shows all statuses regardless of age).
+  window.PM_UPDATES=[
+    {id:'dpmu1',property:'Store #101',scopeId:'demo_sc_active_Store #101',author:'PM User',text:'PE3 is now in adjusting and testing. PE4 hoistway equipment installation is underway. We remain on track for PE3/PE4 completion in early August, with PE5-PE8 procurement starting this month.',status:'Published',created:'2026-08-04',published:'2026-08-05',units:'PE3, PE4',phase:'Construction',progressStatus:'On Track',commentType:'General',appliesToWholeProject:false,linkedUnitIds:['dui101-3','dui101-4']},
+    {id:'dpmu2',property:'Store #142',scopeId:'demo_sc_active_Store #142',author:'PM User',text:'Recovery plan continues to hold. EL1 and EL2 are both in active installation with the added second crew. We are tracking to the recovered schedule and expect no further slippage this quarter.',status:'Published',created:'2026-08-09',published:'2026-08-10',units:'EL1, EL2',phase:'Construction',progressStatus:'Behind Schedule',commentType:'General',appliesToWholeProject:false,linkedUnitIds:['dui142-1','dui142-2']},
+    {id:'dpmu3',property:'Store #531',scopeId:'demo_sc_active_Store #531',author:'PM User',text:'Second install crew is fully staffed as of early July. EL1 is back on the recovered schedule; EL2 is one week behind but closing the gap. We do not expect this to affect the overall project completion date.',status:'Published',created:'2026-08-11',published:'2026-08-12',units:'EL1, EL2',phase:'Construction',progressStatus:'Behind Schedule',commentType:'General',appliesToWholeProject:false,linkedUnitIds:['dui531-1','dui531-2']},
+    {id:'dpmu4',property:'Store #101',scopeId:'demo_sc_active_Store #101',author:'PM User',text:'Draft note to self: confirm PE5-PE8 lead times with Otis procurement before publishing next update.',status:'Draft',created:'2026-08-18',published:'',units:'',phase:'',progressStatus:'',commentType:'General',appliesToWholeProject:true,linkedUnitIds:[]},
+  ];
+  // demo-v1h -- item 10 fix: Store #823 has a round in the portfolio-wide
+  // window.BID_ROUNDS (demo_br2, feeding Ops Center's "Bid Rounds to
+  // Review" card) but no matching entry in the separate
+  // BID_ROUNDS_DEMO/BID_SUBMISSIONS_DEMO cache the property's own Bids
+  // tab actually reads from -- clicking into Store #823 from Ops Center
+  // showed nothing. Adding the matching cache entries here (rather than
+  // removing the portfolio-wide one) since Store #823 genuinely is
+  // Survey-stage awaiting its first bid round, and the Ops Center
+  // surfacing that is correct behavior once the property's own Bids tab
+  // can actually show the same round. Same field/shape convention as the
+  // existing dbr1/dbs1-3/dbli1-4 Store #422 entries above.
+  window.BID_ROUNDS_DEMO.push(
+    {id:'dbr2',property:'Store #823',scopeId:'demo_sc_active_Store #823','Round Name':'Original','Property':['Store #823'],'Unit List':'Elevator No. 1\nElevator No. 2\nElevator No. 3\nElevator No. 4','Round Status':'Open','Created Date':'2026-06-01'}
+  );
+  window.BID_SUBMISSIONS_DEMO.push(
+    {id:'dbs4',property:'Store #823','Bid Round':['dbr2'],'Supplier Name':'Otis','Status':'Submitted','Visibility':'Published','Base Bid Amount':1180000,'Lead Time':14,'Bond Cost':28000,'Interim Maintenance Pricing':4200,'Warranty Maintenance Pricing':0,'Long-Term Maintenance Pricing':11500,'Submitted Date':'2026-06-18','Entered By':'Marcus Webb','Last Edited By':'Marcus Webb'},
+    {id:'dbs5',property:'Store #823','Bid Round':['dbr2'],'Supplier Name':'TBD Elevator Co','Status':'Submitted','Visibility':'Published','Base Bid Amount':1225000,'Lead Time':16,'Bond Cost':29500,'Interim Maintenance Pricing':4500,'Warranty Maintenance Pricing':0,'Long-Term Maintenance Pricing':12000,'Submitted Date':'2026-06-20','Entered By':'Marcus Webb','Last Edited By':'Marcus Webb'}
+  );
+  window.BID_LINE_ITEMS_DEMO.push(
+    {id:'dbli5','Bid Submission':['dbs4'],'Line Item Type':'Clarification','Category':'Scope','Description':'Pricing assumes existing hoistway dimensions confirmed in 2026 survey.'}
+  );
   clientFlags=[];flagIdCounter=0;
 
   setupDemoPortal();
