@@ -809,16 +809,46 @@ function pricingModelLabel(model){
 // TODO on renderWizardStep2Portfolio.
 
 /* ============================================================
-   OFFERS ROSTER — empty on purpose. This used to carry several
-   notional example offers with placeholder client names, included only
-   for roster-breadth mockup purposes. That's fine in a private design
-   review, not on a live public page where it can read as real pipeline
-   data. Real offers aren't persisted yet either (see
-   confirmGenerateOffer() -- it doesn't call POST /api/offers yet), so
-   until that's wired up, this stays empty and the roster shows its
-   real empty-state rather than fabricated rows.
+   OFFERS ROSTER — real data, loaded live from the Worker. This used to
+   carry several notional example offers with placeholder client names
+   as hardcoded JS -- fine for a private design review, not for a live
+   public page where it could read as real pipeline data. Offers are
+   now actually persisted (see confirmGenerateOffer() -> POST
+   /api/offers) and the roster/analytics views both read them back via
+   GET /api/offers, reloaded fresh every time either view is entered
+   (see goTo()) so a just-created offer always shows up.
    ============================================================ */
-const OFFERS = [];
+let OFFERS = [];
+// Server rows are snake_case (client_name, site_count, owner_name, ...);
+// normalize to the camelCase shape the roster/analytics/detail renderers
+// already expect, so none of that existing render code needs to change.
+function normalizeOffer(r){
+  return {
+    id: r.id,
+    client: r.client_name,
+    portfolio: r.portfolio_name || '',
+    type: r.offer_type,
+    status: r.status,
+    siteCount: r.site_count || 0,
+    unitCount: r.unit_count || 0,
+    total: r.total || 0,
+    owner: r.owner_name || '—',
+    updated: r.updated_at ? String(r.updated_at).slice(0,10) : '',
+    deliverables: r.deliverables || ['estimate'],
+  };
+}
+async function loadOffers(){
+  try {
+    const res = await workerFetch('/api/offers');
+    const data = await res.json();
+    OFFERS = res.ok ? data.map(normalizeOffer) : [];
+    if(!res.ok) showToast((data && data.error) || 'Could not load offers.', true);
+  } catch(e){
+    OFFERS = [];
+    showToast('Could not reach the server to load offers.', true);
+  }
+  render();
+}
 
 /* ============================================================
    STATE
@@ -867,6 +897,14 @@ function goTo(view){
     patch.usersData = null;
     setState(patch);
     loadUsers();
+    return;
+  }
+  // Offers and Pricing Analytics both read from the real, live roster --
+  // reload fresh every time either is entered so a newly generated offer
+  // (see confirmGenerateOffer) or a status change elsewhere always shows.
+  if(view==='offers' || view==='admin'){
+    setState(patch);
+    loadOffers();
     return;
   }
   setState(patch);
@@ -1039,7 +1077,20 @@ function renderOffersRoster(){
     </div>
   </div>`;
 }
-function openOffer(id){ setState({ view:'offer-detail', activeOfferId:id }); }
+function openOffer(id){
+  setState({ view:'offer-detail', activeOfferId:id, offerDetail:null });
+  loadOfferDetail(id);
+}
+async function loadOfferDetail(id){
+  try {
+    const res = await workerFetch(`/api/offers/${id}`);
+    const data = await res.json();
+    state.offerDetail = res.ok ? data : { error: (data && data.error) || 'Could not load this offer.' };
+  } catch(e){
+    state.offerDetail = { error: 'Could not reach the server.' };
+  }
+  render();
+}
 
 /* ============================================================
    NEW OFFER WIZARD
@@ -1736,10 +1787,11 @@ function renderWizardStep4(){
     </div>
   </div>
 
+  ${w.deliverables.includes('proposal') ? `
   <div class="notional-banner" style="margin-top:14px;">
     <span class="ic">${icon('warn')}</span>
-    <div>This is a mockup — clicking "Confirm &amp; Generate" simulates offer creation and returns you to the dashboard. No offer is actually persisted.</div>
-  </div>
+    <div>The Narrative Proposal document itself isn't built yet — selecting it here records that this offer wants one, but no document is generated on confirm. The Estimate Sheet below is fully real.</div>
+  </div>` : ''}
 
   <div style="max-width:840px; margin: 14px auto 0 auto;">
     ${w.deliverables.includes('estimate') ? renderEstimateSheetHTML() : ''}
@@ -1747,12 +1799,39 @@ function renderWizardStep4(){
 
   <div style="display:flex; justify-content:space-between; margin-top:18px;">
     <button class="btn" onclick="wizardStep(3)">&larr; Back to Services &amp; Pricing</button>
-    <button class="btn btn-primary" onclick="confirmGenerateOffer()">Confirm &amp; Generate Offer</button>
+    <button class="btn btn-primary" ${w.generating?'disabled':''} onclick="confirmGenerateOffer()">${w.generating?'Generating…':'Confirm &amp; Generate Offer'}</button>
   </div>`;
 }
-function confirmGenerateOffer(){
-  showToast('Offer generated (simulated). In the real tool this would create a new offer record and open its detail page.');
-  setTimeout(()=>goTo('offers'), 900);
+async function confirmGenerateOffer(){
+  const w = state.wizard;
+  if(w.generating) return; // guard against a double-click double-creating the offer
+  if(!w.pricingResult){ showToast('Pricing is still loading — wait a moment and try again.', true); return; }
+  w.generating = true; render();
+
+  const units = currentUnits();
+  const body = {
+    clientName: w.clientName,
+    portfolioName: w.offerType==='single' ? null : w.portfolioName,
+    offerType: w.offerType,
+    siteCount: w.offerType==='single' ? 1 : new Set(units.map(u=>u.property)).size,
+    unitCount: units.length,
+    contractTermYears: w.contractTermYears,
+    totals: computeOfferTotals(),
+    deliverables: w.deliverables,
+    discountTiers: w.discountTiers,
+  };
+  try {
+    const res = await workerFetch('/api/offers', {
+      method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if(!res.ok){ showToast(data.error || 'Could not save this offer.', true); w.generating = false; render(); return; }
+    showToast(`Offer ${data.id} created.`);
+    setState({ view:'offer-detail', activeOfferId:data.id, offerDetail:data });
+  } catch(e){
+    showToast('Could not reach the server. Check your connection and try again.', true);
+    w.generating = false; render();
+  }
 }
 
 function renderEstimateSheetHTML(){
@@ -1995,23 +2074,40 @@ function renderClientsSites(){
 }
 
 /* ============================================================
-   OFFER DETAIL — read-only view of a single offer from the roster.
-   Note: this mockup's seed offers only carry a rolled-up total (no
-   persisted per-service line items), since the wizard's live pricing
-   state isn't saved back onto OFFERS on generate. Detail shows what a
-   real offer record would carry at the roster level; a future pass would
-   persist full line items on "Confirm & Generate Offer" so this page can
-   show the same services/pricing breakdown as the estimate sheet.
+   OFFER DETAIL — real record, loaded live via GET /api/offers/:id
+   (see openOffer()/loadOfferDetail() above). Shows the persisted
+   line-item breakdown exactly as it was computed at generation time --
+   real numbers from offer_line_items, not a re-derivation.
    ============================================================ */
+function offerLineItemLabel(li){
+  const svc = SERVICES.find(s=>s.id===li.service_id);
+  return svc ? svc.name : li.service_id;
+}
+async function changeOfferStatus(id, status){
+  try {
+    const res = await workerFetch(`/api/offers/${id}/status`, {
+      method: 'PATCH', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ status }),
+    });
+    if(!res.ok){ const data = await res.json().catch(()=>({})); showToast(data.error || 'Could not update status.', true); return; }
+    showToast(`Status updated to ${offerStatusLabel(status)}.`);
+    loadOfferDetail(id);
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
 function renderOfferDetail(){
-  const o = OFFERS.find(x=>x.id===state.activeOfferId);
-  if(!o) return renderPlaceholder('Offer Detail');
+  const d = state.offerDetail;
+  if(!d) return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Offer Detail</h1><div class="empty-state card" style="margin-top:20px;"><div class="ic">⚙</div>Loading…</div>`;
+  if(d.error) return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Offer Detail</h1><div class="empty-state card" style="margin-top:20px; color:var(--red);"><div class="ic">${icon('warn')}</div>${d.error}</div>`;
+  const o = normalizeOffer(d);
+  const nextStatuses = { draft:'sent', sent:'accepted', accepted:null, expired:null };
+  const nextStatus = nextStatuses[o.status];
   return `
   <div class="page-topline"><span class="row-link" style="cursor:pointer;" onclick="goTo('offers')">${icon('back')} Offers</span></div>
   <div class="hero-band" style="margin-top:8px;">
     <div class="htitle">${o.client}</div>
     <div class="hmeta">
-      <span>${o.portfolio}</span><span>·</span><span>${o.id}</span><span>·</span>
+      <span>${o.portfolio || o.id}</span><span>·</span><span>${o.id}</span><span>·</span>
       <span>${o.type==='portfolio'?'Portfolio':'Single Property'}</span>
     </div>
   </div>
@@ -2029,21 +2125,33 @@ function renderOfferDetail(){
           <div class="kv-row"><span class="k">Last updated</span><span class="v">${o.updated}</span></div>
         </div>
       </div>
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header"><h3 class="card-title">Services &amp; Pricing</h3></div>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead><tr><th>Service</th><th class="num">Basis</th><th class="num">Amount</th></tr></thead>
+            <tbody>
+              ${(d.lineItems||[]).map(li => `<tr><td>${offerLineItemLabel(li)}</td><td class="num">${pricingModelLabel(li.pricing_model)}</td><td class="num">${fmtMoney(li.amount)}${li.is_monthly?'/mo':''}${li.is_annual?'/yr':''}</td></tr>`).join('') || `<tr><td colspan="3" style="color:var(--text-muted);">No line items recorded.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <div class="card card-pad">
         <p class="card-title" style="margin-bottom:12px;">Deliverables</p>
         <div class="chip-row" style="margin-bottom:0;">
-          ${o.deliverables.map(d => `<span class="tag-pill core">${d==='estimate'?'Estimate Sheet':'Narrative Proposal'}</span>`).join('')}
+          ${o.deliverables.map(dl => `<span class="tag-pill core">${dl==='estimate'?'Estimate Sheet':'Narrative Proposal'}</span>`).join('')}
         </div>
+        ${o.deliverables.includes('proposal') ? `<p class="row-sub" style="margin-top:10px; margin-bottom:0;">The Narrative Proposal document generator isn't built yet — this offer is flagged as wanting one, but no document exists to download.</p>` : ''}
       </div>
     </div>
     <div class="sticky-side">
       <div class="card card-pad">
         <p class="card-title" style="margin-bottom:8px;">Actions</p>
         <div style="display:flex; flex-direction:column; gap:8px;">
+          ${nextStatus ? `<button class="btn btn-primary" onclick="changeOfferStatus('${o.id}','${nextStatus}')">Mark as ${offerStatusLabel(nextStatus)}</button>` : ''}
           <button class="btn btn-primary" onclick="goTo('wizard')">${icon('newoffer')} Start a similar offer</button>
           <button class="btn" onclick="goTo('offers')">${icon('back')} Back to Offers</button>
         </div>
-        <p class="row-sub" style="margin-top:12px; margin-bottom:0;">This mockup doesn't persist per-service line items back onto generated offers yet — the full pricing breakdown is only available live in the New Offer wizard.</p>
       </div>
     </div>
   </div>`;
