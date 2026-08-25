@@ -2937,7 +2937,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">demo-v1j (v50j base)</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">demo-v1k (v50j base)</div>
     </div>
   </nav>
 
@@ -4410,6 +4410,39 @@ const CLIENTS={park:'Park Hotels & Resorts',diamond:'Diamond Rock Hospitality',w
 let demoMode=false;
 let demoRole='pm';
 
+// demo-v1k -- Misty's live feedback after v1j: "on Operations center can
+// you add data to Budget Overrun Watch. Also stores 095, 188, 267, 334,
+// 419, 502, 611, and 743 have no units on on the Properties tab. Also
+// Budget Outlook tab has no data except Portfolio Cashflow curve." Three
+// fixes:
+// (1) The 8 "missing" stores turned out to be CAPITAL_PLAN_DEMO's 8
+// Capital Plan properties (cp1-cp8), not new properties -- confirmed by
+// grep against the file. The v1j round only covered DEMO_PORTFOLIO's 15
+// properties; Capital Plan properties use a separate Scope id convention
+// ('demo_sc_'+p.id) and were never in scope for Unit Inventory seeding.
+// But the Properties tab (renderPropertiesTable/getPropsRowData) reads
+// from window.PORTFOLIO, which is DEMO_PORTFOLIO + CAPITAL_PLAN_DEMO
+// concatenated (~line 4619) -- so these 8 ARE visible there to both demo
+// roles, correcting an earlier scope assumption that Capital Plan data
+// was entirely Admin-only (true only for the separate Capital Plan/
+// Portfolio View pages, not the Properties tab). Added Unit Inventory for
+// all 8, matching each property's units/unitDesc fields exactly, every
+// unit status:'Planned' (none have started construction).
+// (2) Budget Overrun Watch (Operations Center) needs a Scope with a real
+// approvedBudget AND billed exceeding it -- true of zero properties
+// before this round. Gave Store #055 and Store #089 (both already had
+// real billing history from the original parity seed) an approvedBudget
+// just under what's already billed, plus one new Change Order each
+// explaining the overrun without disturbing their existing on-track
+// narratives.
+// (3) Budget Outlook showing "no data except Cash Flow Curve" traced to
+// every DEMO_PORTFOLIO active Scope having year:null -- the outlook's
+// main loop skips any Scope without a real year entirely. Set a real
+// Year (spread 2025-2027 by each property's actual stage) on all 14
+// non-Complete DEMO_PORTFOLIO Scopes. See the two dedicated comment
+// blocks near the DEMO_PORTFOLIO Scope seed (~line 4856 onward) and the
+// Unit Inventory block (~line 5091 onward) for full detail on each.
+//
 // demo-v1j -- Misty's live feedback after v1i: "the properties tab needs
 // seeded Total Unit counts and all some percent complete statuses."
 // getPropsRowData() (~line 13866) derives the Properties tab table's
@@ -4863,6 +4896,71 @@ function enterDemo(){
   window.SCOPES.filter(s=>s.id.startsWith('demo_sc_active_')).forEach(s=>{
     if(s.retainagePct==null)s.retainagePct=5;
   });
+  // demo-v1k -- Misty's live feedback: "Budget Outlook tab has no data
+  // except Portfolio Cashflow curve." Root cause traced in
+  // renderBudgetOutlook() (~line 15909): its main items loop skips a
+  // Scope entirely once "if(sc.year==null)return;" -- and every one of
+  // the 15 DEMO_PORTFOLIO active Scopes above was created with
+  // year:null (see the DEMO_PORTFOLIO.map block ~line 4620), so literally
+  // none of them could ever appear in the outlook's KPI row or year-by-
+  // year table, no matter how much Unit Inventory data existed under
+  // them -- only the separate Portfolio Cash Flow Curve (which reads
+  // Milestones, not Scope.year) had real data. This sets a real forward-
+  // looking Year on every non-Complete active Scope (Store #177 excluded
+  // -- its Scope status is already 'Complete', correctly excluded by the
+  // function's own Complete-status gate, same as live's real "finished
+  // work isn't a forward budget ask" rule). Years are spread across
+  // 2025-2027 by each property's actual stage rather than dumped into one
+  // flat year, so the table reads as a real multi-year outlook: 2025 for
+  // Store #055 (already 60% complete, nearest-term remaining spend);
+  // 2026 for every other CIP/Active/Awarded property (matches where
+  // their real billing/milestone activity already sits, seeded in demo-
+  // v1h/v1j); 2027 for Budgeting/Survey/On Hold properties still in
+  // pre-construction. Each Scope's own Unit Inventory (seeded in demo-
+  // v1j) supplies the real Total Work Est./Award Value dollars once the
+  // year gate opens -- no per-unit changes needed here, this is purely
+  // the missing key that was blocking all of it.
+  {
+    const boYearByProp={
+      'Store #055':2025,
+      'Store #101':2026,'Store #142':2026,'Store #208':2026,'Store #089':2026,'Store #712':2026,'Store #467':2026,'Store #531':2026,
+      'Store #315':2027,'Store #422':2027,'Store #388':2027,'Store #823':2027,'Store #644':2027,'Store #290':2027,
+    };
+    Object.keys(boYearByProp).forEach(n=>{
+      const sc=window.SCOPES.find(s=>s.id==='demo_sc_active_'+n);
+      if(sc)sc.year=boYearByProp[n];
+    });
+  }
+  // demo-v1k -- Misty's live feedback: "add data to Budget Overrun Watch"
+  // (Operations Center). renderOpsCenter()'s budgetOverruns list (~line
+  // 26985) only includes a property once its Scope has a real
+  // approvedBudget AND its lifetime Billing Log total exceeds it -- true
+  // of zero properties before this round (only the 3 demo-v1h showcase
+  // Scopes had approvedBudget set, and none of them are billed over their
+  // approved figure by design). Rather than disturb those 3 properties'
+  // already-established on-track/recovering narratives, this gives two
+  // more properties -- both already carrying real billing history from
+  // the original parity seed (dbl3/dbl7) -- a real approvedBudget set
+  // just under what's already billed, plus one new Change Order each
+  // explaining why: Store #055 (Ahead of schedule, but $920K billed vs a
+  // new $840K approved -- unforeseen hoistway conditions found during
+  // PE2/PE3, cost impact only, doesn't affect its ahead-of-schedule
+  // status) and Store #089 (Active/On Track renovation aligned with a
+  // store remodel, $660K billed vs a new $560K approved -- remodel
+  // coordination drove an unplanned electrical upgrade). Award Value set
+  // slightly below Approved Budget, same small-contingency convention as
+  // the demo-v1h showcase properties above.
+  [
+    {n:'Store #055',award:800000,approved:840000},
+    {n:'Store #089',award:530000,approved:560000},
+  ].forEach(r=>{
+    const sc=window.SCOPES.find(s=>s.id==='demo_sc_active_'+r.n);
+    if(sc){sc.contractAwardValue=r.award;sc.approvedBudget=r.approved;}
+  });
+  window.CO_SAVINGS=window.CO_SAVINGS.concat([
+    {id:'co10',property:'Store #055',description:'Unforeseen hoistway conditions discovered during PE2/PE3 demolition required additional structural bracing',originalAmount:72000,negotiatedAmount:72000,savings:0,status:'Approved',ec:'Kone',loggedBy:'Marcus Webb',date:'2026-04-18',approvedDate:'2026-04-25',notes:'Cost impact only -- schedule held, project remains ahead of plan.'},
+    {id:'co11',property:'Store #089',description:'Additional electrical panel upgrade required to support remodel-driven cab relocation',originalAmount:58000,negotiatedAmount:58000,savings:0,status:'Approved',ec:'Otis',loggedBy:'Marcus Webb',date:'2026-05-02',approvedDate:'2026-05-09',notes:'Driven by store remodel coordination, not original elevator scope.'},
+  ]);
   // demo-v1h -- window.MILESTONES was never seeded in demo mode (stayed
   // permanently []), so the Milestones tab tracker, Cash Flow Curve
   // (buildCashFlowCheckpoints keys off milestoneNumber 4/6/10/14 --
@@ -5087,6 +5185,69 @@ function enterDemo(){
     {id:'dui823-3',name:'EL3',property:'Store #823',scopeId:'demo_sc_active_Store #823',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:272000,awardValue:0},
     {id:'dui823-4',name:'EL4',property:'Store #823',scopeId:'demo_sc_active_Store #823',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:274000,awardValue:0},
     {id:'dui823-5',name:'ESC1',property:'Store #823',scopeId:'demo_sc_active_Store #823',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:3,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:198000,awardValue:0},
+    // demo-v1k -- Unit Inventory for the 8 CAPITAL_PLAN_DEMO properties
+    // (cp1-cp8 / Store #334, #419, #267, #502, #188, #611, #743, #095).
+    // These use the Capital Plan Scope id convention ('demo_sc_'+p.id, set
+    // when window.SCOPES is built from CAPITAL_PLAN_DEMO -- see ~line
+    // 4609), not the 'demo_sc_active_' convention used above for
+    // DEMO_PORTFOLIO properties. None of these have started construction
+    // (Capital Plan stage only), so every unit is status:'Planned',
+    // awardValue:0 -- unit counts/elev-esc split match each property's
+    // CAPITAL_PLAN_DEMO units/unitDesc fields exactly (verified). Store
+    // #095 (cp8) keeps its "long-range, year and budget TBD" narrative --
+    // its units still get a totalWorkEst placeholder (consistent with the
+    // other On Hold/TBD-budget properties above) but no capexYear, and its
+    // Scope's plannedYear stays null so it correctly stays out of Budget
+    // Outlook's year-based table rather than contradicting its own "TBD"
+    // story.
+    // Store #334 -- 6 units (4 Elev/2 Esc), LA, Priority 1: Critical.
+    // "Hydraulic units past service life, ADA compliance gap."
+    {id:'duicp1-1',name:'EL1',property:'Store #334',scopeId:'demo_sc_cp1',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:370000,awardValue:0},
+    {id:'duicp1-2',name:'EL2',property:'Store #334',scopeId:'demo_sc_cp1',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:372000,awardValue:0},
+    {id:'duicp1-3',name:'EL3',property:'Store #334',scopeId:'demo_sc_cp1',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:375000,awardValue:0},
+    {id:'duicp1-4',name:'EL4',property:'Store #334',scopeId:'demo_sc_cp1',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:375000,awardValue:0},
+    {id:'duicp1-5',name:'ESC1',property:'Store #334',scopeId:'demo_sc_cp1',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:268000,awardValue:0},
+    {id:'duicp1-6',name:'ESC2',property:'Store #334',scopeId:'demo_sc_cp1',deviceLocation:'Level 2-3',unitType:'Escalator',equipmentType:'Escalator',priority:2,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:268000,awardValue:0},
+    // Store #419 -- 4 units (4 Elev), NYC, Priority 1: Critical. "Multiple
+    // units flagged in last inspection. Urgent."
+    {id:'duicp2-1',name:'EL1',property:'Store #419',scopeId:'demo_sc_cp2',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:410000,awardValue:0},
+    {id:'duicp2-2',name:'EL2',property:'Store #419',scopeId:'demo_sc_cp2',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:412000,awardValue:0},
+    {id:'duicp2-3',name:'EL3',property:'Store #419',scopeId:'demo_sc_cp2',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:415000,awardValue:0},
+    {id:'duicp2-4',name:'EL4',property:'Store #419',scopeId:'demo_sc_cp2',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:1,status:'Planned',capexYear:'2026',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:415000,awardValue:0},
+    // Store #267 -- 5 units (3 Elev/2 Esc), Orlando, Priority 2: High.
+    // "Budget approved Q4 2025. Survey pending."
+    {id:'duicp3-1',name:'EL1',property:'Store #267',scopeId:'demo_sc_cp3',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:380000,awardValue:0},
+    {id:'duicp3-2',name:'EL2',property:'Store #267',scopeId:'demo_sc_cp3',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:382000,awardValue:0},
+    {id:'duicp3-3',name:'EL3',property:'Store #267',scopeId:'demo_sc_cp3',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:385000,awardValue:0},
+    {id:'duicp3-4',name:'ESC1',property:'Store #267',scopeId:'demo_sc_cp3',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:3,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:255000,awardValue:0},
+    {id:'duicp3-5',name:'ESC2',property:'Store #267',scopeId:'demo_sc_cp3',deviceLocation:'Level 2-3',unitType:'Escalator',equipmentType:'Escalator',priority:3,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:255000,awardValue:0},
+    // Store #502 -- 3 units (3 Elev), Dallas, Priority 2: High.
+    // "Modernization study complete. Awaiting survey date."
+    {id:'duicp4-1',name:'EL1',property:'Store #502',scopeId:'demo_sc_cp4',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:325000,awardValue:0},
+    {id:'duicp4-2',name:'EL2',property:'Store #502',scopeId:'demo_sc_cp4',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:328000,awardValue:0},
+    {id:'duicp4-3',name:'EL3',property:'Store #502',scopeId:'demo_sc_cp4',deviceLocation:'Service Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:2,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:328000,awardValue:0},
+    // Store #188 -- 2 units (2 Elev), Nashville, Priority 3: Medium.
+    // "Preliminary budget. Survey Q1 2027."
+    {id:'duicp5-1',name:'EL1',property:'Store #188',scopeId:'demo_sc_cp5',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:3,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:308000,awardValue:0},
+    {id:'duicp5-2',name:'EL2',property:'Store #188',scopeId:'demo_sc_cp5',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:3,status:'Planned',capexYear:'2027',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:310000,awardValue:0},
+    // Store #611 -- 4 units (2 Elev/2 Esc), Minneapolis, Priority 3:
+    // Medium. "Included in 2028 capital cycle."
+    {id:'duicp6-1',name:'EL1',property:'Store #611',scopeId:'demo_sc_cp6',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:3,status:'Planned',capexYear:'2028',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:340000,awardValue:0},
+    {id:'duicp6-2',name:'EL2',property:'Store #611',scopeId:'demo_sc_cp6',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Geared Elevator',priority:3,status:'Planned',capexYear:'2028',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:342000,awardValue:0},
+    {id:'duicp6-3',name:'ESC1',property:'Store #611',scopeId:'demo_sc_cp6',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:4,status:'Planned',capexYear:'2028',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:328000,awardValue:0},
+    {id:'duicp6-4',name:'ESC2',property:'Store #611',scopeId:'demo_sc_cp6',deviceLocation:'Level 2-3',unitType:'Escalator',equipmentType:'Escalator',priority:4,status:'Planned',capexYear:'2028',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:328000,awardValue:0},
+    // Store #743 -- 2 units (2 Elev), Portland OR, Priority 4: Standard.
+    // "Preliminary scope only."
+    {id:'duicp7-1',name:'EL1',property:'Store #743',scopeId:'demo_sc_cp7',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:4,status:'Planned',capexYear:'2028',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:268000,awardValue:0},
+    {id:'duicp7-2',name:'EL2',property:'Store #743',scopeId:'demo_sc_cp7',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'Hydraulic Elevator',priority:4,status:'Planned',capexYear:'2028',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:270000,awardValue:0},
+    // Store #095 -- 3 units (2 Elev/1 Esc), Austin, Priority 4: Standard.
+    // "Long-range -- year and budget TBD." No capexYear set (matches its
+    // Scope's plannedYear:null), so this property stays out of Budget
+    // Outlook's year-based table -- correct given its own "TBD" narrative
+    // -- but still shows real Total Units/estimate figures on Properties.
+    {id:'duicp8-1',name:'EL1',property:'Store #095',scopeId:'demo_sc_cp8',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:4,status:'Planned',capexYear:'',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:285000,awardValue:0},
+    {id:'duicp8-2',name:'EL2',property:'Store #095',scopeId:'demo_sc_cp8',deviceLocation:'Main Bank',unitType:'Elevator',equipmentType:'MRL Elevator',priority:4,status:'Planned',capexYear:'',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:288000,awardValue:0},
+    {id:'duicp8-3',name:'ESC1',property:'Store #095',scopeId:'demo_sc_cp8',deviceLocation:'Level 1-2',unitType:'Escalator',equipmentType:'Escalator',priority:4,status:'Planned',capexYear:'',vdaRecYear:'',clientBudget:0,elevEst:0,relatedEst:0,cabEst:0,contingencyEst:0,totalWorkEst:205000,awardValue:0},
   ];
   // demo-v1h -- additional Change Orders for the 3 showcase properties
   // (co1/co2 already existed for Store #101, co3 for Store #142 -- both
