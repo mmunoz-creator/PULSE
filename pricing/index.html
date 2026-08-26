@@ -44,7 +44,7 @@
   --radius-sm: 6px;
   --shadow-drawer: -8px 0 32px rgba(10,22,40,0.18);
   --shadow-modal: 0 12px 40px rgba(10,22,40,0.22);
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
+  --font: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -170,8 +170,14 @@ table { border-collapse: collapse; width: 100%; }
 .sidebar-user .who { line-height:1.3; }
 .sidebar-user .name { color:white; font-size:12px; font-weight:650; }
 .sidebar-user .role { color: rgba(255,255,255,0.45); font-size:10.5px; }
-.sidebar-signout { color: rgba(255,255,255,0.4); font-size: 11px; padding: 8px 6px 0 6px; cursor:pointer; }
-.sidebar-signout:hover { color: rgba(255,255,255,0.7); }
+.sidebar-signout-btn {
+  display:flex; align-items:center; gap:8px; width:100%; padding: 8px 12px; margin-top: 8px;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+  color: rgba(255,255,255,0.75); font-size: 12px; font-weight: 600; cursor:pointer;
+  font-family: inherit; transition: background .12s, border-color .12s, color .12s;
+}
+.sidebar-signout-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.22); color: white; }
+.sidebar-signout-btn i { font-size: 15px; flex-shrink:0; }
 .sidebar-version { color: rgba(255,255,255,0.28); font-size: 10px; padding: 6px 6px 0 6px; letter-spacing: 0.3px; }
 
 .main { flex:1; min-width:0; padding: 22px 30px 60px 30px; }
@@ -311,6 +317,18 @@ table { border-collapse: collapse; width: 100%; }
   border:1px solid var(--border); border-radius:6px; background: var(--gray-25); color: var(--text-primary);
 }
 .rc-cell-input:focus { outline:none; border-color: var(--blue); background:white; }
+/* Dollar-amount cells only (unit price grid, VERIFY bands, portfolio
+   tiers) -- NOT the decimal rate/markup-factor cells, which aren't
+   currency. Wraps the same .rc-cell-input in a relative box with a $
+   prefix positioned over it, rather than putting "$" inside the typed
+   value itself (which formatCurrencyInput would have to strip/re-add on
+   every keystroke, adding needless complexity for a static prefix). */
+.rc-cell-currency { position:relative; display:inline-block; }
+.rc-cell-currency::before {
+  content:"$"; position:absolute; left:8px; top:50%; transform:translateY(-50%);
+  font-size:12.5px; font-weight:650; color: var(--text-muted); pointer-events:none;
+}
+.rc-cell-currency .rc-cell-input { padding-left:18px; }
 
 /* ============================================================
    TABS (detail pages)
@@ -648,7 +666,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v1c';
+const APP_VERSION = 'v1f';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1156,7 +1174,7 @@ function renderSidebar(){
         <div class="avatar">${initials(currentUser && currentUser.name)}</div>
         <div class="who"><div class="name">${currentUser ? currentUser.name : ''}</div><div class="role">${currentUser ? roleDisplayLabel(currentUser.role) : ''}</div></div>
       </div>
-      <div class="sidebar-signout" onclick="signOut()">Sign out</div>
+      <button class="sidebar-signout-btn" onclick="signOut()"><i class="ti ti-logout-2"></i>Sign out</button>
       <div class="sidebar-version">PULSE Pricing ${APP_VERSION}</div>
     </div>
   </div>`;
@@ -2299,8 +2317,8 @@ function renderRateCardTableLive(svcId, unitPrices){
               ${STOPS_BUCKETS.map(b => {
                 const row = rows.find(r=>r.equipment_type===eq && r.stops_bucket===b.key);
                 const val = row ? row.price : 0;
-                return `<td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(val).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)"
-                  ${row ? `onchange="updateRateCardCellLive('rate_card_unit_prices','${row.id}','price',currencyInputToNumber(this.value))"` : 'disabled title="No row for this cell yet"'}></td>`;
+                return `<td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(val).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)"
+                  ${row ? `onchange="updateRateCardCellLive('rate_card_unit_prices','${row.id}','price',currencyInputToNumber(this.value))"` : 'disabled title="No row for this cell yet"'}></span></td>`;
               }).join('')}
             </tr>`).join('')}
         </tbody>
@@ -2320,13 +2338,13 @@ function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
         <div>
           <p style="font-size:11px; font-weight:700; color:var(--text-secondary); margin:0 0 6px 0;">REGIONAL (≤100 units)</p>
           <table class="data-table rc-table"><thead><tr><th>Units</th><th class="num">Base $/unit</th></tr></thead><tbody>
-            ${regional.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></td></tr>`).join('')}
+            ${regional.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
           </tbody></table>
         </div>
         <div>
           <p style="font-size:11px; font-weight:700; color:var(--text-secondary); margin:0 0 6px 0;">NATIONAL (&gt;100 units)</p>
           <table class="data-table rc-table"><thead><tr><th>Units</th><th class="num">Base $/unit</th></tr></thead><tbody>
-            ${national.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></td></tr>`).join('')}
+            ${national.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
           </tbody></table>
         </div>
       </div>
@@ -2337,7 +2355,7 @@ function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
     <div class="card-pad" style="padding-top:0;">
       <p class="row-sub" style="margin:10px 0 12px 0;">Applied to TOTAL portfolio device count (not per-site), billed monthly and annualized.</p>
       <table class="data-table rc-table"><thead><tr><th>Devices</th><th class="num">$/unit/mo</th></tr></thead><tbody>
-        ${portfolioTiers.map(t=>`<tr><td>${t.tier_from}–${t.tier_to||'+'}</td><td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(t.price_per_unit).toLocaleString('en-US', {minimumFractionDigits: t.price_per_unit % 1 !== 0 ? 2 : 0})}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_portfolio_tiers','${t.id}','price_per_unit',currencyInputToNumber(this.value))"></td></tr>`).join('')}
+        ${portfolioTiers.map(t=>`<tr><td>${t.tier_from}–${t.tier_to||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(t.price_per_unit).toLocaleString('en-US', {minimumFractionDigits: t.price_per_unit % 1 !== 0 ? 2 : 0})}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_portfolio_tiers','${t.id}','price_per_unit',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
       </tbody></table>
     </div>
   </div>
@@ -2846,6 +2864,38 @@ async function submitCreateUser(){
     state.createUserError = 'Could not reach the server. Check your connection and try again.'; render();
   }
 }
+let editUserTargetId = null;
+function openEditUser(id, name, email){
+  editUserTargetId = id;
+  state.editUserName = name;
+  state.editUserEmail = email;
+  state.editUserError = null;
+  state.editUserBusy = false;
+  state.showEditUser = true;
+  render();
+}
+function closeEditUser(){ editUserTargetId = null; state.showEditUser = false; state.editUserError = null; render(); }
+async function submitEditUser(){
+  const name = document.getElementById('editUserName').value.trim();
+  const email = document.getElementById('editUserEmail').value.trim();
+  if(!name){ state.editUserError = 'Name is required.'; render(); return; }
+  if(!email){ state.editUserError = 'Email is required.'; render(); return; }
+  state.editUserBusy = true; render();
+  try {
+    const res = await workerFetch(`/api/admin/users/${editUserTargetId}`, {
+      method: 'PATCH', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ name, email }),
+    });
+    const data = await res.json();
+    state.editUserBusy = false;
+    if(!res.ok){ state.editUserError = data.error || 'Could not save changes.'; render(); return; }
+    state.showEditUser = false; state.editUserError = null;
+    showToast(`${data.name} updated.`);
+    loadUsers();
+  } catch(e){
+    state.editUserBusy = false;
+    state.editUserError = 'Could not reach the server. Check your connection and try again.'; render();
+  }
+}
 async function changeUserRole(id, role, selectEl){
   // data-prev is set at render time and only updated on a CONFIRMED
   // change below -- selectEl.value at this point is already the NEW
@@ -2973,6 +3023,7 @@ function renderManageUsers(){
                   <td style="color:var(--text-muted); font-size:11.5px;">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never'}</td>
                   <td>
                     <div class="row-actions">
+                      <button class="btn btn-sm" onclick="openEditUser('${u.id}', ${JSON.stringify(u.name)}, ${JSON.stringify(u.email || '')})">Edit</button>
                       <button class="btn btn-sm" onclick="openResetPin('${u.id}', ${JSON.stringify(u.name)})">Reset PIN</button>
                       <button class="btn btn-sm" title="User lost or never received their PIN email" onclick="resendPin('${u.id}', ${JSON.stringify(u.name)})">Resend PIN</button>
                       <button class="btn btn-sm" ${isSelf ? 'disabled title="You cannot deactivate your own account"' : ''} onclick="toggleUserActive('${u.id}', ${u.active ? 'false' : 'true'})">${u.active ? 'Deactivate' : 'Activate'}</button>
@@ -3003,6 +3054,20 @@ function renderManageUsers(){
       <div class="modal-footer">
         <button class="btn" onclick="closeCreateUser()">Cancel</button>
         <button class="btn btn-primary" onclick="submitCreateUser()">Create User &amp; Email PIN</button>
+      </div>
+    </div>
+  </div>` : ''}
+
+  ${state.showEditUser ? `
+  <div class="modal-backdrop" onclick="if(event.target===this) closeEditUser()">
+    <div class="modal narrow">
+      <div class="modal-title">Edit user</div>
+      <div class="field"><label>Name</label><input type="text" id="editUserName" value="${escapeHtml(state.editUserName)}" placeholder="First and last name"></div>
+      <div class="field"><label>Email</label><input type="email" id="editUserEmail" value="${escapeHtml(state.editUserEmail)}" placeholder="name@vda.com"></div>
+      ${state.editUserError ? `<div class="form-error">${escapeHtml(state.editUserError)}</div>` : ''}
+      <div class="modal-footer">
+        <button class="btn" onclick="closeEditUser()" ${state.editUserBusy?'disabled':''}>Cancel</button>
+        <button class="btn btn-primary" onclick="submitEditUser()" ${state.editUserBusy?'disabled':''}>${state.editUserBusy?'Saving…':'Save Changes'}</button>
       </div>
     </div>
   </div>` : ''}
