@@ -668,7 +668,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v1g';
+const APP_VERSION = 'v1i';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -756,8 +756,10 @@ async function doLogin() {
       return;
     }
     if (!['admin', 'sales'].includes(data.user.role)) {
-      // Server-verified role, not a client assumption -- a 'general'
-      // account can authenticate but isn't turned loose in this tool.
+      // Server-verified role, not a client assumption -- only admin and
+      // sales accounts are valid; anything else is rejected here as a
+      // defense-in-depth check even though the Worker won't issue any
+      // other role.
       setLoginError('This account is not set up for PULSE Pricing. Contact your admin.');
       return;
     }
@@ -2821,10 +2823,10 @@ function renderPersonnelRoster(){
 /* ============================================================
    MANAGE USERS (admin only) — ported from the former standalone
    personnel_admin.html. Create/edit/deactivate accounts and assign
-   roles (admin | sales | general). Role is a server-verified fact
+   roles (admin | sales). Role is a server-verified fact
    looked up at login, never a client-side choice.
    ============================================================ */
-function roleLabel(role){ return { admin: 'Admin', sales: 'Sales', general: 'General' }[role] || role; }
+function roleLabel(role){ return { admin: 'Admin', sales: 'Sales' }[role] || role; }
 
 async function loadUsers(){
   try {
@@ -2994,7 +2996,7 @@ function renderManageUsers(){
 
   <div class="helper-banner">
     <span class="ic">${icon('info')}</span>
-    <span>Roles: <b>Admin</b> can edit rate cards, the personnel roster, and other users. <b>Sales</b> can build and save offers, and see anonymized nearest-consultant/inspector results — never rate cards or real personnel names. <b>General</b> is a basic non-sales account with no special access.</span>
+    <span>Roles: <b>Admin</b> can do everything Sales can, plus edit rate cards, the personnel roster, and other users. <b>Sales</b> can build and save offers, and see anonymized nearest-consultant/inspector results — never rate cards or real personnel names.</span>
   </div>
 
   <div class="card">
@@ -3018,16 +3020,16 @@ function renderManageUsers(){
                     <select ${isSelf ? 'disabled title="You cannot change your own role here"' : ''} data-prev="${u.role}" onchange="changeUserRole('${u.id}', this.value, this)" style="font-size:11.5px; padding:4px 6px; border-radius:6px; border:1px solid var(--border-strong);">
                       <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
                       <option value="sales" ${u.role==='sales'?'selected':''}>Sales</option>
-                      <option value="general" ${u.role==='general'?'selected':''}>General</option>
+                      ${!['admin','sales'].includes(u.role) ? `<option value="${escapeHtml(u.role)}" selected>${escapeHtml(roleLabel(u.role))} (legacy)</option>` : ''}
                     </select>
                   </td>
                   <td><span class="status-pill ${u.active ? 'ok' : 'failed'}">${u.active ? 'Active' : 'Disabled'}</span></td>
                   <td style="color:var(--text-muted); font-size:11.5px;">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never'}</td>
                   <td>
                     <div class="row-actions">
-                      <button class="btn btn-sm" onclick="openEditUser('${u.id}', ${JSON.stringify(u.name)}, ${JSON.stringify(u.email || '')})">Edit</button>
-                      <button class="btn btn-sm" onclick="openResetPin('${u.id}', ${JSON.stringify(u.name)})">Reset PIN</button>
-                      <button class="btn btn-sm" title="User lost or never received their PIN email" onclick="resendPin('${u.id}', ${JSON.stringify(u.name)})">Resend PIN</button>
+                      <button class="btn btn-sm" onclick="openEditUser('${u.id}', ${escapeHtml(JSON.stringify(u.name))}, ${escapeHtml(JSON.stringify(u.email || ''))})">Edit</button>
+                      <button class="btn btn-sm" onclick="openResetPin('${u.id}', ${escapeHtml(JSON.stringify(u.name))})">Reset PIN</button>
+                      <button class="btn btn-sm" title="User lost or never received their PIN email" onclick="resendPin('${u.id}', ${escapeHtml(JSON.stringify(u.name))})">Resend PIN</button>
                       <button class="btn btn-sm" ${isSelf ? 'disabled title="You cannot deactivate your own account"' : ''} onclick="toggleUserActive('${u.id}', ${u.active ? 'false' : 'true'})">${u.active ? 'Deactivate' : 'Activate'}</button>
                     </div>
                   </td>
@@ -3048,7 +3050,6 @@ function renderManageUsers(){
         <select id="newUserRole">
           <option value="sales">Sales</option>
           <option value="admin">Admin</option>
-          <option value="general">General</option>
         </select>
       </div>
       <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:12px;">A one-time PIN will be emailed to them. They'll be asked to set their own permanent PIN the first time they sign in.</div>
