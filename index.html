@@ -4973,8 +4973,7 @@ async function loadAllData() {
       // (Milestones, Action Items, Unit Inventory List, etc.): single-value
       // link stored as the first (only) record ID in the array. Older
       // submissions made before this rebuild will have this blank —
-      // editSubmission() and renderFUUnitsList() both handle that
-      // gracefully rather than erroring.
+      // editSubmission() handles that gracefully rather than erroring.
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
       appliesToWholeProject: !!r.fields['Applies to Whole Project'],
       // Draft action — consultant-flagged follow-up attached to this
@@ -8503,36 +8502,41 @@ from unitEffectiveValue() onto each checkbox). -->
                 empty now; populateSubmitDropdown() (called from gotoView()
                 and after loadAllData() resolves) is the single source of
                 truth for these options going forward. -->
-                <select class="form-select" id="f-property" onchange="populateSubmitProjectDropdown();renderFUUnitsList()"><option value="">Select a property...</option></select>
+                <select class="form-select" id="f-property" onchange="populateSubmitProjectDropdown()"><option value="">Select a property...</option></select>
               </div>
-              <div class="form-group"><label class="form-label">Report week</label><input class="form-input" type="date" id="f-week" value="2026-05-13"></div>
+              <!-- v68l — Report week now defaults to today's date at
+              resetSubmitForm() time (see resetSubmitForm()) instead of a
+              hardcoded stale date. Still a plain date input, still editable
+              — "defaults to current week" per Misty's direct request, not
+              locked. -->
+              <div class="form-group"><label class="form-label">Report week</label><input class="form-input" type="date" id="f-week"></div>
             </div>
-            <!-- v42q — Project picker, scoped to the selected property's
-            Scopes. Replaces the old typed "Unit(s) updated" free-text field
-            entirely (per Misty: remove it, the linked-unit checklist below
-            already covers this and typing unit names by hand was error-
-            prone and untraceable). Selecting a project both narrows the
-            unit checklist below to that project's units and shows its VDA
-            Project # for confirmation, so a consultant can tell at a glance
-            they've picked the right one before checking any units. -->
+            <!-- v68l — Applies to Whole Project checkbox + Linked Units
+            picker removed per Misty's direct request, matching the PM
+            Updates composer's identical v68h change (see pmu-structured-
+            fields above): this form only ever needs Property + Project, no
+            per-unit tracking. Every consultant Field Update is now
+            implicitly whole-project (see submitUpdate() — still writes
+            'Applies to Whole Project':true and 'Units Updated':'All' under
+            the hood, same as pmuCreate(), so existing reports/exports
+            reading those fields see no change). Project Phase and Progress
+            Status are no longer manual picks — both are locked, read-only
+            displays driven by the selected project's live Scope data (see
+            onSubmitScopeChange()): Phase reuses PMU_PHASE_MAP (the same
+            mapping the PM Updates composer already uses), Progress Status
+            derives from that scope's weighted VDA Milestones % (0% = Not
+            Started, 100% = Complete, else In Progress), per Misty's direct
+            decision to reuse the same milestone-completion math already
+            computed elsewhere rather than introduce a new manually-typed
+            status. -->
             <div class="form-group">
               <label class="form-label">Project</label>
               <select class="form-select" id="f-scope" onchange="onSubmitScopeChange()"><option value="">Select a property first...</option></select>
               <div id="f-scope-vdanum" style="font-size:11px;color:var(--gray-mid);margin-top:4px;display:none"><i class="ti ti-hash" style="font-size:11px"></i> <span id="f-scope-vdanum-text"></span></div>
             </div>
-            <div class="form-group">
-              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--navy)">
-                <input type="checkbox" id="fu-whole-project" onchange="toggleFUWholeProject()">
-                Applies to Whole Project
-              </label>
-            </div>
-            <div class="form-group" id="fu-units-group">
-              <label class="form-label">Linked Units</label>
-              <div id="fu-units-list" style="max-height:140px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px"></div>
-            </div>
             <div class="form-row">
-              <div class="form-group"><label class="form-label">Project phase</label><select class="form-select" id="f-phase"><option>Pre-Construction</option><option selected>Construction</option><option>Post Construction</option><option>Closeout</option></select></div>
-              <div class="form-group"><label class="form-label">Progress status</label><select class="form-select" id="f-status"><option>Not Started</option><option selected>In Progress</option><option>Complete</option></select></div>
+              <div class="form-group"><label class="form-label">Project phase</label><input class="form-input" type="text" id="f-phase-display" readonly style="background:var(--gray-pale);color:var(--gray-mid)"><input type="hidden" id="f-phase" value=""></div>
+              <div class="form-group"><label class="form-label">Progress status</label><input class="form-input" type="text" id="f-status-display" readonly style="background:var(--gray-pale);color:var(--gray-mid)"><input type="hidden" id="f-status" value=""></div>
             </div>
             <div class="form-group"><label class="form-label">Weekly notes</label><textarea class="form-textarea" id="f-notes" placeholder="Describe progress, milestones, blockers..."></textarea></div>
             <div class="form-group"><label class="form-label">Comment type</label><select class="form-select" id="f-comment-type"><option>General</option><option>Schedule</option><option>Safety</option><option>Material</option><option>Labor</option><option>Unforeseen Condition</option></select></div>
@@ -16301,13 +16305,32 @@ function renderActionBoard(){
   // filter exactly.
   const capitalPlanPropNames=new Set(port.filter(p=>p.st==='Capital Plan').map(p=>p.n));
   const abAllScopes=(window.SCOPES||[]).filter(s=>s.status!=='Capital Plan'&&!removedNames.has(s.property)&&!capitalPlanPropNames.has(s.property));
+  // v68l -- task: heat map % mismatch fix. abScopeData's complete/expected
+  // used to be a flat unweighted milestone count (complete/14), while every
+  // other VDA Milestones % in the app (Overview tiles, Milestones tab,
+  // Performance Report, Budget Performance) uses the weighted MS_WEIGHTS
+  // point system via getMsCompleteWeighted/getMsExpectedTotalWeighted.
+  // Confirmed live: JW Marriott San Francisco Union Square's Elevators 1-4
+  // scope showed 64% on the Dashboard heat map tile (9 of 14 = flat count)
+  // but 74% on that same scope's own property-page VDA Milestones bar
+  // (same 9 completed milestones, weighted points via MS_WEIGHTS). Same
+  // underlying data, two different formulas. Per Misty's direct decision,
+  // the heat map now switches to the weighted calculation (lower-risk
+  // direction -- one call site changes here rather than the flat count
+  // rippling out to every other screen that already depends on the
+  // weighted numbers). complete/expected below are now weighted points
+  // (0-100 per scope, MS_WEIGHTS sums to 100), matching
+  // getMsCompleteWeighted(s.property,s.id)/
+  // getMsExpectedTotalWeighted(s.property,s.id) exactly -- including the
+  // same Fast-Tracked-Complete override (a
+  // fast-tracked scope is worth its full 100 points regardless of real
+  // milestone record count).
   const abScopeData=abAllScopes.map(s=>{
-    const ms=(window.MILESTONES||[]).filter(m=>m.property===s.property&&m.scopeId===s.id);
-    const complete=ms.filter(m=>m.status==='Complete').length;
+    const complete=getMsCompleteWeighted(s.property,s.id);
     const category=getMilestoneCategoryForScope(s).toLowerCase().replace(/\s+/g,'');
     const risk=typeof calcScopeScheduleRisk==='function'?calcScopeScheduleRisk(s.property,s.id):{atRiskCount:0,daysLate:0};
     const isRisk=risk.atRiskCount>0||risk.daysLate>0;
-    const expected=(typeof MILESTONES_DEF!=='undefined'&&MILESTONES_DEF.length)||14;
+    const expected=getMsExpectedTotalWeighted(s.property,s.id);
     return {property:s.property,complete,expected,category,daysLate:risk.daysLate||0,isRisk};
   });
   function abGroupTiles(category){
@@ -16324,6 +16347,9 @@ function renderActionBoard(){
       // here no matter what the tile markup did.
       t.scopeCount+=1;
     });
+    // t.complete/t.expected are now weighted point sums (see abScopeData
+    // above), not flat milestone counts -- pct math itself (complete /
+    // expected * 100) is unchanged, only what feeds it.
     return Object.values(byProp).map(t=>({...t,pct:t.expected>0?Math.round((t.complete/t.expected)*100):0}));
   }
   const preconTiles=abGroupTiles('pre-construction');
@@ -17132,7 +17158,17 @@ function renderPropertiesTable(){
   const tbody=document.getElementById('props-table-body');
   const countEl=document.getElementById('props-count');
   if(!tbody)return;
-  let rows=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed').map(getPropsRowData);
+  // v68l -- task: consultant scoping audit fix. This table (the Properties
+  // tab's list view) was reading window.PORTFOLIO directly with no
+  // consultant restriction at all -- confirmed live as a real leak, unlike
+  // its sibling populatePortfolio() (the Portfolio View grid), which
+  // already scopes correctly. Same consultantSeesProperty() pattern
+  // applied here now, matching Dashboard/Ops Center/Documents/Submit
+  // Update/Portfolio View/Analytics/Capital Plan -- every one of those
+  // already restricts a consultant to their assigned properties this
+  // same way.
+  const allProps=(window.PORTFOLIO||[]).filter(p=>p.st!=='Removed');
+  let rows=(role==='consultant'?allProps.filter(p=>consultantSeesProperty(p.n)):allProps).map(getPropsRowData);
   // v58b -- Core folded into the same one-at-a-time tab group as the
   // status buckets, per Misty's explicit correction (she wanted it as a
   // real tab in the row, not a separate toggle). 'core' is a special
@@ -30491,6 +30527,13 @@ function getCalEvents(){
   // (non-Scheduled) meetings remain PM/admin-only.
   meetings.filter(m=>m.date&&!m.published&&m.isDraft===false&&m.status!=='Cancelled').forEach(m=>{
     if(!liveProps.has(m.property))return;
+    // v68l -- task: consultant scoping audit fix. Calendar had no
+    // consultant restriction at all -- confirmed live as a real leak, the
+    // same consultantSeesProperty() gate already applied to Dashboard/
+    // Properties/Ops Center/Documents/Submit Update now applied here too,
+    // across every event source this function builds (meetings, site
+    // visits, unit-group phase dates).
+    if(role==='consultant'&&!consultantSeesProperty(m.property))return;
     const isScheduled=m.status==='Scheduled';
     if(role==='client'&&!isScheduled)return;
     events.push({id:m.id,date:m.date,type:'meeting',
@@ -30514,6 +30557,7 @@ function getCalEvents(){
   siteVisits.forEach(v=>{
     if(!v.date)return;
     if(!liveProps.has(v.property))return;
+    if(role==='consultant'&&!consultantSeesProperty(v.property))return;
     if(v.status==='Cancelled')return;
     events.push({date:v.date,type:'visit',title:'Site Visit — '+v.property,sub:v.inspector||'',
       color:'ev-visit',dot:CAL_COLORS.visit,propName:v.property,hour:10,duration:60});
@@ -30526,6 +30570,7 @@ function getCalEvents(){
   // as PM/admin.
   (window.UNIT_GROUPS||[]).forEach(u=>{
     if(!liveProps.has(u.property))return;
+    if(role==='consultant'&&!consultantSeesProperty(u.property))return;
     if(u.plannedStart)events.push({date:u.plannedStart,type:'phase',title:'Start: '+u.phase,sub:u.property,
       color:'ev-phase',dot:CAL_COLORS.phase,propName:u.property,hour:8,duration:30});
     if(u.plannedCompletion)events.push({date:u.plannedCompletion,type:'phase',title:'End: '+u.phase,sub:u.property,
@@ -36957,10 +37002,16 @@ function resetSubmitForm(){
   document.getElementById('submit-page-sub').textContent='Enters PM review queue before publishing to client';
   document.getElementById('submit-btn-primary').innerHTML='<i class="ti ti-upload"></i>Submit for review';
   document.getElementById('submit-btn-cancel').style.display='none';
-  // v38e — reset unit-linking state for a fresh submission.
-  fuUnitAssign={};
-  document.getElementById('fu-whole-project').checked=false;
-  document.getElementById('fu-units-group').style.display='block';
+  // v68l — Report week now defaults to today's date on every fresh form
+  // load, replacing the old hardcoded 2026-05-13 default, per Misty's
+  // direct request. toLocaleDateString/toISOString would shift by
+  // timezone near midnight; building the yyyy-mm-dd string from local
+  // getFullYear/getMonth/getDate avoids that, same reasoning as the
+  // T12:00:00-anchoring pattern already used for overdue-date checks
+  // elsewhere in this file.
+  const _today=new Date();
+  const _todayStr=_today.getFullYear()+'-'+String(_today.getMonth()+1).padStart(2,'0')+'-'+String(_today.getDate()).padStart(2,'0');
+  document.getElementById('f-week').value=_todayStr;
   // v42q — clear the project picker back to its empty state; property is
   // blank at this point too (cleared above), so populateSubmitProjectDropdown()
   // correctly falls back to "Select a property first..." rather than
@@ -36997,19 +37048,16 @@ function editSubmission(id){
   // just falls back to "Select a project..." rather than erroring).
   populateSubmitProjectDropdown();
   document.getElementById('f-scope').value=s.scopeId||'';
+  // v68l — Applies to Whole Project / Linked Units are gone from the form
+  // (see the v68l comment above the markup); every submission is now
+  // implicitly whole-project regardless of what an older record has
+  // stored. Project Phase and Progress Status are no longer restored from
+  // the original submission's stored values either — onSubmitScopeChange()
+  // re-derives both from the scope's CURRENT live status/milestone %, same
+  // as a fresh submission, so editing an old update shows today's real
+  // phase/status rather than whatever was true when it was first
+  // submitted.
   onSubmitScopeChange();
-  // v38e — repopulate unit-linking state from the existing submission.
-  // onSubmitScopeChange() above already cleared fuUnitAssign and
-  // re-rendered the (now project-scoped) unit list once — re-apply the
-  // submission's real checked units after that, then render once more so
-  // the checkboxes reflect them.
-  fuUnitAssign={};
-  (s.linkedUnitIds||[]).forEach(id=>{fuUnitAssign[id]=true;});
-  document.getElementById('fu-whole-project').checked=!!s.appliesToWholeProject;
-  toggleFUWholeProject();
-  if(!s.appliesToWholeProject)renderFUUnitsList();
-  document.getElementById('f-phase').value=s.phase||'Construction';
-  document.getElementById('f-status').value=s.status||'In Progress';
   document.getElementById('f-notes').value=s.notes||'';
   document.getElementById('f-comment-type').value=s.commentType||'General';
   // Issue Status input removed from the form (v22b) per the original v20g
@@ -37041,9 +37089,10 @@ function editSubmission(id){
   document.getElementById('submit-btn-cancel').style.display='inline-flex';
   gotoView('submit',null);
 }
-// v38e — Field Update unit-linking state, same pattern as coUnitAssign for
-// Change Orders (line ~8600).
-let fuUnitAssign={};
+// v68l — fuUnitAssign (Field Update unit-linking state) removed. The
+// Applies to Whole Project / Linked Units picker it backed is gone from
+// the Submit Update form entirely (see the form markup's v68l comment) —
+// every consultant Field Update is now implicitly whole-project.
 
 // v42q — Project (Scope) picker for the Submit Weekly Update form. Same
 // property-filter pattern pmuPopulateScopes() already uses for PM Updates
@@ -37066,6 +37115,22 @@ function populateSubmitProjectDropdown(){
 }
 window.populateSubmitProjectDropdown=populateSubmitProjectDropdown;
 
+// v68l — task: consultant Submit Update form rework. Applies to Whole
+// Project / Linked Units picker removed entirely (see the form markup's
+// v68l comment above) — onSubmitScopeChange() no longer manages unit
+// checkbox state. Instead it now drives the locked Project Phase and
+// Progress Status displays from the selected project's live Scope data,
+// same pattern onPmuScopeChange() already uses for the PM Updates
+// composer. Project Phase reuses PMU_PHASE_MAP as-is (already the agreed
+// Scope-status → phase mapping, confirmed with Misty for PM Updates —
+// same mapping applies here, no new phase vocabulary introduced).
+// Progress Status has no equivalent live field anywhere in the app (it's
+// always been manually typed), so per Misty's direct decision it derives
+// from that scope's own weighted VDA Milestones % — the same
+// getMsCompleteWeighted/getMsExpectedTotalWeighted math already computed
+// for the Overview tile, Milestones tab, and (as of this same v68l round)
+// the Dashboard heat map: 0% → Not Started, 100% → Complete, anything
+// in between → In Progress.
 function onSubmitScopeChange(){
   const scopeSel=document.getElementById('f-scope');
   const vdaWrap=document.getElementById('f-scope-vdanum');
@@ -37080,63 +37145,28 @@ function onSubmitScopeChange(){
       vdaWrap.style.display='none';
     }
   }
-  // Changing the project invalidates any units checked against the
-  // previous project — clear the selection rather than silently keeping
-  // checkmarks on units that are about to disappear from the (now
-  // re-filtered) list below.
-  fuUnitAssign={};
-  renderFUUnitsList();
+  const phaseHidden=document.getElementById('f-phase');
+  const phaseDisplay=document.getElementById('f-phase-display');
+  if(phaseHidden&&phaseDisplay){
+    const mappedPhase=scope?(PMU_PHASE_MAP[scope.status]||'Pre-Construction'):'';
+    phaseHidden.value=mappedPhase;
+    phaseDisplay.value=mappedPhase;
+  }
+  const statusHidden=document.getElementById('f-status');
+  const statusDisplay=document.getElementById('f-status-display');
+  if(statusHidden&&statusDisplay){
+    let mappedStatus='';
+    if(scope){
+      const pct=getMsExpectedTotalWeighted(scope.property,scope.id)>0
+        ?Math.round((getMsCompleteWeighted(scope.property,scope.id)/getMsExpectedTotalWeighted(scope.property,scope.id))*100)
+        :0;
+      mappedStatus=pct<=0?'Not Started':pct>=100?'Complete':'In Progress';
+    }
+    statusHidden.value=mappedStatus;
+    statusDisplay.value=mappedStatus;
+  }
 }
 window.onSubmitScopeChange=onSubmitScopeChange;
-
-function renderFUUnitsList(){
-  const listEl=document.getElementById('fu-units-list');
-  if(!listEl)return;
-  const propName=document.getElementById('f-property')?.value||'';
-  const scopeId=document.getElementById('f-scope')?.value||'';
-  if(!propName){
-    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a property first.</div>';
-    return;
-  }
-  if(!scopeId){
-    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">Select a project first.</div>';
-    return;
-  }
-  const units=(window.UNIT_INVENTORY||[]).filter(u=>u.property===propName&&u.scopeId===scopeId).sort((a,b)=>(a.name||'').localeCompare(b.name||'',undefined,{numeric:true}));
-  if(units.length===0){
-    listEl.innerHTML='<div style="font-size:12px;color:var(--gray-mid);padding:4px">No units linked to this project in Unit Inventory List yet.</div>';
-    return;
-  }
-  listEl.innerHTML=units.map(u=>{
-    const checked=!!fuUnitAssign[u.id];
-    const meta=[u.unitType,u.capexYear?`CapEx ${u.capexYear}`:''].filter(Boolean).join(' · ');
-    return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;cursor:pointer">
-      <input type="checkbox" ${checked?'checked':''} onchange="toggleFUUnit('${u.id}',this.checked)">
-      <span style="font-weight:500">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>
-      ${meta?`<span style="color:var(--gray-mid);font-size:11px">${meta}</span>`:''}
-    </label>`;
-  }).join('');
-}
-window.renderFUUnitsList=renderFUUnitsList;
-
-function toggleFUUnit(unitId,checked){
-  if(checked)fuUnitAssign[unitId]=true;
-  else delete fuUnitAssign[unitId];
-}
-window.toggleFUUnit=toggleFUUnit;
-
-function toggleFUWholeProject(){
-  const whole=document.getElementById('fu-whole-project').checked;
-  const group=document.getElementById('fu-units-group');
-  if(whole){
-    fuUnitAssign={};
-    group.style.display='none';
-  }else{
-    group.style.display='block';
-    renderFUUnitsList();
-  }
-}
-window.toggleFUWholeProject=toggleFUWholeProject;
 
 let _savingSubmitUpdate=false;
 async function submitUpdate(){
@@ -37150,25 +37180,23 @@ async function submitUpdate(){
   const notes=document.getElementById('f-notes').value.trim();if(!notes){alert('Please add weekly notes.');return;}
   const dateStr=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const week=document.getElementById('f-week').value;
-  // v42q — 'units' (Airtable's 'Units Updated' text field) is now always
-  // derived, never typed — the old free-text f-units input is gone from
-  // the form. Every other display spot that still reads s.units directly
+  // v68l — 'units' (Airtable's 'Units Updated' text field) is now always
+  // 'All' and Applies to Whole Project is now always true — the Applies to
+  // Whole Project checkbox and Linked Units picker are gone from the form
+  // entirely (per Misty's direct request, matching the identical v68h
+  // change already made to the PM Updates composer). Every other display
+  // spot that still reads s.units/s.appliesToWholeProject directly
   // (print/PDF, Pending Review, My Updates tags) keeps working unchanged
-  // since this string is still written to the same field.
-  const appliesToWholeProject=document.getElementById('fu-whole-project').checked;
-  const linkedUnitIds=appliesToWholeProject?[]:Object.keys(fuUnitAssign);
-  let units='All';
-  if(!appliesToWholeProject&&linkedUnitIds.length>0){
-    // v42k — sortUnitNames for natural unit-name order in this derived string.
-    const unitNames=sortUnitNames(linkedUnitIds.map(id=>(window.UNIT_INVENTORY||[]).find(u=>u.id===id)?.name).filter(Boolean));
-    if(unitNames.length>0)units=unitNames.join(', ');
-  }else if(!appliesToWholeProject&&linkedUnitIds.length===0){
-    // Neither "whole project" nor any individual units checked — don't
-    // silently write 'All' (that would misrepresent scope); require an
-    // explicit choice instead.
-    alert('Please check at least one unit, or select "Applies to Whole Project".');
-    return;
-  }
+  // since these fields are still written, just always to the same values.
+  const appliesToWholeProject=true;
+  const linkedUnitIds=[];
+  const units='All';
+  // Project Phase and Progress Status are no longer manual picks — both
+  // are locked, read-only displays populated by onSubmitScopeChange() from
+  // the selected project's live Scope data (see that function's v68l
+  // comment). f-phase/f-status are now hidden inputs carrying the derived
+  // value, same pmu-phase/pmu-phase-display pattern the PM Updates
+  // composer already uses for Phase.
   const phase=document.getElementById('f-phase').value;
   const status=document.getElementById('f-status').value;
   const commentType=document.getElementById('f-comment-type').value;
@@ -38876,8 +38904,7 @@ async function pollProjectUpdates(){
       // (Milestones, Action Items, Unit Inventory List, etc.): single-value
       // link stored as the first (only) record ID in the array. Older
       // submissions made before this rebuild will have this blank —
-      // editSubmission() and renderFUUnitsList() both handle that
-      // gracefully rather than erroring.
+      // editSubmission() handles that gracefully rather than erroring.
       scopeId:(r.fields['Linked Scope']||[])[0]||'',
       appliesToWholeProject:!!r.fields['Applies to Whole Project'],
       // v50i — draftAction was missing from this poll-refresh mapping
@@ -38914,6 +38941,12 @@ function renderCommentsView(expandedThreads){
   const threads={};
   allComments.forEach(c=>{
     if(role==='consultant'&&c.visibility!=='VDA Team')return;
+    // v68l -- task: consultant scoping audit fix. This only ever filtered
+    // by visibility, never by property -- confirmed live as a real leak: a
+    // consultant could see every property's Client Comment threads, not
+    // just their own assigned properties. Same consultantSeesProperty()
+    // gate already applied everywhere else now applied here too.
+    if(role==='consultant'&&!consultantSeesProperty(c.property))return;
     if(!threads[c.threadId])threads[c.threadId]=[];
     threads[c.threadId].push(c);
   });
