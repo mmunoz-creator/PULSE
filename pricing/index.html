@@ -668,7 +668,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v1j';
+const APP_VERSION = 'v1k';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1362,6 +1362,64 @@ function freshWizardState(){
 function setWizard(patch){ Object.assign(state.wizard, patch); refreshPricing(); render(); }
 function wizardStep(n){ setWizard({ step:n }); }
 
+// setWizard()/setWizardSite() both call render(), which replaces the
+// ENTIRE #root innerHTML (see render()) -- including whatever text
+// input the user is actively typing in. That destroys and recreates
+// the input's DOM node on every keystroke, so the freshly-typed
+// character keeps its value but the input loses browser focus,
+// forcing the user to click back in before the next letter lands
+// (reported 2026-08-26: "only lets me type a single letter at a
+// time" on Step 1's Client Name/Address/City/State fields). State is
+// still updated synchronously below either way -- only the DOM
+// rebuild is deferred a beat, so a continuous burst of keystrokes
+// never tears down the input mid-type. Used ONLY by the free-text
+// Step 1 fields; every other setWizard()/setWizardSite() call (step
+// nav, checkboxes, cards, sliders) keeps its original instant render.
+let wizardTextRenderDebounceTimer = null;
+function setWizardText(patch){
+  Object.assign(state.wizard, patch);
+  refreshPricing();
+  clearTimeout(wizardTextRenderDebounceTimer);
+  wizardTextRenderDebounceTimer = setTimeout(render, 250);
+}
+let wizardSiteTextRenderDebounceTimer = null;
+function setWizardSiteText(patch){
+  // Same DOM-teardown problem as setWizardText() above, but for the
+  // City/State fields, which run through setWizardSite() instead of
+  // setWizard() because they also drive the debounced AHJ auto-suggest
+  // lookup. That lookup's own debounce (ahjSuggestDebounceTimer, 500ms)
+  // is untouched -- this only defers the render() calls that happen
+  // synchronously inside setWizardSite() before the lookup timer fires.
+  Object.assign(state.wizard, patch, { confirmedAhjId: null, ahjSuggestion: null, ahjOverrideOpen: false });
+  clearTimeout(wizardSiteTextRenderDebounceTimer);
+  wizardSiteTextRenderDebounceTimer = setTimeout(render, 250);
+  clearTimeout(ahjSuggestDebounceTimer);
+  const w = state.wizard;
+  if(!w.siteState || !w.siteState.trim()){ return; }
+  state.wizard.ahjSuggestionLoading = true;
+  ahjSuggestDebounceTimer = setTimeout(async () => {
+    const cityAtCall = state.wizard.city, stateAtCall = state.wizard.siteState;
+    try {
+      const res = await fetch('/api/ahj/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city: cityAtCall, state: stateAtCall }),
+      });
+      const data = await res.json();
+      if(state.wizard.city === cityAtCall && state.wizard.siteState === stateAtCall){
+        state.wizard.ahjSuggestion = res.ok ? data : { match:null, reason:'Lookup failed — choose manually.' };
+        state.wizard.ahjSuggestionLoading = false;
+        render();
+      }
+    } catch(e){
+      if(state.wizard.city === cityAtCall && state.wizard.siteState === stateAtCall){
+        state.wizard.ahjSuggestion = { match:null, reason:'Could not reach the server — choose manually.' };
+        state.wizard.ahjSuggestionLoading = false;
+        render();
+      }
+    }
+  }, 500);
+}
+
 /* ============================================================
    AHJ auto-suggest (single-property mode).
    Fires a debounced /api/ahj/suggest call whenever city/state changes,
@@ -1507,36 +1565,36 @@ function renderWizardStep1(){
     <h2 class="section-title" style="margin-bottom:12px;">Client</h2>
     <div class="field-group">
       <label class="field-label">Client Name</label>
-      <input class="text-input" placeholder="e.g. Acme Building" value="${escapeHtml(w.clientName)}" oninput="setWizard({clientName:this.value})">
+      <input class="text-input" placeholder="e.g. Acme Building" value="${escapeHtml(w.clientName)}" oninput="setWizardText({clientName:this.value})">
     </div>
     ${w.offerType==='single' ? `
     <div class="field-group">
       <label class="field-label">Address</label>
-      <input class="text-input" placeholder="e.g. 100 Main Street" value="${escapeHtml(w.address)}" oninput="setWizard({address:this.value})">
+      <input class="text-input" placeholder="e.g. 100 Main Street" value="${escapeHtml(w.address)}" oninput="setWizardText({address:this.value})">
     </div>
     <div class="field-row-2">
       <div class="field-group">
         <label class="field-label">City</label>
-        <input class="text-input" placeholder="e.g. Los Angeles" value="${escapeHtml(w.city)}" oninput="setWizardSite({city:this.value})">
+        <input class="text-input" placeholder="e.g. Los Angeles" value="${escapeHtml(w.city)}" oninput="setWizardSiteText({city:this.value})">
       </div>
       <div class="field-group">
         <label class="field-label">State</label>
-        <input class="text-input" placeholder="e.g. CA" maxlength="24" value="${escapeHtml(w.siteState)}" oninput="setWizardSite({siteState:this.value})">
+        <input class="text-input" placeholder="e.g. CA" maxlength="24" value="${escapeHtml(w.siteState)}" oninput="setWizardSiteText({siteState:this.value})">
       </div>
     </div>
     ${renderAhjPicker()}` : `
     <div class="field-group">
       <label class="field-label">Portfolio / Offer Name</label>
-      <input class="text-input" placeholder="e.g. National Verify Program — Renewal" value="${escapeHtml(w.portfolioName)}" oninput="setWizard({portfolioName:this.value})">
+      <input class="text-input" placeholder="e.g. National Verify Program — Renewal" value="${escapeHtml(w.portfolioName)}" oninput="setWizardText({portfolioName:this.value})">
     </div>
     <div class="field-row-2">
       <div class="field-group">
         <label class="field-label">Number of Properties</label>
-        <input class="text-input" type="number" min="1" placeholder="e.g. 22" value="${w.propertyCount}" oninput="setWizard({propertyCount:this.value})">
+        <input class="text-input" type="number" min="1" placeholder="e.g. 22" value="${w.propertyCount}" oninput="setWizardText({propertyCount:this.value})">
       </div>
       <div class="field-group">
         <label class="field-label">Estimated Total Units</label>
-        <input class="text-input" type="number" min="1" placeholder="e.g. 31" value="${w.unitCountEstimate}" oninput="setWizard({unitCountEstimate:this.value})">
+        <input class="text-input" type="number" min="1" placeholder="e.g. 31" value="${w.unitCountEstimate}" oninput="setWizardText({unitCountEstimate:this.value})">
       </div>
     </div>`}
   </div>` : ''}
