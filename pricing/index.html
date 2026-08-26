@@ -126,6 +126,7 @@ table { border-collapse: collapse; width: 100%; }
   width: 216px; flex-shrink: 0; background: var(--navy);
   display: flex; flex-direction: column;
   padding: 18px 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  font-family: 'Plus Jakarta Sans', var(--font);
 }
 .sidebar-logo { display:flex; align-items:center; gap:9px; padding: 4px 6px 14px 6px; }
 .sidebar-logo .mark {
@@ -137,8 +138,9 @@ table { border-collapse: collapse; width: 100%; }
 .sidebar-logo .word .seg { color: var(--blue); }
 
 .role-pill {
-  display:inline-block; margin: 4px 4px 16px 4px; padding: 3px 10px; font-size: 10px; font-weight: 700;
+  display:inline-block; margin: 4px 4px 16px 4px; padding: 2px 8px; font-size: 9.5px; font-weight: 700;
   letter-spacing: 0.5px; color: var(--blue); background: rgba(47,111,237,0.15); border-radius: 100px;
+  width: fit-content;
 }
 .role-pill.is-admin { color: #ffb020; background: rgba(255,176,32,0.16); }
 
@@ -153,7 +155,7 @@ table { border-collapse: collapse; width: 100%; }
 }
 .nav-item:hover { background: rgba(255,255,255,0.05); color: white; }
 .nav-item.active { background: rgba(47,111,237,0.18); color: #bcd3ff; font-weight: 650; }
-.nav-item .ic { width:15px; text-align:center; opacity:0.85; flex-shrink:0; font-size:12.5px; }
+.nav-item .ic { width:18px; text-align:center; opacity:0.9; flex-shrink:0; font-size:17px; line-height:1; }
 .nav-item .badge-count {
   margin-left:auto; background: var(--blue); color:white; font-size:9.5px; font-weight:700;
   border-radius: 100px; padding: 1px 6px; min-width:16px; text-align:center;
@@ -170,6 +172,7 @@ table { border-collapse: collapse; width: 100%; }
 .sidebar-user .role { color: rgba(255,255,255,0.45); font-size:10.5px; }
 .sidebar-signout { color: rgba(255,255,255,0.4); font-size: 11px; padding: 8px 6px 0 6px; cursor:pointer; }
 .sidebar-signout:hover { color: rgba(255,255,255,0.7); }
+.sidebar-version { color: rgba(255,255,255,0.28); font-size: 10px; padding: 6px 6px 0 6px; letter-spacing: 0.3px; }
 
 .main { flex:1; min-width:0; padding: 22px 30px 60px 30px; }
 
@@ -640,6 +643,13 @@ table { border-collapse: collapse; width: 100%; }
    below); this page never holds a rate table, so there is nothing
    confidential to protect client-side beyond the session token itself.
    ============================================================ */
+// APP VERSION — bump this on every code change pushed to this file, per
+// the standing rule in the continuity brief ("every new code gets a new
+// version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
+// Misty can confirm at a glance which build is actually live after a
+// deploy rather than assuming a push took effect.
+const APP_VERSION = 'v1c';
+
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
 let currentUser = null; // { id, name, role }
@@ -1064,15 +1074,24 @@ function goTo(view){
 function showToast(msg, isError){ state.toast = {msg, isError}; render(); setTimeout(()=>{ state.toast=null; render(); }, 2600); }
 
 /* ============================================================
-   ICONS (inline unicode/emoji-free glyphs to match PULSE's plain icon style)
+   ICONS — nav items use real Tabler Icons (webfont already loaded in
+   <head>, previously unused); everything else stays a plain
+   unicode/text glyph. Picks below are Misty's explicit choices, made
+   from a side-by-side preview against the live sidebar CSS, not a
+   default/guessed set:
+     Offers -> list-details, New Offer -> file-plus, Rate Cards -> table,
+     Clients & Sites -> building-skyscraper, Personnel Roster -> users,
+     Manage Users -> user-cog, Pricing Analytics -> trending-up,
+     Settings -> settings (the gear icon in this set).
    ============================================================ */
 function icon(name){
   const m = {
-    dashboard:'▣', offers:'☷', newoffer:'+', clients:'⌂', ratecard:'▤',
-    reports:'△', settings:'⚙', upload:'↑', back:'←', close:'✕',
+    dashboard:'▣', offers:'<i class="ti ti-list-details"></i>', newoffer:'<i class="ti ti-file-plus"></i>',
+    clients:'<i class="ti ti-building-skyscraper"></i>', ratecard:'<i class="ti ti-table"></i>',
+    reports:'△', settings:'<i class="ti ti-settings"></i>', upload:'↑', back:'←', close:'✕',
     check:'✓', chevron:'›', calendar:'▦', doc:'☷', info:'ⓘ', warn:'⚠',
-    truck:'⚑', flag:'⚑', history:'↻', admin:'⚙', search:'⌕',
-    chevUp:'▴', chevDown:'▾', personnel:'☺', users:'⚉',
+    truck:'⚑', flag:'⚑', history:'↻', admin:'<i class="ti ti-trending-up"></i>', search:'⌕',
+    chevUp:'▴', chevDown:'▾', personnel:'<i class="ti ti-users"></i>', users:'<i class="ti ti-user-cog"></i>',
   };
   return m[name] || '';
 }
@@ -1138,6 +1157,7 @@ function renderSidebar(){
         <div class="who"><div class="name">${currentUser ? currentUser.name : ''}</div><div class="role">${currentUser ? roleDisplayLabel(currentUser.role) : ''}</div></div>
       </div>
       <div class="sidebar-signout" onclick="signOut()">Sign out</div>
+      <div class="sidebar-version">PULSE Pricing ${APP_VERSION}</div>
     </div>
   </div>`;
 }
@@ -2218,10 +2238,17 @@ async function loadRateCardData(){
 }
 async function updateRateCardCellLive(table, id, field, value){
   const rateCardId = state.rateCardData.rateCard.id;
+  // Dollar-amount cells are comma-formatted text inputs (see
+  // formatCurrencyInput/currencyInputToNumber below) -- strip commas
+  // before parsing, or Number("2,200") silently becomes NaN and the
+  // save would corrupt the stored price. Plain number inputs (the
+  // decimal rate/markup factors) pass through unaffected since they
+  // never contain a comma to begin with.
+  const numericValue = Number(String(value).replace(/,/g, ''));
   try {
     const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/cell`, {
       method: 'PATCH', headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify({ table, id: Number(id), field, value: Number(value) }),
+      body: JSON.stringify({ table, id: Number(id), field, value: numericValue }),
     });
     const data = await res.json();
     if(!res.ok){ showToast(data.error || 'Could not save that change.', true); return; }
@@ -2231,6 +2258,23 @@ async function updateRateCardCellLive(table, id, field, value){
     showToast('Could not reach the server.', true);
   }
 }
+// Live comma-formatting for editable dollar-amount cells (Rate Cards
+// price grids). Applied on every keystroke via oninput -- strips
+// anything non-numeric, re-inserts thousands separators, and restores
+// cursor position so typing in the middle of a number doesn't jump the
+// caret to the end (a common bug with naive reformat-on-input).
+function formatCurrencyInput(el){
+  const raw = el.value;
+  const cursorFromEnd = raw.length - el.selectionStart;
+  const digitsOnly = raw.replace(/[^\d.]/g, '');
+  const parts = digitsOnly.split('.');
+  const intPart = parts[0].replace(/^0+(?=\d)/, '');
+  const formatted = (intPart === '' ? '0' : Number(intPart).toLocaleString('en-US')) + (parts.length > 1 ? '.' + parts[1].slice(0,2) : '');
+  el.value = formatted;
+  const newPos = Math.max(0, formatted.length - cursorFromEnd);
+  el.setSelectionRange(newPos, newPos);
+}
+function currencyInputToNumber(str){ return Number(String(str).replace(/,/g, '')) || 0; }
 function renderRateCardTableLive(svcId, unitPrices){
   const rows = unitPrices.filter(r=>r.service_id===svcId);
   const isPlaceholder = rows.some(r=>r.is_placeholder);
@@ -2255,8 +2299,8 @@ function renderRateCardTableLive(svcId, unitPrices){
               ${STOPS_BUCKETS.map(b => {
                 const row = rows.find(r=>r.equipment_type===eq && r.stops_bucket===b.key);
                 const val = row ? row.price : 0;
-                return `<td class="num"><input class="rc-cell-input" type="number" min="0" step="5" value="${val}"
-                  ${row ? `onchange="updateRateCardCellLive('rate_card_unit_prices','${row.id}','price',this.value)"` : 'disabled title="No row for this cell yet"'}></td>`;
+                return `<td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(val).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)"
+                  ${row ? `onchange="updateRateCardCellLive('rate_card_unit_prices','${row.id}','price',currencyInputToNumber(this.value))"` : 'disabled title="No row for this cell yet"'}></td>`;
               }).join('')}
             </tr>`).join('')}
         </tbody>
@@ -2276,13 +2320,13 @@ function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
         <div>
           <p style="font-size:11px; font-weight:700; color:var(--text-secondary); margin:0 0 6px 0;">REGIONAL (≤100 units)</p>
           <table class="data-table rc-table"><thead><tr><th>Units</th><th class="num">Base $/unit</th></tr></thead><tbody>
-            ${regional.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><input class="rc-cell-input" type="number" min="0" step="1" value="${b.base_rate}" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',this.value)"></td></tr>`).join('')}
+            ${regional.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></td></tr>`).join('')}
           </tbody></table>
         </div>
         <div>
           <p style="font-size:11px; font-weight:700; color:var(--text-secondary); margin:0 0 6px 0;">NATIONAL (&gt;100 units)</p>
           <table class="data-table rc-table"><thead><tr><th>Units</th><th class="num">Base $/unit</th></tr></thead><tbody>
-            ${national.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><input class="rc-cell-input" type="number" min="0" step="1" value="${b.base_rate}" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',this.value)"></td></tr>`).join('')}
+            ${national.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></td></tr>`).join('')}
           </tbody></table>
         </div>
       </div>
@@ -2293,7 +2337,7 @@ function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
     <div class="card-pad" style="padding-top:0;">
       <p class="row-sub" style="margin:10px 0 12px 0;">Applied to TOTAL portfolio device count (not per-site), billed monthly and annualized.</p>
       <table class="data-table rc-table"><thead><tr><th>Devices</th><th class="num">$/unit/mo</th></tr></thead><tbody>
-        ${portfolioTiers.map(t=>`<tr><td>${t.tier_from}–${t.tier_to||'+'}</td><td class="num"><input class="rc-cell-input" type="number" min="0" step="0.5" value="${t.price_per_unit}" onchange="updateRateCardCellLive('verify_portfolio_tiers','${t.id}','price_per_unit',this.value)"></td></tr>`).join('')}
+        ${portfolioTiers.map(t=>`<tr><td>${t.tier_from}–${t.tier_to||'+'}</td><td class="num"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(t.price_per_unit).toLocaleString('en-US', {minimumFractionDigits: t.price_per_unit % 1 !== 0 ? 2 : 0})}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_portfolio_tiers','${t.id}','price_per_unit',currencyInputToNumber(this.value))"></td></tr>`).join('')}
       </tbody></table>
     </div>
   </div>
