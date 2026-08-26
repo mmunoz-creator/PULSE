@@ -668,17 +668,77 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v1l';
+const APP_VERSION = 'v2b';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
 let currentUser = null; // { id, name, role }
 
+// SESSION PERSISTENCE ACROSS A REFRESH — same real pattern as PULSE Mod's
+// tryRestorePulseSession()/sessionStorage.pulse_session (confirmed by
+// reading pulse_v68k_build.html directly, not invented): sessionToken and
+// currentUser previously lived ONLY in these two JS variables above, so
+// any browser refresh wiped them and dropped back to the login screen
+// even though the Worker's session (sessions table + SESSIONS_KV, 12h
+// TTL per Worker v1d's SESSION_TTL_SECONDS) was still perfectly valid
+// server-side. This is that same fix, applied here: persist just enough
+// to restore the session in sessionStorage (NOT localStorage — same
+// choice Mod made, and for the same reason: sessionStorage clears when
+// the tab/window actually closes, so this survives a refresh without
+// turning into a permanent login the way localStorage would).
+const SESSION_STORAGE_KEY = 'pulse_pricing_session';
+function saveSessionToStorage(){
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ token: sessionToken, user: currentUser }));
+  } catch(e){ /* sessionStorage unavailable (private browsing, etc.) -- session restore just won't work, not fatal */ }
+}
+function clearSessionStorage(){
+  try { sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch(e){}
+}
+// Restore on page load, before ever showing the login screen. Unlike
+// Mod (which re-verifies an "Active" flag on a separate Airtable table
+// in the background after an optimistic restore), Pricing's session
+// token itself IS the full validity check -- getSession() on the Worker
+// already rejects an expired or revoked token on every authenticated
+// call. So no separate background verify call is needed here: if the
+// restored token is stale, the very next workerFetch() call gets a 401
+// and workerFetch() below already routes that straight back to a clean
+// login screen, same as if the token had never been restored at all.
+function tryRestoreSession(){
+  let saved = null;
+  try {
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (raw) saved = JSON.parse(raw);
+  } catch(e){ return false; }
+  if (!saved || !saved.token || !saved.user) return false;
+  sessionToken = saved.token;
+  currentUser = saved.user;
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('root').classList.remove('hidden');
+  render();
+  return true;
+}
+
 async function workerFetch(path, opts = {}) {
   const o = { ...opts };
   o.headers = { ...(o.headers || {}) };
   if (sessionToken) o.headers['Authorization'] = 'Bearer ' + sessionToken;
-  return fetch(WORKER_URL + path, o);
+  const res = await fetch(WORKER_URL + path, o);
+  // A 401 here means the session the user was restored with (or is
+  // actively using) is no longer valid server-side -- expired past its
+  // 12h TTL, or revoked by a logout elsewhere. Whatever's cached client-
+  // side is stale either way, so drop back to a clean login screen
+  // rather than leaving a half-authenticated UI on screen. /login and
+  // /api/auth/set-pin themselves 401 on a genuinely wrong PIN, not a
+  // stale session -- excluded here so a failed login attempt doesn't
+  // get misread as "your session expired".
+  if (res.status === 401 && path !== '/login' && path !== '/api/auth/set-pin') {
+    sessionToken = null; currentUser = null; pendingResetToken = null;
+    clearSessionStorage();
+    document.getElementById('root').classList.add('hidden');
+    document.getElementById('login-screen').classList.remove('hidden');
+  }
+  return res;
 }
 
 function setLoginError(message) {
@@ -765,6 +825,7 @@ async function doLogin() {
     }
     sessionToken = data.token;
     currentUser = data.user;
+    saveSessionToStorage();
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('root').classList.remove('hidden');
     render();
@@ -809,6 +870,7 @@ async function submitNewPermanentPin() {
     }
     sessionToken = data.token;
     currentUser = data.user;
+    saveSessionToStorage();
     document.getElementById('reset-pin-screen').classList.add('hidden');
     document.getElementById('root').classList.remove('hidden');
     render();
@@ -1131,6 +1193,7 @@ function roleDisplayLabel(role){
 async function signOut(){
   try { await workerFetch('/logout', { method:'POST' }); } catch(e) {}
   sessionToken = null; currentUser = null; pendingResetToken = null;
+  clearSessionStorage();
   document.getElementById('root').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('loginPin').value = '';
@@ -1363,27 +1426,41 @@ function setWizard(patch){ Object.assign(state.wizard, patch); refreshPricing();
 function wizardStep(n){ setWizard({ step:n }); }
 
 /* ============================================================
-   AHJ auto-suggest (single-property mode).
-   Fires a debounced /api/ahj/suggest call whenever city/state changes,
-   caches the response in w.ahjSuggestion, and clears any previously
-   CONFIRMED AHJ -- a changed address invalidates the old confirmation
-   rather than silently keeping a stale one. Suggesting is never the
-   same as applying: confirmedAhjId only ever changes via the user
-   clicking a choice in renderAhjPicker(), never automatically here.
+   AHJ auto-suggest (single-property mode, Inspection service only).
+   Reported 2026-08-26: this used to fire automatically on Step 1 as
+   soon as city/state were typed, for EVERY single-property offer --
+   even ones that never end up offering Inspection, the only service
+   that actually depends on AHJ. Moved so the lookup only ever fires
+   for an explicit reason to need one: checking Inspection in Step 3
+   (see toggleService()), or clicking "Look up AHJ" there if Inspection
+   was already checked before an address existed. The picker itself
+   now renders inline in Step 3's Inspection card (see
+   renderServicePricingCard's per_ahj_category branch) instead of
+   Step 1 -- Step 1 still just captures city/state via setWizardSite()
+   below, with no AHJ side effect anymore.
+   Same "auto-suggest, user confirms" design as before: confirmedAhjId
+   only ever changes via the user clicking a choice in renderAhjPicker(),
+   never automatically.
    ============================================================ */
 let ahjSuggestDebounceTimer = null;
 function setWizardSite(patch){
+  // Still invalidate a previously confirmed AHJ when the address changes
+  // -- that safety property doesn't depend on WHEN the lookup fires,
+  // only on the address being stale. No fetch triggered here anymore.
   Object.assign(state.wizard, patch, { confirmedAhjId: null, ahjSuggestion: null, ahjOverrideOpen: false });
   render();
+}
+function triggerAhjLookup(){
   clearTimeout(ahjSuggestDebounceTimer);
   const w = state.wizard;
   if(!w.siteState || !w.siteState.trim()){ return; }
+  if(w.ahjSuggestion || w.ahjSuggestionLoading){ return; } // already have one (or one in flight) for the current address
   state.wizard.ahjSuggestionLoading = true;
   render();
   ahjSuggestDebounceTimer = setTimeout(async () => {
     const cityAtCall = state.wizard.city, stateAtCall = state.wizard.siteState;
     try {
-      const res = await fetch('/api/ahj/suggest', {
+      const res = await workerFetch('/api/ahj/suggest', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ city: cityAtCall, state: stateAtCall }),
       });
@@ -1403,18 +1480,22 @@ function setWizardSite(patch){
         render();
       }
     }
-  }, 500);
+  }, 200);
 }
 function confirmAhj(ahjId){
   setWizard({ confirmedAhjId: ahjId });
 }
 function renderAhjPicker(){
   const w = state.wizard;
-  if(!w.siteState || !w.siteState.trim()) return '';
+  if(!w.siteState || !w.siteState.trim()){
+    return `<div class="field-group"><div class="notional-banner"><span class="ic">${icon('warn')}</span>Enter this property's city and state on Step 1 to look up its inspecting authority.</div></div>`;
+  }
   if(w.ahjSuggestionLoading && !w.ahjSuggestion){
     return `<div class="field-group"><div class="helper-banner"><span class="ic">${icon('check')}</span>Looking up the inspecting authority…</div></div>`;
   }
-  if(!w.ahjSuggestion) return '';
+  if(!w.ahjSuggestion){
+    return `<div class="field-group"><button class="btn btn-sm btn-primary" onclick="triggerAhjLookup()">Look up AHJ</button></div>`;
+  }
   const s = w.ahjSuggestion;
   const confirmed = w.confirmedAhjId && s.match && w.confirmedAhjId === s.match.id;
   const confidenceLabel = {
@@ -1459,7 +1540,7 @@ function renderAhjOverridePicker(){
 async function ensureAhjListLoaded(){
   if(state.ahjList) return;
   try {
-    const res = await fetch('/api/ahj/list');
+    const res = await workerFetch('/api/ahj/list');
     const data = await res.json();
     state.ahjList = res.ok ? (data.authorities || []) : [];
   } catch(e){
@@ -1524,7 +1605,7 @@ function renderWizardStep1(){
         <input id="w1-siteState" class="text-input" placeholder="e.g. CA" maxlength="24" value="${escapeHtml(w.siteState)}" oninput="setWizardSite({siteState:this.value})">
       </div>
     </div>
-    ${renderAhjPicker()}` : `
+` : `
     <div class="field-group">
       <label class="field-label">Portfolio / Offer Name</label>
       <input id="w1-portfolioName" class="text-input" placeholder="e.g. National Verify Program — Renewal" value="${escapeHtml(w.portfolioName)}" oninput="setWizard({portfolioName:this.value})">
@@ -1724,8 +1805,17 @@ function currentUnits(){
 }
 function toggleService(id){
   const sel = state.wizard.selectedServices;
-  const next = sel.includes(id) ? sel.filter(x=>x!==id) : [...sel, id];
+  const turningOn = !sel.includes(id);
+  const next = turningOn ? [...sel, id] : sel.filter(x=>x!==id);
   setWizard({ selectedServices: next });
+  // AHJ lookup only matters for Inspection, and only fires once there's
+  // an actual reason to need one -- checking this box. Single-property
+  // only (portfolio per-site AHJ selection isn't built yet, see the
+  // per_ahj_category banner below); a no-op if city/state aren't filled
+  // in yet or a lookup's already in flight/cached for this address.
+  if(turningOn && id === 'inspection' && state.wizard.offerType === 'single'){
+    triggerAhjLookup();
+  }
 }
 /* ============================================================
    LIVE PRICING — every dollar figure in the wizard comes from here.
@@ -2071,10 +2161,18 @@ function renderServicePricingCard(svcId, units){
         <div class="notional-banner"><span class="ic">${icon('warn')}</span>Category pricing (CAT 1, Periodic, CAT 3, CAT 5, etc.) for this AHJ isn't wired up yet — the admin rate table editor for Inspection is still being built. Uncheck this service to continue without it for now.</div>
       </div>`;
     }
+    if(w.offerType === 'single'){
+      return `
+      <div class="card card-pad" style="margin-top:14px;">
+        <h3 class="card-title" style="margin-bottom:4px;">${svc.name}</h3>
+        <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Inspection pricing depends on which Authority Having Jurisdiction covers this site, not just its state or city — a single state can contain multiple independent AHJs.</p>
+        ${renderAhjPicker()}
+      </div>`;
+    }
     return `
     <div class="card card-pad" style="margin-top:14px;">
       <h3 class="card-title" style="margin-bottom:4px;">${svc.name}</h3>
-      <div class="notional-banner" style="margin:8px 0 10px 0;"><span class="ic">${icon('warn')}</span>${w.offerType==='single' ? 'Go back to Step 1 and confirm the Authority Having Jurisdiction for this address to price Inspection.' : 'Per-site AHJ selection for portfolio offers isn’t built yet — Inspection pricing currently only supports single-property offers. Uncheck this service to continue.'}</div>
+      <div class="notional-banner" style="margin:8px 0 10px 0;"><span class="ic">${icon('warn')}</span>Per-site AHJ selection for portfolio offers isn’t built yet — Inspection pricing currently only supports single-property offers. Uncheck this service to continue.</div>
       <p style="color:var(--text-muted); font-size:11px; margin:0;">Inspection pricing depends on which Authority Having Jurisdiction covers each site, not just its state or city — a single state can contain multiple independent AHJs.</p>
     </div>`;
   }
@@ -3178,8 +3276,13 @@ function render(){
   }
 }
 // No initial render() call -- #root stays hidden until doLogin()
-// succeeds and calls render() itself. Nothing in this app renders
-// before a real session exists.
+// succeeds and calls render() itself, OR tryRestoreSession() below finds
+// and restores a still-valid session from an earlier login in this same
+// tab (see the SESSION PERSISTENCE comment near workerFetch() for the
+// full reasoning). Nothing in this app renders before a real session
+// exists either way -- login screen is what's visible by default in the
+// HTML, and only one of these two paths ever hides it.
+window.addEventListener('load', () => { tryRestoreSession(); });
 </script>
 </body>
 </html>
