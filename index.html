@@ -37319,12 +37319,21 @@ async function submitUpdate(){
 }
 function refreshMyUpdates(){
   const c=document.getElementById('my-updates-container');if(!c)return;
+  // v68l -- consultant scoping audit fix, part 2: My Updates was showing
+  // every submission on the whole submissions array with no restriction --
+  // a consultant could see other consultants' Field Updates on properties
+  // they aren't even assigned to. Same consultantSeesProperty() pattern as
+  // renderPropertiesTable()/getCalEvents()/renderCommentsView(), filtered by
+  // property (not by submitter name) per Misty's explicit direction: "they
+  // should only see the updates for the properties they have project
+  // assigned to... similar to the Properties tab filter."
+  const scoped=role==='consultant'?submissions.filter(s=>consultantSeesProperty(s.property)):submissions;
   // Approved updates stay visible for 30 days post-approval, then drop from
   // the default view — the permanent record already lives in Documents via
   // approveSubmission(). Pending and returned updates are always shown.
   const now=Date.now();
   const THIRTY_DAYS=30*24*60*60*1000;
-  const visible=submissions.filter(s=>{
+  const visible=scoped.filter(s=>{
     if(s.reviewStatus!=='approved')return true;
     if(!s.approvedAt)return true; // safety: no timestamp means never hide
     return(now-new Date(s.approvedAt).getTime())<=THIRTY_DAYS;
@@ -37341,10 +37350,16 @@ function refreshMyUpdates(){
 // property/week is the only action that clears it (regardless of the new
 // submission's status). Approved updates never contribute to this badge,
 // even within their 30-day visible window.
+// v68l -- scoped to consultantSeesProperty() same as refreshMyUpdates()
+// above -- this badge is called from several places (queue refresh, submit
+// flow, etc.), not just after refreshMyUpdates(), so the scoping has to
+// live here at the source rather than rely on being passed an already-
+// filtered list from every caller.
 function updateMyUpdatesBadge(){
-  const unresolvedReturned=submissions.filter((s,i)=>{
+  const scoped=role==='consultant'?submissions.filter(s=>consultantSeesProperty(s.property)):submissions;
+  const unresolvedReturned=scoped.filter((s,i)=>{
     if(s.reviewStatus!=='returned')return false;
-    const hasLaterForSameKey=submissions.some((other,j)=>j>i&&other.property===s.property&&other.week===s.week);
+    const hasLaterForSameKey=scoped.some((other,j)=>j>i&&other.property===s.property&&other.week===s.week);
     return!hasLaterForSameKey;
   }).length;
   const badge=document.getElementById('my-updates-badge');
