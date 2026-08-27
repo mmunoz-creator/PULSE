@@ -469,7 +469,7 @@ table { border-collapse: collapse; width: 100%; }
 .es-header h1 { font-size:16px; margin:0; }
 .es-doc-meta { text-align:right; font-size:11.5px; color: var(--text-muted); }
 .es-doc-meta .doc-id { font-weight:700; color: var(--text-primary); }
-.es-info-grid { display:grid; grid-template-columns: repeat(4,1fr); gap:14px; margin-bottom:20px; }
+.es-info-grid { display:grid; grid-template-columns: repeat(3,1fr); gap:14px; margin-bottom:20px; }
 .es-info-grid .k { font-size:10px; font-weight:700; text-transform:uppercase; color: var(--text-muted); letter-spacing:0.3px; margin-bottom:3px; }
 .es-info-grid .v { font-size:12.5px; font-weight:650; }
 .es-h2 { font-size:12.5px; font-weight:750; margin: 18px 0 8px 0; text-transform:uppercase; letter-spacing:0.3px; color: var(--text-secondary); }
@@ -479,6 +479,16 @@ table { border-collapse: collapse; width: 100%; }
 .es-table tbody td { padding: 8px 0; border-bottom:1px solid var(--border); }
 .es-total-row td { font-weight:800; font-size:14px; border-top:2px solid var(--navy); border-bottom:none; padding-top:10px; }
 .es-footnote { font-size:10.5px; color: var(--text-muted); margin-top:18px; line-height:1.5; }
+
+/* "Download PDF" -- print-isolate whichever .print-target was set by
+   downloadDocumentPDF() just before window.print() was called; every
+   other element on the page (sidebar, wizard chrome, the OTHER
+   document if both are on screen) is hidden from the print output. */
+@media print {
+  body * { visibility: hidden; }
+  .print-target, .print-target * { visibility: visible; }
+  .print-target { position: absolute; left: 0; top: 0; width: 100%; margin: 0; border: none; box-shadow: none; }
+}
 
 /* ============================================================
    WIZARD
@@ -522,6 +532,11 @@ table { border-collapse: collapse; width: 100%; }
 .deliverable-choice { border: 1.5px solid var(--border-strong); border-radius: var(--radius); padding: 16px; cursor:pointer; transition: all .1s; }
 .deliverable-choice:hover { border-color: var(--blue); }
 .deliverable-choice.selected { border-color: var(--blue); background: var(--blue-pale); box-shadow: 0 0 0 1px var(--blue); }
+.deliverable-choice .dc-head { display:flex; align-items:center; gap:9px; margin-bottom:5px; }
+.deliverable-choice .chk { width:16px; height:16px; border-radius:4px; border:1.5px solid var(--border-strong); background:white;
+  display:flex; align-items:center; justify-content:center; font-size:10px; color:white; flex-shrink:0; }
+.deliverable-choice.selected .chk { background: var(--blue); border-color: var(--blue); }
+.deliverable-choice .tc-title { margin-bottom:0; }
 
 /* ============================================================
    PERSONNEL ROSTER + MANAGE USERS (merged in from the former
@@ -668,7 +683,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2c';
+const APP_VERSION = 'v2h';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1001,7 +1016,46 @@ const TASK_LINE_CATALOG = [
 const BILLING_SPLITS = ['100% on completion', '50% start / 50% completion'];
 const TRIGGER_TYPES = ['Milestone Linked', 'Recurring/count-based', 'Flat recurring'];
 
-const EQUIP_TYPES = ["Hydraulic","MRL (Machine-Room-Less)","Traction (Geared)","Traction (Gearless)"];
+// Performance Timeline — turnaround time to complete a site evaluation,
+// banded by unit count. Per Misty (2026-08-27): applies to every service
+// where VDA physically evaluates units on site — Comprehensive
+// Evaluation, QCE, Due Diligence (the three per-unit Equipment
+// Evaluation variants), and Inspection (AHJ-witnessed). NOT CCM
+// (paperwork/scheduling, not itself an evaluation) or VERIFY (ongoing
+// oversight, not a one-time site evaluation).
+//
+// PLACEHOLDER DATA — same is_placeholder convention as the Inspection
+// rate table: band structure (unit-count breakpoints) and day values
+// below are scaffolding, not real VDA turnaround figures. This belongs
+// in a real rate_card table once the dedicated Rate Cards session
+// formalizes it (see continuity brief) — until then it lives here as a
+// frontend constant, same as EQUIP_TYPES did before the Worker caught up.
+const PERFORMANCE_TIMELINE_SERVICES = ['comp_eval', 'qce', 'due_diligence', 'inspection'];
+const PERFORMANCE_TIMELINE_BANDS = {
+  comp_eval:     [ {maxUnits:10, days:10}, {maxUnits:50, days:20}, {maxUnits:150, days:35}, {maxUnits:Infinity, days:60} ],
+  qce:           [ {maxUnits:10, days:10}, {maxUnits:50, days:20}, {maxUnits:150, days:35}, {maxUnits:Infinity, days:60} ],
+  due_diligence: [ {maxUnits:10, days:7},  {maxUnits:50, days:14}, {maxUnits:150, days:25}, {maxUnits:Infinity, days:45} ],
+  inspection:    [ {maxUnits:10, days:14}, {maxUnits:50, days:30}, {maxUnits:150, days:50}, {maxUnits:Infinity, days:75} ],
+};
+function performanceTimelineDaysFor(serviceId, unitCount){
+  const bands = PERFORMANCE_TIMELINE_BANDS[serviceId];
+  if(!bands) return null;
+  const band = bands.find(b => unitCount <= b.maxUnits) || bands[bands.length-1];
+  return band.days;
+}
+function performanceTimelineBandLabel(band, idx, bands){
+  const prevMax = idx===0 ? 0 : bands[idx-1].maxUnits;
+  if(band.maxUnits === Infinity) return `${prevMax+1}+ units`;
+  return prevMax===0 ? `1–${band.maxUnits} units` : `${prevMax+1}–${band.maxUnits} units`;
+}
+
+// v2e: added Escalator, Wheelchair Lift, and Other per Misty's direct
+// request, matched to the same addition on the Worker (v1e). No real
+// rate-card rows exist yet for these three -- they price at $0 via the
+// Worker's existing table-miss fallback until Rate Cards work (a
+// dedicated future session) adds real ones, same placeholder pattern
+// already used for Inspection's is_placeholder rates.
+const EQUIP_TYPES = ["Hydraulic","MRL (Machine-Room-Less)","Traction (Geared)","Traction (Gearless)","Escalator","Wheelchair Lift","Other"];
 const STOPS_BUCKETS = [
   {key:'2-4', label:'2–4 stops', min:2, max:4},
   {key:'5-8', label:'5–8 stops', min:5, max:8},
@@ -1428,6 +1482,26 @@ function freshWizardState(){
   };
 }
 function setWizard(patch){ Object.assign(state.wizard, patch); refreshPricing(); render(); }
+// setWizard's normal path calls render() synchronously on every call --
+// correct for text fields (the focus/selection-restore in render() makes
+// that safe) but wrong for a native <input type="range"> mid-drag: a
+// range thumb's drag is tracked by the browser's mouse-capture on that
+// exact DOM node, and render() destroys and recreates that node on every
+// tick. Re-focusing the new node afterward (which render() already does
+// by id) does NOT restore mouse-capture -- confirmed by a scripted drag
+// test that showed the slider's value freezing after the very first tick
+// even though the mouse kept moving. So sliders get their own path: patch
+// state and kick off the (already-debounced) pricing refetch, which will
+// render() itself once new numbers arrive -- but skip the synchronous
+// render() here, so the slider's own DOM node survives the whole drag.
+// The visible %/label still needs to feel live during the drag, so we
+// patch just that text directly instead of waiting on the network.
+function setWizardSlider(svcId, pct){
+  state.wizard.priceAdjust = { ...state.wizard.priceAdjust, [svcId]: pct };
+  refreshPricing();
+  const label = document.querySelector(`#price-adjust-${svcId}`)?.closest('.explore-slider-row')?.querySelector('.explore-slider-val');
+  if(label) label.textContent = `${pct>0?'+':''}${pct}%`;
+}
 function wizardStep(n){ setWizard({ step:n }); }
 
 /* ============================================================
@@ -1647,10 +1721,52 @@ function updateSingleUnit(id, field, val){
   setWizard({ singleUnits: units });
 }
 
+// Breakout-count entry, PULSE Mod's Manage Unit Inventory pattern
+// (Elevator/Escalator/Wheelchair Lift/Other counts) per Misty's direct
+// request (2026-08-26) -- scoped as "breakout counts first, then
+// itemize": entering a count here APPENDS that many rows to the
+// existing itemized table below, pre-filled with a representative
+// equipment_type for that breakout category, rather than replacing the
+// itemized table. Rows added this way are still individually editable
+// afterward via the existing per-unit controls -- this is purely a fast
+// bulk-add on top of the same singleUnits array, no new data model.
+// "Elevator" isn't a single EQUIP_TYPES value (the real per-unit types
+// are elevator MECHANISM sub-types: Hydraulic/MRL/Traction), so the
+// Elevator breakout count defaults new rows to Hydraulic (the most
+// common type) -- the itemized table below is exactly where a user
+// corrects that to the real mechanism type per unit, same as today.
+const UNIT_BREAKOUT_CATEGORIES = [
+  { key:'elevator', label:'Elevator', defaultEquip:'Hydraulic' },
+  { key:'escalator', label:'Escalator', defaultEquip:'Escalator' },
+  { key:'wheelchair', label:'Wheelchair Lift', defaultEquip:'Wheelchair Lift' },
+  { key:'other', label:'Other', defaultEquip:'Other' },
+];
+function addUnitsFromBreakout(defaultEquip, count){
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if(!n) return;
+  const w = state.wizard;
+  const newUnits = Array.from({length:n}, () => ({ id:'u'+(units_seq++), equipment_type: defaultEquip, floors_served: 4 }));
+  setWizard({ singleUnits: [...w.singleUnits, ...newUnits] });
+}
+
 function renderWizardStep2Single(){
   const w = state.wizard;
   return `
   <div class="card card-pad">
+    <h2 class="section-title" style="margin-bottom:4px;">How many units, by type?</h2>
+    <p style="color:var(--text-muted); font-size:12px; margin:0 0 14px 0;">Enter a count for each type to quickly add that many rows below — each row stays individually editable after (equipment type, floors/stops served).</p>
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px;">
+      ${UNIT_BREAKOUT_CATEGORIES.map(c => `
+        <div class="field-group" style="margin:0;">
+          <label class="field-label">${c.label}</label>
+          <div style="display:flex; gap:6px;">
+            <input id="breakout-${c.key}" class="text-input" type="number" min="0" placeholder="0" style="text-align:right;">
+            <button class="btn btn-sm" onclick="addUnitsFromBreakout('${escapeHtml(c.defaultEquip)}', document.getElementById('breakout-${c.key}').value); document.getElementById('breakout-${c.key}').value='';">Add</button>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>
+  <div class="card card-pad" style="margin-top:14px;">
     <h2 class="section-title" style="margin-bottom:4px;">Units at ${escapeHtml(w.clientName) || 'this property'}</h2>
     <p style="color:var(--text-muted); font-size:12px; margin:0 0 14px 0;">Add each unit's equipment type and stops served — this drives per-unit pricing.</p>
     <div class="table-card">
@@ -1847,9 +1963,15 @@ function refreshPricing(){
       retainerFees: w.retainerFees,
       taskLines: w.taskLines,
       verifyInputs: { termYears: w.contractTermYears, contractors: w.verifyContractors, directCalls: w.verifyDirectCalls },
-      discountTiers: w.discountTiers,
-      activeDiscountTierId: w.activeDiscountTierId,
-      discountOpen: w.discountOpen,
+      // Volume discount only makes sense against a portfolio award -- a
+      // single-property offer has no "% of portfolio" to award, so never
+      // send tier data for it even if stale wizard state still has a
+      // default tier selected (see freshWizardState's activeDiscountTierId
+      // default of 'd1') -- otherwise the server has no way to know this
+      // offer type shouldn't get a discount and applies it anyway.
+      discountTiers: w.offerType === 'portfolio' ? w.discountTiers : [],
+      activeDiscountTierId: w.offerType === 'portfolio' ? w.activeDiscountTierId : null,
+      discountOpen: w.offerType === 'portfolio' ? w.discountOpen : false,
     };
     try {
       const res = await workerFetch('/api/price/offer-totals', {
@@ -1922,9 +2044,22 @@ function computeOfferTotals(){
   const w = state.wizard;
   const r = w.pricingResult;
   if(!r) return { lineItems: [], subtotal:0, discountPct:0, discountAmt:0, total:0, activeTier:null };
+  // NOTE: this object is used two ways -- the wizard/estimate-sheet
+  // renderers read li.svc.{name,pricingModel} (nested), but this same
+  // object is ALSO sent verbatim as the `totals` field of the POST
+  // /api/offers body, where createOffer() on the Worker reads a
+  // top-level li.pricingModel (flat) to bind into offer_line_items.
+  // Confirmed real bug (2026-08-26): only the nested svc.pricingModel
+  // was ever set, so createOffer's bind() got li.pricingModel===undefined
+  // and D1 threw ("D1PreparedStatement.bind" / Array.map internal error,
+  // confirmed from the live Cloudflare error log, worker.js:818) on every
+  // single offer save -- root cause of "offer lost on tab switch": the
+  // offer was never actually being created at all. Fix: set BOTH the
+  // nested and top-level fields so neither consumer breaks.
   const lineItems = r.lineItems.map(li => ({
     svc: { name: li.serviceName, pricingModel: li.pricingModel },
     serviceId: li.serviceId,
+    pricingModel: li.pricingModel,
     amount: li.amount,
     isAnnual: !!li.isAnnual,
     isMonthly: !!li.isMonthly,
@@ -1962,6 +2097,7 @@ function renderWizardStep3(){
 
       ${w.selectedServices.map(svcId => renderServicePricingCard(svcId, units)).join('')}
 
+      ${w.offerType === 'portfolio' ? `
       <div class="card explore-panel ${w.discountOpen?'open':''}" style="margin-top:14px;">
         <div class="explore-panel-head" onclick="toggleDiscountPanel()">
           <div style="display:flex; align-items:center; gap:8px;">
@@ -1992,7 +2128,7 @@ function renderWizardStep3(){
           </div>
           <button class="btn btn-sm" onclick="addDiscountTier()">+ Add Tier</button>
         </div>` : ''}
-      </div>
+      </div>` : ''}
     </div>
 
     <div class="sticky-side">
@@ -2001,7 +2137,7 @@ function renderWizardStep3(){
         <div class="card-pad">
           <div class="kv-list">
             ${totals.lineItems.map(li => `
-              <div class="kv-row"><span class="k">${li.svc.name}${li.isMonthly?' <span style="color:var(--text-muted);">/mo</span>':''}</span><span class="v">${fmtMoney(li.amount)}</span></div>
+              <div class="kv-row"><span class="k">${li.svc.name}${li.isMonthly?' <span style="color:var(--text-muted);">/mo</span>':''}${li.isAnnual?` <span style="color:var(--text-muted);">(${w.contractTermYears} yr)</span>`:''}</span><span class="v">${fmtMoney(li.amount)}</span></div>
             `).join('') || `<div style="color:var(--text-muted); font-size:12px;">${!w.selectedServices.length ? 'Select at least one service.' : (w.pricingError || 'Calculating…')}</div>`}
           </div>
           <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
@@ -2134,7 +2270,7 @@ function renderServicePricingCard(svcId, units){
         <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">${staffNote} Adjust price per unit — value updates live below, no chart, just the dollar total.</p>
         <div class="explore-slider-row">
           <div class="explore-slider-label"><span>Price Per Unit</span><span class="explore-slider-val">${pct>0?'+':''}${pct}%</span></div>
-          <input type="range" min="-30" max="30" step="1" value="${pct}" class="explore-slider" oninput="updatePriceAdjust('${svcId}', this.value)">
+          <input id="price-adjust-${svcId}" type="range" min="-30" max="30" step="1" value="${pct}" class="explore-slider" oninput="setWizardSlider('${svcId}', Number(this.value))" onchange="updatePriceAdjust('${svcId}', this.value)">
           <div class="explore-slider-range">
             <span>${fmtMoney(range.lo)}–${fmtMoney(range.hi)}/unit (recommended)</span>
             <span style="${pct!==0?'color:var(--purple); font-weight:600;':''}">${fmtMoney(Math.round(range.lo*(1+pct/100)))}–${fmtMoney(Math.round(range.hi*(1+pct/100)))}/unit (adjusted)</span>
@@ -2225,33 +2361,53 @@ function renderWizardStep4(){
   return `
   <div class="card card-pad">
     <h2 class="section-title" style="margin-bottom:4px;">What should PULSE generate?</h2>
-    <p style="color:var(--text-muted); font-size:12px; margin:0 0 16px 0;">Pick one or both. These are two separate deliverables, scoped here at offer creation.</p>
+    <p style="color:var(--text-muted); font-size:12px; margin:0 0 16px 0;">Check as many as you need — these are two independent deliverables, not an either/or choice. Most offers will want at least the Estimate Sheet, since it's the only one that includes real pricing today.</p>
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
       <div class="deliverable-choice ${w.deliverables.includes('estimate')?'selected':''}" onclick="toggleDeliverable('estimate')">
-        <div class="tc-title">${icon('check')==='' ? '' : ''}Estimate Sheet</div>
+        <div class="dc-head"><div class="chk">${w.deliverables.includes('estimate')?icon('check'):''}</div><div class="tc-title">Estimate Sheet</div></div>
         <div class="tc-desc">A pricing-focused commercial summary — services, rate basis, line items, discount applied, total. Client-ready.</div>
       </div>
       <div class="deliverable-choice ${w.deliverables.includes('proposal')?'selected':''}" onclick="toggleDeliverable('proposal')">
-        <div class="tc-title">Narrative Proposal</div>
-        <div class="tc-desc">Pricing &amp; commercial sections only (services included, commercial model, milestones) in an RFI-response style document. Narrative sections like team bios and risk registers are left as fill-in-later.</div>
+        <div class="dc-head"><div class="chk">${w.deliverables.includes('proposal')?icon('check'):''}</div><div class="tc-title">Narrative Proposal</div></div>
+        <div class="tc-desc">Pricing &amp; commercial sections only (scope of services, commercial model, payment milestones, performance timeline) in an RFI-response style document. Narrative sections like team bios and risk registers are left as fill-in-later.</div>
       </div>
     </div>
   </div>
 
-  ${w.deliverables.includes('proposal') ? `
-  <div class="notional-banner" style="margin-top:14px;">
-    <span class="ic">${icon('warn')}</span>
-    <div>The Narrative Proposal document itself isn't built yet — selecting it here records that this offer wants one, but no document is generated on confirm. The Estimate Sheet below is fully real.</div>
-  </div>` : ''}
-
-  <div style="max-width:840px; margin: 14px auto 0 auto;">
-    ${w.deliverables.includes('estimate') ? renderEstimateSheetHTML() : ''}
+  <div style="max-width:840px; margin: 14px auto 0 auto; display:flex; flex-direction:column; gap:20px;">
+    ${w.deliverables.includes('estimate') ? `
+    <div>
+      <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+        <button class="btn btn-sm" onclick="downloadDocumentPDF('estimate-sheet-doc')"><i class="ti ti-download"></i> Download PDF</button>
+      </div>
+      <div id="estimate-sheet-doc">${renderEstimateSheetHTML()}</div>
+    </div>` : ''}
+    ${w.deliverables.includes('proposal') ? `
+    <div>
+      <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+        <button class="btn btn-sm" onclick="downloadDocumentPDF('narrative-proposal-doc')"><i class="ti ti-download"></i> Download PDF</button>
+      </div>
+      <div id="narrative-proposal-doc">${renderNarrativeProposalHTML()}</div>
+    </div>` : ''}
   </div>
 
   <div style="display:flex; justify-content:space-between; margin-top:18px;">
     <button class="btn" onclick="wizardStep(3)">&larr; Back to Services &amp; Pricing</button>
     <button class="btn btn-primary" ${w.generating?'disabled':''} onclick="confirmGenerateOffer()">${w.generating?'Generating…':'Confirm &amp; Generate Offer'}</button>
   </div>`;
+}
+// Print-to-PDF via the browser's native print dialog: isolate the target
+// document element with a class the print stylesheet (see
+// "@media print" in the <style> block) makes visible while everything
+// else is hidden, then invoke window.print(). No new libraries -- the
+// user chooses "Save as PDF" in their browser's print destination
+// picker, same mechanism most lightweight web apps use for this.
+function downloadDocumentPDF(elementId){
+  document.querySelectorAll('.print-target').forEach(el => el.classList.remove('print-target'));
+  const el = document.getElementById(elementId);
+  if(!el){ showToast('Could not find that document to print.', true); return; }
+  el.classList.add('print-target');
+  window.print();
 }
 async function confirmGenerateOffer(){
   const w = state.wizard;
@@ -2269,7 +2425,8 @@ async function confirmGenerateOffer(){
     contractTermYears: w.contractTermYears,
     totals: computeOfferTotals(),
     deliverables: w.deliverables,
-    discountTiers: w.discountTiers,
+    // Same portfolio-only rule as refreshPricing() -- see comment there.
+    discountTiers: w.offerType === 'portfolio' ? w.discountTiers : [],
   };
   try {
     const res = await workerFetch('/api/offers', {
@@ -2289,7 +2446,7 @@ function renderEstimateSheetHTML(){
   const w = state.wizard;
   const totals = computeOfferTotals();
   const units = currentUnits();
-  const today = '2026-08-21';
+  const today = new Date().toISOString().slice(0,10);
   return `
   <div class="estimate-sheet">
     <div class="es-header">
@@ -2297,13 +2454,12 @@ function renderEstimateSheetHTML(){
         <div class="es-brand-mark">P</div>
         <div><h1>Service Estimate</h1><div style="font-size:11px; color:var(--text-muted);">PULSE Pricing · VDA Elevator/Escalator Consulting &amp; Inspection Services</div></div>
       </div>
-      <div class="es-doc-meta"><div class="doc-id">OFR-DRAFT · v1</div><div>${today}</div></div>
+      <div class="es-doc-meta"><div>${today}</div></div>
     </div>
     <div class="es-info-grid">
       <div><div class="k">Client</div><div class="v">${escapeHtml(w.clientName) || '(not entered)'}</div></div>
       <div><div class="k">${w.offerType==='single'?'Address':'Portfolio'}</div><div class="v">${w.offerType==='single' ? (escapeHtml([w.address, [w.city, w.siteState].filter(Boolean).join(', ')].filter(Boolean).join(', ')) || '—') : (escapeHtml(w.portfolioName)||'Untitled Portfolio')}</div></div>
       <div><div class="k">Units</div><div class="v">${units.length} unit${units.length!==1?'s':''}</div></div>
-      <div><div class="k">Rate Card</div><div class="v">${RATE_CARD_DISPLAY_NAME}</div></div>
     </div>
     <h2 class="es-h2">Services Included</h2>
     <table class="es-table">
@@ -2321,7 +2477,91 @@ function renderEstimateSheetHTML(){
         <tr class="es-total-row"><td>Total Estimated Offer</td><td class="num">${fmtMoney(totals.total)}</td></tr>
       </tbody>
     </table>
+    ${renderPerformanceTimelineSectionHTML(w, units)}
     <div class="es-footnote">Pricing generated from ${RATE_CARD_DISPLAY_NAME}. This estimate is valid for 30 days from the date above.</div>
+  </div>`;
+}
+
+// Shared by both the Estimate Sheet and the Narrative Proposal. Only
+// renders for services that involve a physical on-site evaluation (see
+// PERFORMANCE_TIMELINE_SERVICES) -- returns '' entirely if the offer has
+// none of them selected, so e.g. a VERIFY-only or CCM-only offer shows
+// no Performance Timeline section at all.
+function renderPerformanceTimelineSectionHTML(w, units){
+  const applicable = w.selectedServices.filter(id => PERFORMANCE_TIMELINE_SERVICES.includes(id));
+  if(!applicable.length) return '';
+  const unitCount = units.length;
+  return `
+    <h2 class="es-h2">Performance Timeline</h2>
+    <table class="es-table">
+      <thead><tr><th>Service</th><th class="num">Units</th><th class="num">Estimated Completion</th></tr></thead>
+      <tbody>
+        ${applicable.map(id => {
+          const svc = SERVICES.find(s=>s.id===id);
+          const days = performanceTimelineDaysFor(id, unitCount);
+          return `<tr><td>${escapeHtml(svc.name)}</td><td class="num">${unitCount}</td><td class="num">${days} business days</td></tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    <div class="es-footnote" style="margin-top:0;">Estimated completion is calculated from unit count at the site and is provided for planning purposes — final scheduling is confirmed once the engagement is active. Timeline figures are placeholder pending final VDA turnaround data.</div>`;
+}
+
+function renderNarrativeProposalHTML(){
+  const w = state.wizard;
+  const totals = computeOfferTotals();
+  const units = currentUnits();
+  const today = new Date().toISOString().slice(0,10);
+  const milestoneLineItems = totals.lineItems.filter(li => li.taskLines && li.taskLines.length);
+  return `
+  <div class="estimate-sheet">
+    <div class="es-header">
+      <div class="es-brand">
+        <div class="es-brand-mark">P</div>
+        <div><h1>Narrative Proposal</h1><div style="font-size:11px; color:var(--text-muted);">PULSE Pricing · VDA Elevator/Escalator Consulting &amp; Inspection Services</div></div>
+      </div>
+      <div class="es-doc-meta"><div>${today}</div></div>
+    </div>
+    <div class="es-info-grid">
+      <div><div class="k">Client</div><div class="v">${escapeHtml(w.clientName) || '(not entered)'}</div></div>
+      <div><div class="k">${w.offerType==='single'?'Address':'Portfolio'}</div><div class="v">${w.offerType==='single' ? (escapeHtml([w.address, [w.city, w.siteState].filter(Boolean).join(', ')].filter(Boolean).join(', ')) || '—') : (escapeHtml(w.portfolioName)||'Untitled Portfolio')}</div></div>
+      <div><div class="k">Units</div><div class="v">${units.length} unit${units.length!==1?'s':''}</div></div>
+    </div>
+
+    <h2 class="es-h2">Scope of Services</h2>
+    ${totals.lineItems.map(li => {
+      const svc = SERVICES.find(s=>s.id===li.serviceId);
+      return `<p style="font-size:12.5px; line-height:1.6; margin:0 0 12px 0;"><strong>${escapeHtml(li.svc.name)}</strong> — ${escapeHtml((svc && svc.desc) || '')}</p>`;
+    }).join('')}
+
+    <h2 class="es-h2">Commercial Model</h2>
+    <table class="es-table">
+      <thead><tr><th>Service</th><th class="num">Basis</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        ${totals.lineItems.map(li => `<tr><td>${escapeHtml(li.svc.name)}</td><td class="num">${pricingModelLabel(li.svc.pricingModel)}</td><td class="num">${fmtMoney(li.amount)}${li.isMonthly?'/mo':''}${li.isAnnual?'/yr':''}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <table class="es-table" style="margin-top:10px;">
+      <tbody>
+        <tr><td>Subtotal</td><td class="num">${fmtMoney(totals.subtotal)}</td></tr>
+        ${totals.discountPct>0 ? `<tr><td>Volume discount (${totals.activeTier.awardPct}% award of portfolio)</td><td class="num">&minus;${fmtMoney(totals.discountAmt)}</td></tr>` : ''}
+        <tr class="es-total-row"><td>Total Estimated Offer</td><td class="num">${fmtMoney(totals.total)}</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:11.5px; color:var(--text-muted); margin:10px 0 0 0;">Contract term: ${w.contractTermYears} year${w.contractTermYears!==1?'s':''}.</p>
+
+    ${milestoneLineItems.length ? `
+    <h2 class="es-h2">Payment Milestones</h2>
+    ${milestoneLineItems.map(li => `
+      <p style="font-size:12px; font-weight:650; margin:14px 0 6px 0;">${escapeHtml(li.svc.name)}</p>
+      <table class="es-table">
+        <thead><tr><th>Task / Milestone</th><th>Trigger</th><th>Billing Split</th><th class="num">Amount</th></tr></thead>
+        <tbody>
+          ${li.taskLines.map(t => `<tr><td>${escapeHtml(t.name)}</td><td>${escapeHtml(t.trigger)}</td><td>${escapeHtml(t.billingSplit)}</td><td class="num">${fmtMoney(t.amount)}</td></tr>`).join('')}
+        </tbody>
+      </table>`).join('')}` : ''}
+
+    ${renderPerformanceTimelineSectionHTML(w, units)}
+    <div class="es-footnote">This proposal covers pricing and commercial terms only. This estimate is valid for 30 days from the date above.</div>
   </div>`;
 }
 
@@ -2581,6 +2821,34 @@ async function changeOfferStatus(id, status){
     showToast('Could not reach the server.', true);
   }
 }
+let deleteOfferTargetId = null;
+function openDeleteOffer(id, client, status){
+  deleteOfferTargetId = id;
+  state.deleteOfferClient = client;
+  state.deleteOfferStatus = status;
+  state.deleteOfferError = null;
+  state.deleteOfferBusy = false;
+  state.showDeleteOffer = true;
+  render();
+}
+function closeDeleteOffer(){ deleteOfferTargetId = null; state.showDeleteOffer = false; state.deleteOfferError = null; render(); }
+async function submitDeleteOffer(){
+  state.deleteOfferBusy = true; render();
+  try {
+    const res = await workerFetch(`/api/offers/${deleteOfferTargetId}`, { method: 'DELETE' });
+    const data = await res.json().catch(()=>({}));
+    state.deleteOfferBusy = false;
+    if(!res.ok){ state.deleteOfferError = data.error || 'Could not delete this offer.'; render(); return; }
+    const clientName = state.deleteOfferClient;
+    state.showDeleteOffer = false; state.deleteOfferError = null;
+    showToast(`Offer for ${clientName} deleted.`);
+    goTo('offers');
+    loadOffers();
+  } catch(e){
+    state.deleteOfferBusy = false;
+    state.deleteOfferError = 'Could not reach the server. Check your connection and try again.'; render();
+  }
+}
 function renderOfferDetail(){
   const d = state.offerDetail;
   if(!d) return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Offer Detail</h1><div class="empty-state card" style="margin-top:20px;"><div class="ic">⚙</div>Loading…</div>`;
@@ -2588,6 +2856,7 @@ function renderOfferDetail(){
   const o = normalizeOffer(d);
   const nextStatuses = { draft:'sent', sent:'accepted', accepted:null, expired:null };
   const nextStatus = nextStatuses[o.status];
+  const isAdmin = currentUser && currentUser.role === 'admin';
   return `
   <div class="page-topline"><span class="row-link" style="cursor:pointer;" onclick="goTo('offers')">${icon('back')} Offers</span></div>
   <div class="hero-band" style="margin-top:8px;">
@@ -2637,10 +2906,25 @@ function renderOfferDetail(){
           ${nextStatus ? `<button class="btn btn-primary" onclick="changeOfferStatus('${o.id}','${nextStatus}')">Mark as ${offerStatusLabel(nextStatus)}</button>` : ''}
           <button class="btn btn-primary" onclick="goTo('wizard')">${icon('newoffer')} Start a similar offer</button>
           <button class="btn" onclick="goTo('offers')">${icon('back')} Back to Offers</button>
+          ${isAdmin ? `<button class="btn btn-danger" onclick="openDeleteOffer('${o.id}', ${escapeHtml(JSON.stringify(o.client))}, '${o.status}')">Delete Offer</button>` : ''}
         </div>
       </div>
     </div>
-  </div>`;
+  </div>
+
+  ${state.showDeleteOffer ? `
+  <div class="modal-backdrop" onclick="if(event.target===this) closeDeleteOffer()">
+    <div class="modal narrow">
+      <div class="modal-title"><span style="color:var(--red);">${icon('warn')}</span>Delete Offer</div>
+      <div class="modal-desc">This permanently deletes the offer for <strong>${escapeHtml(state.deleteOfferClient)}</strong> and all its line items and history. This cannot be undone.</div>
+      ${['sent','accepted'].includes(state.deleteOfferStatus) ? `<div class="form-error">This offer is marked <strong>${offerStatusLabel(state.deleteOfferStatus)}</strong>. Deleting it removes any record the client was ever quoted — make sure that's really what you want.</div>` : ''}
+      ${state.deleteOfferError ? `<div class="form-error">${escapeHtml(state.deleteOfferError)}</div>` : ''}
+      <div class="modal-footer">
+        <button class="btn" onclick="closeDeleteOffer()" ${state.deleteOfferBusy?'disabled':''}>Cancel</button>
+        <button class="btn btn-danger" onclick="submitDeleteOffer()" ${state.deleteOfferBusy?'disabled':''}>${state.deleteOfferBusy?'Deleting…':'Delete Offer'}</button>
+      </div>
+    </div>
+  </div>` : ''}`;
 }
 
 /* ============================================================
@@ -3090,6 +3374,53 @@ async function resendPin(userId, name){
   }
 }
 function closeFallbackPinNotice(){ state.fallbackPinNotice = null; render(); }
+let deleteUserTargetId = null;
+function openDeleteUser(id, name){
+  deleteUserTargetId = id;
+  state.deleteUserName = name;
+  state.deleteUserOfferCount = 0;
+  state.deleteUserError = null;
+  state.deleteUserBusy = false;
+  state.showDeleteUser = true;
+  render();
+}
+function closeDeleteUser(){ deleteUserTargetId = null; state.showDeleteUser = false; state.deleteUserError = null; render(); }
+async function submitDeleteUser(){
+  // First call (no reassignOffersTo) either succeeds outright, or -- if
+  // the user owns offers -- the Worker responds 400 with offerCount. That
+  // response re-renders THIS SAME modal with the reassignment picker
+  // added, rather than opening a second modal, per the two-step-in-place
+  // pattern. Once a target is picked, the modal is resubmitted with
+  // reassignOffersTo set and the delete proceeds for real.
+  const reassignSelect = document.getElementById('deleteUserReassignTo');
+  const reassignOffersTo = reassignSelect ? reassignSelect.value : null;
+  if(state.deleteUserOfferCount && !reassignOffersTo){
+    state.deleteUserError = 'Pick an admin to reassign these offers to.'; render(); return;
+  }
+  state.deleteUserBusy = true; render();
+  try {
+    const res = await workerFetch(`/api/admin/users/${deleteUserTargetId}`, {
+      method: 'DELETE', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(reassignOffersTo ? { reassignOffersTo } : {}),
+    });
+    const data = await res.json();
+    state.deleteUserBusy = false;
+    if(!res.ok){
+      if(data.offerCount){
+        // Not actually an error state -- surface the reassignment step.
+        state.deleteUserOfferCount = data.offerCount; state.deleteUserError = null; render(); return;
+      }
+      state.deleteUserError = data.error || 'Could not delete this user.'; render(); return;
+    }
+    const deletedName = state.deleteUserName;
+    state.showDeleteUser = false; state.deleteUserError = null;
+    showToast(data.reassignedOfferCount ? `${deletedName} deleted — ${data.reassignedOfferCount} offer${data.reassignedOfferCount!==1?'s':''} reassigned.` : `${deletedName} deleted.`);
+    loadUsers();
+  } catch(e){
+    state.deleteUserBusy = false;
+    state.deleteUserError = 'Could not reach the server. Check your connection and try again.'; render();
+  }
+}
 function renderManageUsers(){
   const data = state.usersData;
   const users = data && !data.error ? data : [];
@@ -3100,7 +3431,7 @@ function renderManageUsers(){
 
   <div class="helper-banner">
     <span class="ic">${icon('info')}</span>
-    <span>Roles: <b>Admin</b> can do everything Sales can, plus edit rate cards, the personnel roster, and other users. <b>Sales</b> can build and save offers, and see anonymized nearest-consultant/inspector results — never rate cards or real personnel names.</span>
+    <span>Roles: <b>Admin</b> can do everything Sales can, plus manage rate cards, the personnel roster, other users, and pricing analytics. <b>Sales</b> can build, price, and save offers — rate cards and the personnel roster are never visible to Sales.</span>
   </div>
 
   <div class="card">
@@ -3135,6 +3466,7 @@ function renderManageUsers(){
                       <button class="btn btn-sm" onclick="openResetPin('${u.id}', ${escapeHtml(JSON.stringify(u.name))})">Reset PIN</button>
                       <button class="btn btn-sm" title="User lost or never received their PIN email" onclick="resendPin('${u.id}', ${escapeHtml(JSON.stringify(u.name))})">Resend PIN</button>
                       <button class="btn btn-sm" ${isSelf ? 'disabled title="You cannot deactivate your own account"' : ''} onclick="toggleUserActive('${u.id}', ${u.active ? 'false' : 'true'})">${u.active ? 'Deactivate' : 'Activate'}</button>
+                      <button class="btn btn-sm btn-danger" ${isSelf ? 'disabled title="You cannot delete your own account"' : ''} onclick="openDeleteUser('${u.id}', ${escapeHtml(JSON.stringify(u.name))})">Delete</button>
                     </div>
                   </td>
                 </tr>`;
@@ -3202,6 +3534,28 @@ function renderManageUsers(){
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" onclick="closeFallbackPinNotice()">Done</button>
+      </div>
+    </div>
+  </div>` : ''}
+
+  ${state.showDeleteUser ? `
+  <div class="modal-backdrop" onclick="if(event.target===this) closeDeleteUser()">
+    <div class="modal narrow">
+      <div class="modal-title"><span style="color:var(--red);">${icon('warn')}</span>Delete ${escapeHtml(state.deleteUserName)}</div>
+      ${state.deleteUserOfferCount ? `
+        <div class="modal-desc">${escapeHtml(state.deleteUserName)} owns ${state.deleteUserOfferCount} offer${state.deleteUserOfferCount!==1?'s':''}. Pick an active admin to reassign ${state.deleteUserOfferCount!==1?'them':'it'} to before this account can be deleted.</div>
+        <div class="field">
+          <label>Reassign offers to</label>
+          <select id="deleteUserReassignTo">
+            <option value="">Select an admin…</option>
+            ${(state.usersData||[]).filter(u=>u.role==='admin' && u.active && u.id!==deleteUserTargetId).map(u=>`<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('')}
+          </select>
+        </div>
+      ` : `<div class="modal-desc">This permanently deletes ${escapeHtml(state.deleteUserName)}'s account and signs them out everywhere. This cannot be undone.</div>`}
+      ${state.deleteUserError ? `<div class="form-error">${escapeHtml(state.deleteUserError)}</div>` : ''}
+      <div class="modal-footer">
+        <button class="btn" onclick="closeDeleteUser()" ${state.deleteUserBusy?'disabled':''}>Cancel</button>
+        <button class="btn btn-danger" onclick="submitDeleteUser()" ${state.deleteUserBusy?'disabled':''}>${state.deleteUserBusy?'Deleting…':'Delete User'}</button>
       </div>
     </div>
   </div>` : ''}`;
