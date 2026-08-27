@@ -333,6 +333,61 @@ table { border-collapse: collapse; width: 100%; }
 .rc-cell-currency .rc-cell-input { padding-left:18px; }
 
 /* ============================================================
+   INSPECTION RATE CARD + INSPECTION GOVERNANCE (v2i) — the
+   per_ahj_category branch of Rate Cards. Column-header-centering and
+   the Governance table's expand/collapse + checkbox/dropdown/notes
+   shape are carried over verbatim from the approved mockup
+   ("Inspection Rate Card + Governance Mockup.html", mk-rate-table /
+   mk-gov-table classes) -- renamed with an ir- prefix here to fit this
+   file's naming convention (rc-* is already taken by the per-unit
+   grids' own classes) rather than importing the mockup's mk- prefix,
+   but the rules themselves are unchanged from what was reviewed and
+   approved.
+   ============================================================ */
+.ir-search-wrap { position:relative; display:inline-flex; align-items:center; margin-bottom:12px; }
+.ir-search-wrap i.ti-search { position:absolute; left:10px; font-size:13px; color:var(--text-muted); pointer-events:none; }
+.ir-search-input { font-size:12.5px; padding:8px 11px 8px 30px; width:240px; }
+/* "+ Add Region" / "+ Add AHJ" -- sits inline with the search box, same
+   row, same bottom margin so both controls align on one line above
+   each table (search grows/shrinks independently since it's a separate
+   inline-flex box, not a shared flex parent that would need the whole
+   row restructured). */
+.ir-toolbar-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:0; }
+.ir-toolbar-row .ir-search-wrap { margin-bottom:0; }
+
+/* Rate card table — column headings centered directly over their values,
+   per the approved mockup's explicit correction from renderRateCardTableLive's
+   left-aligned headers. */
+.ir-rate-table { width:100%; border-collapse:collapse; min-width:900px; }
+.ir-rate-table thead th { text-align:center; font-size:10.5px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.3px; padding:8px 10px; border-bottom:1px solid var(--border); }
+.ir-rate-table thead th:first-child { text-align:left; }
+.ir-rate-table tbody td { padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:middle; text-align:center; }
+.ir-rate-table tbody td:first-child { text-align:left; }
+.ir-rate-table tbody tr:hover { background:var(--gray-25); }
+.ir-rate-table .rc-cell-currency { display:block; margin:0 auto; width:100px; }
+.ir-rate-table .rc-cell-currency .rc-cell-input { width:100%; text-align:right; }
+
+/* Governance table */
+.ir-gov-table { width:100%; border-collapse:collapse; min-width:1160px; }
+.ir-gov-table thead th { text-align:center; font-size:10.5px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.3px; padding:8px 6px; border-bottom:1px solid var(--border); }
+.ir-gov-table thead th:first-child { text-align:left; padding-left:14px; }
+.ir-gov-table thead th.ir-notes-header { text-align:left; }
+.ir-gov-parent-row td { padding:10px 6px; border-bottom:1px solid var(--border); background:var(--gray-25); vertical-align:middle; }
+.ir-gov-child-row td { padding:8px 6px; border-bottom:1px solid var(--border); vertical-align:middle; }
+.ir-gov-name-cell { padding-left:14px !important; min-width:210px; }
+.ir-gov-expand-btn { width:18px; height:18px; border:none; background:var(--gray-100); border-radius:4px; color:var(--text-secondary); font-size:10px; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+.ir-gov-cell { text-align:center; min-width:130px; }
+.ir-gov-cell-inner { display:flex; align-items:center; justify-content:center; gap:6px; }
+.ir-gov-chk-wrap { display:inline-flex; cursor:pointer; flex-shrink:0; }
+.ir-gov-freq-select { font-size:10.5px; font-weight:600; color:var(--text-primary); padding:4px 4px; border:1px solid var(--border); border-radius:5px;
+  background:var(--gray-25); max-width:100px; }
+.ir-gov-freq-select:disabled { color:var(--text-muted); background:var(--gray-100); border-color:var(--border); cursor:not-allowed; }
+.ir-gov-freq-select:not(:disabled):focus { outline:none; border-color:var(--blue); background:white; }
+.ir-gov-notes-cell { font-size:11px; color:var(--text-secondary); line-height:1.5; min-width:240px; max-width:280px; padding-right:14px !important; }
+.ir-gov-notes-cell input.text-input { font-size:11px; padding:6px 8px; }
+.ir-gov-notes-empty { color:var(--text-muted); }
+
+/* ============================================================
    TABS (detail pages)
    ============================================================ */
 .tabs { display:flex; gap: 20px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
@@ -683,7 +738,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2h';
+const APP_VERSION = 'v2i';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1169,6 +1224,29 @@ const state = {
   wizard: null,      // set fresh on entering the wizard view (see goTo)
   rateCardTab: 'verify',
   rateCardData: null, // fetched live from /api/admin/rate-cards on entering the ratecard view
+  // Inspection Rate Card + Inspection Governance (v2i) — pure client-side
+  // filter state for each section's search box (no new API calls; both
+  // sections' data is already loaded in full via rateCardData, this just
+  // narrows which already-loaded rows render). governanceExpanded tracks
+  // which STATE-level rows in the Governance table are expanded to show
+  // their sub-jurisdictions, keyed by ahj id -- a Set rather than a single
+  // state.showX boolean since multiple state rows can be expanded at once,
+  // unlike this app's existing single-flag modal/drawer toggles.
+  inspectionRateSearch: '',
+  inspectionGovSearch: '',
+  governanceExpanded: new Set(),
+  // "+ Add Region" (Inspection Rate Card) and "+ Add AHJ" (Inspection
+  // Governance) -- same state-driven .modal.narrow pattern as
+  // showCreateUser/showEditUser above (see openCreateUser/submitCreateUser),
+  // not a new modal system. showAddRegion/showAddAhj gate the two forms;
+  // *Error/*Busy follow the same per-form naming convention as the rest
+  // of this file's modals.
+  showAddRegion: false,
+  addRegionError: null,
+  addRegionBusy: false,
+  showAddAhj: false,
+  addAhjError: null,
+  addAhjBusy: false,
   clientsFilter: 'all',  // all | single | multi
   clientsSearch: '',
   importType: 'consultant',
@@ -1236,6 +1314,7 @@ function icon(name){
     check:'✓', chevron:'›', calendar:'▦', doc:'☷', info:'ⓘ', warn:'⚠',
     truck:'⚑', flag:'⚑', history:'↻', admin:'<i class="ti ti-trending-up"></i>', search:'⌕',
     chevUp:'▴', chevDown:'▾', personnel:'<i class="ti ti-users"></i>', users:'<i class="ti ti-user-cog"></i>',
+    plus:'<i class="ti ti-plus"></i>',
   };
   return m[name] || '';
 }
@@ -2602,6 +2681,16 @@ async function loadRateCardData(){
   }
   render();
 }
+// v2i fix: this function used to always coerce `value` with Number(),
+// which is correct for the price/rate_factor/markup_factor fields every
+// prior caller used, but silently corrupts a text field -- Number(
+// "Annual") and Number("some note text") are both NaN. Governance's
+// frequency and notes fields (added this update) are the first
+// non-numeric callers, which surfaced this. Fields that should stay
+// numeric are named explicitly; everything else is sent as-is (already
+// a string, or already a real 0/1 number for `required`, which needs
+// no comma-stripping).
+const RATE_CARD_NUMERIC_FIELDS = ['price', 'base_rate', 'rate_factor', 'markup_factor', 'price_per_unit', 'is_placeholder', 'required'];
 async function updateRateCardCellLive(table, id, field, value){
   const rateCardId = state.rateCardData.rateCard.id;
   // Dollar-amount cells are comma-formatted text inputs (see
@@ -2609,12 +2698,15 @@ async function updateRateCardCellLive(table, id, field, value){
   // before parsing, or Number("2,200") silently becomes NaN and the
   // save would corrupt the stored price. Plain number inputs (the
   // decimal rate/markup factors) pass through unaffected since they
-  // never contain a comma to begin with.
-  const numericValue = Number(String(value).replace(/,/g, ''));
+  // never contain a comma to begin with. Non-numeric fields (frequency,
+  // notes) are sent through unchanged.
+  const finalValue = RATE_CARD_NUMERIC_FIELDS.includes(field)
+    ? Number(String(value).replace(/,/g, ''))
+    : value;
   try {
     const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/cell`, {
       method: 'PATCH', headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify({ table, id: Number(id), field, value: numericValue }),
+      body: JSON.stringify({ table, id: Number(id), field, value: finalValue }),
     });
     const data = await res.json();
     if(!res.ok){ showToast(data.error || 'Could not save that change.', true); return; }
@@ -2674,6 +2766,456 @@ function renderRateCardTableLive(svcId, unitPrices){
     </div>
   </div>`;
 }
+/* ============================================================
+   INSPECTION RATE CARD (v2i) — the per_ahj_category branch's Section 1.
+   Rows = the registered pricing regions in rate_card_regions (the 29
+   VDA rate-sheet regions seeded by migration 002 Section 5, plus
+   anything created live via "+ Add Region" -- see the v1f Worker
+   comment on createInspectionRegion for why rate_card_regions exists
+   rather than deriving rows from inspectionPrices alone: a brand-new
+   region deliberately starts with zero price rows, so it would never
+   appear in the table if rows were still derived from inspectionPrices).
+   Columns = the 6 real inspection categories from inspectionCategories
+   (cat1/periodic/cat3/cat5/smoke/gen, in sort_order). Same editable-
+   currency-cell pattern as renderRateCardTableLive (.rc-cell-currency/
+   .rc-cell-input, formatCurrencyInput/currencyInputToNumber/
+   updateRateCardCellLive targeting rate_card_inspection_prices) -- the
+   one deliberate deviation from that pattern is centered column headers
+   (.ir-rate-table CSS), per the approved mockup's explicit correction
+   from renderRateCardTableLive's left-aligned headers.
+   A cell with no existing rate_card_inspection_prices row (new region,
+   or an existing region missing one category) is now a LIVE input, not
+   disabled -- typing a price into it calls createInspectionPriceLive()
+   which POSTs /inspection-price to create the row on first save, same
+   create-on-first-edit shape Governance already uses for checkboxes.
+   ============================================================ */
+function renderInspectionRateCardLive(inspectionPrices, inspectionCategories, rateCardRegions){
+  const search = (state.inspectionRateSearch || '').trim().toLowerCase();
+  const regions = (rateCardRegions||[]).map(r=>r.name).sort((a,b)=>a.localeCompare(b));
+  const visibleRegions = search ? regions.filter(r=>r.toLowerCase().includes(search)) : regions;
+  const anyPlaceholder = (inspectionPrices||[]).some(r=>r.is_placeholder);
+  return `
+  <div class="mk-section" style="margin-bottom:28px;">
+    <p class="card-title" style="margin-bottom:2px;">Inspection Rate Card</p>
+    <p class="row-sub" style="margin:2px 0 12px 0; max-width:760px;">Price per inspection category by state. Sub-jurisdictions inherit their State's rate. Blank cells mean no rate exists yet for that category.</p>
+    ${anyPlaceholder ? `<div class="row-sub" style="color:var(--amber);margin-bottom:10px;">${icon('warn')} Some regions below are notional placeholder figures — pending real VDA pricing input.</div>` : ''}
+    <div class="ir-toolbar-row" style="margin-bottom:12px;">
+      <div class="ir-search-wrap">
+        <i class="ti ti-search"></i>
+        <input type="text" class="text-input ir-search-input" placeholder="Search jurisdiction…" value="${escapeHtml(state.inspectionRateSearch||'')}" oninput="setState({inspectionRateSearch:this.value})">
+      </div>
+      <button class="btn btn-sm" onclick="openAddRegion()">${icon('plus')} Add Region</button>
+    </div>
+    <div class="table-scroll">
+      <table class="ir-rate-table rc-table">
+        <thead><tr>
+          <th>Jurisdiction</th>
+          ${inspectionCategories.map(c=>`<th class="num">${escapeHtml(c.name)}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${visibleRegions.map(region => `
+            <tr>
+              <td class="row-title">${escapeHtml(region)}</td>
+              ${inspectionCategories.map(cat => {
+                const row = (inspectionPrices||[]).find(r=>r.region===region && r.category_id===cat.id);
+                const hasPrice = row && row.price != null;
+                if(!row){
+                  return `<td class="num"><input class="rc-cell-input" type="text" value="" placeholder="—" onchange="createInspectionPriceLive('${escapeHtml(region)}','${cat.id}',this)" style="color:var(--text-muted); text-align:center; width:84px;"></td>`;
+                }
+                if(!hasPrice){
+                  return `<td class="num"><input class="rc-cell-input" type="text" value="" placeholder="—" onchange="updateRateCardCellLive('rate_card_inspection_prices','${row.id}','price',currencyInputToNumber(this.value))" style="color:var(--text-muted); text-align:center; width:84px;"></td>`;
+                }
+                return `<td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(row.price).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)"
+                  onchange="updateRateCardCellLive('rate_card_inspection_prices','${row.id}','price',currencyInputToNumber(this.value))"></span></td>`;
+              }).join('')}
+            </tr>`).join('')}
+          ${visibleRegions.length===0 ? `<tr><td colspan="${inspectionCategories.length+1}" style="text-align:center; color:var(--text-muted); padding:24px;">No jurisdiction matches "${escapeHtml(state.inspectionRateSearch||'')}".</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   INSPECTION GOVERNANCE (v2i) — the per_ahj_category branch's Section
+   2. Rows = states (is_state_level=1 from authorities), each with an
+   expand/collapse chevron revealing its real sub-jurisdictions
+   (matched by the `state` column, same grouping the Worker's
+   suggestAhj() already relies on) nested underneath. Columns = the
+   same 6 inspection categories, each cell a checkbox+frequency-
+   dropdown pair sourced from ahjRequirements (a row exists there only
+   when that category IS required for that AHJ -- see the migration).
+   Checking a box with no existing row calls toggleGovernanceRequirement()
+   (POST /inspection-requirement, creates the row server-side via
+   createAhjInspectionRequirement); changing frequency/notes on an
+   existing row calls updateRateCardCellLive() same as every other
+   rate-card edit in this app (PATCH by row id).
+   ============================================================ */
+const GOV_FREQUENCIES = ['6 months', 'Annual', '2 years', '3 years', '5 years'];
+function toggleGovernanceExpanded(ahjId){
+  if(state.governanceExpanded.has(ahjId)) state.governanceExpanded.delete(ahjId);
+  else state.governanceExpanded.add(ahjId);
+  render();
+}
+function renderInspectionGovernanceLive(authorities, ahjRequirements, inspectionCategories){
+  const search = (state.inspectionGovSearch || '').trim().toLowerCase();
+  // Washington D.C. display-only rename (Task #24): before the real
+  // rename ran in D1, this row's jurisdiction_name/state were literally
+  // "DC" -- this mapped ONLY the label shown here, never the underlying
+  // id/state text used for matching/lookups/API calls. Task #24 has
+  // since renamed the real row to "Washington D.C." directly, so this
+  // condition is now a no-op fallback (kept in case an unmigrated/cached
+  // copy of the row ever shows up) rather than the active code path --
+  // safe to remove entirely once the rename is confirmed live everywhere.
+  const displayName = ahj => ahj.jurisdiction_name === 'DC' && ahj.state === 'DC' ? 'Washington D.C.' : ahj.jurisdiction_name;
+
+  const states = (authorities||[]).filter(a=>a.is_state_level===1 || a.is_state_level===true)
+    .slice()
+    .sort((a,b)=>displayName(a).localeCompare(displayName(b)));
+  const childrenOf = stateAhj => (authorities||[]).filter(a=>
+    a.state===stateAhj.state && a.id!==stateAhj.id && !(a.is_state_level===1 || a.is_state_level===true)
+  ).sort((a,b)=>displayName(a).localeCompare(displayName(b)));
+
+  // v2i (uncheck wiring): a row can now exist with required=0 -- a
+  // soft-flagged/previously-unchecked category, kept around (with its
+  // frequency/notes intact) so re-checking restores it instantly
+  // instead of losing that data. reqFor() returns ANY row regardless of
+  // required, since govNotesCell/re-check need to see it; "checked" for
+  // display/logic purposes is specifically required===1.
+  const reqFor = (ahjId, catId) => (ahjRequirements||[]).find(r=>r.ahj_id===ahjId && r.category_id===catId);
+  const isRequired = req => !!req && (req.required===1 || req.required===true);
+
+  function govCell(ahj, cat){
+    const req = reqFor(ahj.id, cat.id);
+    const checked = isRequired(req);
+    const selId = `govfreq_${ahj.id}_${cat.id}`;
+    return `
+    <td class="ir-gov-cell">
+      <div class="ir-gov-cell-inner">
+        <label class="ir-gov-chk-wrap">
+          <span class="chk ${checked?'checked':''}" onclick="toggleGovernanceRequirement('${escapeHtml(ahj.id)}','${cat.id}', ${req ? req.id : 'null'}, ${checked})">${checked?'✓':''}</span>
+        </label>
+        <select class="ir-gov-freq-select" id="${selId}" ${checked?'':'disabled'}
+          onchange="updateGovernanceFrequency(${req ? req.id : 'null'}, '${escapeHtml(ahj.id)}', '${cat.id}', this.value)">
+          <option value="" disabled ${checked?'':'selected'}>Select…</option>
+          ${GOV_FREQUENCIES.map(f=>`<option value="${f}" ${checked && req.frequency===f ? 'selected':''}>${f}</option>`).join('')}
+        </select>
+      </div>
+    </td>`;
+  }
+  function govNotesCell(ahj, cats){
+    // Notes is per-AHJ in the UI (one free-text column per row) but the
+    // data model stores notes per (ahj, category) row -- follow the
+    // mockup's own convention of showing whichever requirement row for
+    // this AHJ already carries note text (the seeded data always puts
+    // the same note on every required category for a given AHJ), and
+    // wire edits to whichever row is checked first if none carry a note
+    // yet. If no row exists at all for this AHJ, notes has nowhere to
+    // save yet -- shown as a disabled placeholder, same convention as
+    // an unmatched rate-card cell.
+    // Prefer a currently-required row so notes attach to an active
+    // category first; only fall back to a soft-unchecked (required=0)
+    // row if nothing active exists yet for this AHJ.
+    const allReqs = cats.map(c=>reqFor(ahj.id, c.id)).filter(Boolean);
+    const activeReqs = allReqs.filter(isRequired);
+    const withNote = activeReqs.find(r=>r.notes) || allReqs.find(r=>r.notes);
+    const target = withNote || activeReqs[0] || allReqs[0];
+    if(!target){
+      return `<td class="ir-gov-notes-cell ir-gov-notes-empty">—</td>`;
+    }
+    return `<td class="ir-gov-notes-cell"><input class="text-input" type="text" value="${escapeHtml(target.notes||'')}" placeholder="—"
+      onchange="updateRateCardCellLive('ahj_inspection_requirements','${target.id}','notes',this.value)"></td>`;
+  }
+
+  function renderStateRow(ahj, children){
+    const hasChildren = children.length>0;
+    const expanded = state.governanceExpanded.has(ahj.id);
+    return `
+    <tr class="ir-gov-parent-row">
+      <td class="ir-gov-name-cell">
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${hasChildren ? `<button class="ir-gov-expand-btn" onclick="toggleGovernanceExpanded('${escapeHtml(ahj.id)}')">${expanded?icon('chevUp'):icon('chevDown')}</button>` : ''}
+          <span class="row-title">${escapeHtml(displayName(ahj))}</span>
+        </div>
+      </td>
+      ${inspectionCategories.map(cat=>govCell(ahj, cat)).join('')}
+      ${govNotesCell(ahj, inspectionCategories)}
+    </tr>
+    ${hasChildren ? `<tbody class="ir-gov-children" style="${expanded?'':'display:none;'}">
+      ${children.map(child => `
+      <tr class="ir-gov-child-row">
+        <td class="ir-gov-name-cell">
+          <div style="display:flex; align-items:center; gap:6px; padding-left:24px;">
+            <span style="font-size:12px; color:var(--text-secondary);">${escapeHtml(displayName(child))}</span>
+          </div>
+        </td>
+        ${inspectionCategories.map(cat=>govCell(child, cat)).join('')}
+        ${govNotesCell(child, inspectionCategories)}
+      </tr>`).join('')}
+    </tbody>` : ''}`;
+  }
+
+  const visibleStates = states.filter(s => {
+    if(!search) return true;
+    if(displayName(s).toLowerCase().includes(search)) return true;
+    return childrenOf(s).some(c=>displayName(c).toLowerCase().includes(search));
+  });
+
+  return `
+  <div class="mk-section">
+    <p class="card-title" style="margin-bottom:2px;">Inspection Governance</p>
+    <p class="row-sub" style="margin:2px 0 12px 0; max-width:760px;">AHJ required inspection categories and frequency. Checking a category enables its frequency dropdown adjacent to the checkbox.</p>
+    <div class="ir-toolbar-row" style="margin-bottom:12px;">
+      <div class="ir-search-wrap">
+        <i class="ti ti-search"></i>
+        <input type="text" class="text-input ir-search-input" placeholder="Search jurisdiction…" value="${escapeHtml(state.inspectionGovSearch||'')}" oninput="setState({inspectionGovSearch:this.value})">
+      </div>
+      <button class="btn btn-sm" onclick="openAddAhj()">${icon('plus')} Add AHJ</button>
+    </div>
+    <div class="table-scroll">
+      <table class="ir-gov-table">
+        <thead><tr>
+          <th>Jurisdiction</th>
+          ${inspectionCategories.map(c=>`<th>${escapeHtml(c.name)}</th>`).join('')}
+          <th class="ir-notes-header">Notes</th>
+        </tr></thead>
+        ${visibleStates.map(s => renderStateRow(s, childrenOf(s))).join('')}
+      </table>
+      ${visibleStates.length===0 ? `<div class="empty-state"><div class="ic">☷</div>No jurisdiction matches "${escapeHtml(state.inspectionGovSearch||'')}".</div>` : ''}
+    </div>
+  </div>`;
+}
+
+// Checking a box with no existing ahj_inspection_requirements row
+// creates one (POST /inspection-requirement); unchecking a box DELETES
+// nothing today -- there is no delete route for this table (out of
+// scope for this pass, matching the task's instruction to design the
+// create-vs-patch split deliberately rather than fake it -- delete
+// would need its own reviewed decision about whether unchecking should
+// hard-delete history or just flip `required`, and is left for a
+// follow-up rather than guessed here). So unchecking an already-
+// checked box is a no-op for now other than a toast explaining why.
+// v2i: unchecking soft-flags (required=0) rather than deleting -- the
+// row's frequency/notes stay in place so re-checking restores them
+// instantly instead of losing what was entered. See the continuity
+// brief's uncheck-behavior decision. A row with no existing id yet
+// (never checked before) still goes through the create route on first
+// check; every subsequent toggle on that same (ahj, category) is a
+// plain required 1/0 PATCH via the existing updateRateCardCellLive path.
+async function toggleGovernanceRequirement(ahjId, categoryId, existingReqId, currentlyChecked){
+  if(existingReqId){
+    updateRateCardCellLive('ahj_inspection_requirements', existingReqId, 'required', currentlyChecked ? 0 : 1);
+    return;
+  }
+  const rateCardId = state.rateCardData.rateCard.id;
+  try {
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/inspection-requirement`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ ahjId, categoryId, frequency: null, notes: null }),
+    });
+    const data = await res.json();
+    if(!res.ok){ showToast(data.error || 'Could not save that change.', true); return; }
+    showToast('Saved. Choose a frequency to finish.');
+    loadRateCardData();
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+// Setting the frequency dropdown on a just-created row (no id yet, the
+// select is disabled until checked -- see govCell -- but this also
+// covers the create-then-immediately-set-frequency path from a fresh
+// checkbox click) vs. an existing row (plain PATCH via the same
+// updateRateCardCellLive pattern every other rate-card edit uses).
+async function updateGovernanceFrequency(existingReqId, ahjId, categoryId, frequency){
+  if(existingReqId){
+    updateRateCardCellLive('ahj_inspection_requirements', existingReqId, 'frequency', frequency);
+    return;
+  }
+  const rateCardId = state.rateCardData.rateCard.id;
+  try {
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/inspection-requirement`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ ahjId, categoryId, frequency, notes: null }),
+    });
+    const data = await res.json();
+    if(!res.ok){ showToast(data.error || 'Could not save that change.', true); return; }
+    showToast('Saved.');
+    loadRateCardData();
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+
+// Typing a price into a (region, category) cell that has no existing
+// rate_card_inspection_prices row -- POST /inspection-price creates the
+// row server-side (createInspectionPrice), same create-on-first-edit
+// shape as toggleGovernanceRequirement's create-on-first-check. Covers
+// both a brand-new region (no rows at all yet) and an existing region
+// missing just this one category.
+async function createInspectionPriceLive(region, categoryId, inputEl){
+  const price = currencyInputToNumber(inputEl.value);
+  const rateCardId = state.rateCardData.rateCard.id;
+  try {
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/inspection-price`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ region, categoryId, price, isPlaceholder: false }),
+    });
+    const data = await res.json();
+    if(!res.ok){ showToast(data.error || 'Could not save that price.', true); return; }
+    showToast('Saved.');
+    loadRateCardData();
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+
+/* ============================================================
+   "+ Add Region" (Inspection Rate Card) — small inline .modal.narrow
+   form, same state-driven show/close/submit pattern as
+   openCreateUser/closeCreateUser/submitCreateUser above. On submit:
+   POST /inspection-region first (registers the row on the rate card
+   grid with zero price cells -- see createInspectionRegion's Worker
+   comment); if "also create a matching AHJ" was checked, a second POST
+   to /authority follows, using a slugified id derived from the typed
+   jurisdiction name with isStateLevel:true (a brand-new top-level
+   jurisdiction has no parent state to nest under yet, so it's
+   state-level by definition -- matches the task's explicit design call).
+   ============================================================ */
+// Shared slugification for the admin-supplied AHJ id -- lowercase,
+// non-alphanumeric runs collapse to a single underscore, trimmed of
+// leading/trailing underscores, prefixed ahj_. Matches the real
+// ahj_<lowercase_snake_case> convention confirmed live (e.g.
+// ahj_colorado_douglas_county) closely enough for a first-cut id; an
+// admin who wants a different id can't override it from this form (out
+// of scope here, matching the task brief's "slugified id derived from
+// the jurisdiction name" instruction) but the Worker's createAuthority
+// still validates the final id against the real convention either way.
+function slugifyAhjId(name){
+  const slug = String(name||'').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return `ahj_${slug}`;
+}
+function openAddRegion(){
+  state.addRegionError = null;
+  state.addRegionBusy = false;
+  state.addRegionJurisdictionDefault = '';
+  state.showAddRegion = true;
+  render();
+}
+function closeAddRegion(){ state.showAddRegion = false; state.addRegionError = null; render(); }
+// Keeps the AHJ jurisdiction-name field in sync with the region name as
+// it's typed, WITHOUT a full render() on every keystroke (which would
+// steal focus from the region-name input the admin is actively typing
+// in) -- writes straight to the DOM element instead, same technique
+// formatCurrencyInput already uses for live-editing inputs in this file.
+function onAddRegionNameInput(value){
+  const jurisdictionInput = document.getElementById('newRegionJurisdictionName');
+  // Only auto-fill while the admin hasn't diverged the jurisdiction
+  // field from the default themselves -- tracked via addRegionJurisdictionDefault,
+  // which is only ever set here, never by user edits to that field.
+  if(jurisdictionInput && jurisdictionInput.value === (state.addRegionJurisdictionDefault||'')){
+    jurisdictionInput.value = value;
+  }
+  state.addRegionJurisdictionDefault = value;
+}
+async function submitAddRegion(){
+  const region = document.getElementById('newRegionName').value.trim();
+  const makeAhj = document.getElementById('newRegionMakeAhj').checked;
+  const jurisdictionName = document.getElementById('newRegionJurisdictionName').value.trim();
+  if(!region){ state.addRegionError = 'Region name is required.'; render(); return; }
+  if(makeAhj && !jurisdictionName){ state.addRegionError = 'AHJ jurisdiction name is required when creating a matching AHJ.'; render(); return; }
+  state.addRegionBusy = true; render();
+  const rateCardId = state.rateCardData.rateCard.id;
+  try {
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/inspection-region`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ region }),
+    });
+    const data = await res.json();
+    if(!res.ok){ state.addRegionBusy = false; state.addRegionError = data.error || 'Could not create that region.'; render(); return; }
+
+    let ahjNote = '';
+    if(makeAhj){
+      const ahjId = slugifyAhjId(jurisdictionName);
+      const ahjRes = await workerFetch(`/api/admin/rate-cards/${rateCardId}/authority`, {
+        method: 'POST', headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify({ id: ahjId, state: jurisdictionName, jurisdictionName, isStateLevel: true }),
+      });
+      const ahjData = await ahjRes.json();
+      state.addRegionBusy = false;
+      if(!ahjRes.ok){
+        // The region itself was created successfully -- only the AHJ
+        // half failed (e.g. id collision). Close the modal since the
+        // primary action succeeded, but surface the AHJ failure as its
+        // own toast rather than silently dropping it.
+        state.showAddRegion = false; state.addRegionError = null;
+        showToast(`Region "${region}" created, but the matching AHJ could not be created: ${ahjData.error || 'unknown error'}`, true);
+        loadRateCardData();
+        return;
+      }
+      ahjNote = ` and AHJ "${jurisdictionName}"`;
+    } else {
+      state.addRegionBusy = false;
+    }
+    state.showAddRegion = false; state.addRegionError = null;
+    showToast(`Region "${region}"${ahjNote} created.`);
+    loadRateCardData();
+  } catch(e){
+    state.addRegionBusy = false;
+    state.addRegionError = 'Could not reach the server. Check your connection and try again.'; render();
+  }
+}
+
+/* ============================================================
+   "+ Add AHJ" (Inspection Governance) — fully independent of "+ Add
+   Region" above (no region is created here). Same small
+   .modal.narrow form pattern. On submit: POST /authority with a
+   slugified id (slugifyAhjId, shared with Add Region above) and
+   isStateLevel from the checkbox (unchecked by default per the task's
+   explicit design call -- a manually-added AHJ is more often a
+   sub-jurisdiction exception than a whole new state).
+   ============================================================ */
+function openAddAhj(){
+  state.addAhjError = null;
+  state.addAhjBusy = false;
+  state.addAhjStateDefault = '';
+  state.showAddAhj = true;
+  render();
+}
+function closeAddAhj(){ state.showAddAhj = false; state.addAhjError = null; render(); }
+// Same focus-preserving live-sync technique as onAddRegionNameInput.
+function onAddAhjNameInput(value){
+  const stateInput = document.getElementById('newAhjState');
+  if(stateInput && stateInput.value === (state.addAhjStateDefault||'')){
+    stateInput.value = value;
+  }
+  state.addAhjStateDefault = value;
+}
+async function submitAddAhj(){
+  const jurisdictionName = document.getElementById('newAhjJurisdictionName').value.trim();
+  const stateVal = document.getElementById('newAhjState').value.trim();
+  const isStateLevel = document.getElementById('newAhjIsStateLevel').checked;
+  if(!jurisdictionName){ state.addAhjError = 'Jurisdiction name is required.'; render(); return; }
+  if(!stateVal){ state.addAhjError = 'State is required.'; render(); return; }
+  state.addAhjBusy = true; render();
+  const rateCardId = state.rateCardData.rateCard.id;
+  const ahjId = slugifyAhjId(jurisdictionName);
+  try {
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/authority`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ id: ahjId, state: stateVal, jurisdictionName, isStateLevel }),
+    });
+    const data = await res.json();
+    state.addAhjBusy = false;
+    if(!res.ok){ state.addAhjError = data.error || 'Could not create that AHJ.'; render(); return; }
+    state.showAddAhj = false; state.addAhjError = null;
+    showToast(`AHJ "${jurisdictionName}" created.`);
+    loadRateCardData();
+  } catch(e){
+    state.addAhjBusy = false;
+    state.addAhjError = 'Could not reach the server. Check your connection and try again.'; render();
+  }
+}
+
 function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
   const regional = bands.filter(b=>b.table_name==='Regional');
   const national = bands.filter(b=>b.table_name==='National');
@@ -2724,7 +3266,7 @@ function renderRateCards(){
   if(state.rateCardData.error){
     return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Rate Cards</h1><div class="empty-state card" style="margin-top:20px; color:var(--red);"><div class="ic">${icon('warn')}</div>${escapeHtml(state.rateCardData.error)}</div>`;
   }
-  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers } = state.rateCardData;
+  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers, inspectionPrices, rateCardRegions, authorities, inspectionCategories, ahjRequirements } = state.rateCardData;
   const svc = SERVICES.find(s=>s.id===state.rateCardTab) || SERVICES.find(s=>s.pricingModel==='verify_tiered');
   const perUnitTabs = SERVICES.filter(s=>s.pricingModel==='per_unit');
   const verifyTabs = SERVICES.filter(s=>s.pricingModel==='verify_tiered');
@@ -2756,16 +3298,9 @@ function renderRateCards(){
     </p>
   </div>` : ''}
   ${svc.pricingModel==='per_ahj_category' ? `
-  <div class="card card-pad">
-    <p class="card-title" style="margin-bottom:8px;">${svc.name} — priced per Authority Having Jurisdiction</p>
-    <p class="row-sub" style="margin-bottom:0;">
-      This service prices per (inspection category × AHJ) — 113 real jurisdictions are loaded in
-      <code>authorities_having_jurisdiction</code>, but the <code>rate_card_inspection_prices</code> table is
-      structure-only right now, with every rate flagged as a placeholder pending real VDA pricing input.
-      There is no rate-card editor here yet; once real per-AHJ rates are available, this tab will get a
-      jurisdiction × category grid like the per-unit services above.
-    </p>
-  </div>` : ''}
+  ${renderInspectionRateCardLive(inspectionPrices, inspectionCategories, rateCardRegions)}
+  ${renderInspectionGovernanceLive(authorities, ahjRequirements, inspectionCategories)}
+  ` : ''}
 
   <div class="card card-pad" style="margin-top:16px;">
     <p class="card-title" style="margin-bottom:8px;">Travel &amp; per-diem assumptions</p>
@@ -2774,7 +3309,55 @@ function renderRateCards(){
       <div class="kv-row"><span class="k">Overnight rate</span><span class="v">${fmtMoney(rateCard.overnight_rate)}/night, applied when one-way drive exceeds ~3 hours</span></div>
       <div class="kv-row"><span class="k">Staffing pools</span><span class="v">134 VDA consultants (VERIFY, Comprehensive Evaluation, QCE, Due Diligence, General Consulting, Project Management, Modernization, Construction) · 9 sub-vendor inspection firms, 176 field examiners (CCM)</span></div>
     </div>
-  </div>`;
+  </div>
+
+  ${state.showAddRegion ? `
+  <div class="modal-backdrop" onclick="if(event.target===this) closeAddRegion()">
+    <div class="modal narrow">
+      <div class="modal-title">Add a new pricing region</div>
+      <div class="modal-desc">Registers a new row on the Inspection Rate Card. It starts with no prices set — fill in each category's rate afterward.</div>
+      <div class="field"><label>Region name</label><input type="text" id="newRegionName" placeholder='e.g. "Ohio" or "Texas (Austin AHJ)"' oninput="onAddRegionNameInput(this.value)"></div>
+      <div class="field" style="margin-bottom:8px;">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:600; cursor:pointer;">
+          <input type="checkbox" id="newRegionMakeAhj" checked onchange="setState({})" style="width:auto;">
+          Also create a matching AHJ record
+        </label>
+      </div>
+      <div id="newRegionAhjFields" class="field">
+        <label>AHJ jurisdiction name</label>
+        <input type="text" id="newRegionJurisdictionName" placeholder="e.g. Ohio" value="${escapeHtml(state.addRegionJurisdictionDefault||'')}">
+        <div class="field-hint">Pre-filled to match the region name above — edit if the region label isn't a plain jurisdiction name (e.g. "Texas (Austin AHJ)" → "Texas").</div>
+      </div>
+      ${state.addRegionError ? `<div class="form-error">${escapeHtml(state.addRegionError)}</div>` : ''}
+      <div class="modal-footer">
+        <button class="btn" onclick="closeAddRegion()" ${state.addRegionBusy?'disabled':''}>Cancel</button>
+        <button class="btn btn-primary" onclick="submitAddRegion()" ${state.addRegionBusy?'disabled':''}>${state.addRegionBusy?'Creating…':'Create Region'}</button>
+      </div>
+    </div>
+  </div>` : ''}
+
+  ${state.showAddAhj ? `
+  <div class="modal-backdrop" onclick="if(event.target===this) closeAddAhj()">
+    <div class="modal narrow">
+      <div class="modal-title">Add a new AHJ</div>
+      <div class="modal-desc">Adds a row to Inspection Governance. Use an existing State's name to nest this under that state's expand/collapse group as a sub-jurisdiction; use a brand-new State name to start a new top-level group.</div>
+      <div class="field"><label>Jurisdiction name</label><input type="text" id="newAhjJurisdictionName" placeholder="e.g. Pennsylvania, Reading" oninput="onAddAhjNameInput(this.value)"></div>
+      <div class="field"><label>State</label><input type="text" id="newAhjState" placeholder="e.g. Pennsylvania" value="${escapeHtml(state.addAhjStateDefault||'')}">
+        <div class="field-hint">Match an existing State value exactly to nest under it; a new value creates a new top-level group.</div>
+      </div>
+      <div class="field" style="margin-bottom:8px;">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:600; cursor:pointer;">
+          <input type="checkbox" id="newAhjIsStateLevel" style="width:auto;">
+          This is a state-level AHJ (not a sub-jurisdiction)
+        </label>
+      </div>
+      ${state.addAhjError ? `<div class="form-error">${escapeHtml(state.addAhjError)}</div>` : ''}
+      <div class="modal-footer">
+        <button class="btn" onclick="closeAddAhj()" ${state.addAhjBusy?'disabled':''}>Cancel</button>
+        <button class="btn btn-primary" onclick="submitAddAhj()" ${state.addAhjBusy?'disabled':''}>${state.addAhjBusy?'Creating…':'Create AHJ'}</button>
+      </div>
+    </div>
+  </div>` : ''}`;
 }
 
 /* ============================================================
