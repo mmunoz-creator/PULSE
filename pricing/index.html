@@ -534,6 +534,13 @@ table { border-collapse: collapse; width: 100%; }
 .es-table tbody td { padding: 8px 0; border-bottom:1px solid var(--border); }
 .es-total-row td { font-weight:800; font-size:14px; border-top:2px solid var(--navy); border-bottom:none; padding-top:10px; }
 .es-footnote { font-size:10.5px; color: var(--text-muted); margin-top:18px; line-height:1.5; }
+/* v2j: Travel Backup Detail's Sales/Admin edition label -- same
+   convention as the approved mockup (Travel Backup Detail — Sales.html
+   / — Admin.html). */
+.role-chip { display:inline-block; padding:2px 9px; border-radius:5px; font-size:10.5px; font-weight:700;
+  text-transform:uppercase; letter-spacing:0.3px; margin-left:8px; vertical-align:1px; }
+.role-chip.sales { background: var(--blue-pale); color: var(--blue-dark); }
+.role-chip.admin { background: var(--purple-pale); color: var(--purple); }
 
 /* "Download PDF" -- print-isolate whichever .print-target was set by
    downloadDocumentPDF() just before window.print() was called; every
@@ -1161,7 +1168,7 @@ const RATE_CARD_DISPLAY_NAME = "VDA Standard Rate Card — 2026";
 function fmtMoney(n){ return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtMoneyDec(n){ return '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function pricingModelLabel(model){
-  return { verify_tiered:'tiered calculator', per_unit:'per unit', retainer:'retainer', task_line:'task lines', per_ahj_category:'per AHJ / category' }[model] || model;
+  return { verify_tiered:'tiered calculator', per_unit:'per unit', retainer:'retainer', task_line:'task lines', per_ahj_category:'per AHJ / category', travel:'mileage' }[model] || model;
 }
 // Nearest-consultant/inspector lookups now go through the real
 // anonymity-gated endpoint (/api/personnel/nearest) instead of a local
@@ -1523,6 +1530,34 @@ function freshWizardState(){
     ahjSuggestionLoading: false,
     ahjOverrideOpen: false,
     confirmedAhjId: null,
+    // v2j: rate-sheet REGION suggestion + confirmation, single-property
+    // only -- same "auto-suggest, user confirms" shape as AHJ above, but a
+    // separate lookup (see resolveRegion()'s Worker-side comment for why
+    // region and AHJ are different key spaces). Needed for Inspection
+    // pricing to find a price row at all, in addition to which categories
+    // the confirmed AHJ says are required.
+    regionSuggestion: null,
+    regionSuggestionLoading: false,
+    confirmedRegion: null,
+    // v2j: portfolio Inspection -- per-property AHJ + region assignment.
+    // Keyed by property name (the same grouping key currentProperties()
+    // derives from uploadedSites). siteAhjSuggestions/siteRegionSuggestions
+    // cache the last suggest-batch responses; siteAhj/siteRegion hold only
+    // what the user has actually confirmed (accepting a suggestion or
+    // picking an override both count as confirming) -- pricing only ever
+    // reads the confirmed maps, never the suggestion cache directly, same
+    // separation as confirmedAhjId vs. ahjSuggestion above.
+    siteAhjSuggestions: {},
+    siteRegionSuggestions: {},
+    siteAssignLoading: false,
+    siteAhj: {},
+    siteRegion: {},
+    // v2j: cache for the Travel Backup Detail document's Admin-edition
+    // real names -- see ensureTravelAdminNames()'s comment. Sales edition
+    // never needs this (always shows the anonymized code already present
+    // in the travel pricing detail).
+    travelAdminNames: {},
+    travelAdminNamesLoaded: false,
     portfolioName: '',
     propertyCount: '',
     unitCountEstimate: '',
@@ -1605,7 +1640,9 @@ function setWizardSite(patch){
   // Still invalidate a previously confirmed AHJ when the address changes
   // -- that safety property doesn't depend on WHEN the lookup fires,
   // only on the address being stale. No fetch triggered here anymore.
-  Object.assign(state.wizard, patch, { confirmedAhjId: null, ahjSuggestion: null, ahjOverrideOpen: false });
+  // v2j: same invalidation now applies to the region suggestion/confirmation
+  // -- a stale region is exactly as unsafe to price against as a stale AHJ.
+  Object.assign(state.wizard, patch, { confirmedAhjId: null, ahjSuggestion: null, ahjOverrideOpen: false, confirmedRegion: null, regionSuggestion: null });
   render();
 }
 function triggerAhjLookup(){
@@ -1705,6 +1742,95 @@ async function ensureAhjListLoaded(){
     state.ahjList = [];
   }
   render();
+}
+
+/* ============================================================
+   REGION auto-suggest (single-property mode, Inspection only) --
+   same debounce/guard/confirm shape as the AHJ lookup above, kept as
+   a fully separate function rather than merged into it, since region
+   and AHJ are different lookups against different data (see
+   resolveRegion()'s Worker-side comment).
+   ============================================================ */
+let regionSuggestDebounceTimer = null;
+function triggerRegionLookup(){
+  clearTimeout(regionSuggestDebounceTimer);
+  const w = state.wizard;
+  if(!w.siteState || !w.siteState.trim()){ return; }
+  if(w.regionSuggestion || w.regionSuggestionLoading){ return; }
+  state.wizard.regionSuggestionLoading = true;
+  render();
+  regionSuggestDebounceTimer = setTimeout(async () => {
+    const cityAtCall = state.wizard.city, stateAtCall = state.wizard.siteState;
+    try {
+      const res = await workerFetch('/api/region/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city: cityAtCall, state: stateAtCall }),
+      });
+      const data = await res.json();
+      if(state.wizard.city === cityAtCall && state.wizard.siteState === stateAtCall){
+        state.wizard.regionSuggestion = res.ok ? data : { region:null, reason:'Lookup failed — choose manually.' };
+        state.wizard.regionSuggestionLoading = false;
+        render();
+      }
+    } catch(e){
+      if(state.wizard.city === cityAtCall && state.wizard.siteState === stateAtCall){
+        state.wizard.regionSuggestion = { region:null, reason:'Could not reach the server — choose manually.' };
+        state.wizard.regionSuggestionLoading = false;
+        render();
+      }
+    }
+  }, 200);
+}
+function confirmRegion(region){ setWizard({ confirmedRegion: region }); }
+async function ensureRegionListLoaded(){
+  if(state.regionList) return;
+  try {
+    const res = await workerFetch('/api/regions/list');
+    const data = await res.json();
+    state.regionList = res.ok ? (data.regions || []) : [];
+  } catch(e){
+    state.regionList = [];
+  }
+  render();
+}
+function renderRegionPicker(){
+  const w = state.wizard;
+  if(!w.siteState || !w.siteState.trim()){
+    return `<div class="field-group"><div class="notional-banner"><span class="ic">${icon('warn')}</span>Enter this property's city and state on Step 1 to look up its rate-sheet pricing region.</div></div>`;
+  }
+  if(w.regionSuggestionLoading && !w.regionSuggestion){
+    return `<div class="field-group"><div class="helper-banner"><span class="ic">${icon('check')}</span>Looking up the pricing region…</div></div>`;
+  }
+  if(!w.regionSuggestion){
+    return `<div class="field-group"><button class="btn btn-sm btn-primary" onclick="triggerRegionLookup()">Look up pricing region</button></div>`;
+  }
+  const s = w.regionSuggestion;
+  const confirmed = w.confirmedRegion && s.region && w.confirmedRegion === s.region;
+  const confidenceLabel = {
+    city_rule: 'Matched by city',
+    state_default: null,
+    low_confidence_default: 'Low confidence — please verify',
+  }[s.confidence];
+  ensureRegionListLoaded();
+  return `
+  <div class="field-group">
+    <label class="field-label">Rate-Sheet Pricing Region</label>
+    ${s.region ? `
+    <div class="helper-banner" style="${confirmed?'':'background:#fff8ec;'}">
+      <span class="ic">${icon(confirmed?'check':'warn')}</span>
+      <div>
+        <div><strong>${escapeHtml(s.region)}</strong>${confidenceLabel?` <span style="color:var(--text-muted); font-weight:400;">— ${confidenceLabel}</span>`:''}</div>
+        ${s.reason ? `<div style="font-size:11px; color:var(--amber); margin-top:2px;">${escapeHtml(s.reason)}</div>` : ''}
+        ${confirmed ? `<div style="font-size:12px; color:var(--text-muted); margin-top:2px;">Confirmed for this offer.</div>`
+          : `<button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="confirmRegion('${escapeHtml(s.region)}')">Confirm this region</button>`}
+      </div>
+    </div>` : `
+    <div class="notional-banner"><span class="ic">${icon('warn')}</span>${escapeHtml(s.reason || 'No region on file for this state — choose manually.')}</div>`}
+    <select class="select-input" style="margin-top:8px;" onchange="confirmRegion(this.value)">
+      <option value="">${s.region ? 'Choose a different region…' : 'Select a region…'}</option>
+      ${(state.regionList||[]).map(r => `<option value="${escapeHtml(r)}" ${w.confirmedRegion===r?'selected':''}>${escapeHtml(r)}</option>`).join('')}
+    </select>
+  </div>`;
 }
 
 function wizardStepHeader(){
@@ -2003,6 +2129,25 @@ function currentUnits(){
   const w = state.wizard;
   return w.offerType==='single' ? w.singleUnits : w.uploadedSites;
 }
+// v2j: portfolio's per-UNIT uploadedSites rows collapse to one entry per
+// PROPERTY (site) for anything that's site-level, not unit-level -- AHJ/
+// region assignment (Inspection) and travel distance both depend on where
+// the property is, not how many units it has. Grouped by the 'property'
+// field (same natural key the Travel Backup Detail mockup groups by), with
+// city/state taken from that property's first row -- the upload step
+// already requires city/state per row (see UPLOAD_REQUIRED_COLS), so every
+// row for the same property is expected to agree.
+function currentProperties(){
+  const w = state.wizard;
+  if(w.offerType !== 'portfolio') return [];
+  const byProperty = new Map();
+  for(const s of w.uploadedSites){
+    if(!s.property) continue;
+    if(!byProperty.has(s.property)) byProperty.set(s.property, { key:s.property, property:s.property, city:s.city, state:s.state, unitCount:0 });
+    byProperty.get(s.property).unitCount++;
+  }
+  return Array.from(byProperty.values());
+}
 function toggleService(id){
   const sel = state.wizard.selectedServices;
   const turningOn = !sel.includes(id);
@@ -2015,6 +2160,7 @@ function toggleService(id){
   // in yet or a lookup's already in flight/cached for this address.
   if(turningOn && id === 'inspection' && state.wizard.offerType === 'single'){
     triggerAhjLookup();
+    triggerRegionLookup();
   }
 }
 /* ============================================================
@@ -2042,6 +2188,23 @@ function refreshPricing(){
       retainerFees: w.retainerFees,
       taskLines: w.taskLines,
       verifyInputs: { termYears: w.contractTermYears, contractors: w.verifyContractors, directCalls: w.verifyDirectCalls },
+      // v2j: Inspection's (ahjId, region) pair -- single sends the one
+      // confirmed pair; portfolio sends one per confirmed property (an
+      // unconfirmed property is sent with null ahjId/region, and
+      // computeOfferTotals() on the Worker skips it rather than guessing --
+      // see its per_ahj_category branch). Harmless to always include even
+      // when Inspection isn't selected; the server only reads this when it is.
+      inspectionInputs: w.offerType === 'single'
+        ? { ahjId: w.confirmedAhjId, region: w.confirmedRegion }
+        : { sites: currentProperties().map(p => ({ key:p.key, property:p.property, ahjId: w.siteAhj[p.key]||null, region: w.siteRegion[p.key]||null })) },
+      // v2j: travel is priced unconditionally against wherever the site(s)
+      // actually are (see priceTravel()'s comment) -- not gated on any
+      // selected service. Single-property sends its one Step-1 city/state
+      // as a synthetic one-site list; empty city/state simply prices to
+      // nothing server-side rather than being filtered out here.
+      travelSites: w.offerType === 'single'
+        ? [{ key:'single', property: w.clientName || w.address || 'Property', city: w.city, state: w.siteState }]
+        : currentProperties().map(p => ({ key:p.key, property:p.property, city:p.city, state:p.state })),
       // Volume discount only makes sense against a portfolio award -- a
       // single-property offer has no "% of portfolio" to award, so never
       // send tier data for it even if stale wizard state still has a
@@ -2176,6 +2339,8 @@ function renderWizardStep3(){
 
       ${w.selectedServices.map(svcId => renderServicePricingCard(svcId, units)).join('')}
 
+      ${renderTravelCard(totals)}
+
       ${w.offerType === 'portfolio' ? `
       <div class="card explore-panel ${w.discountOpen?'open':''}" style="margin-top:14px;">
         <div class="explore-panel-head" onclick="toggleDiscountPanel()">
@@ -2232,6 +2397,139 @@ function renderWizardStep3(){
   <div style="display:flex; justify-content:space-between; margin-top:18px;">
     <button class="btn" onclick="wizardStep(2)">&larr; Back</button>
     <button class="btn btn-primary" ${w.selectedServices.length?'':'disabled'} onclick="wizardStep(4)">Continue to Generate &rarr;</button>
+  </div>`;
+}
+
+/* ============================================================
+   INSPECTION (per_ahj_category) -- portfolio per-property AHJ/region
+   assignment + the year-by-year pricing detail shared by both offer
+   types. Assignment handlers take an INDEX into currentProperties()
+   rather than embedding the property name (free text from an
+   uploaded CSV, so it can contain quotes/apostrophes) directly into
+   an onclick string -- avoids a whole class of quoting bugs.
+   ============================================================ */
+async function lookupSiteAssignments(){
+  const w = state.wizard;
+  const props = currentProperties();
+  if(!props.length) return;
+  w.siteAssignLoading = true; render();
+  const sites = props.map(p => ({ key:p.key, city:p.city, state:p.state }));
+  try {
+    const [ahjRes, regionRes] = await Promise.all([
+      workerFetch('/api/ahj/suggest-batch', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sites }) }),
+      workerFetch('/api/region/suggest-batch', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sites }) }),
+    ]);
+    const ahjData = await ahjRes.json();
+    const regionData = await regionRes.json();
+    state.wizard.siteAhjSuggestions = ahjRes.ok ? (ahjData.results||{}) : {};
+    state.wizard.siteRegionSuggestions = regionRes.ok ? (regionData.results||{}) : {};
+  } catch(e){
+    showToast('Could not reach the server for AHJ/region lookup.', true);
+  }
+  state.wizard.siteAssignLoading = false;
+  render();
+}
+function confirmSiteAhj(idx, ahjId){
+  const p = currentProperties()[idx]; if(!p) return;
+  setWizard({ siteAhj: { ...state.wizard.siteAhj, [p.key]: ahjId } });
+}
+function confirmSiteAhjSuggested(idx){
+  const p = currentProperties()[idx]; if(!p) return;
+  const sug = state.wizard.siteAhjSuggestions[p.key];
+  if(sug && sug.match) confirmSiteAhj(idx, sug.match.id);
+}
+function confirmSiteRegion(idx, region){
+  const p = currentProperties()[idx]; if(!p) return;
+  setWizard({ siteRegion: { ...state.wizard.siteRegion, [p.key]: region } });
+}
+function confirmSiteRegionSuggested(idx){
+  const p = currentProperties()[idx]; if(!p) return;
+  const sug = state.wizard.siteRegionSuggestions[p.key];
+  if(sug && sug.region) confirmSiteRegion(idx, sug.region);
+}
+function confirmAllSiteSuggestions(){
+  const props = currentProperties();
+  const w = state.wizard;
+  const nextAhj = { ...w.siteAhj }, nextRegion = { ...w.siteRegion };
+  for(const p of props){
+    const aSug = w.siteAhjSuggestions[p.key];
+    if(aSug && aSug.match && !nextAhj[p.key]) nextAhj[p.key] = aSug.match.id;
+    const rSug = w.siteRegionSuggestions[p.key];
+    if(rSug && rSug.region && !nextRegion[p.key]) nextRegion[p.key] = rSug.region;
+  }
+  setWizard({ siteAhj: nextAhj, siteRegion: nextRegion });
+}
+function renderSiteAssignmentRow(p, idx){
+  const w = state.wizard;
+  const ahjSug = w.siteAhjSuggestions[p.key];
+  const regionSug = w.siteRegionSuggestions[p.key];
+  const confirmedAhjId = w.siteAhj[p.key];
+  const confirmedRegion = w.siteRegion[p.key];
+  const ahjList = state.ahjList || [];
+  const regionList = state.regionList || [];
+  const ahjCell = confirmedAhjId
+    ? `<select class="select-input" onchange="confirmSiteAhj(${idx}, this.value)">${ahjList.map(a=>`<option value="${a.id}" ${confirmedAhjId===a.id?'selected':''}>${escapeHtml(a.jurisdiction_name)}</option>`).join('')}</select>`
+    : (ahjSug && ahjSug.match
+        ? `<div style="font-size:11.5px;"><span style="color:var(--amber);">${escapeHtml(ahjSug.match.jurisdiction_name)}</span><br><button class="btn btn-sm" style="margin-top:3px;" onclick="confirmSiteAhjSuggested(${idx})">Confirm</button></div>`
+        : (ahjList.length ? `<select class="select-input" onchange="confirmSiteAhj(${idx}, this.value)"><option value="">Select…</option>${ahjList.map(a=>`<option value="${a.id}">${escapeHtml(a.jurisdiction_name)}</option>`).join('')}</select>` : `<span style="color:var(--text-muted); font-size:11px;">—</span>`));
+  const regionCell = confirmedRegion
+    ? `<select class="select-input" onchange="confirmSiteRegion(${idx}, this.value)">${regionList.map(r=>`<option value="${escapeHtml(r)}" ${confirmedRegion===r?'selected':''}>${escapeHtml(r)}</option>`).join('')}</select>`
+    : (regionSug && regionSug.region
+        ? `<div style="font-size:11.5px;"><span style="color:var(--amber);">${escapeHtml(regionSug.region)}</span><br><button class="btn btn-sm" style="margin-top:3px;" onclick="confirmSiteRegionSuggested(${idx})">Confirm</button></div>`
+        : (regionList.length ? `<select class="select-input" onchange="confirmSiteRegion(${idx}, this.value)"><option value="">Select…</option>${regionList.map(r=>`<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}</select>` : `<span style="color:var(--text-muted); font-size:11px;">—</span>`));
+  return `<tr>
+    <td>${escapeHtml(p.property)}</td>
+    <td>${escapeHtml([p.city,p.state].filter(Boolean).join(', ')) || '—'}</td>
+    <td class="num">${p.unitCount}</td>
+    <td>${ahjCell}</td>
+    <td>${regionCell}</td>
+  </tr>`;
+}
+// Shared by both offer types -- li is the 'inspection' lineItem from the
+// cached pricing response (see renderServicePricingCard). isPortfolio
+// picks between the two detail shapes computeOfferTotals() returns for
+// this service (see its per_ahj_category branch): single carries one
+// yearBreakdown with per-category itemization; portfolio carries perSite
+// results that get summed here into a portfolio-wide per-year total (the
+// finer per-property-per-category breakout is the still-separate,
+// not-yet-built "Inspection CAT breakout" backup-detail item).
+function renderInspectionPricingDetail(li, termYears, isPortfolio){
+  if(!li || !li.detail){
+    return `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>Calculating…</div>`;
+  }
+  const d = li.detail;
+  const placeholderNote = d.isPlaceholder
+    ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${isPortfolio?'One or more matched regions use':'This region uses'} a placeholder (not-yet-vetted) rate — treat this total as notional.</div>`
+    : '';
+  if(isPortfolio){
+    const n = d.termYears || termYears || 1;
+    const years = Array.from({length:n}, (_, i) => ({
+      year: i+1,
+      amount: (d.perSite||[]).reduce((a,s) => a + (s.yearBreakdown && s.yearBreakdown[i] ? s.yearBreakdown[i].amount : 0), 0),
+    }));
+    const unresolvedCount = (d.perSite||[]).filter(s=>s.unresolved).length;
+    return placeholderNote + `
+    ${unresolvedCount>0 ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${unresolvedCount} propert${unresolvedCount===1?'y':'ies'} not yet confirmed — excluded from this total.</div>` : ''}
+    <div class="table-card" style="margin-top:10px;">
+      <table class="data-table rc-table">
+        <thead><tr><th>Contract Year</th><th class="num">Amount (all confirmed properties)</th></tr></thead>
+        <tbody>
+          ${years.map(y => `<tr><td>Year ${y.year}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')}
+          <tr style="font-weight:750;"><td>Full contract (${n}yr)</td><td class="num">${fmtMoney(d.contractTotal||0)}</td></tr>
+        </tbody>
+      </table>
+    </div>`;
+  }
+  const years = d.yearBreakdown || [];
+  return placeholderNote + `
+  <div class="table-card" style="margin-top:10px;">
+    <table class="data-table rc-table">
+      <thead><tr><th>Contract Year</th><th>Categories Billed</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        ${years.map(y => `<tr><td>Year ${y.year} <span style="color:var(--text-muted); font-size:10.5px;">(${y.date})</span></td><td>${y.categories.length ? y.categories.map(c=>escapeHtml(c.name)).join(', ') : '<span style="color:var(--text-muted);">none</span>'}${y.missingPriceCategoryIds && y.missingPriceCategoryIds.length ? ` <span style="color:var(--amber);">+${y.missingPriceCategoryIds.length} missing price</span>` : ''}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')}
+        <tr style="font-weight:750;"><td colspan="2">Full contract (${years.length}yr)</td><td class="num">${fmtMoney(d.contractTotal||0)}</td></tr>
+      </tbody>
+    </table>
   </div>`;
 }
 
@@ -2372,28 +2670,57 @@ function renderServicePricingCard(svcId, units){
     </div>`;
   }
   if(svc.pricingModel === 'per_ahj_category'){
-    if(w.offerType === 'single' && w.confirmedAhjId){
+    if(w.offerType === 'single'){
+      if(!w.confirmedAhjId || !w.confirmedRegion){
+        return `
+        <div class="card card-pad" style="margin-top:14px;">
+          <h3 class="card-title" style="margin-bottom:4px;">${svc.name}</h3>
+          <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Inspection pricing needs two confirmations: which Authority Having Jurisdiction covers this site (drives which categories bill), and which rate-sheet region it falls in (drives the price). A single state can contain multiple AHJs and, for a few states, multiple pricing regions.</p>
+          ${renderAhjPicker()}
+          ${renderRegionPicker()}
+        </div>`;
+      }
       const ahj = (w.ahjSuggestion && w.ahjSuggestion.match && w.ahjSuggestion.match.id === w.confirmedAhjId) ? w.ahjSuggestion.match : null;
       return `
       <div class="card card-pad" style="margin-top:14px;">
         <h3 class="card-title" style="margin-bottom:4px;">${svc.name}</h3>
-        <div class="helper-banner" style="margin:8px 0 10px 0;"><span class="ic">${icon('check')}</span>AHJ confirmed: <strong>${escapeHtml(ahj ? ahj.jurisdiction_name : w.confirmedAhjId)}</strong></div>
-        <div class="notional-banner"><span class="ic">${icon('warn')}</span>Category pricing (CAT 1, Periodic, CAT 3, CAT 5, etc.) for this AHJ isn't wired up yet — the admin rate table editor for Inspection is still being built. Uncheck this service to continue without it for now.</div>
+        <div class="helper-banner" style="margin:8px 0 10px 0;"><span class="ic">${icon('check')}</span>AHJ: <strong>${escapeHtml(ahj ? ahj.jurisdiction_name : w.confirmedAhjId)}</strong> &middot; Region: <strong>${escapeHtml(w.confirmedRegion)}</strong></div>
+        ${renderInspectionPricingDetail(li, w.contractTermYears)}
       </div>`;
     }
-    if(w.offerType === 'single'){
+    // Portfolio -- per-property AHJ + region assignment.
+    const props = currentProperties();
+    if(!props.length){
       return `
       <div class="card card-pad" style="margin-top:14px;">
         <h3 class="card-title" style="margin-bottom:4px;">${svc.name}</h3>
-        <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Inspection pricing depends on which Authority Having Jurisdiction covers this site, not just its state or city — a single state can contain multiple independent AHJs.</p>
-        ${renderAhjPicker()}
+        <div class="notional-banner"><span class="ic">${icon('warn')}</span>Upload the portfolio's unit inventory on Step 2 before assigning AHJs — Inspection pricing is per property.</div>
       </div>`;
     }
+    const confirmedCount = props.filter(p => w.siteAhj[p.key] && w.siteRegion[p.key]).length;
+    ensureAhjListLoaded(); ensureRegionListLoaded();
     return `
-    <div class="card card-pad" style="margin-top:14px;">
-      <h3 class="card-title" style="margin-bottom:4px;">${svc.name}</h3>
-      <div class="notional-banner" style="margin:8px 0 10px 0;"><span class="ic">${icon('warn')}</span>Per-site AHJ selection for portfolio offers isn’t built yet — Inspection pricing currently only supports single-property offers. Uncheck this service to continue.</div>
-      <p style="color:var(--text-muted); font-size:11px; margin:0;">Inspection pricing depends on which Authority Having Jurisdiction covers each site, not just its state or city — a single state can contain multiple independent AHJs.</p>
+    <div class="card" style="margin-top:14px;">
+      <div class="card-header">
+        <h3 class="card-title" style="margin:0;">${svc.name}</h3>
+        <span style="font-size:11px; color:${confirmedCount===props.length?'var(--green)':'var(--amber)'}; font-weight:650;">${confirmedCount} of ${props.length} properties confirmed</span>
+      </div>
+      <div class="card-pad">
+        <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Inspection pricing depends on each property's AHJ (which categories bill) and rate-sheet region (the price) — a portfolio can span multiple of each. Only confirmed properties are included in the price below.</p>
+        <div style="display:flex; gap:8px; margin-bottom:10px;">
+          <button class="btn btn-sm btn-primary" ${w.siteAssignLoading?'disabled':''} onclick="lookupSiteAssignments()">${w.siteAssignLoading?'Looking up…':'Look up AHJ &amp; region for all properties'}</button>
+          ${Object.keys(w.siteAhjSuggestions).length ? `<button class="btn btn-sm" onclick="confirmAllSiteSuggestions()">Confirm all suggested</button>` : ''}
+        </div>
+        <div class="table-card">
+          <table class="data-table">
+            <thead><tr><th>Property</th><th>City, State</th><th class="num">Units</th><th>AHJ</th><th>Region</th></tr></thead>
+            <tbody>
+              ${props.map((p,idx) => renderSiteAssignmentRow(p,idx)).join('')}
+            </tbody>
+          </table>
+        </div>
+        ${confirmedCount>0 ? renderInspectionPricingDetail(li, w.contractTermYears, true) : ''}
+      </div>
     </div>`;
   }
   // task_line
@@ -2428,6 +2755,43 @@ function renderServicePricingCard(svcId, units){
   </div>`;
 }
 
+/* v2j: Travel -- not a togglable service (see priceTravel()'s Worker-side
+   comment), so this renders unconditionally in Step 3 rather than through
+   renderServicePricingCard's per-service dispatch. Reads the 'travel'
+   lineItem the same way every other card reads its own -- computeOfferTotals()
+   already produces it generically, so no other wiring was needed for it to
+   also show up in the sidebar Live Estimate and both documents' line-item
+   tables. Renders nothing until there's real site data to price against
+   (Step 1's city/state, or an uploaded portfolio) -- an empty travelSites
+   list contributes no 'travel' lineItem at all, per computeOfferTotals(). */
+function renderTravelCard(totals){
+  const w = state.wizard;
+  const li = (totals.lineItems||[]).find(x => x.svc && x.svc.pricingModel === 'travel');
+  if(!li) return '';
+  const d = li.detail || { perSite: [], totalCost: 0, mileageRate: 0 };
+  const billed = (d.perSite||[]).filter(s => s.billed);
+  const notBilled = (d.perSite||[]).length - billed.length;
+  return `
+  <div class="card" style="margin-top:14px;">
+    <div class="card-header">
+      <h3 class="card-title" style="margin:0;">Travel</h3>
+      <div style="font-weight:750; font-size:14px;">${fmtMoney(d.totalCost)}</div>
+    </div>
+    <div class="card-pad">
+      <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Round-trip mileage from the nearest available consultant, at the rate card's mileage rate (${fmtMoneyDec(d.mileageRate)}/mi), charged only when one-way distance exceeds 50 miles.${notBilled>0 ? ` ${notBilled} propert${notBilled===1?'y falls':'ies fall'} under that threshold and carr${notBilled===1?'ies':'y'} no travel cost.` : ''}</p>
+      ${billed.length ? `
+      <div class="table-card">
+        <table class="data-table">
+          <thead><tr><th>Property</th><th>City, State</th><th>Consultant</th><th class="num">One-way</th><th class="num">Round-trip</th><th class="num">Cost</th></tr></thead>
+          <tbody>
+            ${billed.map(s => `<tr><td>${escapeHtml(s.property || '—')}</td><td>${escapeHtml([s.city,s.state].filter(Boolean).join(', ')) || '—'}</td><td>${escapeHtml(s.code || '—')}</td><td class="num">${s.oneWayMiles} mi</td><td class="num">${s.roundTripMiles} mi</td><td class="num" style="font-weight:650;">${fmtMoney(s.cost)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="empty-state" style="padding:18px;"><div class="ic">☷</div>No properties currently exceed the 50-mile travel threshold.</div>`}
+    </div>
+  </div>`;
+}
+
 /* ---- Step 4: Generate — deliverable picker ---- */
 function toggleDeliverable(id){
   const sel = state.wizard.deliverables;
@@ -2441,7 +2805,7 @@ function renderWizardStep4(){
   <div class="card card-pad">
     <h2 class="section-title" style="margin-bottom:4px;">What should PULSE generate?</h2>
     <p style="color:var(--text-muted); font-size:12px; margin:0 0 16px 0;">Check as many as you need — these are two independent deliverables, not an either/or choice. Most offers will want at least the Estimate Sheet, since it's the only one that includes real pricing today.</p>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
       <div class="deliverable-choice ${w.deliverables.includes('estimate')?'selected':''}" onclick="toggleDeliverable('estimate')">
         <div class="dc-head"><div class="chk">${w.deliverables.includes('estimate')?icon('check'):''}</div><div class="tc-title">Estimate Sheet</div></div>
         <div class="tc-desc">A pricing-focused commercial summary — services, rate basis, line items, discount applied, total. Client-ready.</div>
@@ -2449,6 +2813,10 @@ function renderWizardStep4(){
       <div class="deliverable-choice ${w.deliverables.includes('proposal')?'selected':''}" onclick="toggleDeliverable('proposal')">
         <div class="dc-head"><div class="chk">${w.deliverables.includes('proposal')?icon('check'):''}</div><div class="tc-title">Narrative Proposal</div></div>
         <div class="tc-desc">Pricing &amp; commercial sections only (scope of services, commercial model, payment milestones, performance timeline) in an RFI-response style document. Narrative sections like team bios and risk registers are left as fill-in-later.</div>
+      </div>
+      <div class="deliverable-choice ${w.deliverables.includes('travelBackup')?'selected':''}" onclick="toggleDeliverable('travelBackup')">
+        <div class="dc-head"><div class="chk">${w.deliverables.includes('travelBackup')?icon('check'):''}</div><div class="tc-title">Pricing &amp; Travel Backup Detail</div></div>
+        <div class="tc-desc">Internal document — pricing summary plus a per-property Travel Backup Detail table. Sales/Admin editions differ only in whether the nearest consultant shows by code or by name.</div>
       </div>
     </div>
   </div>
@@ -2467,6 +2835,13 @@ function renderWizardStep4(){
         <button class="btn btn-sm" onclick="downloadDocumentPDF('narrative-proposal-doc')"><i class="ti ti-download"></i> Download PDF</button>
       </div>
       <div id="narrative-proposal-doc">${renderNarrativeProposalHTML()}</div>
+    </div>` : ''}
+    ${w.deliverables.includes('travelBackup') ? `
+    <div>
+      <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+        <button class="btn btn-sm" onclick="downloadDocumentPDF('travel-backup-doc')"><i class="ti ti-download"></i> Download PDF</button>
+      </div>
+      <div id="travel-backup-doc">${renderTravelBackupDetailHTML()}</div>
     </div>` : ''}
   </div>
 
@@ -2641,6 +3016,132 @@ function renderNarrativeProposalHTML(){
 
     ${renderPerformanceTimelineSectionHTML(w, units)}
     <div class="es-footnote">This proposal covers pricing and commercial terms only. This estimate is valid for 30 days from the date above.</div>
+  </div>`;
+}
+
+/* ============================================================
+   TRAVEL BACKUP DETAIL (v2j) -- the new backup-detail document type
+   Misty asked for (distinct from Estimate Sheet/Narrative Proposal,
+   per the continuity brief's domain note), built to the approved
+   mockup structurally: a Pricing Summary section followed by a Travel
+   Backup Detail table, Sales/Admin editions gated by session role the
+   same way personnel anonymity is gated everywhere else in this app.
+   SCOPE NOTE: the approved mockup's Pricing Summary table showed a
+   dollar amount PER PROPERTY for every service (Inspection, Comp
+   Eval, etc.) -- that's sample data, not something today's pricing
+   model can compute for real. VERIFY and per-unit services price
+   against the whole units/portfolio at once (see priceUnitService()/
+   priceVerify()), not per property, so there's no real per-property
+   split to show for them yet. What IS real per-property data is
+   Inspection's portfolio branch and Travel (both carry a `perSite`
+   array) -- so this document's Pricing Summary reuses the same
+   aggregate totals table as the Estimate Sheet, and its Travel Backup
+   Detail section is the real, fully-computed per-property travel
+   table, matching the mockup's second half exactly. Building true
+   per-property attribution for VERIFY/per-unit pricing would be a
+   real, separate pricing-model change nobody has asked for yet --
+   flagged here rather than faked with sample-shaped numbers.
+   ============================================================ */
+async function ensureTravelAdminNames(){
+  if(!currentUser || currentUser.role !== 'admin') return;
+  const w = state.wizard;
+  if(w.travelAdminNamesLoaded) return;
+  const sites = (w.offerType === 'single'
+    ? [{ key:'single', city:w.city, state:w.siteState }]
+    : currentProperties().map(p => ({ key:p.key, city:p.city, state:p.state })))
+    .filter(s => s.city && s.state)
+    .map(s => ({ ...s, types:['consultant'] }));
+  if(!sites.length) return;
+  w.travelAdminNamesLoaded = true; // set before the await -- avoids duplicate concurrent fetches on re-render
+  try {
+    const res = await workerFetch('/api/personnel/nearest-batch', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sites }),
+    });
+    const data = await res.json();
+    if(res.ok){
+      const names = {};
+      for(const [key, r] of Object.entries(data.results||{})){
+        if(r && r.consultant && r.consultant.name) names[key] = r.consultant;
+      }
+      state.wizard.travelAdminNames = names;
+      render();
+    }
+  } catch(e){ /* falls back to anonymized code below -- not fatal */ }
+}
+function renderTravelBackupDetailHTML(){
+  const w = state.wizard;
+  const totals = computeOfferTotals();
+  const units = currentUnits();
+  const today = new Date().toISOString().slice(0,10);
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  if(isAdmin) ensureTravelAdminNames();
+  const travelLi = totals.lineItems.find(li => li.svc.pricingModel === 'travel');
+  const d = travelLi ? travelLi.detail : { perSite: [], totalCost: 0, mileageRate: 0 };
+  const billed = (d.perSite||[]).filter(s => s.billed);
+  const notBilled = (d.perSite||[]).length - billed.length;
+  const names = state.wizard.travelAdminNames || {};
+  return `
+  <div class="estimate-sheet">
+    <div class="es-header">
+      <div class="es-brand">
+        <div class="es-brand-mark">P</div>
+        <div><h1>Pricing &amp; Travel Backup Detail<span class="role-chip ${isAdmin?'admin':'sales'}">${isAdmin?'Admin':'Sales'} edition</span></h1><div style="font-size:11px; color:var(--text-muted);">PULSE Pricing · VDA Elevator/Escalator Consulting &amp; Inspection Services</div></div>
+      </div>
+      <div class="es-doc-meta"><div>${today}</div></div>
+    </div>
+    <div class="es-info-grid">
+      <div><div class="k">Client</div><div class="v">${escapeHtml(w.clientName) || '(not entered)'}</div></div>
+      <div><div class="k">${w.offerType==='single'?'Address':'Portfolio'}</div><div class="v">${w.offerType==='single' ? (escapeHtml([w.address, [w.city, w.siteState].filter(Boolean).join(', ')].filter(Boolean).join(', ')) || '—') : (escapeHtml(w.portfolioName)||'Untitled Portfolio')}</div></div>
+      <div><div class="k">Contract Term</div><div class="v">${w.contractTermYears} year${w.contractTermYears!==1?'s':''}</div></div>
+    </div>
+
+    <h2 class="es-h2">Pricing Summary</h2>
+    <table class="es-table">
+      <thead><tr><th>Service</th><th class="num">Basis</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        ${totals.lineItems.map(li => `<tr><td>${escapeHtml(li.svc.name)}</td><td class="num">${pricingModelLabel(li.svc.pricingModel)}</td><td class="num">${fmtMoney(li.amount)}${li.isMonthly?'/mo':''}${li.isAnnual?'/yr':''}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <table class="es-table" style="margin-top:10px;">
+      <tbody>
+        <tr><td>Subtotal</td><td class="num">${fmtMoney(totals.subtotal)}</td></tr>
+        ${totals.discountPct>0 ? `<tr><td>Volume discount (${totals.activeTier.awardPct}% award of portfolio)</td><td class="num">&minus;${fmtMoney(totals.discountAmt)}</td></tr>` : ''}
+        <tr class="es-total-row"><td>Total Estimated Offer</td><td class="num">${fmtMoney(totals.total)}</td></tr>
+      </tbody>
+    </table>
+
+    <h2 class="es-h2" style="margin-top:28px;">Travel Backup Detail</h2>
+    <p style="font-size:11.5px; color:var(--text-muted); margin:0 0 10px 0;">
+      ${isAdmin
+        ? 'This is the Admin edition of this document — the nearest consultant is shown by name and city.'
+        : 'This is the Sales edition of this document — the nearest consultant is shown by anonymized code only, matching the identity rule used everywhere else in PULSE Pricing.'}
+      Travel is charged only when one-way distance from the nearest available consultant exceeds 50 miles${notBilled>0 ? ` — the ${notBilled} propert${notBilled===1?'y':'ies'} not listed here fall under that threshold and carr${notBilled===1?'ies':'y'} no travel cost.` : '.'}
+    </p>
+    ${billed.length ? `
+    <table class="es-table">
+      <thead><tr>
+        <th>Property</th><th>City, State</th>
+        <th colspan="2">${isAdmin?'Consultant':'Consultant Code'}</th>
+        <th class="num">One-way</th><th class="num">Round-trip</th><th class="num">Rate</th><th class="num">Travel Cost</th>
+      </tr></thead>
+      <tbody>
+        ${billed.map(s => {
+          const n = names[s.key];
+          const who = isAdmin && n ? `${escapeHtml(n.name)}${n.city?` — ${escapeHtml(n.city)}${n.state?', '+escapeHtml(n.state):''}`:''}` : escapeHtml(s.code || '—');
+          return `<tr>
+            <td>${escapeHtml(s.property || '—')}</td><td>${escapeHtml([s.city,s.state].filter(Boolean).join(', ')) || '—'}</td>
+            <td colspan="2">${who}</td>
+            <td class="num">${s.oneWayMiles} mi</td>
+            <td class="num">${s.roundTripMiles} mi</td>
+            <td class="num">${fmtMoneyDec(d.mileageRate)}/mi</td>
+            <td class="num" style="font-weight:650;">${fmtMoney(s.cost)}</td>
+          </tr>`;
+        }).join('')}
+        <tr class="es-total-row"><td colspan="6">Total travel (this ${w.offerType==='single'?'property':'portfolio'})</td><td class="num">${fmtMoney(d.totalCost)}</td></tr>
+      </tbody>
+    </table>
+    <div class="es-footnote">Travel is calculated as round-trip mileage between the site and the nearest available consultant, at the rate card's mileage rate. This document cross-checks against the Travel line in the Pricing Summary above — both total ${fmtMoney(d.totalCost)}.</div>`
+      : `<div class="empty-state" style="padding:22px;"><div class="ic">☷</div>No properties currently exceed the 50-mile travel threshold.</div>`}
   </div>`;
 }
 
@@ -3389,6 +3890,7 @@ function renderClientsSites(){
    real numbers from offer_line_items, not a re-derivation.
    ============================================================ */
 function offerLineItemLabel(li){
+  if(li.service_id === 'travel') return 'Travel'; // not in SERVICES -- see priceTravel()'s comment on why it isn't a toggleable service
   const svc = SERVICES.find(s=>s.id===li.service_id);
   return svc ? svc.name : li.service_id;
 }
