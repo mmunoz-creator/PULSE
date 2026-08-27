@@ -16257,14 +16257,44 @@ function renderActionBoard(){
   // never meant to be the client's primary attention list).
   const unitsByProp={};
   (window.UNIT_INVENTORY||[]).forEach(u=>{if(!unitsByProp[u.property])unitsByProp[u.property]=[];unitsByProp[u.property].push(u);});
+  // v68m -- task: Priority Properties display-only stacked bar. Misty
+  // flagged the single unit-complete % (2 of 26 units = 8%) reading as
+  // contradictory next to the property card's weighted milestone % (74%,
+  // M10) for the same project -- confirmed live this is because a unit's
+  // real Status field only ever flips to Complete when its whole Scope
+  // reaches Complete (computeDerivedUnitStatus, line ~10777), so a unit
+  // sits at Active for the entire M1-M14 life of an in-progress project.
+  // Mocked up and approved: replace the single bar/pct with a 3-segment
+  // stacked bar (complete/in-progress/not-started), where "complete" here
+  // is a DISPLAY-ONLY bump for this tile -- explicitly NOT a write to the
+  // real Unit Inventory List Status field (Misty: "I meant complete in the
+  // bar chart only not on units inventory"). A unit displays as complete
+  // if its real status is already 'Complete', OR its linked Scope's M12
+  // milestone ("Inspections Complete (AHJ)") is Complete -- per Misty's
+  // direction (M10 first proposed, corrected to M12: physical work
+  // passing inspection is the more meaningful "done" signal than
+  // construction wrapping up, which M10 "Final Phase Complete" only
+  // represents). Same m-find-by-milestoneNumber pattern
+  // getMilestoneCategoryForScope() already uses for its own M10 Project
+  // Closeout boundary, just checking M12 here and only for this tile's
+  // display math -- no Scope/Unit records touched.
   const priorityProps=port.filter(p=>p.type==='Core').map(p=>{
     const units=unitsByProp[p.n]||[];
     if(units.length===0)return null;
-    const complete=units.filter(u=>u.status==='Complete').length;
-    const pct=Math.round((complete/units.length)*100);
+    const scopeM12CompleteCache={};
+    const scopeM12Complete=scopeId=>{
+      if(!scopeId)return false;
+      if(scopeId in scopeM12CompleteCache)return scopeM12CompleteCache[scopeId];
+      const m12=getMilestonesForProp(p.n,scopeId).find(m=>m.milestoneNumber===12);
+      return scopeM12CompleteCache[scopeId]=!!(m12&&m12.status==='Complete');
+    };
+    const displayComplete=units.filter(u=>u.status==='Complete'||scopeM12Complete(u.scopeId)).length;
+    const active=units.filter(u=>u.status!=='Complete'&&!scopeM12Complete(u.scopeId)&&u.status==='Active').length;
+    const notStarted=units.length-displayComplete-active;
+    const pct=Math.round((displayComplete/units.length)*100);
     if(pct===0)return null;
     const atRisk=(window.MILESTONES||[]).some(m=>m.property===p.n&&m.status==='At Risk');
-    return {name:p.n,complete,total:units.length,pct,atRisk};
+    return {name:p.n,complete:displayComplete,active,notStarted,total:units.length,pct,atRisk};
   }).filter(Boolean).sort((a,b)=>a.pct-b.pct).slice(0,4);
   // v61b-status — Heat map rebucketed onto the new 5-stage Scope
   // vocabulary (task #11). Was filtering on the old flat s.status==='In
@@ -16654,7 +16684,15 @@ function renderActionBoard(){
         icon, then a flex:1 text column (name + "why" line only), then the
         56px-wide track+fill, then the pill -- exactly mirroring
         .status-list-item/.pct-track/.status-pill in the mockup CSS. -->
-        ${priorityProps.map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="width:28px;height:28px;border-radius:8px;background:var(--gray-xpale);color:var(--gray-mid);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0"><i class="ti ti-building-skyscraper"></i></div><div style="flex:1;min-width:0"><p style="font-size:12.5px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(p.name)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${p.complete} of ${p.total} units complete${p.atRisk?' (At Risk milestone)':''}</p></div><div style="width:56px;height:8px;background:var(--gray-pale);border-radius:4px;overflow:hidden;flex-shrink:0"><div style="height:100%;width:${p.pct}%;background:${p.atRisk?'var(--amber)':'var(--blue-dark)'}"></div></div><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap;margin-left:auto;flex-shrink:0;${p.atRisk?'background:var(--amber-pale,#FAEEDA);color:var(--amber)':'background:var(--gray-pale,#F1EFE8);color:var(--gray-mid)'}">${p.pct}%</span></div>`).join('')||'<p style="color:var(--gray-mid);font-size:12px">No properties with unit data yet.</p>'}
+        <!-- v68m -- stacked complete/in-progress/not-started bar replacing
+        the single bar+pct pill, per approved mockup
+        (mockup_dashboard_priority_milestones.html). complete/active/
+        notStarted are the display-only counts computed above (M12-boosted
+        complete, real Unit Inventory Status otherwise unaffected). Legend
+        only shown once beneath the last row, matching the mockup, since a
+        per-row legend would be redundant repetition down the whole list. -->
+        ${priorityProps.map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="width:28px;height:28px;border-radius:8px;background:var(--gray-xpale);color:var(--gray-mid);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0"><i class="ti ti-building-skyscraper"></i></div><div style="flex:1;min-width:0"><p style="font-size:12.5px;font-weight:600;color:var(--gray-dark);margin:0">${escHtml(p.name)}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">${p.complete} complete · ${p.active} in progress · ${p.notStarted} not started${p.atRisk?' (At Risk milestone)':''}</p></div><div style="display:flex;flex-direction:column;gap:3px;width:100px;flex-shrink:0;margin-left:auto"><div style="width:100%;height:8px;background:var(--gray-pale);border-radius:4px;overflow:hidden;display:flex">${p.complete>0?`<div style="height:100%;width:${(p.complete/p.total)*100}%;background:${p.atRisk?'var(--amber)':'var(--blue-dark)'}"></div>`:''}${p.active>0?`<div style="height:100%;width:${(p.active/p.total)*100}%;background:#8FBEE0"></div>`:''}</div></div></div>`).join('')||'<p style="color:var(--gray-mid);font-size:12px">No properties with unit data yet.</p>'}
+        ${priorityProps.length?'<div style="display:flex;gap:12px;font-size:10px;color:var(--gray-mid);margin-top:8px;padding-top:2px"><span style="display:inline-flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:2px;background:var(--blue-dark);display:inline-block"></span>Complete</span><span style="display:inline-flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:2px;background:#8FBEE0;display:inline-block"></span>In progress</span></div>':''}
       </div>
     </div>
     <div class="card" style="margin-bottom:16px;border-radius:12px">
@@ -16807,13 +16845,35 @@ function renderActionBoard(){
         read distinctly from At Risk/In Progress rather than looking like
         an error (a checkmark icon reused for "in motion" would be
         confusing). -->
+        <!-- v68m -- per approved mockup (mockup_dashboard_priority_
+        milestones.html): added the scope/project name as a small pill
+        (Misty: "should also indicate the project on that property that
+        the Milestones refer to" -- a property with more than one Scope
+        had no way to tell which project a milestone belonged to) and the
+        milestone's own real Planned Date field (already captured in
+        Airtable, just not surfaced on this panel before). In-progress/
+        at-risk rows past their Planned Date with no Completion Date yet
+        are flagged "(overdue)" in amber, same overdue idiom
+        (new Date(x+'T12:00:00')<today) already used for Action Items
+        above in this same function. Complete rows show the real
+        Completion Date instead of a planned one. -->
         ${milestonesInMotion.map(m=>{
           const isComplete=m.status==='Complete';
           const isRisk=m.status==='At Risk';
           const iconBg=isComplete?'var(--green-pale)':isRisk?'var(--amber-pale)':'var(--blue-pale)';
           const iconFg=isComplete?'var(--green)':isRisk?'var(--amber)':'var(--blue-dark)';
           const icon=isComplete?'ti-circle-check':isRisk?'ti-alert-triangle':'ti-progress';
-          return `<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;background:${iconBg};color:${iconFg}"><i class="ti ${icon}"></i></div><div><p style="font-size:12px;font-weight:600;margin:0">${escHtml(m.property||'')}</p><p style="font-size:11px;color:var(--gray-mid);margin:1px 0 0">M${m.milestoneNumber||''}: ${escHtml(m.milestoneName||'')}${isComplete?' (Complete)':''}</p></div></div>`;
+          const scope=(window.SCOPES||[]).find(s=>s.id===m.scopeId);
+          const scopePill=scope&&scope.name?`<span style="font-size:10.5px;font-weight:600;color:var(--blue-dark);background:var(--blue-pale);display:inline-block;padding:1px 7px;border-radius:8px;margin:3px 0 0">${escHtml(scope.name)}</span>`:'';
+          const fmtD=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+          let dateLine='';
+          if(isComplete){
+            dateLine=m.completionDate?`<div style="font-size:10.5px;color:var(--gray-mid);margin-top:4px">Completed ${fmtD(m.completionDate)}</div>`:'';
+          }else if(m.plannedDate){
+            const overdue=new Date(m.plannedDate+'T12:00:00')<today;
+            dateLine=`<div style="font-size:10.5px;color:${overdue?'var(--amber)':'var(--gray-mid)'};margin-top:4px;display:flex;align-items:center;gap:4px"><i class="ti ti-calendar" style="font-size:10.5px"></i>Planned: <b style="font-weight:600">${fmtD(m.plannedDate)}</b>${overdue?' (overdue)':''}</div>`;
+          }
+          return `<div style="display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)"><div style="width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;background:${iconBg};color:${iconFg}"><i class="ti ${icon}"></i></div><div style="flex:1;min-width:0"><p style="font-size:12px;font-weight:600;margin:0">${escHtml(m.property||'')}</p>${scopePill}<p style="font-size:11px;color:var(--gray-mid);margin:4px 0 0">M${m.milestoneNumber||''}: ${escHtml(m.milestoneName||'')}${isComplete?' (Complete)':''}</p>${dateLine}</div></div>`;
         }).join('')||'<p style="color:var(--gray-mid);font-size:12px">No milestones currently in progress.</p>'}
       </div>
       <div class="card" style="border-radius:12px">
