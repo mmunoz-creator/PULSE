@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2m';
+const APP_VERSION = 'v2n';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2929,9 +2929,10 @@ function renderTravelCard(totals){
   const w = state.wizard;
   const li = (totals.lineItems||[]).find(x => x.svc && x.svc.pricingModel === 'travel');
   if(!li) return '';
-  const d = li.detail || { perSite: [], totalCost: 0, mileageRate: 0 };
+  const d = li.detail || { perSite: [], totalCost: 0, mileageRate: 0, overnightRate: 0, avgMph: 65, overnightThresholdHours: 3 };
   const billed = (d.perSite||[]).filter(s => s.billed);
   const notBilled = (d.perSite||[]).length - billed.length;
+  const anyOvernight = billed.some(s => s.overnightTriggered);
   return `
   <div class="card" style="margin-top:14px;">
     <div class="card-header">
@@ -2939,16 +2940,23 @@ function renderTravelCard(totals){
       <div style="font-weight:750; font-size:14px;">${fmtMoney(d.totalCost)}</div>
     </div>
     <div class="card-pad">
-      <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Round-trip mileage from the nearest available consultant, at the rate card's mileage rate (${fmtMoneyDec(d.mileageRate)}/mi), charged only when one-way distance exceeds 50 miles.${notBilled>0 ? ` ${notBilled} propert${notBilled===1?'y falls':'ies fall'} under that threshold and carr${notBilled===1?'ies':'y'} no travel cost.` : ''}</p>
+      <p style="color:var(--text-muted); font-size:11px; margin:0 0 6px 0;">Round-trip mileage from the nearest available consultant, at the rate card's mileage rate (${fmtMoneyDec(d.mileageRate)}/mi), charged only when one-way distance exceeds 50 miles.${notBilled>0 ? ` ${notBilled} propert${notBilled===1?'y falls':'ies fall'} under that threshold and carr${notBilled===1?'ies':'y'} no travel cost.` : ''}</p>
+      <!-- Drive-time estimate + overnight trigger (2026-08-28, per Misty:
+           "let's do drive time estimate based on 65 miles an hour on
+           average") -- estimated, not a real routing API, same
+           straight-line-distance basis mileage itself already uses. -->
+      <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Drive time is estimated at ${d.avgMph}mph average from that same one-way distance. One-way drive time ≥ ${d.overnightThresholdHours} hours adds one night at the rate card's overnight rate (${fmtMoney(d.overnightRate)}).</p>
       ${billed.length ? `
       <div class="table-card">
         <table class="data-table">
-          <thead><tr><th>Property</th><th>City, State</th><th>Consultant</th><th class="num">One-way</th><th class="num">Round-trip</th><th class="num">Cost</th></tr></thead>
+          <thead><tr><th>Property</th><th>City, State</th><th>Consultant</th><th class="num">One-way</th><th class="num">Drive time</th><th class="num">Round-trip</th><th class="num">Mileage</th><th class="num">Overnight</th><th class="num">Cost</th></tr></thead>
           <tbody>
-            ${billed.map(s => `<tr><td>${escapeHtml(s.property || '—')}</td><td>${escapeHtml([s.city,s.state].filter(Boolean).join(', ')) || '—'}</td><td>${escapeHtml(s.code || '—')}</td><td class="num">${s.oneWayMiles} mi</td><td class="num">${s.roundTripMiles} mi</td><td class="num" style="font-weight:650;">${fmtMoney(s.cost)}</td></tr>`).join('')}
+            ${billed.map(s => `<tr><td>${escapeHtml(s.property || '—')}</td><td>${escapeHtml([s.city,s.state].filter(Boolean).join(', ')) || '—'}</td><td>${escapeHtml(s.code || '—')}</td><td class="num">${s.oneWayMiles} mi</td><td class="num" style="${s.overnightTriggered?'color:var(--amber); font-weight:650;':''}">${s.driveTimeHours}h</td><td class="num">${s.roundTripMiles} mi</td><td class="num">${fmtMoney(s.mileageCost)}</td><td class="num">${s.overnightTriggered ? fmtMoney(s.overnightCost) : '—'}</td><td class="num" style="font-weight:650;">${fmtMoney(s.cost)}</td></tr>`).join('')}
           </tbody>
         </table>
-      </div>` : `<div class="empty-state" style="padding:18px;"><div class="ic">☷</div>No properties currently exceed the 50-mile travel threshold.</div>`}
+      </div>
+      ${anyOvernight ? `<p style="color:var(--amber); font-size:10.5px; margin:8px 0 0 0;">${icon('warn')} One or more properties trigger an overnight stay (one-way drive time ≥ ${d.overnightThresholdHours}h).</p>` : ''}
+      ` : `<div class="empty-state" style="padding:18px;"><div class="ic">☷</div>No properties currently exceed the 50-mile travel threshold.</div>`}
     </div>
   </div>`;
 }
@@ -3277,13 +3285,14 @@ function renderTravelBackupDetailHTML(){
         ? 'This is the Admin edition of this document — the nearest consultant is shown by name and city.'
         : 'This is the Sales edition of this document — the nearest consultant is shown by anonymized code only, matching the identity rule used everywhere else in PULSE Pricing.'}
       Travel is charged only when one-way distance from the nearest available consultant exceeds 50 miles${notBilled>0 ? ` — the ${notBilled} propert${notBilled===1?'y':'ies'} not listed here fall under that threshold and carr${notBilled===1?'ies':'y'} no travel cost.` : '.'}
+      Drive time is estimated at ${d.avgMph||65}mph average from that same one-way distance; one-way drive time ≥ ${d.overnightThresholdHours||3} hours adds one night at the overnight rate (${fmtMoney(d.overnightRate||0)}).
     </p>
     ${billed.length ? `
     <table class="es-table">
       <thead><tr>
         <th>Property</th><th>City, State</th>
         <th colspan="2">${isAdmin?'Consultant':'Consultant Code'}</th>
-        <th class="num">One-way</th><th class="num">Round-trip</th><th class="num">Rate</th><th class="num">Travel Cost</th>
+        <th class="num">One-way</th><th class="num">Drive time</th><th class="num">Round-trip</th><th class="num">Mileage</th><th class="num">Overnight</th><th class="num">Travel Cost</th>
       </tr></thead>
       <tbody>
         ${billed.map(s => {
@@ -3293,12 +3302,14 @@ function renderTravelBackupDetailHTML(){
             <td>${escapeHtml(s.property || '—')}</td><td>${escapeHtml([s.city,s.state].filter(Boolean).join(', ')) || '—'}</td>
             <td colspan="2">${who}</td>
             <td class="num">${s.oneWayMiles} mi</td>
+            <td class="num">${s.driveTimeHours!=null?s.driveTimeHours+'h':'—'}</td>
             <td class="num">${s.roundTripMiles} mi</td>
-            <td class="num">${fmtMoneyDec(d.mileageRate)}/mi</td>
+            <td class="num">${fmtMoney(s.mileageCost!=null?s.mileageCost:s.cost)}</td>
+            <td class="num">${s.overnightTriggered ? fmtMoney(s.overnightCost) : '—'}</td>
             <td class="num" style="font-weight:650;">${fmtMoney(s.cost)}</td>
           </tr>`;
         }).join('')}
-        <tr class="es-total-row"><td colspan="6">Total travel (this ${w.offerType==='single'?'property':'portfolio'})</td><td class="num">${fmtMoney(d.totalCost)}</td></tr>
+        <tr class="es-total-row"><td colspan="8">Total travel (this ${w.offerType==='single'?'property':'portfolio'})</td><td class="num">${fmtMoney(d.totalCost)}</td></tr>
       </tbody>
     </table>
     <div class="es-footnote">Travel is calculated as round-trip mileage between the site and the nearest available consultant, at the rate card's mileage rate. This document cross-checks against the Travel line in the Pricing Summary above — both total ${fmtMoney(d.totalCost)}.</div>`
@@ -4113,7 +4124,7 @@ function renderRateCards(){
     <p class="card-title" style="margin-bottom:8px;">Travel &amp; per-diem assumptions</p>
     <div class="kv-list">
       <div class="kv-row"><span class="k">Mileage rate</span><span class="v">$${Number(rateCard.mileage_rate).toFixed(3)}/mile, round trip from nearest staffed office</span></div>
-      <div class="kv-row"><span class="k">Overnight rate</span><span class="v">${fmtMoney(rateCard.overnight_rate)}/night, applied when one-way drive exceeds ~3 hours</span></div>
+      <div class="kv-row"><span class="k">Overnight rate</span><span class="v">${fmtMoney(rateCard.overnight_rate)}/night, applied when one-way drive time (estimated at 65mph average) exceeds 3 hours</span></div>
       <!-- Staffing pools line removed (2026-08-28, per Misty) -- not
            rate-card-relevant, shouldn't sit in Travel & Per-diem
            Assumptions. Removed from this one shared card component,
