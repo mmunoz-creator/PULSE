@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2o';
+const APP_VERSION = 'v2q';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1268,6 +1268,12 @@ const state = {
   // auto-fetch a preview -- an explicit "Preview" click does, so a
   // half-typed number never fires a request).
   bulkIncrease: null,
+  // Audit log UI (2026-08-28, "item #2") -- null when the panel is
+  // closed. { tabId, loading, error, events } while open, keyed to
+  // whichever rate-card tab it was opened from (mirrors bulkIncrease's
+  // shape/lifecycle above) so switching tabs doesn't leave a stale
+  // panel showing the wrong tab's events.
+  auditLog: null,
   // Inspection Rate Card + Inspection Governance (v2i) — pure client-side
   // filter state for each section's search box (no new API calls; both
   // sections' data is already loaded in full via rateCardData, this just
@@ -1358,7 +1364,7 @@ function icon(name){
     check:'✓', chevron:'›', calendar:'▦', doc:'☷', info:'ⓘ', warn:'⚠',
     truck:'⚑', flag:'⚑', history:'↻', admin:'<i class="ti ti-trending-up"></i>', search:'⌕',
     chevUp:'▴', chevDown:'▾', personnel:'<i class="ti ti-users"></i>', users:'<i class="ti ti-user-cog"></i>',
-    plus:'<i class="ti ti-plus"></i>',
+    plus:'<i class="ti ti-plus"></i>', auditlog:'<i class="ti ti-clock-hour-4"></i>',
   };
   return m[name] || '';
 }
@@ -3494,6 +3500,81 @@ function renderBulkIncreasePanel(){
   </div>`;
 }
 
+/* ============================================================
+   AUDIT LOG (2026-08-28, "item #2" of the 2026-08-28 evening scope) --
+   surfaces rate_card_events (who edited what, when) on the Rate Cards
+   admin screen. Read-only, one GET call per open, no preview/commit
+   split needed since nothing here writes. Scoped to the active rate
+   card only (every event row is rate_card_id-scoped server-side) --
+   this app only ever has one active rate card at a time per the
+   existing rate_cards versioning model, so there's no card-picker.
+   ============================================================ */
+async function openAuditLog(tabId){
+  setState({ auditLog: { tabId, loading: true, error: null, events: null } });
+  try {
+    const rateCardId = state.rateCardData.rateCard.id;
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/events`);
+    const data = await res.json();
+    if(!res.ok){ setState({ auditLog: { ...state.auditLog, loading: false, error: data.error || 'Could not load the audit log.' } }); return; }
+    setState({ auditLog: { ...state.auditLog, loading: false, events: data.events || [] } });
+  } catch(e){
+    setState({ auditLog: { ...state.auditLog, loading: false, error: 'Could not reach the server.' } });
+  }
+}
+function closeAuditLog(){
+  setState({ auditLog: null });
+}
+// event_type values come from whatever each mutation function passes to
+// its own INSERT INTO rate_card_events call (cell edits, bulk_increase,
+// AHJ/region/price creates, etc.) -- kept as free-form labels here
+// rather than a hardcoded map so a future event_type this code doesn't
+// know about still renders as readable text instead of nothing.
+function auditEventLabel(eventType){
+  const known = {
+    cell_edit: 'Rate edited', bulk_increase: 'Bulk % increase applied',
+    ahj_created: 'AHJ added', region_created: 'Rate card region added',
+    inspection_price_created: 'Inspection price added',
+    inspection_requirement_created: 'Inspection requirement added',
+  };
+  if(known[eventType]) return known[eventType];
+  // Fallback: turn an unrecognized snake_case event_type into Title Case
+  // words rather than showing the raw code to a non-technical admin.
+  return String(eventType || 'Change').replace(/_/g,' ').replace(/\b\w/g, c=>c.toUpperCase());
+}
+function fmtEventTimestamp(ts){
+  if(!ts) return '—';
+  const d = new Date(ts);
+  if(isNaN(d.getTime())) return escapeHtml(String(ts));
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' });
+}
+function renderAuditLogPanel(){
+  const al = state.auditLog;
+  return `
+  <div class="card card-pad" style="margin-top:4px; margin-bottom:16px; border-color:var(--purple);">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+      <p class="card-title" style="margin:0;">${icon('auditlog')} Audit log</p>
+      <button class="btn btn-sm" onclick="closeAuditLog()">Close</button>
+    </div>
+    ${al.loading ? `<p style="color:var(--text-muted); font-size:12px; margin:12px 0 0 0;">Loading…</p>` : ''}
+    ${al.error ? `<p style="color:var(--red); font-size:11.5px; margin:10px 0 0 0;">${escapeHtml(al.error)}</p>` : ''}
+    ${(al.events && al.events.length === 0) ? `<p style="color:var(--text-muted); font-size:12px; margin:12px 0 0 0;">No recorded changes for this rate card yet.</p>` : ''}
+    ${(al.events && al.events.length > 0) ? `
+    <div class="table-card" style="max-height:340px; overflow-y:auto; margin-top:12px;">
+      <table class="data-table rc-table">
+        <thead><tr><th>When</th><th>Who</th><th>Change</th><th>Detail</th></tr></thead>
+        <tbody>
+          ${al.events.map(ev => `<tr>
+            <td style="white-space:nowrap;">${fmtEventTimestamp(ev.timestamp)}</td>
+            <td>${escapeHtml(ev.actorName)}</td>
+            <td>${escapeHtml(auditEventLabel(ev.eventType))}</td>
+            <td style="color:var(--text-muted);">${ev.note ? escapeHtml(ev.note) : '—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+  </div>`;
+}
+
 // Live comma-formatting for editable dollar-amount cells (Rate Cards
 // price grids). Applied on every keystroke via oninput -- strips
 // anything non-numeric, re-inserts thousands separators, and restores
@@ -4206,10 +4287,14 @@ function renderRateCards(){
            inside comments here, they close the template literal early. -->
       <p class="page-sub">Rates effective ${rateCard.effective_date}. Edits save immediately to the rate card.</p>
     </div>
-    ${showBulkIncrease ? `<button class="btn btn-sm" onclick="openBulkIncrease('${state.rateCardTab}')">${icon('admin')} Increase Rates</button>` : ''}
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-sm" onclick="openAuditLog('${state.rateCardTab}')">${icon('auditlog')} Audit Log</button>
+      ${showBulkIncrease ? `<button class="btn btn-sm" onclick="openBulkIncrease('${state.rateCardTab}')">${icon('admin')} Increase Rates</button>` : ''}
+    </div>
   </div>
 
   ${state.bulkIncrease && state.bulkIncrease.tabId === state.rateCardTab ? renderBulkIncreasePanel() : ''}
+  ${state.auditLog && state.auditLog.tabId === state.rateCardTab ? renderAuditLogPanel() : ''}
 
   <div class="tabs" style="margin-top:4px;">
     ${verifyTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
@@ -4237,7 +4322,7 @@ function renderRateCards(){
   ${renderInspectionGovernanceLive(authorities, ahjRequirements, inspectionCategories)}
   ` : ''}
 
-  ${svc.id!=='ccm' ? `
+  ${(svc.id!=='ccm' && svc.id!=='verify') ? `
   <div class="card card-pad" style="margin-top:16px;">
     <p class="card-title" style="margin-bottom:8px;">Travel &amp; per-diem assumptions</p>
     <div class="kv-list">
@@ -4246,13 +4331,14 @@ function renderRateCards(){
       <!-- Staffing pools line removed (2026-08-28, per Misty) -- not
            rate-card-relevant, shouldn't sit in Travel & Per-diem
            Assumptions. Removed from this one shared card component,
-           which covers every tab that renders it except CCM (see the
-           surrounding svc.id!=='ccm' guard, Batch B 2026-08-28: CCM
-           doesn't use Travel & per-diem at all per Misty's rate-cards
-           review notes). NOTE: VERIFY also shouldn't show this card at
-           all per those same review notes -- that's a separate,
-           still-open item, not yet built; flagged here so a future
-           session doesn't assume this guard already covers it. -->
+           which covers every tab that renders it except CCM and VERIFY
+           (see the surrounding svc.id guard). CCM excluded in Batch B
+           (2026-08-28): CCM doesn't use Travel & per-diem at all. VERIFY
+           excluded in Batch E (2026-08-28, this fix): "VERIFY is a
+           subscription software program only" per Misty's original
+           rate-cards review notes -- this was flagged as a still-open
+           item in the Batch B comment (now resolved) and left the
+           card showing on VERIFY's tab until now. -->
     </div>
   </div>` : ''}
 
