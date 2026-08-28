@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2l';
+const APP_VERSION = 'v2m';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1035,7 +1035,17 @@ initParticles('hero-particles', { count: 60 });
                       should be structured like VERIFY... per unit
                       service not per stop"). See priceCcm()/
                       renderCcmRateCardLive.
-   - 'retainer'  : recurring monthly/annual flat fee
+   - 'retainer'  : recurring monthly/annual flat fee (General Consulting —
+                    still fully manual/negotiated, no rate card backs it yet)
+   - 'pm_tiered' : Good/Better/Best flat tier pick (Essential/Enhanced/
+                    Comprehensive) plus optional extra-hours/extra-visits
+                    add-ons priced off two shared component rates -- Project
+                    Management only (restructured off 'retainer' in Batch C,
+                    2026-08-28, per Misty's Hospitality_CS_Tier_Pricing.docx,
+                    genericized to "properties"). Tier prices are FLAT
+                    editable totals, NOT computed live from hours x rate,
+                    per Misty's explicit answer that session. See
+                    priceProjectManagement()/renderPmRateCardLive.
    - 'task_line' : open task-line builder (Modernization, Construction)
    - 'per_ahj_category' : Inspection's own model, priced per inspection
                            category per Authority Having Jurisdiction.
@@ -1077,8 +1087,8 @@ const SERVICES = [
     desc:'AHJ-witnessed inspection event — CAT 1, Periodic, CAT 3, CAT 5, etc. Priced per inspection category AND per Authority Having Jurisdiction, since requirements and fees vary by AHJ rather than by state or city. Rates are placeholder pending real VDA pricing input.' },
   { id:'general_consulting', name:'General Consulting', pricingModel:'retainer', staffPool:'consultants',
     desc:'Ongoing portfolio-level advisory — lifecycle consulting informed by VERIFY findings, inspection results, and condition data. Recurring monthly/annual fee.' },
-  { id:'project_management', name:'Project Management', pricingModel:'retainer', staffPool:'consultants',
-    desc:'Standing PM function — implementation milestones, sequencing, dependency and risk tracking. Recurring monthly/annual fee.' },
+  { id:'project_management', name:'Project Management', pricingModel:'pm_tiered', staffPool:'consultants',
+    desc:'Good/Better/Best construction-administration support — Essential, Enhanced, or Comprehensive tier, plus optional extra hours/visits beyond what’s included.' },
   { id:'modernization', name:'Modernization Services', pricingModel:'task_line', staffPool:'consultants',
     desc:'Feasibility through deployment — Survey, Spec, RFP, Award, Submittal Review, phased Construction, Closeout. Priced as individual task lines.' },
   { id:'construction', name:'Construction Services', pricingModel:'task_line', staffPool:'consultants',
@@ -1189,7 +1199,7 @@ const RATE_CARD_DISPLAY_NAME = "VDA Standard Rate Card — 2026";
 function fmtMoney(n){ return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtMoneyDec(n){ return '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function pricingModelLabel(model){
-  return { verify_tiered:'tiered calculator', per_unit:'per unit', unit_tiered:'unit tier bands', retainer:'retainer', task_line:'task lines', per_ahj_category:'per AHJ / category', travel:'mileage' }[model] || model;
+  return { verify_tiered:'tiered calculator', per_unit:'per unit', unit_tiered:'unit tier bands', retainer:'retainer', pm_tiered:'tier pick', task_line:'task lines', per_ahj_category:'per AHJ / category', travel:'mileage' }[model] || model;
 }
 // Nearest-consultant/inspector lookups now go through the real
 // anonymity-gated endpoint (/api/personnel/nearest) instead of a local
@@ -1597,6 +1607,10 @@ function freshWizardState(){
     // Cash Flow Curve "Explore scenario" pattern (live drag -> live $, no chart)
     priceAdjust: {},
     retainerFees: {},         // {svcId: monthlyFee}
+    // Project Management (Batch C, 2026-08-28): {svcId: {tierKey, extraHours, extraVisits}}.
+    // tierKey starts null -- no tier is silently defaulted, see
+    // priceProjectManagement()'s Worker-side comment on why.
+    pmInputs: {},
     taskLines: {},            // {svcId: [{id, name, amount, billingSplit, trigger}]}
     exploreOpen: false,
     discountOpen: false,
@@ -2207,6 +2221,7 @@ function refreshPricing(){
       selectedServices: w.selectedServices,
       priceAdjust: w.priceAdjust,
       retainerFees: w.retainerFees,
+      pmInputs: w.pmInputs,
       taskLines: w.taskLines,
       verifyInputs: { termYears: w.contractTermYears, contractors: w.verifyContractors, directCalls: w.verifyDirectCalls },
       // v2j: Inspection's (ahjId, region) pair -- single sends the one
@@ -2258,6 +2273,23 @@ function resetPriceAdjust(svcId){
 }
 function updateRetainerFee(svcId, val){
   setWizard({ retainerFees: { ...state.wizard.retainerFees, [svcId]: Number(val) } });
+}
+// Project Management (Batch C, 2026-08-28) -- three inputs per service
+// (tierKey, extraHours, extraVisits), same {svcId: {...}} shape as
+// retainerFees/taskLines. Each setter merges into the existing
+// per-service object rather than replacing it, so e.g. picking a tier
+// doesn't wipe out an already-entered extraHours value.
+function updatePmTier(svcId, tierKey){
+  const cur = state.wizard.pmInputs[svcId] || {};
+  setWizard({ pmInputs: { ...state.wizard.pmInputs, [svcId]: { ...cur, tierKey } } });
+}
+function updatePmExtraHours(svcId, val){
+  const cur = state.wizard.pmInputs[svcId] || {};
+  setWizard({ pmInputs: { ...state.wizard.pmInputs, [svcId]: { ...cur, extraHours: Number(val)||0 } } });
+}
+function updatePmExtraVisits(svcId, val){
+  const cur = state.wizard.pmInputs[svcId] || {};
+  setWizard({ pmInputs: { ...state.wizard.pmInputs, [svcId]: { ...cur, extraVisits: Number(val)||0 } } });
 }
 function updateContractTermYears(val){ setWizard({ contractTermYears: Number(val) }); }
 function updateVerifyContractors(val){ setWizard({ verifyContractors: Number(val) }); }
@@ -2564,7 +2596,7 @@ function renderServicePricingCard(svcId, units){
   // (tier breakdowns, recommended ranges) that must never be derived
   // client-side again.
   const li = w.pricingResult ? w.pricingResult.lineItems.find(x => x.serviceId === svcId) : null;
-  const needsServerDetail = svc.pricingModel === 'verify_tiered' || svc.pricingModel === 'per_unit' || svc.pricingModel === 'unit_tiered';
+  const needsServerDetail = svc.pricingModel === 'verify_tiered' || svc.pricingModel === 'per_unit' || svc.pricingModel === 'unit_tiered' || svc.pricingModel === 'pm_tiered';
   if(needsServerDetail && !li){
     return `
     <div class="card card-pad" style="margin-top:14px;">
@@ -2739,6 +2771,62 @@ function renderServicePricingCard(svcId, units){
       <div class="field-group" style="max-width:220px; margin-bottom:0;">
         <label class="field-label">Monthly Fee</label>
         <input class="text-input" type="number" min="0" step="100" value="${fee}" oninput="updateRetainerFee('${svcId}', this.value)">
+      </div>
+    </div>`;
+  }
+  if(svc.pricingModel === 'pm_tiered'){
+    // Project Management (Batch C, 2026-08-28) -- Good/Better/Best tier
+    // pick. result.allTiers carries every tier (for the picker cards)
+    // even though only the selected tier's price rolls into the offer
+    // total -- see priceProjectManagement()'s comment. No tier selected
+    // yet (tierKey null) is a real, expected state for a fresh offer,
+    // not an error -- render the picker with nothing highlighted rather
+    // than silently defaulting to one, per that same comment's reasoning.
+    const result = li.detail; // {tier, allTiers, hourlyRate, visitRate, extraHours, extraHoursAmount, extraVisits, extraVisitsAmount, subtotal, isPlaceholder}
+    const inputs = w.pmInputs[svcId] || {};
+    const extraHours = inputs.extraHours || 0;
+    const extraVisits = inputs.extraVisits || 0;
+    return `
+    <div class="card" style="margin-top:14px;">
+      <div class="card-header">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="explore-dot"></span>
+          <h3 class="card-title" style="margin:0;">${svc.name}</h3>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:750; font-size:14px;">${fmtMoney(result.subtotal)}</div>
+          ${result.tier ? `<div style="font-size:10px; color:var(--text-muted);">${escapeHtml(result.tier.tierName)}</div>` : `<div style="font-size:10px; color:var(--amber);">no tier selected</div>`}
+        </div>
+      </div>
+      <div class="card-pad">
+        ${result.isPlaceholder ? `<div class="notional-banner" style="margin-bottom:10px;"><span class="ic">${icon('warn')}</span>Notional placeholder rates — pending real VDA pricing input for this service.</div>` : ''}
+        <p style="color:var(--text-muted); font-size:11px; margin:0 0 12px 0;">Pick the tier that fits this project's oversight needs. Add extra hours or site visits beyond what's included if the scope calls for it.</p>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px;">
+          ${result.allTiers.map(t => `
+          <div class="tier-pick-card ${inputs.tierKey===t.tierKey?'selected':''}" style="border:1px solid ${inputs.tierKey===t.tierKey?'var(--purple)':'var(--border)'}; border-radius:10px; padding:12px; cursor:pointer; ${inputs.tierKey===t.tierKey?'background:var(--purple-pale);':''}" onclick="updatePmTier('${svcId}','${t.tierKey}')">
+            <div style="font-weight:700; font-size:12px; margin-bottom:4px;">${escapeHtml(t.tierName.split('—')[0].trim())}</div>
+            <div style="font-weight:750; font-size:16px; margin-bottom:6px;">${fmtMoney(t.price)}</div>
+            <div style="font-size:10.5px; color:var(--text-muted); line-height:1.4;">${escapeHtml(t.tagline)}</div>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:6px;">${t.includedHours?`${t.includedHours} hrs`:''}${t.includedHours && t.includedVisits ? ' · ' : ''}${t.includedVisits?`${t.includedVisits} visits`:''} included</div>
+          </div>`).join('')}
+        </div>
+        <div class="field-row-2" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="field-group" style="margin-bottom:0;">
+            <label class="field-label">Extra Hours <span style="color:var(--text-muted); font-weight:500;">(${fmtMoneyDec(result.hourlyRate)}/hr)</span></label>
+            <input class="text-input" type="number" min="0" step="1" value="${extraHours}" oninput="updatePmExtraHours('${svcId}', this.value)">
+          </div>
+          <div class="field-group" style="margin-bottom:0;">
+            <label class="field-label">Extra Site Visits <span style="color:var(--text-muted); font-weight:500;">(${fmtMoney(result.visitRate)}/visit)</span></label>
+            <input class="text-input" type="number" min="0" step="1" value="${extraVisits}" oninput="updatePmExtraVisits('${svcId}', this.value)">
+          </div>
+        </div>
+        ${(extraHours>0 || extraVisits>0) ? `
+        <div class="kv-list" style="margin-top:12px;">
+          ${result.tier ? `<div class="kv-row"><span class="k">${escapeHtml(result.tier.tierName)}</span><span class="v">${fmtMoney(result.tier.price)}</span></div>` : ''}
+          ${extraHours>0 ? `<div class="kv-row"><span class="k">Extra hours (${extraHours} × ${fmtMoneyDec(result.hourlyRate)})</span><span class="v">${fmtMoney(result.extraHoursAmount)}</span></div>` : ''}
+          ${extraVisits>0 ? `<div class="kv-row"><span class="k">Extra visits (${extraVisits} × ${fmtMoney(result.visitRate)})</span><span class="v">${fmtMoney(result.extraVisitsAmount)}</span></div>` : ''}
+          <div class="kv-row"><span class="k">Total</span><span class="v" style="font-weight:750;">${fmtMoney(result.subtotal)}</span></div>
+        </div>` : ''}
       </div>
     </div>`;
   }
@@ -3374,6 +3462,71 @@ function renderRateCardTableLive(svcId, unitPrices){
 // as CCM's own independent band table (ccm_unit_bands), not shared
 // numbers with VERIFY. Deliberately no contract-term curve here -- see
 // priceCcm()'s Worker-side comment for why that scope wasn't assumed.
+/* ============================================================
+   PROJECT MANAGEMENT RATE CARD (Batch C, 2026-08-28) — the
+   pm_tiered branch. Two card blocks:
+   1. The three Good/Better/Best tiers (pm_tiers) — price is a FLAT
+      editable total per Misty's explicit answer this session (NOT
+      computed from hours x rate). tier_name and tagline are ALSO
+      editable (Misty, same session: "I may want to change the names
+      of PM tiers... let's have those be editable too") via a plain
+      text-input, same pattern as ahj_inspection_requirements' notes
+      field. included_hours/included_visits render as plain read-only
+      text — informational only, not wired to updateRateCardCellLive,
+      per priceProjectManagement()'s comment on why they're excluded
+      from the Worker's ALLOWED_TABLES for this table.
+   2. The two shared component rates (pm_component_rates) — hourly_rate
+      and site_visit_rate, each editable, each feeding two consumers
+      (see the Worker's pm_component_rates seed comment for exactly
+      which two line items share each rate).
+   Same editable-currency-cell pattern as renderCcmRateCardLive
+   (.rc-cell-currency/.rc-cell-input, formatCurrencyInput/
+   currencyInputToNumber/updateRateCardCellLive) for every dollar
+   figure — per Misty's standing instruction this session that ALL
+   pricing values must be admin-editable, nothing hardcoded.
+   ============================================================ */
+function renderPmRateCardLive(pmTiers, pmComponentRates){
+  const isPlaceholder = pmTiers.some(t=>t.is_placeholder) || pmComponentRates.some(r=>r.is_placeholder);
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+      <div>
+        <p class="card-title">Tiers — Good / Better / Best</p>
+        ${isPlaceholder ? `<div class="row-sub" style="color:var(--amber);margin-top:3px;">${icon('warn')} Notional placeholder figures — pending real VDA pricing input</div>` : ''}
+      </div>
+    </div>
+    <div class="card-pad" style="padding-top:0;">
+      <p class="row-sub" style="margin:10px 0 12px 0;">Each tier's price is a flat fee set here — not computed from hours or visits. Included hours/visits are shown for reference only.</p>
+      <table class="data-table rc-table">
+        <thead><tr><th>Tier</th><th>Description</th><th class="num">Included</th><th class="num">Price</th></tr></thead>
+        <tbody>
+          ${pmTiers.map(t=>`<tr>
+            <td style="min-width:180px;"><input class="text-input" type="text" value="${escapeHtml(t.tier_name)}" onchange="updateRateCardCellLive('pm_tiers','${t.id}','tier_name',this.value)"></td>
+            <td style="min-width:220px;"><input class="text-input" type="text" value="${escapeHtml(t.tagline)}" onchange="updateRateCardCellLive('pm_tiers','${t.id}','tagline',this.value)"></td>
+            <td class="num" style="white-space:nowrap; color:var(--text-muted);">${t.included_hours?`${t.included_hours} hrs`:''}${t.included_hours && t.included_visits ? ' · ' : ''}${t.included_visits?`${t.included_visits} visits`:''}</td>
+            <td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(t.price).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('pm_tiers','${t.id}','price',currencyInputToNumber(this.value))"></span></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+      <div>
+        <p class="card-title">Shared component rates</p>
+      </div>
+    </div>
+    <div class="card-pad" style="padding-top:0;">
+      <p class="row-sub" style="margin:10px 0 12px 0;">Each rate below feeds two line items on an offer — see each row's label.</p>
+      <table class="data-table rc-table" style="max-width:520px;">
+        <thead><tr><th>Rate</th><th class="num">Price</th></tr></thead>
+        <tbody>
+          ${pmComponentRates.map(r=>`<tr><td>${escapeHtml(r.label)}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(r.price).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('pm_component_rates','${r.id}','price',currencyInputToNumber(this.value))"></span><span class="row-sub" style="margin-left:6px;">/${escapeHtml(r.unit_label)}</span></td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
 function renderCcmRateCardLive(ccmUnitBands){
   const isPlaceholder = ccmUnitBands.some(b=>b.is_placeholder);
   return `
@@ -3895,7 +4048,7 @@ function renderRateCards(){
   if(state.rateCardData.error){
     return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Rate Cards</h1><div class="empty-state card" style="margin-top:20px; color:var(--red);"><div class="ic">${icon('warn')}</div>${escapeHtml(state.rateCardData.error)}</div>`;
   }
-  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers, ccmUnitBands, inspectionPrices, rateCardRegions, authorities, inspectionCategories, ahjRequirements } = state.rateCardData;
+  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers, ccmUnitBands, pmTiers, pmComponentRates, inspectionPrices, rateCardRegions, authorities, inspectionCategories, ahjRequirements } = state.rateCardData;
   const svc = SERVICES.find(s=>s.id===state.rateCardTab) || SERVICES.find(s=>s.pricingModel==='verify_tiered');
   const perUnitTabs = SERVICES.filter(s=>s.pricingModel==='per_unit');
   const verifyTabs = SERVICES.filter(s=>s.pricingModel==='verify_tiered');
@@ -3904,7 +4057,12 @@ function renderRateCards(){
   // otherTabs (unstructured retainer/task_line text) -- it's a real
   // structured rate table, just not the equipment x stops shape.
   const unitTieredTabs = SERVICES.filter(s=>s.pricingModel==='unit_tiered');
-  const otherTabs = SERVICES.filter(s=>s.pricingModel!=='per_unit' && s.pricingModel!=='verify_tiered' && s.pricingModel!=='unit_tiered');
+  // Project Management (Batch C, 2026-08-28): now pricingModel:'pm_tiered',
+  // same reasoning as unitTieredTabs above -- a real structured rate
+  // table (3 tiers + 2 shared component rates), not the unstructured
+  // retainer text otherTabs renders.
+  const pmTieredTabs = SERVICES.filter(s=>s.pricingModel==='pm_tiered');
+  const otherTabs = SERVICES.filter(s=>s.pricingModel!=='per_unit' && s.pricingModel!=='verify_tiered' && s.pricingModel!=='unit_tiered' && s.pricingModel!=='pm_tiered');
   return `
   <div class="page-topline">PULSE Pricing</div>
   <div class="page-header-row">
@@ -3928,12 +4086,14 @@ function renderRateCards(){
     ${verifyTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
     ${perUnitTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
     ${unitTieredTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
+    ${pmTieredTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
     ${otherTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
   </div>
 
   ${svc.pricingModel==='verify_tiered' ? renderVerifyRateCardLive(verifySingleBands, verifyTermCurve, verifyPortfolioTiers) : ''}
   ${svc.pricingModel==='per_unit' ? renderRateCardTableLive(svc.id, unitPrices) : ''}
   ${svc.pricingModel==='unit_tiered' ? renderCcmRateCardLive(ccmUnitBands) : ''}
+  ${svc.pricingModel==='pm_tiered' ? renderPmRateCardLive(pmTiers, pmComponentRates) : ''}
   ${(svc.pricingModel==='retainer' || svc.pricingModel==='task_line') ? `
   <div class="card card-pad">
     <p class="card-title" style="margin-bottom:8px;">${svc.name} — ${svc.pricingModel==='retainer'?'Recurring retainer':'Open task-line schedule'}</p>
