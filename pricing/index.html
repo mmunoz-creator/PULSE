@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2k';
+const APP_VERSION = 'v2l';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1022,16 +1022,26 @@ initParticles('hero-particles', { count: 60 });
 
 /* ============================================================
    SERVICE CATALOG — corrected per real VDA source docs.
-   Four distinct pricing models:
+   Distinct pricing models:
    - 'verify_tiered' : VERIFY's real calculator logic (see below) — unit-tier
                         bands for single-property offers, graduated
                         $/unit/month tiers on total devices for portfolio
                         (Key Account) offers. Both scale with contract term.
    - 'per_unit'  : lookup table by equipment type x stops bucket
+                    (Comprehensive Evaluation, QCE, Due Diligence)
+   - 'unit_tiered' : uniform unit-count tier bands, independent of
+                      equipment type -- CCM only (restructured off
+                      'per_unit' in Batch B, 2026-08-28, per Misty: "CCM
+                      should be structured like VERIFY... per unit
+                      service not per stop"). See priceCcm()/
+                      renderCcmRateCardLive.
    - 'retainer'  : recurring monthly/annual flat fee
    - 'task_line' : open task-line builder (Modernization, Construction)
+   - 'per_ahj_category' : Inspection's own model, priced per inspection
+                           category per Authority Having Jurisdiction.
    CCM staffs from INSPECTOR_FIRMS (real "Family of Inspection Companies");
-   the 4 per-unit evaluation services staff from CONSULTANTS.
+   the 3 per-unit evaluation services (Comprehensive Evaluation, QCE, Due
+   Diligence) staff from CONSULTANTS.
 
    VERIFY pricing logic — sourced from three real VDA pricing workbooks:
    - Single Property offers: the "Regional/National" tiered calculator.
@@ -1061,7 +1071,7 @@ const SERVICES = [
     desc:'Second independent evaluation pass — Equipment Evaluation variant, priced per unit.' },
   { id:'due_diligence', name:'Due Diligence', pricingModel:'per_unit', staffPool:'consultants',
     desc:'Pre-acquisition / pre-contract equipment assessment — Equipment Evaluation variant, priced per unit.' },
-  { id:'ccm', name:'Certificate Compliance Management (CCM)', pricingModel:'per_unit', staffPool:'inspectors',
+  { id:'ccm', name:'Certificate Compliance Management (CCM)', pricingModel:'unit_tiered', staffPool:'inspectors',
     desc:'AHJ inspection scheduling, witnessing, violation tracking, and fee/paperwork submission. Delivered by VDA’s Family of Inspection Companies. Priced per unit. Can stand alone or support the Inspection service below.' },
   { id:'inspection', name:'Inspection', pricingModel:'per_ahj_category', staffPool:'inspectors',
     desc:'AHJ-witnessed inspection event — CAT 1, Periodic, CAT 3, CAT 5, etc. Priced per inspection category AND per Authority Having Jurisdiction, since requirements and fees vary by AHJ rather than by state or city. Rates are placeholder pending real VDA pricing input.' },
@@ -1179,7 +1189,7 @@ const RATE_CARD_DISPLAY_NAME = "VDA Standard Rate Card — 2026";
 function fmtMoney(n){ return '$' + Math.round(n).toLocaleString('en-US'); }
 function fmtMoneyDec(n){ return '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function pricingModelLabel(model){
-  return { verify_tiered:'tiered calculator', per_unit:'per unit', retainer:'retainer', task_line:'task lines', per_ahj_category:'per AHJ / category', travel:'mileage' }[model] || model;
+  return { verify_tiered:'tiered calculator', per_unit:'per unit', unit_tiered:'unit tier bands', retainer:'retainer', task_line:'task lines', per_ahj_category:'per AHJ / category', travel:'mileage' }[model] || model;
 }
 // Nearest-consultant/inspector lookups now go through the real
 // anonymity-gated endpoint (/api/personnel/nearest) instead of a local
@@ -2554,7 +2564,7 @@ function renderServicePricingCard(svcId, units){
   // (tier breakdowns, recommended ranges) that must never be derived
   // client-side again.
   const li = w.pricingResult ? w.pricingResult.lineItems.find(x => x.serviceId === svcId) : null;
-  const needsServerDetail = svc.pricingModel === 'verify_tiered' || svc.pricingModel === 'per_unit';
+  const needsServerDetail = svc.pricingModel === 'verify_tiered' || svc.pricingModel === 'per_unit' || svc.pricingModel === 'unit_tiered';
   if(needsServerDetail && !li){
     return `
     <div class="card card-pad" style="margin-top:14px;">
@@ -2663,6 +2673,58 @@ function renderServicePricingCard(svcId, units){
             <span>${fmtMoney(range.lo)}–${fmtMoney(range.hi)}/unit (recommended)</span>
             <span style="${pct!==0?'color:var(--purple); font-weight:600;':''}">${fmtMoney(Math.round(range.lo*(1+pct/100)))}–${fmtMoney(Math.round(range.hi*(1+pct/100)))}/unit (adjusted)</span>
           </div>
+        </div>
+        ${pct!==0 ? `<button class="btn btn-sm" style="margin-top:8px;" onclick="resetPriceAdjust('${svcId}')">${icon('history')} Reset to recommended</button>` : ''}
+      </div>
+    </div>`;
+  }
+  if(svc.pricingModel === 'unit_tiered'){
+    // CCM (Batch B, 2026-08-28) -- restructured off the equipment x
+    // stops grid to unit-count tier bands, mirroring VERIFY's tier-
+    // breakdown table presentation rather than per_unit's single-slider
+    // card, since CCM now has multiple bands to show like VERIFY does.
+    // Deliberately NO contract-term or calls input here (unlike VERIFY)
+    // -- see priceCcm()'s Worker-side comment: that scope wasn't
+    // confirmed with Misty, so this doesn't invent it. Price Adjust
+    // slider IS kept, consistent with every other per-offer pricing
+    // lane letting the pricer nudge the computed total.
+    const result = li.detail; // {tierBreakdown, subtotal, recommendedRange, isPlaceholder, unitCount}
+    const range = result.recommendedRange;
+    const pct = w.priceAdjust[svcId] || 0;
+    return `
+    <div class="card explore-panel ${pct!==0?'open':''}" style="margin-top:14px;">
+      <div class="explore-panel-head">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="explore-dot"></span>
+          <h3 class="card-title" style="margin:0;">${svc.name}</h3>
+          ${pct!==0 ? `<span class="badge-internal" style="background:var(--purple-pale); color:var(--purple); border-color:#ded7f7;">${pct>0?'+':''}${pct}% adjusted</span>` : ''}
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:750; font-size:14px;">${fmtMoney(result.subtotal)}</div>
+          <div style="font-size:10px; color:var(--text-muted);">${result.unitCount} unit${result.unitCount===1?'':'s'}</div>
+        </div>
+      </div>
+      <div class="explore-panel-body">
+        ${result.isPlaceholder ? `<div class="notional-banner" style="margin-bottom:10px;"><span class="ic">${icon('warn')}</span>Notional placeholder rates — pending real VDA pricing input for this service.</div>` : ''}
+        <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Staffed by VDA’s Family of Inspection Companies. Priced by unit-count tier band, applied the same way regardless of equipment type.</p>
+        <div class="table-card" style="margin-bottom:10px;">
+          <table class="data-table rc-table">
+            <thead><tr><th>Unit tier</th><th class="num">Units</th><th class="num">$/unit</th><th class="num">Amount</th></tr></thead>
+            <tbody>
+              ${result.tierBreakdown.map(t => `
+                <tr>
+                  <td>${t.from}–${t.to||'+'}</td>
+                  <td class="num">${t.units}</td>
+                  <td class="num">${fmtMoneyDec(t.priceU)}</td>
+                  <td class="num">${fmtMoney(t.amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="explore-slider-row">
+          <div class="explore-slider-label"><span>Price Adjust</span><span class="explore-slider-val">${pct>0?'+':''}${pct}%</span></div>
+          <input id="price-adjust-${svcId}" type="range" min="-30" max="30" step="1" value="${pct}" class="explore-slider" oninput="setWizardSlider('${svcId}', Number(this.value))" onchange="updatePriceAdjust('${svcId}', this.value)">
+          ${range.hi>0 ? `<div class="explore-slider-range"><span>${fmtMoney(range.lo)}–${fmtMoney(range.hi)}/unit (recommended)</span></div>` : ''}
         </div>
         ${pct!==0 ? `<button class="btn btn-sm" style="margin-top:8px;" onclick="resetPriceAdjust('${svcId}')">${icon('history')} Reset to recommended</button>` : ''}
       </div>
@@ -3245,6 +3307,13 @@ function formatCurrencyInput(el){
   el.setSelectionRange(newPos, newPos);
 }
 function currencyInputToNumber(str){ return Number(String(str).replace(/,/g, '')) || 0; }
+// Flat-rate equipment types (Batch B, 2026-08-28, per Misty): Escalator,
+// Wheelchair Lift, and Other don't vary by stops served -- kept in sync
+// with the Worker's FLAT_RATE_EQUIP_TYPES set (Pulse Pricing Worker
+// v1j.js). Rows for these live in rate_card_unit_prices with the
+// sentinel stops_bucket value 'FLAT' (migration 004).
+const FLAT_RATE_EQUIP_TYPES = ['Escalator', 'Wheelchair Lift', 'Other'];
+const STOPS_GRID_EQUIP_TYPES = EQUIP_TYPES.filter(eq => !FLAT_RATE_EQUIP_TYPES.includes(eq));
 function renderRateCardTableLive(svcId, unitPrices){
   const rows = unitPrices.filter(r=>r.service_id===svcId);
   const isPlaceholder = rows.some(r=>r.is_placeholder);
@@ -3263,7 +3332,7 @@ function renderRateCardTableLive(svcId, unitPrices){
           ${STOPS_BUCKETS.map(b=>`<th class="num">${b.label}</th>`).join('')}
         </tr></thead>
         <tbody>
-          ${EQUIP_TYPES.map(eq => `
+          ${STOPS_GRID_EQUIP_TYPES.map(eq => `
             <tr>
               <td>${eq}</td>
               ${STOPS_BUCKETS.map(b => {
@@ -3273,6 +3342,54 @@ function renderRateCardTableLive(svcId, unitPrices){
                   ${row ? `onchange="updateRateCardCellLive('rate_card_unit_prices','${row.id}','price',currencyInputToNumber(this.value))"` : 'disabled title="No row for this cell yet"'}></span></td>`;
               }).join('')}
             </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+      <div>
+        <p class="card-title">Price per unit — Flat rate (no stops dimension)</p>
+        <div class="row-sub" style="margin-top:3px;">Escalator, Wheelchair Lift, and Other price at one flat $/unit rate regardless of floors served.</div>
+      </div>
+    </div>
+    <table class="data-table rc-table" style="max-width:360px;">
+      <thead><tr><th>Equipment type</th><th class="num">$/unit</th></tr></thead>
+      <tbody>
+        ${FLAT_RATE_EQUIP_TYPES.map(eq => {
+          const row = rows.find(r=>r.equipment_type===eq && r.stops_bucket==='FLAT');
+          const val = row ? row.price : 0;
+          return `<tr><td>${eq}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(val).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)"
+            ${row ? `onchange="updateRateCardCellLive('rate_card_unit_prices','${row.id}','price',currencyInputToNumber(this.value))"` : 'disabled title="No row for this cell yet"'}></span></td></tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+// CCM restructure (Batch B, 2026-08-28, per Misty): "CCM should be
+// structured like VERIFY... per unit service not per stop" -- uniform
+// unit-count tier bands, applied the same way regardless of equipment
+// type. Mirrors renderVerifyRateCardLive's Portfolio/Key Account table
+// styling (same table shape: tier range + $/unit, editable cell), but
+// as CCM's own independent band table (ccm_unit_bands), not shared
+// numbers with VERIFY. Deliberately no contract-term curve here -- see
+// priceCcm()'s Worker-side comment for why that scope wasn't assumed.
+function renderCcmRateCardLive(ccmUnitBands){
+  const isPlaceholder = ccmUnitBands.some(b=>b.is_placeholder);
+  return `
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+      <div>
+        <p class="card-title">Price per unit — Unit-count tier bands</p>
+        ${isPlaceholder ? `<div class="row-sub" style="color:var(--amber);margin-top:3px;">${icon('warn')} Notional placeholder figures — pending real VDA pricing input</div>` : ''}
+      </div>
+    </div>
+    <div class="card-pad" style="padding-top:0;">
+      <p class="row-sub" style="margin:10px 0 12px 0;">Applied to total unit count on the offer, regardless of equipment type — CCM prices the same way for every equipment type.</p>
+      <table class="data-table rc-table" style="max-width:360px;">
+        <thead><tr><th>Units</th><th class="num">$/unit</th></tr></thead>
+        <tbody>
+          ${ccmUnitBands.map(b=>`<tr><td>${b.tier_from}–${b.tier_to||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.price_per_unit).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('ccm_unit_bands','${b.id}','price_per_unit',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -3778,11 +3895,16 @@ function renderRateCards(){
   if(state.rateCardData.error){
     return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Rate Cards</h1><div class="empty-state card" style="margin-top:20px; color:var(--red);"><div class="ic">${icon('warn')}</div>${escapeHtml(state.rateCardData.error)}</div>`;
   }
-  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers, inspectionPrices, rateCardRegions, authorities, inspectionCategories, ahjRequirements } = state.rateCardData;
+  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers, ccmUnitBands, inspectionPrices, rateCardRegions, authorities, inspectionCategories, ahjRequirements } = state.rateCardData;
   const svc = SERVICES.find(s=>s.id===state.rateCardTab) || SERVICES.find(s=>s.pricingModel==='verify_tiered');
   const perUnitTabs = SERVICES.filter(s=>s.pricingModel==='per_unit');
   const verifyTabs = SERVICES.filter(s=>s.pricingModel==='verify_tiered');
-  const otherTabs = SERVICES.filter(s=>s.pricingModel!=='per_unit' && s.pricingModel!=='verify_tiered');
+  // CCM (Batch B, 2026-08-28): now pricingModel:'unit_tiered', its own
+  // bucket in the tab bar rather than falling into perUnitTabs (grid) or
+  // otherTabs (unstructured retainer/task_line text) -- it's a real
+  // structured rate table, just not the equipment x stops shape.
+  const unitTieredTabs = SERVICES.filter(s=>s.pricingModel==='unit_tiered');
+  const otherTabs = SERVICES.filter(s=>s.pricingModel!=='per_unit' && s.pricingModel!=='verify_tiered' && s.pricingModel!=='unit_tiered');
   return `
   <div class="page-topline">PULSE Pricing</div>
   <div class="page-header-row">
@@ -3805,11 +3927,13 @@ function renderRateCards(){
   <div class="tabs" style="margin-top:4px;">
     ${verifyTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
     ${perUnitTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
+    ${unitTieredTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
     ${otherTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
   </div>
 
   ${svc.pricingModel==='verify_tiered' ? renderVerifyRateCardLive(verifySingleBands, verifyTermCurve, verifyPortfolioTiers) : ''}
   ${svc.pricingModel==='per_unit' ? renderRateCardTableLive(svc.id, unitPrices) : ''}
+  ${svc.pricingModel==='unit_tiered' ? renderCcmRateCardLive(ccmUnitBands) : ''}
   ${(svc.pricingModel==='retainer' || svc.pricingModel==='task_line') ? `
   <div class="card card-pad">
     <p class="card-title" style="margin-bottom:8px;">${svc.name} — ${svc.pricingModel==='retainer'?'Recurring retainer':'Open task-line schedule'}</p>
@@ -3824,6 +3948,7 @@ function renderRateCards(){
   ${renderInspectionGovernanceLive(authorities, ahjRequirements, inspectionCategories)}
   ` : ''}
 
+  ${svc.id!=='ccm' ? `
   <div class="card card-pad" style="margin-top:16px;">
     <p class="card-title" style="margin-bottom:8px;">Travel &amp; per-diem assumptions</p>
     <div class="kv-list">
@@ -3832,10 +3957,15 @@ function renderRateCards(){
       <!-- Staffing pools line removed (2026-08-28, per Misty) -- not
            rate-card-relevant, shouldn't sit in Travel & Per-diem
            Assumptions. Removed from this one shared card component,
-           which covers every tab that renders it (VERIFY, Comprehensive
-           Evaluation, QCE, Due Diligence, CCM). -->
+           which covers every tab that renders it except CCM (see the
+           surrounding svc.id!=='ccm' guard, Batch B 2026-08-28: CCM
+           doesn't use Travel & per-diem at all per Misty's rate-cards
+           review notes). NOTE: VERIFY also shouldn't show this card at
+           all per those same review notes -- that's a separate,
+           still-open item, not yet built; flagged here so a future
+           session doesn't assume this guard already covers it. -->
     </div>
-  </div>
+  </div>` : ''}
 
   ${state.showAddRegion ? `
   <div class="modal-backdrop" onclick="if(event.target===this) closeAddRegion()">
