@@ -3729,33 +3729,33 @@ async function submitAddAhj(){
 }
 
 function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
+  // Display fix (2026-08-28, per Misty): Single Property pricing is
+  // Regional-only -- there is no National concept scoped to a single
+  // property. The National column that used to render here (from
+  // verify_single_bands' table_name='National' rows) is removed
+  // entirely. Those 5 rows are now orphaned/unused by any pricing path
+  // (see priceVerify's 2026-08-28 comment in the Worker) -- left as-is
+  // in D1 rather than deleted here, since removing rate data isn't a
+  // decision the frontend should make unilaterally; flagged for Misty
+  // to confirm whether to clean them up.
+  // Confirmed with Misty: a single property over 100 units crosses over
+  // into Portfolio/Key Account pricing (the card just below) -- that IS
+  // the real "national" pricing tier, not a separate table.
   const regional = bands.filter(b=>b.table_name==='Regional');
-  const national = bands.filter(b=>b.table_name==='National');
   return `
   <div class="card" style="margin-bottom:16px;">
     <div class="card-header"><p class="card-title">Single Property — Unit-Tier Bands</p></div>
     <div class="card-pad" style="padding-top:0;">
-      <p class="row-sub" style="margin:10px 0 12px 0;">Regional bands apply up to 100 units; National bands apply above 100 units. Each band's base $/unit rate is scaled by the contract-term curve below.</p>
-      <div class="two-col" style="grid-template-columns:1fr 1fr;">
-        <div>
-          <p style="font-size:11px; font-weight:700; color:var(--text-secondary); margin:0 0 6px 0;">REGIONAL (≤100 units)</p>
-          <table class="data-table rc-table"><thead><tr><th>Units</th><th class="num">Base $/unit</th></tr></thead><tbody>
-            ${regional.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
-          </tbody></table>
-        </div>
-        <div>
-          <p style="font-size:11px; font-weight:700; color:var(--text-secondary); margin:0 0 6px 0;">NATIONAL (&gt;100 units)</p>
-          <table class="data-table rc-table"><thead><tr><th>Units</th><th class="num">Base $/unit</th></tr></thead><tbody>
-            ${national.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
-          </tbody></table>
-        </div>
-      </div>
+      <p class="row-sub" style="margin:10px 0 12px 0;">Regional bands apply up to 100 units. Each band's base $/unit rate is scaled by the contract-term curve below. Above 100 units, a single property is priced using Portfolio / Key Account rates instead (see below) — there is no separate national rate for single properties.</p>
+      <table class="data-table rc-table" style="max-width:360px;"><thead><tr><th>Units</th><th class="num">Base $/unit</th></tr></thead><tbody>
+        ${regional.map(b=>`<tr><td>${b.band_start}–${b.band_end||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(b.base_rate).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_bands','${b.id}','base_rate',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
+      </tbody></table>
     </div>
   </div>
   <div class="card" style="margin-bottom:16px;">
     <div class="card-header"><p class="card-title">Portfolio / Key Account — Graduated Device Tiers</p></div>
     <div class="card-pad" style="padding-top:0;">
-      <p class="row-sub" style="margin:10px 0 12px 0;">Applied to TOTAL portfolio device count (not per-site), billed monthly and annualized.</p>
+      <p class="row-sub" style="margin:10px 0 12px 0;">Applied to TOTAL portfolio device count (not per-site), billed monthly and annualized. Also applies to any single property once it exceeds 100 units.</p>
       <table class="data-table rc-table"><thead><tr><th>Devices</th><th class="num">$/unit/mo</th></tr></thead><tbody>
         ${portfolioTiers.map(t=>`<tr><td>${t.tier_from}–${t.tier_to||'+'}</td><td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(t.price_per_unit).toLocaleString('en-US', {minimumFractionDigits: t.price_per_unit % 1 !== 0 ? 2 : 0})}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_portfolio_tiers','${t.id}','price_per_unit',currencyInputToNumber(this.value))"></span></td></tr>`).join('')}
       </tbody></table>
