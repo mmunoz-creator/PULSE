@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2n';
+const APP_VERSION = 'v2o';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1262,6 +1262,12 @@ const state = {
   wizard: null,      // set fresh on entering the wizard view (see goTo)
   rateCardTab: 'verify',
   rateCardData: null, // fetched live from /api/admin/rate-cards on entering the ratecard view
+  // Bulk % rate increase (Batch D, 2026-08-28) -- null when the panel is
+  // closed. { tabId, pct, preview, loading, error } while open. preview
+  // is null until the admin has requested one (typing a % alone doesn't
+  // auto-fetch a preview -- an explicit "Preview" click does, so a
+  // half-typed number never fires a request).
+  bulkIncrease: null,
   // Inspection Rate Card + Inspection Governance (v2i) — pure client-side
   // filter state for each section's search box (no new API calls; both
   // sections' data is already loaded in full via rateCardData, this just
@@ -3389,6 +3395,105 @@ async function updateRateCardCellLive(table, id, field, value){
     showToast('Could not reach the server.', true);
   }
 }
+
+/* ============================================================
+   BULK % RATE INCREASE (Batch D, 2026-08-28) -- per-tab, with a
+   required preview step before commit, per Misty's confirmed design
+   (see the Worker's matching comment for the full design record).
+   Two-call shape mirrors the Worker: previewBulkIncrease() is
+   read-only and safe to call repeatedly; commitBulkIncrease() is the
+   one call that writes, and is only reachable from the preview screen
+   (never directly from the % input) so there's no path that skips
+   seeing old->new values first.
+   ============================================================ */
+function openBulkIncrease(tabId){
+  setState({ bulkIncrease: { tabId, pct: '', preview: null, loading: false, error: null } });
+}
+function closeBulkIncrease(){
+  setState({ bulkIncrease: null });
+}
+function updateBulkIncreasePct(val){
+  if(!state.bulkIncrease) return;
+  setState({ bulkIncrease: { ...state.bulkIncrease, pct: val, preview: null, error: null } });
+}
+async function requestBulkIncreasePreview(){
+  const bi = state.bulkIncrease;
+  if(!bi) return;
+  const pct = Number(bi.pct);
+  if(!bi.pct || isNaN(pct)){
+    setState({ bulkIncrease: { ...bi, error: 'Enter a percentage first.' } });
+    return;
+  }
+  setState({ bulkIncrease: { ...bi, loading: true, error: null } });
+  try {
+    const rateCardId = state.rateCardData.rateCard.id;
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/bulk-increase-preview`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ tabId: bi.tabId, pctIncrease: pct }),
+    });
+    const data = await res.json();
+    if(!res.ok){ setState({ bulkIncrease: { ...state.bulkIncrease, loading: false, error: data.error || 'Could not compute a preview.' } }); return; }
+    setState({ bulkIncrease: { ...state.bulkIncrease, loading: false, preview: data, error: null } });
+  } catch(e){
+    setState({ bulkIncrease: { ...state.bulkIncrease, loading: false, error: 'Could not reach the server.' } });
+  }
+}
+async function commitBulkIncrease(){
+  const bi = state.bulkIncrease;
+  if(!bi || !bi.preview) return;
+  setState({ bulkIncrease: { ...bi, loading: true, error: null } });
+  try {
+    const rateCardId = state.rateCardData.rateCard.id;
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/bulk-increase-commit`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ tabId: bi.tabId, pctIncrease: Number(bi.pct) }),
+    });
+    const data = await res.json();
+    if(!res.ok){ setState({ bulkIncrease: { ...state.bulkIncrease, loading: false, error: data.error || 'Could not apply the increase.' } }); return; }
+    showToast(`Applied +${bi.pct}% to ${data.rowCount} rate${data.rowCount===1?'':'s'}. Effective date now ${data.newEffectiveDate}.`);
+    setState({ bulkIncrease: null });
+    loadRateCardData();
+  } catch(e){
+    setState({ bulkIncrease: { ...state.bulkIncrease, loading: false, error: 'Could not reach the server.' } });
+  }
+}
+function renderBulkIncreasePanel(){
+  const bi = state.bulkIncrease;
+  const svc = SERVICES.find(s=>s.id===bi.tabId);
+  return `
+  <div class="card card-pad" style="margin-top:4px; margin-bottom:16px; border-color:var(--purple);">
+    <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap;">
+      <div class="field-group" style="margin-bottom:0; max-width:160px;">
+        <label class="field-label">Increase ${escapeHtml(svc.name)} rates by</label>
+        <div style="position:relative;">
+          <input class="text-input" type="number" step="0.1" placeholder="e.g. 3" value="${escapeHtml(bi.pct)}" oninput="updateBulkIncreasePct(this.value)" style="padding-right:26px;">
+          <span style="position:absolute; right:10px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:12px;">%</span>
+        </div>
+      </div>
+      ${!bi.preview ? `<button class="btn btn-sm" ${bi.loading?'disabled':''} onclick="requestBulkIncreasePreview()">${bi.loading ? 'Calculating…' : 'Preview'}</button>` : ''}
+      <button class="btn btn-sm" onclick="closeBulkIncrease()">Cancel</button>
+    </div>
+    ${bi.error ? `<p style="color:var(--red); font-size:11.5px; margin:10px 0 0 0;">${escapeHtml(bi.error)}</p>` : ''}
+    <p style="color:var(--text-muted); font-size:11px; margin:8px 0 0 0;">Applies to every priced rate on this tab. Purely forward-looking — offers already saved keep the rates in effect when they were created. Rolls this rate card's effective date forward to January 1 of next year on commit.</p>
+    ${bi.preview ? `
+    <div style="margin-top:14px;">
+      <p style="font-weight:650; font-size:12.5px; margin:0 0 8px 0;">${bi.preview.rowCount} rate${bi.preview.rowCount===1?'':'s'} will change:</p>
+      <div class="table-card" style="max-height:280px; overflow-y:auto;">
+        <table class="data-table rc-table">
+          <thead><tr><th>Row</th><th class="num">Current</th><th class="num">New</th></tr></thead>
+          <tbody>
+            ${bi.preview.rows.map(r => `<tr><td>${escapeHtml(r.label)}</td><td class="num">${fmtMoneyDec(r.oldValue)}</td><td class="num" style="font-weight:650; color:var(--purple);">${fmtMoneyDec(r.newValue)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:12px;">
+        <button class="btn btn-sm btn-primary" ${bi.loading?'disabled':''} onclick="commitBulkIncrease()">${bi.loading ? 'Applying…' : `Confirm — apply +${escapeHtml(bi.pct)}% to ${bi.preview.rowCount} rate${bi.preview.rowCount===1?'':'s'}`}</button>
+        <button class="btn btn-sm" onclick="setState({bulkIncrease:{...state.bulkIncrease, preview:null}})">Back</button>
+      </div>
+    </div>` : ''}
+  </div>`;
+}
+
 // Live comma-formatting for editable dollar-amount cells (Rate Cards
 // price grids). Applied on every keystroke via oninput -- strips
 // anything non-numeric, re-inserts thousands separators, and restores
@@ -4074,6 +4179,15 @@ function renderRateCards(){
   // retainer text otherTabs renders.
   const pmTieredTabs = SERVICES.filter(s=>s.pricingModel==='pm_tiered');
   const otherTabs = SERVICES.filter(s=>s.pricingModel!=='per_unit' && s.pricingModel!=='verify_tiered' && s.pricingModel!=='unit_tiered' && s.pricingModel!=='pm_tiered');
+  // Bulk % rate increase (Batch D, 2026-08-28): only these six tabs
+  // have a real dollar-rate table mapping server-side (see
+  // TAB_BULK_TABLES in the Worker) -- General Consulting/Inspection/
+  // Modernization/Construction don't have a structured rate table yet
+  // (still free-text retainer/task-line), so the button simply doesn't
+  // render on those tabs rather than rendering disabled with no clear
+  // reason why.
+  const BULK_INCREASE_TABS = ['verify','comp_eval','qce','due_diligence','ccm','project_management'];
+  const showBulkIncrease = BULK_INCREASE_TABS.includes(state.rateCardTab);
   return `
   <div class="page-topline">PULSE Pricing</div>
   <div class="page-header-row">
@@ -4083,15 +4197,19 @@ function renderRateCards(){
            internal name field and the "the live" wording from this line.
            rateCard.effective_date was already sourced dynamically from
            the active row in D1's rate_cards table (not a hardcoded
-           string) -- rolling to a new rate year via the future bulk
-           percent increase feature will update this automatically once
-           that feature writes a new active rate_cards row. NOTE: this
+           string) -- rolling to a new rate year via the bulk percent
+           increase feature (Batch D, 2026-08-28) now updates this
+           automatically, since that feature updates the SAME active
+           rate_cards row's effective_date in place. NOTE: this
            comment sits inside a JS template literal (the enclosing
            return backtick-string) -- never use backtick characters
            inside comments here, they close the template literal early. -->
       <p class="page-sub">Rates effective ${rateCard.effective_date}. Edits save immediately to the rate card.</p>
     </div>
+    ${showBulkIncrease ? `<button class="btn btn-sm" onclick="openBulkIncrease('${state.rateCardTab}')">${icon('admin')} Increase Rates</button>` : ''}
   </div>
+
+  ${state.bulkIncrease && state.bulkIncrease.tabId === state.rateCardTab ? renderBulkIncreasePanel() : ''}
 
   <div class="tabs" style="margin-top:4px;">
     ${verifyTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
