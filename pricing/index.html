@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2r';
+const APP_VERSION = 'v2s';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -3375,7 +3375,7 @@ async function loadRateCardData(){
 // numeric are named explicitly; everything else is sent as-is (already
 // a string, or already a real 0/1 number for `required`, which needs
 // no comma-stripping).
-const RATE_CARD_NUMERIC_FIELDS = ['price', 'base_rate', 'rate_factor', 'markup_factor', 'price_per_unit', 'is_placeholder', 'required'];
+const RATE_CARD_NUMERIC_FIELDS = ['price', 'base_rate', 'rate_factor', 'price_per_unit', 'is_placeholder', 'required', 'included_contractors', 'markup_per_unit'];
 async function updateRateCardCellLive(table, id, field, value){
   const rateCardId = state.rateCardData.rateCard.id;
   // Dollar-amount cells are comma-formatted text inputs (see
@@ -4195,7 +4195,7 @@ async function submitAddAhj(){
   }
 }
 
-function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
+function renderVerifyRateCardLive(bands, termCurve, portfolioTiers, contractorRule){
   // Display fix (2026-08-28, per Misty): Single Property pricing is
   // Regional-only -- there is no National concept scoped to a single
   // property. The National column that used to render here (from
@@ -4228,16 +4228,31 @@ function renderVerifyRateCardLive(bands, termCurve, portfolioTiers){
       </tbody></table>
     </div>
   </div>
-  <div class="card card-pad">
+  <div class="card card-pad" style="margin-bottom:16px;">
     <p class="card-title" style="margin-bottom:8px;">Contract-term discount curve (Single Property)</p>
-    <table class="data-table rc-table"><thead><tr><th>Term (years)</th><th class="num">Rate factor</th><th class="num">Contractor-markup factor</th></tr></thead><tbody>
+    <table class="data-table rc-table"><thead><tr><th>Term (years)</th><th class="num">Rate factor</th></tr></thead><tbody>
       ${termCurve.map(c=>`<tr><td>${c.term_years==null?'5+':c.term_years}</td>
         <td class="num"><input class="rc-cell-input" type="number" min="0" max="1" step="0.01" value="${c.rate_factor}" onchange="updateRateCardCellLive('verify_single_term_curve','${c.id}','rate_factor',this.value)"></td>
-        <td class="num"><input class="rc-cell-input" type="number" min="0" max="1" step="0.01" value="${c.markup_factor}" onchange="updateRateCardCellLive('verify_single_term_curve','${c.id}','markup_factor',this.value)"></td>
       </tr>`).join('')}
+    </tbody></table>
+  </div>
+  <div class="card card-pad">
+    <p class="card-title" style="margin-bottom:8px;">Extra Contractor Calls</p>
+    <p class="row-sub" style="margin:0 0 12px 0;">
+      Every VERIFY offer includes a set number of contractor calls at no extra charge.
+      Beyond that, each additional contractor adds a flat fee per unit -- this fee does
+      NOT scale with the contract-term discount above (e.g. a 5-year, 6-contractor quote
+      is the discounted unit price PLUS 2 extra contractors x this fee, full stop).
+    </p>
+    <table class="data-table rc-table" style="max-width:420px;"><thead><tr><th>Included contractor calls</th><th class="num">Fee per extra contractor ($/unit)</th></tr></thead><tbody>
+      <tr>
+        <td><input class="rc-cell-input" type="number" min="0" step="1" value="${contractorRule?.included_contractors ?? 4}" onchange="updateRateCardCellLive('verify_single_contractor_rule',0,'included_contractors',this.value)"></td>
+        <td class="num"><span class="rc-cell-currency"><input class="rc-cell-input" type="text" inputmode="numeric" value="${Number(contractorRule?.markup_per_unit ?? 4).toLocaleString('en-US')}" oninput="formatCurrencyInput(this)" onchange="updateRateCardCellLive('verify_single_contractor_rule',0,'markup_per_unit',currencyInputToNumber(this.value))"></span></td>
+      </tr>
     </tbody></table>
   </div>`;
 }
+
 function renderRateCards(){
   if(!state.rateCardData){
     return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Rate Cards</h1><div class="empty-state card" style="margin-top:20px;"><div class="ic">⚙</div>Loading…</div>`;
@@ -4245,7 +4260,7 @@ function renderRateCards(){
   if(state.rateCardData.error){
     return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Rate Cards</h1><div class="empty-state card" style="margin-top:20px; color:var(--red);"><div class="ic">${icon('warn')}</div>${escapeHtml(state.rateCardData.error)}</div>`;
   }
-  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers, ccmUnitBands, pmTiers, pmComponentRates, inspectionPrices, rateCardRegions, authorities, inspectionCategories, ahjRequirements } = state.rateCardData;
+  const { rateCard, unitPrices, verifySingleBands, verifyTermCurve, verifyPortfolioTiers, verifyContractorRule, ccmUnitBands, pmTiers, pmComponentRates, inspectionPrices, rateCardRegions, authorities, inspectionCategories, ahjRequirements } = state.rateCardData;
   const svc = SERVICES.find(s=>s.id===state.rateCardTab) || SERVICES.find(s=>s.pricingModel==='verify_tiered');
   const perUnitTabs = SERVICES.filter(s=>s.pricingModel==='per_unit');
   const verifyTabs = SERVICES.filter(s=>s.pricingModel==='verify_tiered');
@@ -4304,7 +4319,7 @@ function renderRateCards(){
     ${otherTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
   </div>
 
-  ${svc.pricingModel==='verify_tiered' ? renderVerifyRateCardLive(verifySingleBands, verifyTermCurve, verifyPortfolioTiers) : ''}
+  ${svc.pricingModel==='verify_tiered' ? renderVerifyRateCardLive(verifySingleBands, verifyTermCurve, verifyPortfolioTiers, verifyContractorRule) : ''}
   ${svc.pricingModel==='per_unit' ? renderRateCardTableLive(svc.id, unitPrices) : ''}
   ${svc.pricingModel==='unit_tiered' ? renderCcmRateCardLive(ccmUnitBands) : ''}
   ${svc.pricingModel==='pm_tiered' ? renderPmRateCardLive(pmTiers, pmComponentRates) : ''}
