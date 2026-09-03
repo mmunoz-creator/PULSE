@@ -7157,7 +7157,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68m</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68n</div>
     </div>
   </nav>
 
@@ -7566,7 +7566,12 @@ from unitEffectiveValue() onto each checkbox). -->
             active tab" behavior falls out for free from .tab-content's own
             CSS (inactive tabs are already display:none; only .active
             shows), so no extra per-tab print markup was needed here. -->
-            <button class="btn" id="prop-print-btn" onclick="printPropertyOverview()"><i class="ti ti-printer"></i>Print</button>
+            <!-- v68n fix -- matches every other Print/PDF button's class
+            (btn btn-primary) and label ("Print / PDF") app-wide, per
+            Misty's direct request. Was plain .btn with just "Print",
+            inconsistent with printDashboard/printGantt/printPropertySchedule/
+            etc., all of which use this exact shape. -->
+            <button class="btn btn-primary" id="prop-print-btn" onclick="printPropertyOverview()"><i class="ti ti-printer"></i>Print / PDF</button>
             <button class="btn btn-edit" id="prop-edit-btn" onclick="openEditPropertyPanel()" style="display:none"><i class="ti ti-pencil"></i>Edit Property</button>
             <button class="btn btn-delete" id="prop-delete-btn" onclick="deleteProperty()" style="display:none"><i class="ti ti-trash"></i>Delete Property</button>
             <button class="btn btn-add" id="prop-meeting-btn" onclick="openScheduleMeetingModal(currentProp?.n)" style="display:none"><i class="ti ti-calendar-plus"></i> Schedule Meeting</button>
@@ -24701,6 +24706,71 @@ function auditPropertyLevelOnlyConsultants(){
   console.table(flagged.map(p=>({property:p.n,propertyLevelConsultant:p.v})));
 }
 window.auditPropertyLevelOnlyConsultants=auditPropertyLevelOnlyConsultants;
+
+// v68n -- one-time backfill, per Misty's explicit request, following the
+// same fix as autoCreateContractRatesAction() (see there): that function
+// used to create "Enter Contract Rates for <property>" action items with
+// no Linked Scope at all, so on a property with more than one Project
+// there was no way to tell which one a given item meant, and no way to
+// jump straight to entering its rates from the Action Items panel. New
+// Contract Award completions now link the right Project automatically;
+// this backfills items that already exist from before that fix.
+//
+// Only backfills where the match is unambiguous: a property with exactly
+// one non-Capital-Plan Project gets that Project linked. A property with
+// zero or with more than one such Project is left alone and reported
+// separately, since guessing which of several Projects an old item meant
+// would risk linking it to the wrong one -- Misty (or the PM who owns
+// that property) can link those by hand via the pencil-edit's Linked
+// Project field instead. Console-only, Admin-only, confirm-gated before
+// any writes, same shape as cleanupOrphanedPhaseTasks()/
+// auditPropertyLevelOnlyConsultants() just above.
+async function backfillContractRatesActionScopes(){
+  if(role!=='admin'){console.warn('backfillContractRatesActionScopes: Admin only.');return;}
+  const candidates=(actionItems||[]).filter(a=>a.status==='Open'&&/^Enter Contract Rates/.test(a.description)&&!a.scopeId);
+  if(candidates.length===0){
+    console.log('backfillContractRatesActionScopes: no unlinked open Contract Rates action items found. Nothing to do.');
+    return;
+  }
+  const scopes=window.SCOPES||[];
+  const linkable=[],skipped=[];
+  candidates.forEach(a=>{
+    const propScopes=scopes.filter(s=>s.property===a.property&&s.status!=='Capital Plan');
+    if(propScopes.length===1){
+      linkable.push({action:a,scope:propScopes[0]});
+    }else{
+      skipped.push({action:a,reason:propScopes.length===0?'no non-Capital-Plan project found':`${propScopes.length} projects found -- ambiguous`});
+    }
+  });
+  console.log(`backfillContractRatesActionScopes: ${candidates.length} unlinked item(s) found -- ${linkable.length} can be linked unambiguously, ${skipped.length} need manual review.`);
+  if(linkable.length>0){
+    console.log('Will link:');
+    console.table(linkable.map(x=>({property:x.action.property,description:x.action.description,linkTo:x.scope.name||'Project'})));
+  }
+  if(skipped.length>0){
+    console.log('Skipping (needs manual review via the pencil-edit\'s Linked Project field):');
+    console.table(skipped.map(x=>({property:x.action.property,description:x.action.description,reason:x.reason})));
+  }
+  if(linkable.length===0){
+    console.log('backfillContractRatesActionScopes: nothing safe to auto-link. Review the skipped list above and link manually.');
+    return;
+  }
+  if(!confirm(`Link ${linkable.length} Contract Rates action item(s) to their project? This writes to Airtable and cannot be undone automatically (you can always unlink/relink manually after).`))return;
+  let linked=0,failed=0;
+  for(const {action,scope} of linkable){
+    const res=await atUpdate('Action Items',action.id,{'Linked Scope':[scope.id]});
+    if(res){
+      action.scopeId=scope.id;
+      linked++;
+    }else{
+      failed++;
+      console.error(`backfillContractRatesActionScopes: failed to link "${action.description}" (${action.property})`,res);
+    }
+  }
+  refreshDashActions();
+  console.log(`backfillContractRatesActionScopes: linked ${linked} record(s)${failed>0?`, ${failed} FAILED (left unlinked, see errors above)`:''}. Re-open the Action Items panel to see the "Enter Rates" button and project tag on the newly-linked items.`);
+}
+window.backfillContractRatesActionScopes=backfillContractRatesActionScopes;
 
 async function updatePhaseStatus(id,newStatus,propName){
   const phase=(window.UNIT_GROUPS||[]).find(u=>u.id===id);
