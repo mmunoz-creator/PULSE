@@ -14806,7 +14806,12 @@ async function updateMilestoneField(msId,fieldName,value,propName,idx,circleId,i
   // — distinct from the Issue Status publish/don't-publish pattern, since
   // this trigger is deterministic rather than a judgment call).
   if(milestoneNumber===4&&fields['Status']==='Complete'&&priorStatus!=='Complete'){
-    await autoCreateContractRatesAction(propName);
+    // v68n fix -- pass this milestone's own Linked Scope through so the
+    // auto-created action is tied to the specific project whose Contract
+    // Award just completed, not just the property. msForConflict is this
+    // same milestone record, already looked up above for the conflict
+    // check -- reused here rather than re-finding it.
+    await autoCreateContractRatesAction(propName,msForConflict?.scopeId||'');
   }
   // Determine effective status for circle/badge update
   const effectiveStatus=fields['Status']||(fieldName==='Status'?value:null);
@@ -15084,8 +15089,22 @@ function populateAiScopes(propNameOverride){
 // updateMilestoneField(). Creates a real Action Item via the same write
 // pattern as saveActionItem(), so it appears in the 30/60/90 horizon and
 // Operations Center exactly like a manually-created action.
-async function autoCreateContractRatesAction(propName){
-  const description=`Enter Contract Rates for ${propName}`;
+//
+// v68n fix -- per Misty's direct correction: "It should be an action for
+// the project not the property." A property with multiple projects
+// (common -- e.g. Hilton Waikoloa Village has 4) previously got one
+// property-level Contract Rates action with no Linked Scope at all, so
+// there was no way to tell which project's rates it meant, and no way to
+// jump straight to editing them from the Action Items panel. Now takes
+// scopeId (the milestone's own Linked Scope, read at the call site in
+// updateMilestoneField -- M4 only ever completes for one specific
+// project's milestone track) and writes it to the action item's own
+// Linked Scope field, same shape saveActionItem() already uses. The
+// description also names the project, not just the property, so it reads
+// correctly once several of these exist across a property's projects.
+async function autoCreateContractRatesAction(propName,scopeId){
+  const scope=scopeId?(window.SCOPES||[]).find(s=>s.id===scopeId):null;
+  const description=scope?.name?`Enter Contract Rates for ${propName} — ${scope.name}`:`Enter Contract Rates for ${propName}`;
   // Duplicate guard: don't create a second one if an open action with this
   // exact description already exists for this property (e.g. milestone
   // completion date corrected/re-saved through a path priorStatus didn't catch,
@@ -15095,6 +15114,7 @@ async function autoCreateContractRatesAction(propName){
   const due=new Date();due.setDate(due.getDate()+14);
   const dueStr=due.toISOString().split('T')[0];
   const fields={'Property Name':propertyNameToLink(propName),'Description':description,'Owner':'','Due Date':dueStr,'Priority':'Medium','Status':'Open'};
+  if(scopeId)fields['Linked Scope']=[scopeId];
   const res=demoMode?null:await atCreate('Action Items',fields);
   // v51j — this auto-trigger used to fabricate a local action item and
   // announce success even if the Airtable write failed, same silent-loss
@@ -15106,9 +15126,9 @@ async function autoCreateContractRatesAction(propName){
     return;
   }
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
-  actionItems.push({id:newId,property:propName,description,owner:'',due:dueStr,priority:'Medium',status:'Open',meetingId:null});
+  actionItems.push({id:newId,property:propName,description,owner:'',due:dueStr,priority:'Medium',status:'Open',meetingId:null,scopeId:scopeId||''});
   refreshDashActions();
-  showToast(`Contract Award complete — action created: enter Contract Rates for ${propName}`,'info');
+  showToast(`Contract Award complete — action created: enter Contract Rates for ${propName}${scope?.name?' — '+scope.name:''}`,'info');
 }
 
 // v42r — Action Item assignment email notification. No atCreate('Action
@@ -18405,6 +18425,7 @@ function renderActionItemsPortfolioList(){
             </div>
           </div>
           ${canEdit?`<div style="display:flex;gap:4px;flex-shrink:0">
+            ${(/^Enter Contract Rates/.test(a.description)&&a.scopeId)?`<button class="btn" style="font-size:10px;padding:3px 8px" onclick="closeActionItemsPanel();openScopeEditModal('${a.scopeId}')" title="Enter contract rates for this project"><i class="ti ti-currency-dollar" style="font-size:12px"></i>Enter Rates</button>`:''}
             <button class="btn btn-icon" onclick="openActionItemModal('${escHtml(p).replace(/'/g,"\\'")}','${a.id}')" title="Edit action item"><i class="ti ti-pencil" style="font-size:12px"></i></button>
             <button class="btn btn-icon" onclick="closeAction('${a.id}');setTimeout(renderActionItemsPortfolioList,50)" title="Close action item"><i class="ti ti-check" style="font-size:12px"></i></button>
           </div>`:''}
