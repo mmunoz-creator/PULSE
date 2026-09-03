@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2w';
+const APP_VERSION = 'v2x';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2744,17 +2744,17 @@ function renderServicePricingCard(svcId, units){
       </div>
     </div>`;
   }
-  if(svc.pricingModel === 'unit_tiered'){
-    // CCM (Batch B, 2026-08-28) -- restructured off the equipment x
+   if(svc.pricingModel === 'unit_tiered'){
+    // CCM (Batch B, 2026-08-28): restructured off the equipment x
     // stops grid to unit-count tier bands, mirroring VERIFY's tier-
-    // breakdown table presentation rather than per_unit's single-slider
-    // card, since CCM now has multiple bands to show like VERIFY does.
-    // Deliberately NO contract-term or calls input here (unlike VERIFY)
-    // -- see priceCcm()'s Worker-side comment: that scope wasn't
-    // confirmed with Misty, so this doesn't invent it. Price Adjust
-    // slider IS kept, consistent with every other per-offer pricing
-    // lane letting the pricer nudge the computed total.
-    const result = li.detail; // {tierBreakdown, subtotal, recommendedRange, isPlaceholder, unitCount}
+    // breakdown table presentation.
+    // v2x (Misty, 2026-09-03): CCM now mirrors VERIFY's contract-term
+    // behavior -- reads the SAME shared offer-level Contract Term
+    // field (no dropdown of its own here), and bills the full annual
+    // amount flat, every year, for however many years are selected.
+    // Deliberately still NO discount curve and NO contractor-markup
+    // concept -- CCM has neither, unlike VERIFY.
+    const result = li.detail; // {tierBreakdown, annualTotal, contractTotal, recommendedRange, isPlaceholder, unitCount}
     const range = result.recommendedRange;
     const pct = w.priceAdjust[svcId] || 0;
     return `
@@ -2766,13 +2766,14 @@ function renderServicePricingCard(svcId, units){
           ${pct!==0 ? `<span class="badge-internal" style="background:var(--purple-pale); color:var(--purple); border-color:#ded7f7;">${pct>0?'+':''}${pct}% adjusted</span>` : ''}
         </div>
         <div style="text-align:right;">
-          <div style="font-weight:750; font-size:14px;">${fmtMoney(result.subtotal)}</div>
-          <div style="font-size:10px; color:var(--text-muted);">${result.unitCount} unit${result.unitCount===1?'':'s'}</div>
+          <div style="font-weight:750; font-size:14px;">${fmtMoney(result.annualTotal)}<span style="font-weight:500; font-size:10.5px; color:var(--text-muted);">/yr</span></div>
+          <div style="font-size:10px; color:var(--text-muted);">${result.unitCount} unit${result.unitCount===1?'':'s'} · ${fmtMoney(result.contractTotal)} full contract</div>
         </div>
       </div>
       <div class="explore-panel-body">
         ${result.isPlaceholder ? `<div class="notional-banner" style="margin-bottom:10px;"><span class="ic">${icon('warn')}</span>Notional placeholder rates — pending real VDA pricing input for this service.</div>` : ''}
-        <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Staffed by VDA’s Family of Inspection Companies. Priced by unit-count tier band, applied the same way regardless of equipment type.</p>
+        <p style="color:var(--text-muted); font-size:11px; margin:0 0 4px 0;">Staffed by VDA’s Family of Inspection Companies. Priced by unit-count tier band, applied the same way regardless of equipment type.</p>
+        <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px 0;">Contract term: ${w.contractTermYears} year${w.contractTermYears!==1?'s':''} <span style="color:var(--text-muted);">(set above)</span> — billed flat, no discount.</p>
         <div class="table-card" style="margin-bottom:10px;">
           <table class="data-table rc-table">
             <thead><tr><th>Unit tier</th><th class="num">Units</th><th class="num">$/unit</th><th class="num">Amount</th></tr></thead>
