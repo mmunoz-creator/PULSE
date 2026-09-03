@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2t';
+const APP_VERSION = 'v2u';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2152,17 +2152,23 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function downloadTemplate(){
-  // Mockup note: script-driven file saves aren't available in every host
-  // this page can run in (e.g. a published, view-only page). Open the
-  // template as plain text in a new tab so it's always reachable — the
-  // real tool would serve this as a normal file download.
+  // v2u: was a mockup-era workaround (opened the CSV as plain text in a
+  // new tab, since script-driven downloads weren't guaranteed to work
+  // on a published, view-only preview page). The live site fully
+  // supports real downloads, so this now triggers an actual .csv file
+  // save via a Blob + temporary object URL, same technique used
+  // anywhere a real file download is needed. No popup involved, so the
+  // old "pop-up blocked" fallback toast is no longer needed either.
   const csv = "property,address,city,state,unit_id,equipment_type,floors_served\nExample Hotel,123 Main St,Denver,CO,Unit 1,Hydraulic,4\n";
-  const win = window.open('', '_blank');
-  if(win){
-    win.document.write('<title>PULSE Pricing — Unit Inventory Template</title><pre style="font:12.5px/1.6 ui-monospace,monospace; padding:20px; white-space:pre-wrap;">' + csv.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</pre>');
-  } else {
-    showToast('Pop-up blocked — copy the template columns: property, address, city, state, unit_id, equipment_type, floors_served');
-  }
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'pulse_pricing_unit_inventory_template.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /* ---- Step 3: Services & Pricing ----
