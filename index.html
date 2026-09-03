@@ -4072,7 +4072,15 @@ there. */
   exclusion selector below it -- both must be updated together or this
   view either never shows on print or is stuck always-visible on print. */
   #view-property-schedule.print-active{display:block!important}
-  [id^="view-"]:not(#view-report):not(#view-dashboard.print-active):not(#view-charts.print-active):not(#view-budgetoutlook.print-active):not(#view-schedule.print-active):not(#view-property-schedule.print-active):not(#view-portfolio.print-active):not(#view-capital.print-active){display:none!important}
+  /* v68o -- task #3. Property Overview, same paired whitelist/exclusion
+  pattern as view-property-schedule directly above -- printPropertyOverview()
+  toggles print-active on #view-property. .tab-wrap/.table-wrap forced
+  visible so a tab's internal scroll container (e.g. a long table on the
+  Change Orders or Milestones tab) doesn't get clipped to its on-screen
+  scroll height when printed. */
+  #view-property.print-active{display:block!important;overflow:visible!important;height:auto!important}
+  #view-property.print-active .table-wrap{overflow:visible!important}
+  [id^="view-"]:not(#view-report):not(#view-dashboard.print-active):not(#view-charts.print-active):not(#view-budgetoutlook.print-active):not(#view-schedule.print-active):not(#view-property-schedule.print-active):not(#view-property.print-active):not(#view-portfolio.print-active):not(#view-capital.print-active){display:none!important}
   /* v49d — Custom Report Builder. body.custom-report-print-mode is added
   only while printCustomReport() runs, letting several views be visible at
   once (unlike every single-view print function above, which only ever
@@ -6416,6 +6424,40 @@ property as a whole. -->
   </div>
 </div>
 
+<!-- v68o -- task #2. Dashboard's Action Items "View all actions" link
+previously went to gotoView('opscenter',null) -- the full Operations
+Center, not scoped to actions at all. Misty's direct request: a slide-out
+panel instead, showing the action items grouped by property. Structurally
+this mirrors deps-portfolio-panel above (same overlay/panel/transform
+pattern, same 0a1628 header chrome) rather than the Related Work panel's
+flat searchable-feed design -- that flat layout was a deliberate choice
+there because grouping "breaks down" at Dependencies' scale/portfolio
+sprawl (see the comment above renderDepsPortfolioList), but Misty asked
+for this one grouped by property specifically, so it stays grouped rather
+than reusing that same flat pattern. -->
+<div id="action-items-portfolio-overlay" onclick="closeActionItemsPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200"></div>
+<div id="action-items-portfolio-panel" style="display:none;position:fixed;top:0;right:0;width:520px;max-width:96vw;height:100vh;background:white;z-index:201;box-shadow:-8px 0 40px rgba(0,0,0,0.15);overflow-y:auto;transform:translateX(100%);transition:transform .3s ease">
+  <div style="padding:24px;background:#0a1628;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1">
+    <div>
+      <div style="font-size:16px;font-weight:700;color:#85B7EB">Action items</div>
+      <div style="font-size:12px;color:rgba(133,183,235,0.7)" id="action-items-portfolio-subtitle"></div>
+    </div>
+    <button onclick="closeActionItemsPanel()" style="background:none;border:none;cursor:pointer;color:#85B7EB;font-size:20px"><i class="ti ti-x"></i></button>
+  </div>
+  <div style="padding:24px">
+    <div style="position:relative;margin-bottom:12px">
+      <i class="ti ti-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--gray-light);font-size:15px"></i>
+      <input class="form-input" id="action-items-portfolio-search" placeholder="Search property or description" style="padding-left:34px" oninput="renderActionItemsPortfolioList()">
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      <span class="ai-portfolio-status-chip" data-status="Overdue" onclick="toggleAiPortfolioStatusChip('Overdue')" style="font-size:11px;font-weight:700;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--red);color:#fff">Overdue (<span id="ai-portfolio-overdue-count">0</span>)</span>
+      <span class="ai-portfolio-status-chip" data-status="Open" onclick="toggleAiPortfolioStatusChip('Open')" style="font-size:11px;font-weight:600;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--gray-pale);color:var(--gray-mid)">Open</span>
+      <span class="ai-portfolio-status-chip" data-status="High" onclick="toggleAiPortfolioStatusChip('High')" style="font-size:11px;font-weight:600;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--gray-pale);color:var(--gray-mid)">High priority</span>
+    </div>
+    <div id="action-items-portfolio-list"></div>
+  </div>
+</div>
+
 <!-- v67b -- Award flow. Two pieces, matching the two approved mockups:
   award-scope-modal is the small centered "link this award to a scope"
   prompt (fires when the round's Bid Round has no Linked Scope set,
@@ -7092,7 +7134,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68l</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68m</div>
     </div>
   </nav>
 
@@ -7494,6 +7536,14 @@ from unitEffectiveValue() onto each checkbox). -->
             <p id="prop-subtitle">Property details</p>
           </div>
           <div class="header-actions">
+            <!-- v68o -- task #3. Print button, same printPropertySchedule()
+            shape (toggle print-active, window.print(), remove after a
+            timeout). Per Misty's confirmed choice, this prints only the
+            active tab, not every tab concatenated -- and that "only the
+            active tab" behavior falls out for free from .tab-content's own
+            CSS (inactive tabs are already display:none; only .active
+            shows), so no extra per-tab print markup was needed here. -->
+            <button class="btn" id="prop-print-btn" onclick="printPropertyOverview()"><i class="ti ti-printer"></i>Print</button>
             <button class="btn btn-edit" id="prop-edit-btn" onclick="openEditPropertyPanel()" style="display:none"><i class="ti ti-pencil"></i>Edit Property</button>
             <button class="btn btn-delete" id="prop-delete-btn" onclick="deleteProperty()" style="display:none"><i class="ti ti-trash"></i>Delete Property</button>
             <button class="btn btn-add" id="prop-meeting-btn" onclick="openScheduleMeetingModal(currentProp?.n)" style="display:none"><i class="ti ti-calendar-plus"></i> Schedule Meeting</button>
@@ -13049,11 +13099,31 @@ function renderScopeCards(p){
     const demoteBtn=(canEdit&&s.status!=='Complete'&&otherDemoteTargets.length>0)
       ?`<button onclick="event.stopPropagation();openDemoteScopeModal('${s.id}')" title="Demote to unit phase" aria-label="Demote to unit phase" style="width:26px;height:26px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid var(--border-strong);background:white;color:var(--gray-mid);cursor:pointer;flex-shrink:0"><i class="ti ti-corner-down-right" style="font-size:13px"></i></button>`
       :'';
+    // v68o -- task #5. On track/At risk badge, per Misty's direction. Uses
+    // the exact same calcScopeScheduleRisk()-derived formula already
+    // established as canonical on the Action Board and Dashboard heat map
+    // (isRisk = atRiskCount>0||daysLate>0), not the stricter riskLevel
+    // ==='High' variant used only for the Properties table's status-tab
+    // bucketing -- so this card's badge always agrees with the heat map's
+    // own at-risk flag for the same scope rather than inventing a third
+    // definition. Only shown for scopes in an active build stage (same
+    // gate onHoldToggle above already uses: not Complete, not Capital
+    // Plan) -- a project that hasn't started or is already finished has no
+    // meaningful "on track" schedule signal to show.
+    const isActiveStage=s.status!=='Complete'&&s.status!=='Capital Plan'&&s.status!=='On Hold';
+    let riskBadge='';
+    if(isActiveStage&&typeof calcScopeScheduleRisk==='function'){
+      const risk=calcScopeScheduleRisk(p.n,s.id);
+      const isAtRisk=risk.atRiskCount>0||risk.daysLate>0;
+      riskBadge=isAtRisk
+        ?`<span style="font-size:10px;font-weight:600;background:var(--red-pale);color:var(--red);border-radius:6px;padding:2px 8px;display:inline-flex;align-items:center;gap:3px"><i class="ti ti-alert-triangle" style="font-size:11px"></i>At Risk</span>`
+        :`<span style="font-size:10px;font-weight:600;background:var(--green-pale);color:var(--green);border-radius:6px;padding:2px 8px;display:inline-flex;align-items:center;gap:3px"><i class="ti ti-circle-check" style="font-size:11px"></i>On Track</span>`;
+    }
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
           <span style="font-size:14px;font-weight:600;color:var(--navy);min-width:0">${escHtml(s.name||'Property Modernization')} ${staleFlag}</span>
-          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${statusBadge(s.status||'Capital Plan')}${demoteBtn}${editBtn}</span>
+          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">${riskBadge}${statusBadge(s.status||'Capital Plan')}${demoteBtn}${editBtn}</span>
         </div>
         ${onHoldToggle?`<div style="display:flex;justify-content:flex-end;margin-bottom:6px">${onHoldToggle}</div>`:''}
         ${driftBadge}
@@ -16635,7 +16705,7 @@ function renderActionBoard(){
     matched. -->
     <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:16px">
       <div class="card" style="border-radius:12px">
-        ${panelTitle('Action items',overdueActions.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${overdueActions.length} overdue</span>`:'',{label:'View all actions',onclick:"gotoView('opscenter',null)"})}
+        ${panelTitle('Action Items',overdueActions.length>0?`<span style="font-size:10px;font-weight:700;color:var(--red);background:var(--red-pale);padding:2px 7px;border-radius:9px;margin-left:4px">${overdueActions.length} overdue</span>`:'',{label:'View all actions',onclick:"openActionItemsPanel()"})}
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <!-- v57e -- mockup's table.mini th is uppercase, 10.5px, 700-weight,
           letter-spacing .04em; these headers were plain-case 12px with no
@@ -18171,6 +18241,140 @@ function closeDepsPortfolioPanel(){
   },300);
 }
 window.closeDepsPortfolioPanel=closeDepsPortfolioPanel;
+
+// v68o -- task #2. Action Items portfolio slide-out, opened from
+// Dashboard's "View all actions" link. Same overlay/transform mechanics as
+// deps-portfolio-panel just above (copy-adapted rather than shared, since
+// the two panels' filter chips and grouping are different enough that a
+// shared helper would need as many branches as just having two functions).
+// "Overdue" defaults on for the same reason as Dependencies: the whole
+// point of the link is usually to see what's late. Grouped by property per
+// Misty's explicit ask, sorted so properties with an overdue item surface
+// first, then alphabetically -- most-urgent-property-first, not a flat
+// dump in Airtable record order.
+let aiPortfolioActiveStatuses=new Set(['Overdue']);
+function toggleAiPortfolioStatusChip(status){
+  if(aiPortfolioActiveStatuses.has(status))aiPortfolioActiveStatuses.delete(status);
+  else aiPortfolioActiveStatuses.add(status);
+  const chip=document.querySelector(`.ai-portfolio-status-chip[data-status="${status}"]`);
+  if(chip){
+    const active=aiPortfolioActiveStatuses.has(status);
+    const colorMap={Overdue:'var(--red)',Open:'var(--blue-dark)',High:'var(--amber)'};
+    chip.style.background=active?colorMap[status]:'var(--gray-pale)';
+    chip.style.color=active?'#fff':'var(--gray-mid)';
+  }
+  renderActionItemsPortfolioList();
+}
+
+function openActionItemsPanel(){
+  aiPortfolioActiveStatuses=new Set(['Overdue']);
+  [...document.querySelectorAll('.ai-portfolio-status-chip')].forEach(chip=>{
+    const status=chip.dataset.status;
+    const active=aiPortfolioActiveStatuses.has(status);
+    const colorMap={Overdue:'var(--red)',Open:'var(--blue-dark)',High:'var(--amber)'};
+    chip.style.background=active?colorMap[status]:'var(--gray-pale)';
+    chip.style.color=active?'#fff':'var(--gray-mid)';
+  });
+  const searchInput=document.getElementById('action-items-portfolio-search');
+  if(searchInput)searchInput.value='';
+  renderActionItemsPortfolioList();
+  const overlay=document.getElementById('action-items-portfolio-overlay');
+  const panel=document.getElementById('action-items-portfolio-panel');
+  overlay.style.display='block';
+  panel.style.display='block';
+  requestAnimationFrame(()=>panel.style.transform='translateX(0)');
+}
+window.openActionItemsPanel=openActionItemsPanel;
+
+function closeActionItemsPanel(){
+  const panel=document.getElementById('action-items-portfolio-panel');
+  panel.style.transform='translateX(100%)';
+  setTimeout(()=>{
+    panel.style.display='none';
+    document.getElementById('action-items-portfolio-overlay').style.display='none';
+  },300);
+}
+window.closeActionItemsPanel=closeActionItemsPanel;
+
+function renderActionItemsPortfolioList(){
+  const list=document.getElementById('action-items-portfolio-list');
+  const subtitle=document.getElementById('action-items-portfolio-subtitle');
+  if(!list)return;
+  const fmtDate=d=>(!d||d==='TBD')?'No due date':new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const query=(document.getElementById('action-items-portfolio-search')?.value||'').trim().toLowerCase();
+  const isConsultant=role==='consultant'&&!window._consultantUnrestricted;
+  const port=window.PORTFOLIO||(demoMode?PORTFOLIO:[]);
+  const consultantProps=isConsultant?new Set(port.filter(p=>consultantSeesProperty(p.n)).map(p=>p.n)):null;
+  const today=new Date();today.setHours(0,0,0,0);
+
+  let items=(actionItems||[]).filter(a=>a.status==='Open').map(a=>{
+    const sc=(window.SCOPES||[]).find(s=>s.id===a.scopeId);
+    const overdue=!!(a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today);
+    return{...a,_scopeName:sc?.name||'',_overdue:overdue};
+  });
+  if(isConsultant)items=items.filter(a=>consultantProps.has(a.property));
+  if(aiPortfolioActiveStatuses.has('Overdue')&&!aiPortfolioActiveStatuses.has('Open')&&!aiPortfolioActiveStatuses.has('High')){
+    items=items.filter(a=>a._overdue);
+  }else{
+    const wantHigh=aiPortfolioActiveStatuses.has('High');
+    const wantOverdue=aiPortfolioActiveStatuses.has('Overdue');
+    if(wantHigh||wantOverdue){
+      items=items.filter(a=>(wantOverdue&&a._overdue)||(wantHigh&&a.priority==='High'));
+    }
+  }
+  if(query)items=items.filter(a=>(a.property||'').toLowerCase().includes(query)||(a.description||'').toLowerCase().includes(query));
+
+  const overdueTotal=(actionItems||[]).filter(a=>a.status==='Open'&&a.due&&a.due!=='TBD'&&new Date(a.due+'T12:00:00')<today&&(!isConsultant||consultantProps.has(a.property))).length;
+  const overdueCountEl=document.getElementById('ai-portfolio-overdue-count');
+  if(overdueCountEl)overdueCountEl.textContent=overdueTotal;
+
+  const propCount=new Set(items.map(a=>a.property)).size;
+  if(subtitle)subtitle.textContent=`${items.length} open across ${propCount} propert${propCount===1?'y':'ies'}`;
+
+  if(items.length===0){
+    list.innerHTML='<div class="empty-state" style="padding:2rem"><i class="ti ti-checkbox"></i><div class="empty-state-title">No matching action items</div><div class="empty-state-sub">Try a different search or filter.</div></div>';
+    return;
+  }
+
+  const grouped={};
+  items.forEach(a=>{if(!grouped[a.property])grouped[a.property]=[];grouped[a.property].push(a);});
+  const propNames=Object.keys(grouped).sort((a,b)=>{
+    const aOver=grouped[a].some(x=>x._overdue),bOver=grouped[b].some(x=>x._overdue);
+    if(aOver!==bOver)return aOver?-1:1;
+    return a.localeCompare(b);
+  });
+  propNames.forEach(p=>grouped[p].sort((a,b)=>new Date(a.due==='TBD'?'9999-12-31':a.due||'9999-12-31')-new Date(b.due==='TBD'?'9999-12-31':b.due||'9999-12-31')));
+
+  const canEdit=role==='pm'||role==='admin'||role==='consultant';
+  list.innerHTML=propNames.map(p=>{
+    const rows=grouped[p];
+    return `<div style="margin-bottom:22px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--border);margin-bottom:10px">
+        <span style="font-size:13.5px;font-weight:700;color:var(--navy)">${escHtml(p)}</span>
+        <span style="font-size:11px;color:var(--gray-mid);font-weight:600">${rows.length} open</span>
+      </div>
+      ${rows.map(a=>{
+        const dueLabel=a._overdue?`${Math.round((today-new Date(a.due+'T12:00:00'))/86400000)} days overdue`:fmtDate(a.due);
+        return `<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--gray-xpale)">
+          <div style="width:8px;height:8px;border-radius:50%;margin-top:5px;flex-shrink:0;background:${a._overdue?'var(--red)':'var(--gray-light)'}"></div>
+          <div style="flex:1;min-width:0">
+            <p style="font-size:12.5px;color:var(--gray-dark);margin:0;line-height:1.4">${escHtml(a.description)}</p>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:5px;flex-wrap:wrap">
+              ${a._scopeName?`<span style="font-size:10.5px;color:var(--blue-dark);font-weight:600">${escHtml(a._scopeName)}</span>`:''}
+              ${a.owner?`<span style="font-size:11px;color:var(--gray-mid)">${a._scopeName?'· ':''}${escHtml(a.owner)}</span>`:''}
+              <span style="font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:8px;background:${a._overdue?'var(--red-pale)':'var(--gray-pale)'};color:${a._overdue?'var(--red)':'var(--gray-mid)'}">${dueLabel}</span>
+            </div>
+          </div>
+          ${canEdit?`<div style="display:flex;gap:4px;flex-shrink:0">
+            <button class="btn btn-icon" onclick="openActionItemModal('${escHtml(p).replace(/'/g,"\\'")}','${a.id}')" title="Edit action item"><i class="ti ti-pencil" style="font-size:12px"></i></button>
+            <button class="btn btn-icon" onclick="closeAction('${a.id}');setTimeout(renderActionItemsPortfolioList,50)" title="Close action item"><i class="ti ti-check" style="font-size:12px"></i></button>
+          </div>`:''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+}
+window.renderActionItemsPortfolioList=renderActionItemsPortfolioList;
 
 function renderDepsPortfolioList(){
   const list=document.getElementById('deps-portfolio-list');
@@ -36124,23 +36328,46 @@ function renderPropUpdates(p){
   const mostRecentFirst=merged.slice().reverse();
   const shown=_propUpdatesShowAll?mostRecentFirst:mostRecentFirst.slice(0,5);
   const hiddenCount=mostRecentFirst.length-shown.length;
+  // v68o -- task #4. Both card types rebuilt on one shared skeleton, per
+  // approved mockup (mockup_update_cards_unified.html, 2nd round). Misty's
+  // explicit direction: "the goal is to have the cards look consistent
+  // with only difference being who it came from" -- both cards now show
+  // the identical 5 fields, in the identical order, with the identical
+  // badge styling: (1) update designation ("PM Update"/"Field Update"
+  // badge), (2) project (scope name tag), (3) phase (Project Phase tag --
+  // confirmed PM Updates already carry a real Project Phase field, same
+  // as Field Updates, so no field is faked/blank on either card), (4)
+  // comment type (confirmed PM Updates already carry a real Comment Type
+  // field too), (5) "Submitted by <name>" line. Only genuine differences
+  // left: the source badge's label/color, and Field Update's own
+  // preview/print icon buttons + Issue Status/Savings trailing tags,
+  // which Misty confirmed should stay ("yes that's correct") since a PM
+  // Update has no equivalent of those.
   el.innerHTML=shown.map(item=>{
     if(item._kind==='pmu'){
       const u=item.u;
       const scope=(window.SCOPES||[]).find(sc=>sc.id===u.scopeId);
-      const scopeLabel=escHtml(scope?scope.name||'Project':'');
+      const scopeLabel=escHtml(scope?scope.name||'':'');
       const dateFmt=item._date?new Date(item._date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
       const statusBadge=u.status==='Published'?'<span class="badge b-approved">Published</span>':'<span class="badge b-pending">Draft</span>';
       return `<div class="update-card">
         <div class="update-card-header">
-          <div class="update-card-title">${dateFmt}<span class="badge b-nac" style="margin-left:8px"><i class="ti ti-broadcast" style="font-size:11px"></i> PM Update${scopeLabel?' · '+scopeLabel:''}</span></div>
+          <div class="update-card-title">${dateFmt}</div>
           ${statusBadge}
         </div>
-        <div class="update-card-meta">${escHtml(u.author||'PULSE Team')}</div>
+        <div class="update-card-meta" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span class="badge b-nac"><i class="ti ti-broadcast" style="font-size:11px"></i> PM Update</span>
+          ${scopeLabel?`<span class="badge b-nac">${scopeLabel}</span>`:''}
+          ${u.phase?`<span class="badge b-nac">${escHtml(u.phase)}</span>`:''}
+          ${u.commentType?`<span class="badge b-nac">${escHtml(u.commentType)}</span>`:''}
+        </div>
+        <div class="update-card-meta">Submitted by <strong>${escHtml(u.author||'PULSE Team')}</strong></div>
         <div class="update-card-body">${escHtml(u.text)}</div>
       </div>`;
     }
     const s=item.s;
+    const fuScope=(window.SCOPES||[]).find(sc=>sc.id===s.scopeId);
+    const fuScopeLabel=escHtml(fuScope?fuScope.name||'':'');
     return `<div class="update-card">
     <div class="update-card-header">
       <div class="update-card-title">${fmtFieldUpdateDate(s)}</div>
@@ -36150,9 +36377,15 @@ function renderPropUpdates(p){
         <button class="btn btn-icon" onclick="printFieldUpdate('${s.id}')" title="Print / PDF"><i class="ti ti-printer" style="font-size:14px"></i></button>
       </div>
     </div>
-    <div class="update-card-meta">${escHtml(s.units)} · ${escHtml(s.phase)} · ${escHtml(s.status)}</div>
+    <div class="update-card-meta" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span class="badge b-nac"><i class="ti ti-tool" style="font-size:11px"></i> Field Update</span>
+      ${fuScopeLabel?`<span class="badge b-nac">${fuScopeLabel}</span>`:''}
+      ${s.phase?`<span class="badge b-nac">${escHtml(s.phase)}</span>`:''}
+      ${s.commentType?`<span class="badge b-nac">${escHtml(s.commentType)}</span>`:''}
+    </div>
+    <div class="update-card-meta">Submitted by <strong>${escHtml(s.consultant||'—')}</strong></div>
     <div class="update-card-body">${escHtml(s.notes)}</div>
-    <div class="update-card-tags"><span class="badge b-nac">${escHtml(s.commentType)}</span><span class="badge b-nac">${escHtml(s.issueStatus)}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
+    <div class="update-card-tags"><span class="badge b-nac">${escHtml(s.issueStatus)}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
   </div>`;
   }).join('')
   +(mostRecentFirst.length>5?`<div style="text-align:center;margin-top:8px">
@@ -36723,8 +36956,20 @@ function previewQueueItem(subId){
         <div><span style="color:var(--gray-mid)">Issue Status:</span> <strong>${escHtml(s.issueStatus||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Review Status:</span> <strong style="color:var(--amber)">Pending</strong></div>
       </div>
-      <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
-      <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(s.notes||'—')}</div>
+      <!-- v68o -- task #1. Weekly Notes only (per Misty's explicit scope --
+      "PM can only edit ... Weekly Notes only"), turned from a static div
+      into an editable textarea plus its own Save button, separate from
+      Approve/Return so a PM can correct the text without also having to
+      decide approve-vs-return in the same click. Every other field on this
+      modal (Units/Phase/Progress/Comment Type/Issue Status) stays
+      read-only, deliberately -- Phase/Progress Status are auto-derived
+      from live project data by design (see onSubmitScopeChange()), not
+      meant to be hand-edited after the fact. -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em">Weekly Notes <span style="font-weight:400;color:var(--gray-mid);text-transform:none;letter-spacing:0">(editable)</span></div>
+        <button class="btn btn-icon" style="font-size:11px;padding:4px 10px;width:auto" onclick="saveQueueItemNotes('${subId}')" title="Save note changes"><i class="ti ti-device-floppy" style="font-size:12px"></i> Save</button>
+      </div>
+      <textarea id="queue-preview-notes-${subId}" style="width:100%;min-height:110px;font-size:13px;color:var(--gray-dark);line-height:1.7;background:var(--gray-xpale);padding:12px;border-radius:6px;border:1px solid var(--border);font-family:inherit;resize:vertical" onclick="event.stopPropagation()">${escHtml(s.notes||'')}</textarea>
       ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Previous Return Note:</strong> ${escHtml(s.returnNote)}</div>`:''}
       ${s.draftAction?`<div style="margin-top:12px;padding:12px;background:var(--blue-xpale);border:1px solid var(--blue-pale);border-radius:6px">
         <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px"><i class="ti ti-flag" style="margin-right:4px"></i>Consultant-flagged follow-up</div>
@@ -36748,6 +36993,32 @@ function previewQueueItem(subId){
   </div>`;
   document.body.appendChild(overlay);
 }
+
+// v68o -- task #1. PM edit of a pending submission's Weekly Notes, from
+// previewQueueItem()'s modal above. Scoped to Weekly Notes only, per
+// Misty's explicit direction -- writes only the 'Weekly Notes' field to
+// Airtable, same atUpdate('Field Updates',...) pattern approveSubmission/
+// kickSubmission already use, with the same fail-safe (abort + error toast
+// on a failed write, never silently claim success). Available regardless
+// of the submission's current reviewStatus (Pending or Returned) -- a PM
+// previewing a Returned item the consultant hasn't resubmitted yet should
+// be able to fix it too, not just Pending ones.
+async function saveQueueItemNotes(subId){
+  const s=submissions.find(x=>x.id===subId);if(!s)return;
+  const ta=document.getElementById(`queue-preview-notes-${subId}`);if(!ta)return;
+  const newNotes=ta.value;
+  if(newNotes===s.notes){showToast('No changes to save','info');return;}
+  if(s.atId){
+    const res=await atUpdate('Field Updates',s.atId,{'Weekly Notes':newNotes});
+    if(!res){
+      showToast('Could not save note changes. Please try again.','error');
+      return;
+    }
+  }
+  s.notes=newNotes;
+  showToast('Weekly Notes updated','success');
+}
+window.saveQueueItemNotes=saveQueueItemNotes;
 
 async function publishDraftAction(subId){
   // PM-initiated publish of a consultant-flagged draft action (v21c). Creates
@@ -36848,6 +37119,50 @@ async function dismissDraftAction(subId){
   showToast('Action dismissed','info');
 }
 
+// v68o -- task #1. Real email to the consultant on approve (published to
+// client) and on return, replacing the dead `notifications` array pushes
+// that never rendered anywhere (confirmed live -- notifications was
+// write-only, no bell/list ever consumed it) and making kickSubmission's
+// existing "...has been notified" toast actually true instead of
+// aspirational. Same exact pattern as notifyActionItemOwner() (line
+// ~15031): resolve email by matching Consultant Name against active
+// Access PINs rows (Field Updates has no email field of its own), silent
+// no-op if no match or in demoMode, never blocks/errors the approve/return
+// flow itself on a failed send.
+async function notifyConsultantOfReview(s,kind,note){
+  const trimmedName=(s.consultant||'').trim();
+  if(!trimmedName)return;
+  if(demoMode)return;
+  try{
+    const recs=await atGet('Access PINs');
+    const match=recs.find(r=>r.fields['Active']&&r.fields['Email']&&
+      (r.fields['Name']||'').trim().toLowerCase()===trimmedName.toLowerCase());
+    if(!match){
+      console.log(`Field Update notify — no active PULSE user matches consultant "${trimmedName}", email not sent`);
+      return;
+    }
+    const isApproved=kind==='approved';
+    const subject=isApproved?`[PULSE] Your update has been published — ${s.property}`:`[PULSE] Your update was returned — ${s.property}`;
+    const html=isApproved?
+      `<p><strong>Your Field Update has been approved and published to the client.</strong></p>
+       <p><strong>Property:</strong> ${escHtml(s.property)}<br>
+       <strong>Week:</strong> ${escHtml(s.week)}</p>
+       <p>Log in to PULSE to view it under My Updates.</p>
+       <p style="font-size:11px;color:#888">This notification was sent from noreply@elevatorpulse.com via PULSE Portal — Park Hotels &amp; Resorts Modernization Program.</p>`:
+      `<p><strong>Your Field Update was returned for changes.</strong></p>
+       <p><strong>Property:</strong> ${escHtml(s.property)}<br>
+       <strong>Week:</strong> ${escHtml(s.week)}<br>
+       <strong>Return note:</strong> ${escHtml(note||'')}</p>
+       <p>Log in to PULSE to edit and resubmit under My Updates.</p>
+       <p style="font-size:11px;color:#888">This notification was sent from noreply@elevatorpulse.com via PULSE Portal — Park Hotels &amp; Resorts Modernization Program.</p>`;
+    await workerFetch(WORKER_URL.replace('?','').replace(/\?.*$/,'')+'/send-email',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({to:match.fields['Email'],subject,html})
+    });
+  }catch(e){
+    console.error('Field Update notify — email send failed:',e);
+  }
+}
 async function approveSubmission(id){
   const s=submissions.find(s=>s.id===id);if(!s)return;
   if(s.reviewStatus==='approved')return; // already approved — prevent duplicate Documents records (v20d fix)
@@ -36906,6 +37221,15 @@ async function approveSubmission(id){
       message:'New Field Updates have been Posted',
       time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
   }
+  // v68o -- task #1. Consultant notify fires on the Field Update's own
+  // approval (Review Status write above already succeeded by this point --
+  // function returns early otherwise), independent of whether the separate
+  // Documents-archive step happened to fail. The consultant's update WAS
+  // published to the client either way; the archive is a bookkeeping copy,
+  // not a precondition of "published." Not awaited -- matches
+  // notifyActionItemOwner()'s fire-and-forget convention elsewhere, so a
+  // slow/failed email send never delays the PM's approve flow.
+  notifyConsultantOfReview(s,'approved');
   updateQueueBadge();refreshQueue();refreshMyUpdates();renderDocFolders();
   if(docArchiveFailed){
     showToast('Update approved, but the Documents archive entry failed to save. Check your connection.','error');
@@ -36930,6 +37254,12 @@ async function kickSubmission(id){
   }
   s.reviewStatus='returned';s.returnNote=note;
   notifications.push({type:'returned',property:s.property,week:s.week,note,time:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})});
+  // v68o -- task #1. This toast has said "...has been notified" since
+  // before this task, but nothing actually notified the consultant (the
+  // notifications array push two lines up is dead/write-only -- confirmed
+  // live, nothing renders it). Wiring the real email in makes this claim
+  // true. Fire-and-forget, same as approveSubmission's call.
+  notifyConsultantOfReview(s,'returned',note);
   updateQueueBadge();refreshQueue();refreshMyUpdates();
   showToast(`Update returned — ${s.consultant} has been notified`,'warn');
 }
@@ -41579,6 +41909,16 @@ function printPropertySchedule(){
   window.print();
   setTimeout(()=>el?.classList.remove('print-active'),1000);
 }
+
+// v68o -- task #3. Property Overview print button, same shape as
+// printPropertySchedule() just above.
+function printPropertyOverview(){
+  const el=document.getElementById('view-property');
+  if(el)el.classList.add('print-active');
+  window.print();
+  setTimeout(()=>el?.classList.remove('print-active'),1000);
+}
+window.printPropertyOverview=printPropertyOverview;
 
 function renderPropertySchedule(){
   propGanttInit();
