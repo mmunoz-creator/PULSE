@@ -4995,6 +4995,22 @@ async function loadAllData() {
         dismissed: !!r.fields['Draft Action Dismissed'],
         dismissNote: r.fields['Draft Action Dismiss Note']||'',
       }:null,
+      // v68n fix -- real bug behind "Field Updates appear on a delayed
+      // timing... when the page loads it doesn't automatically appear."
+      // approvedAt is client-side-only (never written to Airtable, see
+      // approveSubmission()); pollProjectUpdates()'s re-fetch already
+      // carried a Submitted-Date fallback for exactly this reason, but
+      // this initial loadAllData() mapping -- which runs first, on every
+      // fresh page load -- never set approvedAt at all. So a submission
+      // that was already approved before this session even loaded got
+      // approvedAt:undefined here, failed renderClientProjectUpdates()'s
+      // reviewStatus==='approved'&&s.approvedAt filter, and stayed
+      // invisible on the client's Project Updates page until the next
+      // live-poll tick (pollProjectUpdates, which only runs once that
+      // view is open) happened to re-fetch it with the fallback applied.
+      // Same fallback added here so it's correct from the very first
+      // render, not just after a poll.
+      approvedAt: (r.fields['Review Status']||'')==='Approved'?(r.fields['Submitted Date']||new Date().toISOString()):'',
     }));
     meetings = meets.map(r => ({
       id: r.id, atId: r.id,
@@ -6449,9 +6465,16 @@ than reusing that same flat pattern. -->
       <i class="ti ti-search" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--gray-light);font-size:15px"></i>
       <input class="form-input" id="action-items-portfolio-search" placeholder="Search property or description" style="padding-left:34px" oninput="renderActionItemsPortfolioList()">
     </div>
+    <!-- v68n fix -- chips start unselected (background:var(--gray-pale),
+    matching the inactive style openActionItemsPanel()/toggleAiPortfolioStatusChip()
+    already apply in JS) since the panel now opens showing all open items,
+    not pre-filtered to Overdue. The old "Open" chip is removed -- every row
+    in this panel is already status==='Open' by definition (see the
+    a.status==='Open' filter at the top of renderActionItemsPortfolioList),
+    so it never actually filtered anything and only implied a distinction
+    that didn't exist. -->
     <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-      <span class="ai-portfolio-status-chip" data-status="Overdue" onclick="toggleAiPortfolioStatusChip('Overdue')" style="font-size:11px;font-weight:700;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--red);color:#fff">Overdue (<span id="ai-portfolio-overdue-count">0</span>)</span>
-      <span class="ai-portfolio-status-chip" data-status="Open" onclick="toggleAiPortfolioStatusChip('Open')" style="font-size:11px;font-weight:600;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--gray-pale);color:var(--gray-mid)">Open</span>
+      <span class="ai-portfolio-status-chip" data-status="Overdue" onclick="toggleAiPortfolioStatusChip('Overdue')" style="font-size:11px;font-weight:600;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--gray-pale);color:var(--gray-mid)">Overdue (<span id="ai-portfolio-overdue-count">0</span>)</span>
       <span class="ai-portfolio-status-chip" data-status="High" onclick="toggleAiPortfolioStatusChip('High')" style="font-size:11px;font-weight:600;padding:5px 11px;border-radius:14px;cursor:pointer;background:var(--gray-pale);color:var(--gray-mid)">High priority</span>
     </div>
     <div id="action-items-portfolio-list"></div>
@@ -13115,9 +13138,14 @@ function renderScopeCards(p){
     if(isActiveStage&&typeof calcScopeScheduleRisk==='function'){
       const risk=calcScopeScheduleRisk(p.n,s.id);
       const isAtRisk=risk.atRiskCount>0||risk.daysLate>0;
+      // v68n fix -- On Track was green here, but every other On Track
+      // indicator in the app (Dashboard heat map tiles, the Construction
+      // Heat Map legend, Priority Properties) uses var(--blue-dark) on a
+      // pale blue background, per Misty's direct request to match that.
+      // At Risk unchanged (red already matches its own convention app-wide).
       riskBadge=isAtRisk
         ?`<span style="font-size:10px;font-weight:600;background:var(--red-pale);color:var(--red);border-radius:6px;padding:2px 8px;display:inline-flex;align-items:center;gap:3px"><i class="ti ti-alert-triangle" style="font-size:11px"></i>At Risk</span>`
-        :`<span style="font-size:10px;font-weight:600;background:var(--green-pale);color:var(--green);border-radius:6px;padding:2px 8px;display:inline-flex;align-items:center;gap:3px"><i class="ti ti-circle-check" style="font-size:11px"></i>On Track</span>`;
+        :`<span style="font-size:10px;font-weight:600;background:var(--blue-pale);color:var(--blue-dark);border-radius:6px;padding:2px 8px;display:inline-flex;align-items:center;gap:3px"><i class="ti ti-circle-check" style="font-size:11px"></i>On Track</span>`;
     }
     return `<div style="background:white;border-radius:12px;border:0.5px solid var(--border);overflow:hidden">
       <div style="padding:12px 16px;border-bottom:0.5px solid var(--border)">
@@ -18247,12 +18275,23 @@ window.closeDepsPortfolioPanel=closeDepsPortfolioPanel;
 // deps-portfolio-panel just above (copy-adapted rather than shared, since
 // the two panels' filter chips and grouping are different enough that a
 // shared helper would need as many branches as just having two functions).
-// "Overdue" defaults on for the same reason as Dependencies: the whole
-// point of the link is usually to see what's late. Grouped by property per
-// Misty's explicit ask, sorted so properties with an overdue item surface
-// first, then alphabetically -- most-urgent-property-first, not a flat
-// dump in Airtable record order.
-let aiPortfolioActiveStatuses=new Set(['Overdue']);
+// Grouped by property per Misty's explicit ask, sorted so properties with
+// an overdue item surface first, then alphabetically -- most-urgent-
+// property-first, not a flat dump in Airtable record order.
+//
+// v68n fix -- Dependencies' panel defaults to its Overdue chip active
+// because that panel usually has overdue rows to show. This panel copied
+// that default, but Action Items commonly has zero overdue items on a
+// healthy portfolio (as here: 6 open, "None overdue" on the dashboard
+// stat card) -- so the panel opened pre-filtered to a chip that produced
+// zero rows, and looked broken ("Action items panel renders blank even
+// though action items are identified on dashboard") when it was actually
+// just showing an accurate empty result for an overly narrow default.
+// Starts with no status chips active now -- i.e. all open items shown --
+// so the panel's initial view always matches what the dashboard table
+// itself shows. Chips still narrow from there if the user wants just
+// Overdue or just High priority.
+let aiPortfolioActiveStatuses=new Set();
 function toggleAiPortfolioStatusChip(status){
   if(aiPortfolioActiveStatuses.has(status))aiPortfolioActiveStatuses.delete(status);
   else aiPortfolioActiveStatuses.add(status);
@@ -18267,7 +18306,7 @@ function toggleAiPortfolioStatusChip(status){
 }
 
 function openActionItemsPanel(){
-  aiPortfolioActiveStatuses=new Set(['Overdue']);
+  aiPortfolioActiveStatuses=new Set();
   [...document.querySelectorAll('.ai-portfolio-status-chip')].forEach(chip=>{
     const status=chip.dataset.status;
     const active=aiPortfolioActiveStatuses.has(status);
@@ -18313,14 +18352,14 @@ function renderActionItemsPortfolioList(){
     return{...a,_scopeName:sc?.name||'',_overdue:overdue};
   });
   if(isConsultant)items=items.filter(a=>consultantProps.has(a.property));
-  if(aiPortfolioActiveStatuses.has('Overdue')&&!aiPortfolioActiveStatuses.has('Open')&&!aiPortfolioActiveStatuses.has('High')){
-    items=items.filter(a=>a._overdue);
-  }else{
-    const wantHigh=aiPortfolioActiveStatuses.has('High');
-    const wantOverdue=aiPortfolioActiveStatuses.has('Overdue');
-    if(wantHigh||wantOverdue){
-      items=items.filter(a=>(wantOverdue&&a._overdue)||(wantHigh&&a.priority==='High'));
-    }
+  // v68n fix -- the "Open" chip was removed (see the comment above
+  // aiPortfolioActiveStatuses) since every row here is already Open by
+  // definition. With only Overdue/High left, this is now a plain
+  // any-active-chip-matches filter -- no special-case branch needed.
+  const wantHigh=aiPortfolioActiveStatuses.has('High');
+  const wantOverdue=aiPortfolioActiveStatuses.has('Overdue');
+  if(wantHigh||wantOverdue){
+    items=items.filter(a=>(wantOverdue&&a._overdue)||(wantHigh&&a.priority==='High'));
   }
   if(query)items=items.filter(a=>(a.property||'').toLowerCase().includes(query)||(a.description||'').toLowerCase().includes(query));
 
@@ -38140,14 +38179,23 @@ function renderClientProjectUpdates(){
   const esc=escHtml;
   const cutoff=new Date();
   cutoff.setDate(cutoff.getDate()-30);
+  // v68n fix -- this was a genuinely separate, never-updated function from
+  // renderPropUpdates() (the property-tab feed unified back in v68m task
+  // #4). Misty's client-facing "Project Updates" nav page is this
+  // function, not that one -- so the unified-card work never actually
+  // reached the page she was reviewing. Same shared 5-field skeleton
+  // applied here now: designation badge, project, phase, comment type,
+  // "Submitted by <name>" -- both card kinds structurally identical, only
+  // the designation badge's label/color and Field Update's Savings tag
+  // differ, matching mockup_update_cards_unified.html.
   const pmEntries=(window.PM_UPDATES||[])
     .filter(u=>u.status==='Published'&&u.published)
     .filter(u=>new Date(u.published+'T12:00:00')>=cutoff)
-    .map(u=>({property:u.property,kind:'pm',date:u.published,author:u.author,text:u.text}));
+    .map(u=>({property:u.property,kind:'pm',date:u.published,author:u.author,text:u.text,scopeId:u.scopeId,phase:u.phase,commentType:u.commentType}));
   const fieldEntries=(submissions||[])
     .filter(s=>s.reviewStatus==='approved'&&s.approvedAt)
     .filter(s=>new Date(s.approvedAt)>=cutoff)
-    .map(s=>({property:s.property,kind:'field',date:s.approvedAt.split('T')[0],week:s.week,phase:s.phase,status:s.status,notes:s.notes,savings:s.savings}));
+    .map(s=>({property:s.property,kind:'field',date:s.approvedAt.split('T')[0],week:s.week,phase:s.phase,status:s.status,notes:s.notes,savings:s.savings,scopeId:s.scopeId,commentType:s.commentType,consultant:s.consultant}));
   const all=[...pmEntries,...fieldEntries];
   if(all.length===0){
     feed.innerHTML=`<div class="empty-state" style="padding:2rem"><i class="ti ti-broadcast-off"></i><div class="empty-state-title">No updates in the last 30 days</div></div>`;
@@ -38165,22 +38213,34 @@ function renderClientProjectUpdates(){
       <div style="font-weight:600;font-size:15px;margin-bottom:10px">${esc(propName)}</div>
       ${entries.map(e=>{
         const dateFmt=e.date?new Date(e.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+        const scope=(window.SCOPES||[]).find(sc=>sc.id===e.scopeId);
+        const scopeLabel=scope?.name?esc(scope.name):'';
         if(e.kind==='pm'){
           return `<div class="card" style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
-              <span class="badge" style="background:var(--blue-xpale,#e8f0fe);color:var(--blue-dark)">Team update</span>
+              <span class="badge" style="background:var(--blue-xpale,#e8f0fe);color:var(--blue-dark)"><i class="ti ti-broadcast" style="font-size:11px"></i> Team Update</span>
               <span style="font-size:11px;color:var(--gray-mid)">${dateFmt}</span>
             </div>
-            <div style="font-size:12px;color:var(--gray-mid);margin-bottom:4px">${esc(e.author||'PULSE Team')}</div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+              ${scopeLabel?`<span class="badge b-nac">${scopeLabel}</span>`:''}
+              ${e.phase?`<span class="badge b-nac">${esc(e.phase)}</span>`:''}
+              ${e.commentType?`<span class="badge b-nac">${esc(e.commentType)}</span>`:''}
+            </div>
+            <div style="font-size:12px;color:var(--gray-mid);margin-bottom:4px">Submitted by <strong>${esc(e.author||'PULSE Team')}</strong></div>
             <div style="font-size:13px;color:var(--navy);white-space:pre-wrap">${esc(e.text)}</div>
           </div>`;
         }
         return `<div class="card" style="margin-bottom:10px">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
-            <span class="badge" style="background:var(--teal-pale);color:var(--teal)">Field update</span>
+            <span class="badge" style="background:var(--teal-pale);color:var(--teal)"><i class="ti ti-tool" style="font-size:11px"></i> Field Update</span>
             <span style="font-size:11px;color:var(--gray-mid)">${dateFmt}</span>
           </div>
-          <div style="font-size:12px;color:var(--gray-mid);margin-bottom:4px">Week of ${esc(e.week)}${e.phase?' · '+esc(e.phase):''}</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+            ${scopeLabel?`<span class="badge b-nac">${scopeLabel}</span>`:''}
+            ${e.phase?`<span class="badge b-nac">${esc(e.phase)}</span>`:''}
+            ${e.commentType?`<span class="badge b-nac">${esc(e.commentType)}</span>`:''}
+          </div>
+          <div style="font-size:12px;color:var(--gray-mid);margin-bottom:4px">Submitted by <strong>${esc(e.consultant||'—')}</strong></div>
           <div style="font-size:13px;color:var(--navy);white-space:pre-wrap">${esc(e.notes)}</div>
           ${e.savings?`<div style="margin-top:6px"><span class="badge b-track">${esc(e.savings)}</span></div>`:''}
         </div>`;
