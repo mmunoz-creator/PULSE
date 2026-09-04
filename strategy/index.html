@@ -155,7 +155,7 @@ h1,h2,h3{text-wrap:balance; margin:0}
 }
 .rail-user{
   display:flex; align-items:center; gap:9px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.05);
-  border:1px solid rgba(255,255,255,0.08); cursor:pointer;
+  border:1px solid rgba(255,255,255,0.08);
 }
 .rail-avatar{
   width:30px; height:30px; border-radius:8px; background:var(--accent); color:#fff; display:flex;
@@ -163,6 +163,16 @@ h1,h2,h3{text-wrap:balance; margin:0}
 }
 .rail-user-name{font-size:12.5px; font-weight:700; color:#fff}
 .rail-user-role{font-size:10.5px; color:#7c839c}
+/* Explicit sign-out button (2026-09-04), replacing the old behavior where
+   the whole .rail-user card was silently clickable to log out with only a
+   title tooltip as a hint, an easy accidental-logout trap. .rail-user no
+   longer has onclick/cursor:pointer, per the change below. */
+.rail-signout-btn{
+  display:flex; align-items:center; justify-content:center; gap:6px; width:100%; margin-top:8px;
+  padding:8px 10px; border-radius:9px; border:1px solid rgba(255,255,255,0.1); background:transparent;
+  color:#b8bdd1; font-family:inherit; font-size:11.5px; font-weight:700; cursor:pointer;
+}
+.rail-signout-btn:hover{background:rgba(255,255,255,0.06); color:#fff}
 
 /* v1a — quiet build-version label under the sign-out row, matching
    PULSE-Mod's established pattern (#sb-internal-build there: low-contrast
@@ -218,7 +228,7 @@ h1,h2,h3{text-wrap:balance; margin:0}
   font-family:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; border-radius:8px; border:none;
   background:transparent; color:var(--text-muted); cursor:pointer; white-space:nowrap;
 }
-.subtab.active{background:var(--paper-raised); color:var(--accent-ink); box-shadow:0 1px 3px rgba(10,22,40,0.1)}
+.subtab.active{background:var(--accent-soft); color:var(--accent-ink); box-shadow:0 1px 3px rgba(10,22,40,0.1)}
 .subpane{display:none}
 .subpane.active{display:block}
 
@@ -665,13 +675,17 @@ td.budget-lob-td{text-align:center}
         Dark
       </button>
     </div>
-    <div class="rail-user" id="railUser" onclick="doLogout()" title="Sign out">
+    <div class="rail-user" id="railUser">
       <div class="rail-avatar" id="railAvatar">--</div>
       <div>
         <div class="rail-user-name" id="railUserName">--</div>
         <div class="rail-user-role" id="railUserRole">--</div>
       </div>
     </div>
+    <button type="button" class="rail-signout-btn" onclick="doLogout()" title="Sign out">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Sign out
+    </button>
     <!-- v1a — build-version label, matching PULSE-Mod's pattern of a
          quiet footer line under Sign out. Text set at boot from
          APP_VERSION (see script block) so it never has to be hand-edited
@@ -1895,7 +1909,13 @@ async function loadRegions(){
   try {
     const res = await workerFetch('/api/regions');
     const data = await res.json();
-    REGIONS = (data.regions || []).sort((a,b)=>a.sort_order-b.sort_order);
+    // Sorted strictly A-Z by region name, not sort_order, per Misty's
+    // explicit request (2026-09-04). This drives every screen that reads
+    // from the shared REGIONS array (Sales Budgets, Revenue Budgets,
+    // Geography, Forecast), so alphabetizing here is a single change
+    // rather than one per screen. Self-maintaining if a region is
+    // renamed later, unlike a static sort_order value would be.
+    REGIONS = (data.regions || []).sort((a,b)=>a.name.localeCompare(b.name));
   } catch(e){
     showToast('Could not load regions from the server.', true);
     REGIONS = [];
