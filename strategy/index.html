@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PULSE Strategy v1e</title>
+<title>PULSE Strategy v1g</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
 <!-- SheetJS (2026-09-04): needed to parse Billed Fact uploads, real
      binary .xlsx files, unlike every other upload type here which is an
@@ -390,6 +390,8 @@ td.budget-lob-td{text-align:center}
 .region-driver-row:last-child{border-bottom:none}
 .region-driver-row.rd-head{padding-bottom:8px; border-bottom:1px solid var(--border)}
 .region-driver-row.rd-head > div{font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text-faint)}
+.region-driver-row.rd-head .rd-col-right{text-align:right}
+.region-driver-row.rd-head .rd-col-left{text-align:left}
 .rd-name{font-size:12.5px; font-weight:700}
 .rd-track{position:relative; height:9px; border-radius:999px; background:var(--paper-sunk); overflow:visible}
 .rd-fill{position:absolute; top:0; left:0; height:100%; border-radius:999px}
@@ -420,7 +422,14 @@ td.budget-lob-td{text-align:center}
 .fc-empty-note{font-size:12px; color:var(--text-faint); padding:16px 18px; line-height:1.5}
 
 /* ================= WEEKLY UPLOADS ================= */
-.upload-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px}
+/* v1f (2026-09-05): was repeat(auto-fit, minmax(260px, 1fr)), which wraps
+   to a new row once 5 cards at 260px minimum stop fitting the container
+   width — confirmed live, the 5th card (Billed Fact) dropped to its own
+   row below the first four. Fixed to a real 5-column grid so all upload
+   types sit in one row; minmax's lower bound drops on narrower screens
+   (a real fixed-width column would overflow instead of shrinking), but
+   the row won't wrap early the way auto-fit did. */
+.upload-grid{display:grid; grid-template-columns:repeat(5, minmax(200px, 1fr)); gap:16px}
 .upload-card-disabled{opacity:.55}
 .upload-hint{font-size:12px; color:var(--text-muted); line-height:1.5; margin-bottom:14px; min-height:52px}
 .upload-file-input{position:absolute; width:1px; height:1px; overflow:hidden; opacity:0}
@@ -1176,17 +1185,17 @@ td.budget-lob-td{text-align:center}
     <div class="subpane" id="fc-subpane-regional-drivers">
       <div class="card">
         <div class="card-head">
-          <h3 id="fc-rd-title">Regions vs. Pace</h3>
+          <h3 id="fc-rd-title">Sales vs. Pace</h3>
           <span class="meta" id="fc-rd-asof-meta">Sorted by furthest below pace</span>
         </div>
         <div class="card-pad" style="padding-top:6px">
           <div class="region-driver-row rd-head">
-            <div>Region</div>
-            <div>vs. Trailing Avg</div>
+            <div class="rd-col-left">Region</div>
+            <div class="rd-col-right">vs. Trailing Avg</div>
             <div></div>
-            <div>$ vs. Avg Month</div>
-            <div>vs. Budget</div>
-            <div>Biggest Shortfall</div>
+            <div class="rd-col-right">$ vs. Avg Month</div>
+            <div class="rd-col-right">vs. Budget</div>
+            <div class="rd-col-left">Biggest Shortfall</div>
           </div>
           <div id="fc-rd-rows"></div>
           <div class="legend-row">
@@ -1195,12 +1204,47 @@ td.budget-lob-td{text-align:center}
             <div class="legend-item"><div class="legend-swatch" style="background:var(--crit)"></div> More than 5% below</div>
             <div class="legend-item"><div class="legend-tick"></div> Trailing-average mark</div>
           </div>
-          <!-- v1a — Revenue Budget is reference context, not a pace
-               comparison (no Revenue-actuals source yet), so it's called
-               out separately here rather than folded into the legend
+          <!-- Revenue Budget is reference context on the Sales panel, not
+               a pace comparison here (its own pace lives in the Revenue
+               panel below once actuals exist for a region), so it's
+               called out separately rather than folded into the legend
                above, which describes the Sales pace bar's color coding. -->
           <div class="legend-row" style="margin-top:6px; padding-top:0; border-top:none">
-            <div class="legend-item" style="color:var(--text-faint)">Revenue Budget shown per region is reference only &mdash; no Revenue actuals source exists yet to measure pace against.</div>
+            <div class="legend-item" style="color:var(--text-faint)">Revenue Budget shown per region is reference only on this panel &mdash; see Revenue vs. Pace below for regions with real Revenue actuals.</div>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head">
+          <h3>Revenue vs. Pace</h3>
+          <span class="meta" id="fc-rd-rev-asof-meta">Sorted to match the Sales panel above</span>
+        </div>
+        <div class="card-pad" style="padding-top:6px">
+          <!-- Real once billed_fact has data for a region's fiscal year
+               (2026-09-04: Details_1.xlsx uploaded via Data Updates >
+               Billed Fact). Until then, per-region revenueActualsAvailable
+               is false and that region's row shows a pending note instead,
+               same "explicit pending state, never fake numbers" rule as
+               Business Lines' Revenue table. -->
+          <div id="fc-rd-rev-empty-note" class="fc-empty-note hidden">
+            Revenue isn't wired to real data yet for this fiscal year. Upload a Billed Fact export on Data Updates to populate this section.
+          </div>
+          <div id="fc-rd-rev-wrap">
+            <div class="region-driver-row rd-head">
+              <div class="rd-col-left">Region</div>
+              <div class="rd-col-right">vs. Trailing Avg</div>
+              <div></div>
+              <div class="rd-col-right">$ vs. Avg Month</div>
+              <div class="rd-col-right">vs. Budget</div>
+              <div class="rd-col-left">Biggest Shortfall</div>
+            </div>
+            <div id="fc-rd-rev-rows"></div>
+          </div>
+          <div class="legend-row" id="fc-rd-rev-legend">
+            <div class="legend-item"><div class="legend-swatch" style="background:var(--good)"></div> At or above pace</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:var(--warn)"></div> Within 5% of pace</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:var(--crit)"></div> More than 5% below</div>
+            <div class="legend-item"><div class="legend-tick"></div> Trailing-average mark</div>
           </div>
         </div>
       </div>
@@ -1561,8 +1605,16 @@ td.budget-lob-td{text-align:center}
    computed once at load, never hardcoded) via the new
    populateYearSelect() helper, which builds each select's option list
    at page load. No year will ever need a manual code edit again.
+
+   v1f (2026-09-05): fixed the Data Updates upload grid. Confirmed live
+   (Misty's screenshot after uploading Billed Fact, the 5th type added in
+   v1d): the grid's .upload-grid rule was auto-fit/minmax(260px,1fr),
+   which wraps to a new row once 5 cards no longer fit one row's width,
+   so Billed Fact dropped below the first four instead of sitting beside
+   them. Changed to a real 5-column grid (repeat(5, minmax(200px,1fr)))
+   so all five upload types stay in one row.
    ============================================================ */
-const APP_VERSION = 'v1e';
+const APP_VERSION = 'v1g';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -1970,6 +2022,48 @@ async function loadForecastRegionalDrivers(year){
   }
 }
 
+// Shared row builder for both the Sales panel and the Revenue panel.
+// `scope` is a { currentMonthBlended, priorAvgPerMonth, dollarVsAvgMonth,
+// pacePctOfTrailingAvg, pacePctOfBudget, shortfallLob, shortfallGroup |
+// shortfallServiceFamily } object; Sales passes the flattened region
+// fields (shortfallServiceFamily), Revenue passes `r.revenue`
+// (shortfallGroup, from computeRegionDriverForScope's own shape), both
+// normalized to the same { label, dollarGap } access below so one
+// function renders either.
+function buildRegionDriverRow(regionName, scope, revenueNoteHtml){
+  const pct = scope.pacePctOfTrailingAvg;
+  const cls = paceClass(pct);
+  const widthPct = pct === null ? 0 : Math.min(pct, 130);
+  const budgetCls = paceClass(scope.pacePctOfBudget);
+  const gapCls = scope.dollarVsAvgMonth >= 0 ? 'good' : 'crit';
+
+  const secondLevel = scope.shortfallServiceFamily
+    ? { label: scope.shortfallServiceFamily.serviceFamily, dollarGap: scope.shortfallServiceFamily.dollarGap }
+    : (scope.shortfallGroup ? { label: scope.shortfallGroup.groupLabel, dollarGap: scope.shortfallGroup.dollarGap } : null);
+
+  let shortfallHtml = '&mdash;';
+  if (scope.shortfallLob) {
+    shortfallHtml = `<div class="rd-shortfall"><span class="rd-shortfall-lob">${escapeHtml(scope.shortfallLob.label)}</span> (${fmtMoneyShort(scope.shortfallLob.dollarGap)})`;
+    if (secondLevel) {
+      shortfallHtml += `<br><span class="rd-shortfall-fam">${escapeHtml(secondLevel.label)} (${fmtMoneyShort(secondLevel.dollarGap)})</span>`;
+    }
+    shortfallHtml += '</div>';
+  }
+
+  const row = document.createElement('div');
+  row.className = 'region-driver-row';
+  row.innerHTML = `
+    <div class="rd-name">${escapeHtml(regionName)}</div>
+    <div class="rd-track"><div class="rd-fill ${cls}" style="width:${widthPct}%"></div><div class="rd-target-tick" style="left:100%"></div></div>
+    <div class="rd-pct ${cls}">${pct === null ? '&mdash;' : pct.toFixed(1) + '%'}</div>
+    <div class="rd-gap ${gapCls}">${scope.dollarVsAvgMonth >= 0 ? '+' : '−'}${fmtMoneyShort(Math.abs(scope.dollarVsAvgMonth))}</div>
+    <div class="rd-gap ${budgetCls === 'crit' ? 'crit' : (budgetCls === 'good' ? 'good' : '')}">${scope.pacePctOfBudget === null ? 'No budget set' : scope.pacePctOfBudget.toFixed(1) + '%'}</div>
+    <div>${shortfallHtml}</div>
+    ${revenueNoteHtml || ''}
+  `;
+  return row;
+}
+
 function renderForecastRegionalDrivers(data){
   document.getElementById('fc-rd-asof-meta').textContent =
     'Sorted by furthest below pace · ' + (data.asOf ? fmtAsOf(data.asOf).replace('As of ', 'as of ') : '');
@@ -1977,46 +2071,59 @@ function renderForecastRegionalDrivers(data){
   const container = document.getElementById('fc-rd-rows');
   container.innerHTML = '';
   data.regions.forEach(r=>{
-    const pct = r.pacePctOfTrailingAvg;
-    const cls = paceClass(pct);
-    const widthPct = pct === null ? 0 : Math.min(pct, 130);
-    const budgetCls = paceClass(r.pacePctOfBudget);
-    const gapCls = r.dollarVsAvgMonth >= 0 ? 'good' : 'crit';
-
-    let shortfallHtml = '&mdash;';
-    if (r.shortfallLob) {
-      shortfallHtml = `<div class="rd-shortfall"><span class="rd-shortfall-lob">${escapeHtml(r.shortfallLob.label)}</span> (${fmtMoneyShort(r.shortfallLob.dollarGap)})`;
-      if (r.shortfallServiceFamily) {
-        shortfallHtml += `<br><span class="rd-shortfall-fam">${escapeHtml(r.shortfallServiceFamily.serviceFamily)} (${fmtMoneyShort(r.shortfallServiceFamily.dollarGap)})</span>`;
-      }
-      shortfallHtml += '</div>';
-    }
-
-    // v1a — Revenue Budget context row, added under the existing Sales
-    // pace row per region. Reference only (annualBudget / month-
-    // equivalent, monthly-preferred with annual÷12 fallback exactly as
-    // the Worker computes it) — no pace percentage or color-coding,
-    // since revenueActualsAvailable is always false today (no billed
-    // data source yet). Renders nothing when there's no Revenue Budget
+    // Revenue Budget context row, shown under the Sales pace row per
+    // region. Reference only (annualBudget / month-equivalent, monthly-
+    // preferred with annual÷12 fallback exactly as the Worker computes
+    // it). The Sales panel never shows a Revenue pace percentage or
+    // color-coding, that lives in the Revenue panel below for regions
+    // with real actuals. Renders nothing when there's no Revenue Budget
     // at all for this region/year, rather than showing a misleading $0.
     let revenueNoteHtml = '';
     if (r.revenueAnnualBudget && r.revenueAnnualBudget > 0) {
       const monthLabel = r.revenueBudgetSource === 'monthly' ? 'entered for this month' : 'annual ÷ 12';
-      revenueNoteHtml = `<div class="rd-revenue-note"><b>Revenue Budget:</b> ${fmtMoneyShort(r.revenueAnnualBudget)}/yr &middot; ${fmtMoneyShort(r.revenueMonthBudget)}/mo (${monthLabel}) &mdash; reference only, no Revenue actuals yet</div>`;
+      const actualsNote = r.revenueActualsAvailable ? 'see Revenue panel below for pace' : 'no Revenue actuals yet';
+      revenueNoteHtml = `<div class="rd-revenue-note"><b>Revenue Budget:</b> ${fmtMoneyShort(r.revenueAnnualBudget)}/yr &middot; ${fmtMoneyShort(r.revenueMonthBudget)}/mo (${monthLabel}) &mdash; reference only, ${actualsNote}</div>`;
     }
+    container.appendChild(buildRegionDriverRow(r.regionName, r, revenueNoteHtml));
+  });
 
-    const row = document.createElement('div');
-    row.className = 'region-driver-row';
-    row.innerHTML = `
-      <div class="rd-name">${escapeHtml(r.regionName)}</div>
-      <div class="rd-track"><div class="rd-fill ${cls}" style="width:${widthPct}%"></div><div class="rd-target-tick" style="left:100%"></div></div>
-      <div class="rd-pct ${cls}">${pct === null ? '&mdash;' : pct.toFixed(1) + '%'}</div>
-      <div class="rd-gap ${gapCls}">${r.dollarVsAvgMonth >= 0 ? '+' : '−'}${fmtMoneyShort(Math.abs(r.dollarVsAvgMonth))}</div>
-      <div class="rd-gap ${budgetCls === 'crit' ? 'crit' : (budgetCls === 'good' ? 'good' : '')}">${r.pacePctOfBudget === null ? 'No budget set' : r.pacePctOfBudget.toFixed(1) + '%'}</div>
-      <div>${shortfallHtml}</div>
-      ${revenueNoteHtml}
-    `;
-    container.appendChild(row);
+  renderForecastRegionalDriversRevenue(data);
+}
+
+// Revenue panel: one row per region that has real billed_fact actuals for
+// this fiscal year (revenueActualsAvailable), using the exact same row
+// builder and the exact same region order as the Sales panel above. When
+// no region has Revenue actuals yet for the selected year, the whole
+// panel falls back to the same explicit pending note Business Lines uses
+// (never a table of misleading zeros).
+function renderForecastRegionalDriversRevenue(data){
+  const emptyNote = document.getElementById('fc-rd-rev-empty-note');
+  const wrap = document.getElementById('fc-rd-rev-wrap');
+  const legend = document.getElementById('fc-rd-rev-legend');
+  const asOfMeta = document.getElementById('fc-rd-rev-asof-meta');
+
+  const regionsWithRevenue = data.regions.filter(r => r.revenueActualsAvailable && r.revenue);
+  if (regionsWithRevenue.length === 0) {
+    emptyNote.classList.remove('hidden');
+    wrap.classList.add('hidden');
+    legend.classList.add('hidden');
+    asOfMeta.textContent = '';
+    return;
+  }
+
+  emptyNote.classList.add('hidden');
+  wrap.classList.remove('hidden');
+  legend.classList.remove('hidden');
+  asOfMeta.textContent = 'Sorted to match the Sales panel above · ' + (data.asOf ? fmtAsOf(data.asOf).replace('As of ', 'as of ') : '');
+
+  const container = document.getElementById('fc-rd-rev-rows');
+  container.innerHTML = '';
+  // Same region order as the Sales panel (data.regions is already sorted
+  // by Sales pace); regions without Revenue actuals yet are simply
+  // omitted from this panel rather than shown with fake numbers.
+  data.regions.forEach(r=>{
+    if (!r.revenueActualsAvailable || !r.revenue) return;
+    container.appendChild(buildRegionDriverRow(r.regionName, r.revenue, ''));
   });
 }
 
