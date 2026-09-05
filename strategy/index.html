@@ -3,8 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PULSE Strategy v1b</title>
+<title>PULSE Strategy v1d</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+<!-- SheetJS (2026-09-04): needed to parse Billed Fact uploads, real
+     binary .xlsx files, unlike every other upload type here which is an
+     HTML table saved with an .xls extension (parsed via DOMParser, no
+     library needed). Pinned to an exact version per standard practice. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   /* Shared PULSE family tokens, matched to PULSE Pricing's live CSS
@@ -420,6 +425,12 @@ td.budget-lob-td{text-align:center}
 .upload-hint{font-size:12px; color:var(--text-muted); line-height:1.5; margin-bottom:14px; min-height:52px}
 .upload-file-input{position:absolute; width:1px; height:1px; overflow:hidden; opacity:0}
 .upload-choose-btn{display:inline-block; font-size:12.5px; padding:8px 14px; cursor:pointer}
+.upload-input-row{display:flex; align-items:center; gap:8px; margin-bottom:12px}
+.upload-field-label{font-size:12px; font-weight:700; color:var(--text-muted)}
+.upload-year-select{
+  font-family:inherit; font-size:12.5px; font-weight:700; color:var(--text); padding:6px 9px; border-radius:8px;
+  border:1.5px solid var(--border-strong); background:var(--paper-raised);
+}
 .upload-filename{display:block; font-size:11.5px; color:var(--text-faint); margin-top:8px}
 .upload-progress{height:6px; border-radius:4px; background:var(--paper-sunk); margin-top:12px; overflow:hidden}
 .upload-progress-bar{height:100%; width:0%; background:var(--accent); transition:width .2s}
@@ -1148,9 +1159,30 @@ td.budget-lob-td{text-align:center}
         </div>
       </div>
       <div class="card" style="margin-top:16px">
-        <div class="card-head"><h3>Revenue (Billings) by Line of Business</h3></div>
-        <div class="card-pad fc-empty-note" id="fc-revenue-pending-note">
-          Revenue isn't wired to real data yet. Backlog's End Date table is a point-in-time snapshot of future expected completions, not a historical record of what actually billed &mdash; so real Jan-through-today Revenue needs its own billed-data upload, which hasn't been provided yet. This section will populate once that source exists.
+        <div class="card-head">
+          <h3>Revenue (Billings) by Line of Business</h3>
+          <span class="meta" id="fc-rev-asof-meta"></span>
+        </div>
+        <div class="card-pad" style="padding-top:6px">
+          <!-- Real once billed_fact has data for this fiscal year (2026-09-04:
+               Details_1.xlsx uploaded via Data Updates > Billed Fact). Until
+               then, revenueAvailable is false and this pending note shows
+               instead, per the same "explicit pending state, never fake
+               numbers" rule the placeholder always followed. -->
+          <div id="fc-revenue-pending-note" class="fc-empty-note">
+            Revenue isn't wired to real data yet for this fiscal year. Upload a Billed Fact export on Data Updates to populate this section.
+          </div>
+          <div id="fc-revenue-table-wrap" class="hidden" style="overflow-x:auto">
+            <table class="rtable" id="fc-rev-table">
+              <thead><tr id="fc-rev-thead-row"><th>Line of Business</th></tr></thead>
+              <tbody id="fc-rev-tbody"></tbody>
+            </table>
+          </div>
+          <div class="legend-row hidden" id="fc-rev-legend">
+            <div class="legend-item"><span style="font-weight:700">Plain</span>&nbsp;Actual, closed month</div>
+            <div class="legend-item"><span class="cell-current" style="font-weight:800">Blended</span>&nbsp;Current month, actual-to-date + projected</div>
+            <div class="legend-item"><span class="cell-forecast" style="font-style:italic">Forecast</span>&nbsp;Remaining months, at trailing average</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1294,6 +1326,37 @@ td.budget-lob-td{text-align:center}
           <span class="upload-filename" id="upload-filename-proposal_volume">No file chosen</span>
           <div class="upload-progress hidden" id="upload-progress-proposal_volume"><div class="upload-progress-bar" id="upload-progress-bar-proposal_volume"></div></div>
           <div class="upload-status" id="upload-status-proposal_volume"></div>
+        </div>
+      </div>
+
+      <!-- Billed Fact (2026-09-04): real Adj. Billings actuals, the source
+           Forecast's Revenue display had been waiting on. Its own card
+           since it works differently from the four above: a real binary
+           .xlsx (needs SheetJS, not the DOMParser HTML-table trick), a
+           fiscal year picker (this REPLACES that year's existing data
+           rather than appending), and one request instead of chunking
+           (the real file is ~3,950 rows, comfortably under the 5,000/
+           request cap, and replace semantics need the whole year's data
+           in one call so a partial upload can't wipe part of a prior
+           one). -->
+      <div class="card upload-card">
+        <div class="card-head"><h3>Billed Fact (Revenue Actuals)</h3></div>
+        <div class="card-pad" style="padding-top:6px">
+          <div class="upload-hint">Real Adj. Billings by period, region, and line of business. Re-uploading for a fiscal year replaces that year's data entirely, other years are untouched. Real export columns: Period, Entity, Region, Revenue Type, Revenue Subtype, Adj. Billings, and related fields.</div>
+          <div class="upload-input-row">
+            <label class="upload-field-label" for="upload-billed-fact-year">Fiscal Year</label>
+            <select id="upload-billed-fact-year" class="upload-year-select">
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026" selected>2026</option>
+              <option value="2027">2027</option>
+            </select>
+          </div>
+          <input type="file" id="upload-file-billed_fact" accept=".xlsx,.xls" class="upload-file-input" onchange="onBilledFactFileChosen(this)">
+          <label class="btn-secondary upload-choose-btn" for="upload-file-billed_fact">Choose File</label>
+          <span class="upload-filename" id="upload-filename-billed_fact">No file chosen</span>
+          <div class="upload-progress hidden" id="upload-progress-billed_fact"><div class="upload-progress-bar" id="upload-progress-bar-billed_fact"></div></div>
+          <div class="upload-status" id="upload-status-billed_fact"></div>
         </div>
       </div>
     </div>
@@ -1455,8 +1518,58 @@ td.budget-lob-td{text-align:center}
    service_family+service_name+effective_fiscal_year); and a "Merge
    Region" card on Geography (preview -> confirm -> execute, using the
    now-live region_merges/regions.active backend from worker_v1b.mjs).
+
+   v1c (2026-09-04): Setup Baseline wizard (Worker batch C, paired with
+   worker_v1c.mjs): new "Setup Baseline" subtab under Baseline, 4-step
+   flow (Growth Scenario, Line of Business Totals, Region Allocation,
+   Lock), backed by the new fiscal_year_locks/budget_company_targets
+   tables. Also folded into this same v1c build, no separate version
+   bump per change since these all shipped together:
+   - Fixed the §54 header-centering bug: .budget-cell-input is now
+     centered (display:block, margin:0 auto, text-align:center) instead
+     of just centering the <td> around a right-aligned fixed-width box.
+   - Region lists across every screen now sort strictly A-Z by name
+     (loadRegions(), REGIONS.sort by name.localeCompare) instead of the
+     old fixed sort_order grouping, then Canada/UK pinned last (see
+     loadRegions() below) per Misty's direct request.
+   - Active subtab now shows var(--accent-soft) background with
+     var(--accent-ink) text (was a neutral background with only the text
+     colored), so the selected tab reads as a clear purple highlight.
+   - Added an explicit "Sign out" button under the user card in the
+     rail. The old behavior silently logged out on any click anywhere on
+     the user card, with only a title tooltip as a hint, an easy
+     accidental-logout trap. That onclick was removed from .rail-user.
+
+   v1d (2026-09-04): versioning rule changed per Misty's direct request,
+   from here forward every round of edits gets a new version letter, even
+   before the prior one has been deployed (previously the letter only
+   bumped once a version had actually gone live). No Worker change this
+   round, still paired with worker_v1c.mjs. Changes:
+   - Canada/UK now pinned to the very bottom of every region list, below
+     the rest of the A-Z sort, not just alphabetized in with everything
+     else (loadRegions() below, keyed off is_placeholder so it survives
+     a future rename).
+   - APP_VERSION corrected to actually match this file's real version
+     (was hardcoded to 'v1b' through the v1c build, an oversight caught
+     directly by Misty from the live footer label).
+
+   Also folded into v1d (2026-09-04, Worker batch D, still paired with
+   worker_v1c.mjs, only the frontend changed here): Billed Fact (Revenue
+   Actuals), the real billed_fact data source Forecast's Revenue display
+   had been waiting on since the continuity brief's §48/§51.
+   - New "Billed Fact (Revenue Actuals)" card on Data Updates, its own
+     fiscal year picker (re-uploading a year REPLACES that year's data,
+     unlike the other four append-only upload types), parsed client-side
+     with SheetJS (real binary .xlsx, not the HTML-table-as-.xls trick
+     the other four use) via parseBilledFactXlsx/onBilledFactFileChosen.
+   - Forecast's Business Lines tab now renders a real Revenue table
+     (renderForecastLobTable, shared with the existing Sales table) once
+     billed_fact has data for the selected fiscal year, falling back to
+     the same explicit "pending" note as before for any year without an
+     upload yet, per Misty's confirmed source column (Adj. Billings
+     only) and mapping decisions, see PULSE-billed-fact-schema-v1.md.
    ============================================================ */
-const APP_VERSION = 'v1b';
+const APP_VERSION = 'v1d';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -1741,18 +1854,19 @@ async function loadForecastBusinessLines(year){
   }
 }
 
-function renderForecastBusinessLines(data){
-  document.getElementById('fc-bl-asof-meta').innerHTML = fmtAsOf(data.asOf) +
-    (data.unmappedTotal ? ` &middot; ${fmtMoneyShort(data.unmappedTotal)} unmapped revenue type` : '');
-
-  const theadRow = document.getElementById('fc-bl-thead-row');
+// Shared by Sales and Revenue below, both use the identical
+// actual/blended/forecast month-cell shape from the Worker's blended
+// forecast math (computeBlendedForecast), so the rendering only needs to
+// exist once. theadId/tbodyId point at each section's own table.
+function renderForecastLobTable(theadId, tbodyId, sectionData){
+  const theadRow = document.getElementById(theadId);
   theadRow.innerHTML = '<th>Line of Business</th>' +
-    data.sales.companyTotal.months.map(m => `<th class="num">${m.label}</th>`).join('') +
+    sectionData.companyTotal.months.map(m => `<th class="num">${m.label}</th>`).join('') +
     '<th class="num">YTD</th><th class="num">Total Year Forecast</th>';
 
-  const tbody = document.getElementById('fc-bl-tbody');
+  const tbody = document.getElementById(tbodyId);
   tbody.innerHTML = '';
-  data.sales.lines.forEach(line=>{
+  sectionData.lines.forEach(line=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `<td class="region-name">${escapeHtml(line.label)}</td>` +
       line.months.map(m=>{
@@ -1767,7 +1881,7 @@ function renderForecastBusinessLines(data){
 
   const totalTr = document.createElement('tr');
   totalTr.className = 'rtable-total-row';
-  const ct = data.sales.companyTotal;
+  const ct = sectionData.companyTotal;
   totalTr.innerHTML = `<td>Company Total</td>` +
     ct.months.map(m=>{
       if (m.actual !== null) return `<td class="num">${fmtMoneyShort(m.actual)}</td>`;
@@ -1777,6 +1891,34 @@ function renderForecastBusinessLines(data){
     `<td class="num">${fmtMoneyShort(ct.ytdActual)}</td>` +
     `<td class="num">${fmtMoneyShort(ct.totalYearForecast)}</td>`;
   tbody.appendChild(totalTr);
+}
+
+function renderForecastBusinessLines(data){
+  document.getElementById('fc-bl-asof-meta').innerHTML = fmtAsOf(data.asOf) +
+    (data.unmappedTotal ? ` &middot; ${fmtMoneyShort(data.unmappedTotal)} unmapped revenue type` : '');
+  renderForecastLobTable('fc-bl-thead-row', 'fc-bl-tbody', data.sales);
+
+  // Revenue (2026-09-04): real once billed_fact has data for this fiscal
+  // year (data.revenueAvailable, set in getForecastBusinessLines). Shows
+  // the same pending note as before for any year without an upload yet,
+  // rather than an empty or misleadingly-zeroed table.
+  const pendingNote = document.getElementById('fc-revenue-pending-note');
+  const tableWrap = document.getElementById('fc-revenue-table-wrap');
+  const legend = document.getElementById('fc-rev-legend');
+  const asOfMeta = document.getElementById('fc-rev-asof-meta');
+  if (data.revenueAvailable && data.revenue){
+    pendingNote.classList.add('hidden');
+    tableWrap.classList.remove('hidden');
+    legend.classList.remove('hidden');
+    asOfMeta.innerHTML = fmtAsOf(data.asOf) +
+      (data.revenue.unmappedTotal ? ` &middot; ${fmtMoneyShort(data.revenue.unmappedTotal)} unmapped revenue type` : '');
+    renderForecastLobTable('fc-rev-thead-row', 'fc-rev-tbody', data.revenue);
+  } else {
+    pendingNote.classList.remove('hidden');
+    tableWrap.classList.add('hidden');
+    legend.classList.add('hidden');
+    asOfMeta.textContent = '';
+  }
 }
 
 /* ---- Regional Drivers ---- */
@@ -1915,7 +2057,17 @@ async function loadRegions(){
     // Geography, Forecast), so alphabetizing here is a single change
     // rather than one per screen. Self-maintaining if a region is
     // renamed later, unlike a static sort_order value would be.
-    REGIONS = (data.regions || []).sort((a,b)=>a.name.localeCompare(b.name));
+    // Canada/UK are pinned last regardless of where they'd otherwise
+    // alphabetize, per Misty's direct follow-up: they're placeholder
+    // regions with no live SFDC feed yet (is_placeholder=1 in the
+    // regions table, not a name match, so this still works if either is
+    // renamed later), and reading as an afterthought at the bottom of
+    // the list is the point, not a side effect.
+    REGIONS = (data.regions || []).sort((a,b)=>{
+      const aPin = a.is_placeholder ? 1 : 0, bPin = b.is_placeholder ? 1 : 0;
+      if (aPin !== bPin) return aPin - bPin;
+      return a.name.localeCompare(b.name);
+    });
   } catch(e){
     showToast('Could not load regions from the server.', true);
     REGIONS = [];
@@ -3341,7 +3493,7 @@ async function onResendPin(userId){
    ============================================================ */
 
 const UPLOAD_CHUNK_SIZE = 500; // rows per request to /api/uploads/:id/rows
-const UPLOAD_TYPE_LABELS = { bookings: 'Bookings', backlog: 'Backlog', proposal_pipeline: 'Proposal Pipeline', proposal_volume: 'Proposal Volume' };
+const UPLOAD_TYPE_LABELS = { bookings: 'Bookings', backlog: 'Backlog', proposal_pipeline: 'Proposal Pipeline', proposal_volume: 'Proposal Volume', billed_fact: 'Billed Fact' };
 
 // Parses a Salesforce "HTML table saved as .xls" export into an array of
 // row objects keyed by the real header text (verbatim, including spaces,
@@ -3368,6 +3520,67 @@ function parseSalesforceHtmlExport(text){
     if (Object.values(obj).some(v => v !== '')) dataRows.push(obj);
   }
   return dataRows;
+}
+
+// Billed Fact (2026-09-04): parses a real binary .xlsx export via
+// SheetJS, unlike parseSalesforceHtmlExport above which handles the
+// HTML-table-saved-as-.xls trick every other upload type uses. Reads the
+// first sheet, first row as headers (verbatim, so mapBilledFactRow in
+// the Worker can look up 'Period'/'Region'/'Revenue Type'/etc. by their
+// real names), and drops rows with no parseable Period (the source
+// file's own 'No filters applied'/'Total'/blank footer rows) so those
+// never reach the Worker at all, on top of the Worker's own defensive
+// filtering for the same thing.
+function parseBilledFactXlsx(arrayBuffer){
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  if (!sheet) throw new Error('No sheet found in this file.');
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const periodPattern = /^\d{4}-\d{2}$/;
+  const dataRows = rows.filter(r => periodPattern.test(String(r['Period'] || '').trim()));
+  if (dataRows.length === 0) throw new Error('No rows with a valid Period (e.g. "2026-08") were found.');
+  return dataRows;
+}
+
+async function onBilledFactFileChosen(input){
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const fiscalYear = parseInt(document.getElementById('upload-billed-fact-year').value, 10);
+  document.getElementById('upload-filename-billed_fact').textContent = file.name;
+  setUploadStatus('billed_fact', '', null);
+  setUploadProgress('billed_fact', 0);
+
+  try {
+    if (typeof XLSX === 'undefined') {
+      setUploadStatus('billed_fact', 'The spreadsheet library did not load, check your connection and reload the page.', 'error');
+      return;
+    }
+    setUploadStatus('billed_fact', 'Reading file...', 'working');
+    const buffer = await file.arrayBuffer();
+    const rows = parseBilledFactXlsx(buffer);
+
+    setUploadStatus('billed_fact', `Parsed ${rows.length.toLocaleString()} rows. This will REPLACE all FY${fiscalYear} Billed Fact data. Uploading...`, 'working');
+    setUploadProgress('billed_fact', 30);
+
+    const res = await workerFetch('/api/uploads/billed-fact', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ fiscalYear, sourceFilename: file.name, rows }),
+    });
+    const data = await res.json();
+    setUploadProgress('billed_fact', null);
+    if (!res.ok) { setUploadStatus('billed_fact', data.error || 'Upload failed.', 'error'); return; }
+
+    if ((data.unmappedRegions || []).length > 0){
+      setUploadStatus('billed_fact', `Done: ${data.rowsInserted.toLocaleString()} rows replaced FY${fiscalYear}. Some rows had an unrecognized region and were saved without one: ${data.unmappedRegions.join(', ')}. Contact your admin to add these to the region mapping.`, 'error');
+    } else {
+      setUploadStatus('billed_fact', `Done: ${data.rowsInserted.toLocaleString()} rows replaced FY${fiscalYear}'s Billed Fact data.`, 'ok');
+    }
+    input.value = '';
+    loadUploadHistory();
+  } catch(e){
+    setUploadStatus('billed_fact', 'Could not read or upload this file: ' + (e.message || 'unknown error'), 'error');
+    setUploadProgress('billed_fact', null);
+  }
 }
 
 function setUploadStatus(uploadType, message, kind){
