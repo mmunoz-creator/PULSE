@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PULSE Strategy v1d</title>
+<title>PULSE Strategy v1e</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
 <!-- SheetJS (2026-09-04): needed to parse Billed Fact uploads, real
      binary .xlsx files, unlike every other upload type here which is an
@@ -732,10 +732,7 @@ td.budget-lob-td{text-align:center}
             <button class="btn-secondary" style="font-size:12px; padding:7px 12px" id="revenue-monthly-toggle-btn" onclick="toggleRevenueMonthlyDetail()">Monthly Detail</button>
             <label class="year-picker">
               <span>Year</span>
-              <select id="revenue-year-select" onchange="onBudgetYearChange('revenue', this.value)">
-                <option value="2026">2026</option>
-                <option value="2027">2027</option>
-              </select>
+              <select id="revenue-year-select" onchange="onBudgetYearChange('revenue', this.value)"></select>
             </label>
           </div>
         </div>
@@ -814,10 +811,7 @@ td.budget-lob-td{text-align:center}
             <span class="meta" id="sales-total-meta">&mdash;</span>
             <label class="year-picker">
               <span>Year</span>
-              <select id="sales-year-select" onchange="onBudgetYearChange('sales', this.value)">
-                <option value="2026">2026</option>
-                <option value="2027">2027</option>
-              </select>
+              <select id="sales-year-select" onchange="onBudgetYearChange('sales', this.value)"></select>
             </label>
           </div>
         </div>
@@ -953,10 +947,7 @@ td.budget-lob-td{text-align:center}
             <span class="meta" id="sa-count-meta">&mdash;</span>
             <label class="year-picker">
               <span>Effective Year</span>
-              <select id="sa-year-select" onchange="onServiceAlignmentYearChange(this.value)">
-                <option value="2026">2026</option>
-                <option value="2027">2027</option>
-              </select>
+              <select id="sa-year-select" onchange="onServiceAlignmentYearChange(this.value)"></select>
             </label>
             <button class="btn-primary" style="width:auto; margin-top:0" onclick="openCreateSaModal()">Add Mapping</button>
           </div>
@@ -987,10 +978,7 @@ td.budget-lob-td{text-align:center}
           <h3>Setup Baseline</h3>
           <label class="year-picker">
             <span>Fiscal Year</span>
-            <select id="wiz-year-select" onchange="onWizardYearChange(this.value)">
-              <option value="2026">2026</option>
-              <option value="2027">2027</option>
-            </select>
+            <select id="wiz-year-select" onchange="onWizardYearChange(this.value)"></select>
           </label>
         </div>
         <div class="card-pad" style="padding-top:6px; padding-bottom:0">
@@ -1124,10 +1112,7 @@ td.budget-lob-td{text-align:center}
       </div>
       <label class="year-picker">
         <span>Year</span>
-        <select id="forecast-year-select" onchange="onForecastYearChange(this.value)">
-          <option value="2026">2026</option>
-          <option value="2027">2027</option>
-        </select>
+        <select id="forecast-year-select" onchange="onForecastYearChange(this.value)"></select>
       </label>
     </div>
 
@@ -1345,12 +1330,7 @@ td.budget-lob-td{text-align:center}
           <div class="upload-hint">Real Adj. Billings by period, region, and line of business. Re-uploading for a fiscal year replaces that year's data entirely, other years are untouched. Real export columns: Period, Entity, Region, Revenue Type, Revenue Subtype, Adj. Billings, and related fields.</div>
           <div class="upload-input-row">
             <label class="upload-field-label" for="upload-billed-fact-year">Fiscal Year</label>
-            <select id="upload-billed-fact-year" class="upload-year-select">
-              <option value="2024">2024</option>
-              <option value="2025">2025</option>
-              <option value="2026" selected>2026</option>
-              <option value="2027">2027</option>
-            </select>
+            <select id="upload-billed-fact-year" class="upload-year-select"></select>
           </div>
           <input type="file" id="upload-file-billed_fact" accept=".xlsx,.xls" class="upload-file-input" onchange="onBilledFactFileChosen(this)">
           <label class="btn-secondary upload-choose-btn" for="upload-file-billed_fact">Choose File</label>
@@ -1568,12 +1548,58 @@ td.budget-lob-td{text-align:center}
      the same explicit "pending" note as before for any year without an
      upload yet, per Misty's confirmed source column (Adj. Billings
      only) and mapping decisions, see PULSE-billed-fact-schema-v1.md.
+
+   v1e (2026-09-05): fixed every fiscal year dropdown in the app. Misty
+   caught that Setup Baseline's Year select only offered 2026/2027,
+   hardcoded, and asked what happens in 2028. Turned out this exact
+   hardcoded-pair pattern was copy-pasted across SIX selects (Revenue
+   Budgets, Sales Budgets, Service Alignment, Setup Baseline, Forecast,
+   and the new Billed Fact upload picker added in v1d), plus two more
+   hardcoded 2026 defaults in JS state (forecastYear, currentYear) and
+   four more hardcoded 2026 literals in showApp()'s login-time init
+   calls. All of it now derives from CURRENT_YEAR (new Date().getFullYear(),
+   computed once at load, never hardcoded) via the new
+   populateYearSelect() helper, which builds each select's option list
+   at page load. No year will ever need a manual code edit again.
    ============================================================ */
-const APP_VERSION = 'v1d';
+const APP_VERSION = 'v1e';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
 const WORKER_URL = 'https://pulse-strategy-api.misty-munoz.workers.dev';
+
+// Fiscal year dropdowns (2026-09-05): every "Year"/"Fiscal Year" select in
+// this app (Revenue Budgets, Sales Budgets, Service Alignment, Setup
+// Baseline, Forecast, and the Billed Fact upload) used to be a static
+// <option value="2026">2026</option>/<option value="2027">2027</option>
+// pair typed directly into the HTML, six separate copies, none of them
+// aware of each other. That silently breaks the moment the real
+// calendar reaches 2028 (Misty caught this directly). CURRENT_YEAR is
+// computed from the real system clock, never hardcoded, and
+// populateYearSelect() builds every year dropdown's options at page
+// load from that, so there is exactly one place a future year ever
+// needs adjusting again: nowhere, since this recomputes itself every
+// time the page loads.
+const CURRENT_YEAR = new Date().getFullYear();
+
+// Fills `select` (an <select> element or element id) with <option>s from
+// (CURRENT_YEAR - yearsBack) through (CURRENT_YEAR + yearsForward),
+// selecting `selectedYear` (defaults to CURRENT_YEAR) if it falls in that
+// range. Safe to call on an already-populated select, replaces its
+// entire option list.
+function populateYearSelect(select, { yearsBack = 1, yearsForward = 2, selectedYear } = {}){
+  const el = typeof select === 'string' ? document.getElementById(select) : select;
+  if (!el) return;
+  const target = selectedYear || CURRENT_YEAR;
+  el.innerHTML = '';
+  for (let y = CURRENT_YEAR - yearsBack; y <= CURRENT_YEAR + yearsForward; y++){
+    const opt = document.createElement('option');
+    opt.value = String(y);
+    opt.textContent = String(y);
+    if (y === target) opt.selected = true;
+    el.appendChild(opt);
+  }
+}
 
 let sessionToken = null;
 let currentUser = null; // { id, name, role }
@@ -1723,15 +1749,26 @@ function showApp(){
   // request, matching PULSE-Mod's #sb-internal-build pattern.
   const _buildEl = document.getElementById('railBuild');
   if (_buildEl) _buildEl.textContent = APP_VERSION;
+  // Fiscal year dropdowns (2026-09-05): populate every year select from
+  // the real current date (CURRENT_YEAR/populateYearSelect, defined
+  // above) before anything tries to set a .value on one of them, rather
+  // than the old hardcoded 2026 this whole block used to pass around.
+  populateYearSelect('revenue-year-select');
+  populateYearSelect('sales-year-select');
+  populateYearSelect('sa-year-select');
+  populateYearSelect('wiz-year-select');
+  populateYearSelect('forecast-year-select');
+  populateYearSelect('upload-billed-fact-year', { yearsBack: 2, yearsForward: 1 });
+
   loadRegions().then(() => {
-    loadBudgetYear('revenue', 2026);
-    loadBudgetYear('sales', 2026);
+    loadBudgetYear('revenue', CURRENT_YEAR);
+    loadBudgetYear('sales', CURRENT_YEAR);
     renderGeoTable();
     loadStates();
     populateMergeRegionSelects();
     loadMergeHistory();
-    loadServiceAlignment(2026);
-    wizInit(2026);
+    loadServiceAlignment(CURRENT_YEAR);
+    wizInit(CURRENT_YEAR);
   });
 }
 
@@ -1797,7 +1834,7 @@ function showToast(message, isError){
    formula. Revenue is intentionally not shown yet — no real billed-data
    source exists (continuity brief §48/§51).
    ============================================================ */
-let forecastYear = 2026;
+let forecastYear = CURRENT_YEAR;
 const FC_LOB_ORDER = [
   { key: 'program_advisory', label: 'Program Advisory' },
   { key: 'design_services', label: 'Design Services' },
@@ -2177,7 +2214,7 @@ const LOBS = [
   { key: 'design_services', label: 'Design Services' },
   { key: 'inspections', label: 'Inspections' },
 ];
-let currentYear = { revenue: 2026, sales: 2026 };
+let currentYear = { revenue: CURRENT_YEAR, sales: CURRENT_YEAR };
 let lastBudgetRows = { revenue: [], sales: [] };
 
 function fmtMoney(n){
