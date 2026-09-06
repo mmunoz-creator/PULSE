@@ -524,6 +524,32 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
 
 .fc-empty-note{font-size:12px; color:var(--text-faint); padding:16px 18px; line-height:1.5}
 
+/* ================= EXECUTIVE SUMMARY (2026-09-06) =================
+   Narrative card and Revenue Bridge waterfall are the only two pieces
+   with no existing reusable component; tiles and the Regions table
+   reuse .fc-tile / .region-driver-row exactly as Forecast does. */
+.es-narrative-card{background:var(--navy); border-radius:14px; padding:18px 22px; margin-bottom:16px; box-shadow:var(--shadow)}
+.es-narrative-card h3{margin:0 0 10px; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:var(--accent-ink)}
+.es-narrative-card ul{margin:0; padding:0 0 0 18px}
+.es-narrative-card li{font-size:13.5px; line-height:1.6; color:#f2f4f8; margin-bottom:6px}
+.es-narrative-card li:last-child{margin-bottom:0}
+
+.es-bridge-chart{display:flex; align-items:flex-end; gap:0; min-width:720px; height:220px; padding:10px 6px 0}
+.es-bridge-col{flex:1; display:flex; flex-direction:column; align-items:center; height:100%}
+.es-bridge-track{width:100%; flex:1; display:flex; align-items:flex-end; position:relative}
+.es-bridge-bar{width:60%; margin:0 auto; border-radius:4px 4px 0 0}
+.es-bridge-bar.total{background:var(--navy)}
+.es-bridge-bar.pos{background:var(--good)}
+.es-bridge-val{font-size:11px; font-weight:800; margin-bottom:4px; color:var(--text)}
+.es-bridge-val.pos{color:var(--good)}
+.es-bridge-label{font-size:10.5px; color:var(--text-muted); text-align:center; margin-top:8px; line-height:1.35; max-width:104px}
+
+.es-svc-row{display:grid; grid-template-columns:180px 1fr 76px; align-items:center; gap:10px; margin-bottom:9px}
+.es-svc-row .n{font-size:12.5px; font-weight:700}
+.es-svc-track{height:16px; background:var(--paper-sunk); border-radius:5px; overflow:hidden}
+.es-svc-fill{height:100%; background:var(--accent)}
+.es-svc-row .v{font-size:11.5px; font-weight:700; text-align:right; font-variant-numeric:tabular-nums}
+
 /* ================= WEEKLY UPLOADS ================= */
 /* v1f (2026-09-05): was repeat(auto-fit, minmax(260px, 1fr)), which wraps
    to a new row once 5 cards at 260px minimum stop fitting the container
@@ -757,7 +783,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
     </div>
     <div class="rail-badge">Admin</div>
 
-    <div class="rail-item disabled" title="Not yet built in this pass">
+    <div class="rail-item" data-view="executive-summary" onclick="showView('executive-summary',this)">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
       Executive Summary
     </div>
@@ -1434,6 +1460,87 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
         </div>
         <div class="card-pad" style="padding-top:6px" id="fc-mp-detail"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- ---- Executive Summary (2026-09-06): pace tiles, Revenue Bridge,
+       Regions Below Budget Pace, Service Family — in that order, per
+       Misty's confirmed layout call. Composes getForecastMonthPace,
+       getForecastRegionalDrivers and getRevenueBridge (all real,
+       already built for Forecast/Regions) plus a new Service Family
+       chart and an auto-generated narrative, via GET
+       /api/executive-summary. Not an editable page — read-only, same as
+       Forecast. ---- -->
+  <div class="main hidden" id="view-executive-summary">
+    <div class="topbar">
+      <div>
+        <div class="eyebrow">Executive Summary</div>
+        <h1>Executive Summary</h1>
+        <div class="period">Where the company stands this month, on Sales and on Revenue, and what's driving it.</div>
+      </div>
+      <label class="year-picker">
+        <span>Year</span>
+        <select id="es-year-select" onchange="onExecSummaryYearChange(this.value)"></select>
+      </label>
+    </div>
+
+    <!-- Narrative -->
+    <div class="es-narrative-card">
+      <h3>This Month at a Glance</h3>
+      <ul id="es-narrative-list"></ul>
+    </div>
+
+    <!-- Pace Tiles -->
+    <div class="fc-tiles" id="es-tiles"></div>
+
+    <!-- Revenue Bridge -->
+    <div class="card">
+      <div class="card-head">
+        <h3>YTD Actuals to Expected Revenue</h3>
+        <span class="meta" id="es-bridge-meta">All Regions, company-wide</span>
+      </div>
+      <div class="card-pad" style="padding-top:6px">
+        <div style="overflow-x:auto; padding-bottom:6px">
+          <div class="es-bridge-chart" id="es-bridge-chart"></div>
+        </div>
+        <div class="legend-row" id="es-bridge-recon" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    <!-- Regions Below Budget Pace -->
+    <div class="card" style="margin-top:16px">
+      <div class="card-head">
+        <h3>Regions Below Budget Pace</h3>
+        <span class="meta" id="es-regions-meta">Sales basis, sorted worst pace first</span>
+      </div>
+      <div class="card-pad" style="padding-top:6px">
+        <div id="es-regions-empty-note" class="fc-empty-note hidden">Every region is at or above its own trailing-average pace this month.</div>
+        <div id="es-regions-wrap">
+          <div class="region-driver-row rd-head">
+            <div class="rd-col-left">Region</div>
+            <div class="rd-col-right">vs. Trailing Avg</div>
+            <div></div>
+            <div class="rd-col-right">$ vs. Avg Month</div>
+            <div class="rd-col-right">vs. Budget</div>
+            <div class="rd-col-left">Biggest Shortfall</div>
+          </div>
+          <div id="es-regions-rows"></div>
+        </div>
+        <div class="legend-row">
+          <div class="legend-item"><div class="legend-swatch" style="background:var(--good)"></div> At or above pace</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:var(--warn)"></div> Within 5% of pace</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:var(--crit)"></div> More than 5% below</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Service Family -->
+    <div class="card" style="margin-top:16px">
+      <div class="card-head">
+        <h3>Bookings by Service Family</h3>
+        <span class="meta">Company-wide, this fiscal year, sorted highest first</span>
+      </div>
+      <div class="card-pad" style="padding-top:6px" id="es-service-family"></div>
     </div>
   </div>
 
@@ -2361,7 +2468,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    creates a real service_alignment row rather than editing the built-in
    fallback in place.
    ============================================================ */
-const APP_VERSION = 'v1v';
+const APP_VERSION = 'v1w';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -2583,6 +2690,7 @@ function showView(view, el){
   if (view === 'uploads') loadUploadHistory();
   if (view === 'forecast') loadForecastAll(forecastYear);
   if (view === 'regions') regionsInit();
+  if (view === 'executive-summary') execSummaryInit();
 }
 
 /* ============================================================
@@ -2934,6 +3042,201 @@ function renderForecastMonthPace(data){
       </tbody>
     </table>
   `;
+}
+
+/* ============================================================
+   EXECUTIVE SUMMARY (2026-09-06)
+   Composes three already-real Forecast/Regions pieces plus a new
+   Service Family chart and an auto-generated narrative, all served by
+   one GET /api/executive-summary?fiscalYear= call. Read-only, no edit
+   affordances, same as Forecast.
+   ============================================================ */
+let esYear = CURRENT_YEAR;
+
+function execSummaryInit(){
+  populateYearSelect('es-year-select', { selectedYear: esYear });
+  esYear = parseInt(document.getElementById('es-year-select').value, 10);
+  loadExecutiveSummary(esYear);
+}
+
+function onExecSummaryYearChange(value){
+  esYear = parseInt(value, 10);
+  loadExecutiveSummary(esYear);
+}
+
+async function loadExecutiveSummary(year){
+  try {
+    const res = await workerFetch(`/api/executive-summary?fiscalYear=${year}`);
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not load Executive Summary.', true); return; }
+    renderExecutiveSummary(data);
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+
+function renderExecutiveSummary(data){
+  renderExecSummaryNarrative(data.narrative || []);
+  renderExecSummaryTiles(data);
+  renderExecSummaryBridge(data.revenueBridge);
+  renderExecSummaryRegions(data.regionalDrivers);
+  renderExecSummaryServiceFamily(data.serviceFamilyChart || []);
+}
+
+function renderExecSummaryNarrative(lines){
+  const list = document.getElementById('es-narrative-list');
+  list.innerHTML = lines.map(l => `<li>${escapeHtml(l)}</li>`).join('');
+}
+
+// Four tiles: Sales current-month-blended, Sales vs. budget, Revenue
+// current-month-blended, Revenue vs. budget. Sales comes straight from
+// getForecastMonthPace (identical fields to Month Pace's own tiles).
+// Revenue comes from the new company-wide revenuePace rollup — falls
+// back to a plain "not yet available" tile pair when revenueAvailable
+// is false (zero regions have billed_fact rows this fiscal year yet),
+// same "explicit pending state, never a fake number" rule used
+// throughout this app.
+function renderExecSummaryTiles(data){
+  const mp = data.monthPace;
+  const avgCls = paceClass(mp.pacePctOfTrailingAvg);
+  const budgetCls = paceClass(mp.pacePctOfBudget);
+
+  let revenueTilesHtml;
+  if (data.revenueAvailable && data.revenuePace) {
+    const rp = data.revenuePace;
+    const rAvgCls = paceClass(rp.pacePctOfTrailingAvg);
+    const rBudgetCls = paceClass(rp.pacePctOfBudget);
+    revenueTilesHtml = `
+      <div class="fc-tile">
+        <div class="fc-tile-top"><div class="fc-tile-icon ${rAvgCls === 'crit' ? 'warn' : 'good'}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8 12 14.7l-3.5-3.5L3 16.5"/></svg></div></div>
+        <div class="fc-tile-label">Revenue, Current Month Blended</div>
+        <div class="fc-tile-value">${fmtMoneyShort(rp.currentMonthBlended)}</div>
+        <div class="fc-tile-sub">vs. trailing avg: <span class="pace-pill ${rAvgCls}">${rp.pacePctOfTrailingAvg === null ? '&mdash;' : rp.pacePctOfTrailingAvg.toFixed(1) + '%'}</span></div>
+      </div>
+      <div class="fc-tile">
+        <div class="fc-tile-top"><div class="fc-tile-icon accent"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg></div></div>
+        <div class="fc-tile-label">Revenue vs. Budget</div>
+        <div class="fc-tile-value"><span class="pace-pill ${rBudgetCls}">${rp.pacePctOfBudget === null ? '&mdash;' : rp.pacePctOfBudget.toFixed(1) + '%'}</span></div>
+        <div class="fc-tile-sub">${rp.monthBudget > 0 ? fmtMoneyShort(rp.monthBudget) + '/mo budget' : 'No Revenue Budget set for ' + data.fiscalYear}</div>
+      </div>
+    `;
+  } else {
+    revenueTilesHtml = `
+      <div class="fc-tile">
+        <div class="fc-tile-top"><div class="fc-tile-icon warn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8 12 14.7l-3.5-3.5L3 16.5"/></svg></div></div>
+        <div class="fc-tile-label">Revenue, Current Month Blended</div>
+        <div class="fc-tile-value">&mdash;</div>
+        <div class="fc-tile-sub">No region has Revenue actuals yet for ${data.fiscalYear}</div>
+      </div>
+      <div class="fc-tile">
+        <div class="fc-tile-top"><div class="fc-tile-icon accent"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg></div></div>
+        <div class="fc-tile-label">Revenue vs. Budget</div>
+        <div class="fc-tile-value">&mdash;</div>
+        <div class="fc-tile-sub">Upload a Billed Fact export on Data Updates to populate this</div>
+      </div>
+    `;
+  }
+
+  document.getElementById('es-tiles').innerHTML = `
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon blue"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8 12 14.7l-3.5-3.5L3 16.5"/></svg></div></div>
+      <div class="fc-tile-label">Sales, Current Month Blended</div>
+      <div class="fc-tile-value">${fmtMoneyShort(mp.currentMonth.blended)}</div>
+      <div class="fc-tile-sub">vs. trailing avg: <span class="pace-pill ${avgCls}">${mp.pacePctOfTrailingAvg === null ? '&mdash;' : mp.pacePctOfTrailingAvg.toFixed(1) + '%'}</span></div>
+    </div>
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon ${budgetCls === 'crit' ? 'warn' : 'good'}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg></div></div>
+      <div class="fc-tile-label">Sales vs. Budget</div>
+      <div class="fc-tile-value"><span class="pace-pill ${budgetCls}">${mp.pacePctOfBudget === null ? '&mdash;' : mp.pacePctOfBudget.toFixed(1) + '%'}</span></div>
+      <div class="fc-tile-sub">${mp.companyMonthBudget > 0 ? fmtMoneyShort(mp.companyMonthBudget) + '/mo budget' : 'No budget set for ' + data.fiscalYear}</div>
+    </div>
+    ${revenueTilesHtml}
+  `;
+}
+
+// Revenue Bridge waterfall. `bridge.steps` is the real 7-step array from
+// getRevenueBridge (YTD Actuals, Inspections Run Rate, PA Backlog, DS
+// Backlog, Weighted Pipeline, Proposal Volume x Win Rate, Expected
+// Revenue) — 'total' steps are drawn from $0, 'pos' steps stack on the
+// running total, exactly matching the approved bridge mockup's chart
+// logic. reconciliation compares Expected Revenue to the stated Revenue
+// Budget, a check beyond the original spec.
+function renderExecSummaryBridge(bridge){
+  const chart = document.getElementById('es-bridge-chart');
+  const recon = document.getElementById('es-bridge-recon');
+  if (!bridge || !bridge.steps || !bridge.steps.length) {
+    chart.innerHTML = '';
+    recon.innerHTML = '<div class="legend-item" style="color:var(--text-faint)">Revenue Bridge is not available for this fiscal year yet.</div>';
+    return;
+  }
+
+  let running = 0;
+  const runningTotals = bridge.steps.map(s => { running = s.kind === 'total' ? s.value : running + s.value; return running; });
+  const maxV = Math.max(...runningTotals, 1);
+
+  running = 0;
+  chart.innerHTML = bridge.steps.map(s => {
+    const start = s.kind === 'total' ? 0 : running;
+    running = s.kind === 'total' ? s.value : running + s.value;
+    const barHeightPct = s.kind === 'total' ? (running / maxV) * 100 : (s.value / maxV) * 100;
+    const bottomPct = s.kind === 'total' ? 0 : (start / maxV) * 100;
+    const valLabel = s.kind === 'total' ? fmtMoneyShort(s.value) : (s.value >= 0 ? '+' : '') + fmtMoneyShort(s.value);
+    return `
+      <div class="es-bridge-col">
+        <div class="es-bridge-val ${s.kind !== 'total' ? s.kind : ''}">${valLabel}</div>
+        <div class="es-bridge-track"><div class="es-bridge-bar ${s.kind}" style="height:${barHeightPct}%; margin-bottom:${bottomPct}%"></div></div>
+        <div class="es-bridge-label">${escapeHtml(s.label)}</div>
+      </div>
+    `;
+  }).join('');
+
+  const r = bridge.reconciliation;
+  if (r && r.variancePct !== null) {
+    const dir = r.variance >= 0 ? 'above' : 'below';
+    const cls = r.variance >= 0 ? 'good' : 'crit';
+    recon.innerHTML = `<div class="legend-item">Expected Revenue <b>${fmtMoneyShort(r.expectedRevenue)}</b> is running <span style="color:var(--${cls}); font-weight:700">${fmtMoneyShort(Math.abs(r.variance))} ${dir}</span> the stated Revenue Budget (${fmtMoneyShort(r.revenueBudget)}, <span style="color:var(--${cls}); font-weight:700">${r.variancePct >= 0 ? '+' : ''}${r.variancePct.toFixed(1)}%</span>).</div>`;
+  } else {
+    recon.innerHTML = '<div class="legend-item" style="color:var(--text-faint)">No Revenue Budget set for this fiscal year to reconcile against.</div>';
+  }
+}
+
+// Regions Below Budget Pace: reuses buildRegionDriverRow (the same row
+// builder Forecast's Regional Drivers uses) so a region row looks and
+// behaves identically in both places. Only rows below their own
+// trailing-average Sales pace are shown here (Executive Summary is
+// meant to be a shortlist of what needs attention, not the full regional
+// breakdown Forecast already provides), already sorted worst-first by
+// getForecastRegionalDrivers.
+function renderExecSummaryRegions(regionalDrivers){
+  const emptyNote = document.getElementById('es-regions-empty-note');
+  const wrap = document.getElementById('es-regions-wrap');
+  const container = document.getElementById('es-regions-rows');
+  container.innerHTML = '';
+
+  if (!regionalDrivers || !regionalDrivers.regions) { emptyNote.classList.remove('hidden'); wrap.classList.add('hidden'); return; }
+
+  const belowPace = regionalDrivers.regions.filter(r => r.pacePctOfTrailingAvg !== null && r.pacePctOfTrailingAvg < 100);
+  if (belowPace.length === 0) {
+    emptyNote.classList.remove('hidden');
+    wrap.classList.add('hidden');
+    return;
+  }
+  emptyNote.classList.add('hidden');
+  wrap.classList.remove('hidden');
+  belowPace.forEach(r => container.appendChild(buildRegionDriverRow(r.regionName, r, '')));
+}
+
+function renderExecSummaryServiceFamily(chartData){
+  const container = document.getElementById('es-service-family');
+  if (!chartData.length) { container.innerHTML = '<div class="fc-empty-note">No bookings yet for this fiscal year.</div>'; return; }
+  const maxV = Math.max(...chartData.map(d => d.total), 1);
+  container.innerHTML = chartData.map(d => `
+    <div class="es-svc-row">
+      <div class="n">${escapeHtml(d.label)}</div>
+      <div class="es-svc-track"><div class="es-svc-fill" style="width:${(d.total / maxV) * 100}%"></div></div>
+      <div class="v">${fmtMoneyShort(d.total)}</div>
+    </div>
+  `).join('');
 }
 
 /* ============================================================
