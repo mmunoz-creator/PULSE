@@ -296,6 +296,14 @@ td.budget-lob-td{text-align:center}
    fit without letting the column blow out the whole table's horizontal
    scroll. */
 .budget-cell-input-monthly{width:92px; font-size:11px; padding:6px 4px}
+/* Range-select + Delete on Monthly Detail / Sales Budgets grids (v1s,
+   2026-09-06), per Misty's direct request. Selected cells get a soft
+   accent background + ring on the <td> (not the <input>, so the
+   highlight reads as a spreadsheet-style cell selection rather than a
+   focus state) — visually distinct from .budget-cell-input:focus's
+   border/shadow so both can be told apart when the last-clicked cell in
+   a selection is also focused. */
+td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 0 0 0 1.5px var(--accent)}
 /* Text inputs (used for currency entry, replacing the old type=number
    spinner) don't get a native up/down control, but Chrome/Safari still
    show a clear-("x")/spin affordance on some input types -- explicitly
@@ -307,8 +315,13 @@ td.budget-lob-td{text-align:center}
 /* Company Total (annual Revenue/Sales tables) and Region Total (Monthly
    Detail table) footer rows, in the same purple as eyebrow labels and
    table headers, per Misty's direct request, confirmed alongside the
-   table-header color pass. */
-.budget-grand-row td{font-weight:800; border-top:2px solid var(--border-strong); border-bottom:none; padding-top:12px; color:var(--accent-ink)}
+   table-header color pass. Light purple row background (var(--accent-
+   soft), the same tint used for badges/highlights elsewhere) added on a
+   follow-up request so the total row reads as a distinct band, not just
+   colored text sitting on the plain row background. */
+.budget-grand-row td{font-weight:800; border-top:2px solid var(--border-strong); border-bottom:none; padding-top:12px; padding-bottom:12px; color:var(--accent-ink); background:var(--accent-soft)}
+.budget-grand-row td:first-child{border-radius:8px 0 0 8px}
+.budget-grand-row td:last-child{border-radius:0 8px 8px 0}
 .budget-hint{font-size:11.5px; color:var(--text-faint); margin-top:12px; line-height:1.5}
 
 .geo-name-input{
@@ -2176,8 +2189,66 @@ td.budget-lob-td{text-align:center}
       class (92px, smaller font) replaces the old inline width:82px;
       LOB Total / Region Total cells were already plain <td> text, not
       inputs, and were not affected.
+   5. Two fixes caught from the first real v1q screenshot after deploy:
+      (a) the new read-only annual Revenue cells (renderBudgetTable's
+      readOnly branch) had picked up a stray "num" class alongside
+      "budget-lob-td", right-aligning them against centered headers and
+      every other row — removed, matching the input version's own
+      centered text-align. (b) Company Total / Region Total rows
+      (.budget-grand-row) given a light purple background
+      (var(--accent-soft), the same tint as badges elsewhere) so the
+      purple text reads as a distinct band, per Misty's follow-up
+      request, not just colored text on the plain row background.
+   6. Double-click bug (see fix 3 above) still reproduced after that
+      first attempt — deferring only select() wasn't enough, since
+      input.value was still being rewritten synchronously inside onfocus
+      and that rewrite itself was part of the race. onBudgetCellFocus now
+      defers its ENTIRE body (the reformat and the select()) into one
+      setTimeout(...,0), so nothing runs until the click's own native
+      focus/caret sequence is completely finished.
+
+   v1r (2026-09-06): paste-a-row support for Monthly Detail, so a row
+   copied straight out of Misty's real Excel gating workbook (Jan-Dec,
+   tab-separated, one line per LOB/geography) can be pasted directly
+   instead of typed cell by cell. New onRevenueMonthlyCellPaste, wired to
+   every monthly cell's onpaste. Fills rightward from whichever cell was
+   focused when the paste happened (a partial-year paste, e.g. Mar-Dec,
+   lands where clicked rather than forcing a scroll back to January
+   first — confirmed with Misty over always resetting to Jan). Stops at
+   December, doesn't wrap into the next year. Only the row's own single
+   LOB is touched; a multi-line paste (accidentally copying more than one
+   Excel row) uses only the first line and shows a toast saying so,
+   rather than silently guessing which other PULSE row the rest belongs
+   to — Monthly Detail's 3 LOB rows don't line up with Excel's many
+   geography rows anyway. A plain single-value paste (no tab character)
+   isn't intercepted at all, so normal single-cell paste behavior is
+   unchanged. Saves all pasted months in one batched request
+   (worker_v1n.mjs's new revenue-budgets-monthly-batch route) instead of
+   one POST per cell.
+
+   v1s (2026-09-06): range-select + Delete on the two data-entry grids
+   (Monthly Detail and Sales Budgets' annual grid), per Misty's direct
+   request: "select multiple fields and delete all entries." Excludes the
+   Revenue annual grid on purpose, it's read-only/derived, nothing there
+   to select or delete. Click-drag or shift-click selects a rectangle of
+   cells (spreadsheet-style, matching how she already thinks about these
+   grids per the paste feature above); Delete/Backspace clears every
+   selected cell to $0 and saves the whole selection in one batched
+   request via two new routes (worker_v1o.mjs: revenue-budgets-monthly-
+   clear, sales-budgets-clear) rather than one request per cell. New
+   shared module: rangeSelect state + wireRangeSelect/rangeSelectStart/
+   Extend/End/applyRangeSelectionVisuals, generic over both grids via
+   each cell's row/col position within its own <tbody> rather than by
+   region/LOB identity, so the same code drives a 10-region x 3-LOB grid
+   and a 3-LOB x 12-month grid. A plain click with no shift/drag still
+   focuses a single cell exactly as before; only a genuine multi-cell
+   selection (or a single explicitly-selected, not-currently-focused
+   cell) responds to Delete, so ordinary backspace-while-typing inside a
+   cell is untouched. New .range-selectable/.range-selected classes and
+   data-kind/data-region/data-lob/data-month attributes added to each
+   editable <td> (previously only the inner <input> carried these).
    ============================================================ */
-const APP_VERSION = 'v1q';
+const APP_VERSION = 'v1s';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -2971,16 +3042,22 @@ function formatBudgetInputValue(n){
   return '$' + Math.round(n).toLocaleString('en-US');
 }
 function onBudgetCellFocus(input){
-  const raw = parseBudgetInputValue(input.value);
-  input.value = raw === 0 ? '' : String(raw);
-  // Deferred to the next tick: calling select() synchronously inside
-  // onfocus races the click's own native caret placement in some
-  // browsers (confirmed real, not imagined — Misty had to double-click
-  // before typing would actually land). Deferring it lets the click
-  // finish focusing/placing the caret first, then select() runs after,
-  // so a single click reliably both focuses AND selects the value for
-  // immediate overtyping.
-  setTimeout(() => input.select(), 0);
+  // Both the reformat (input.value = ...) AND select() are deferred to
+  // the next tick together, not just select() alone. The first attempt
+  // only deferred select() and Misty still saw the double-click bug —
+  // turned out rewriting input.value synchronously inside onfocus was
+  // itself part of the race: some browsers process the click's own
+  // native focus-and-place-caret behavior AFTER onfocus's synchronous
+  // code runs, so a same-tick value rewrite can still get overwritten by
+  // or conflict with that native step. Deferring the entire body ensures
+  // nothing here runs until the click's own focus/caret sequence is
+  // fully done, so a single click reliably reformats AND selects the
+  // value, every time.
+  setTimeout(() => {
+    const raw = parseBudgetInputValue(input.value);
+    input.value = raw === 0 ? '' : String(raw);
+    input.select();
+  }, 0);
 }
 function onBudgetCellBlurFormat(input){
   input.value = formatBudgetInputValue(parseBudgetInputValue(input.value));
@@ -2993,6 +3070,7 @@ function onBudgetCellBlurFormat(input){
 function renderBudgetTable(kind, rows){
   const data = pivotRows(rows);
   const tbody = document.getElementById(kind + '-tbody');
+  if (rangeSelect.tbody === tbody) { rangeSelect.tbody = null; rangeSelect.anchor = null; rangeSelect.focus = null; }
   tbody.innerHTML = '';
   const readOnly = kind === 'revenue';
   let totals = { program_advisory: 0, design_services: 0, inspections: 0 };
@@ -3002,8 +3080,8 @@ function renderBudgetTable(kind, rows){
     LOBS.forEach(l => totals[l.key] += (row[l.key]||0));
     const tr = document.createElement('tr');
     const cells = readOnly
-      ? LOBS.map(l => `<td class="budget-lob-td num">${fmtMoney(row[l.key]||0)}</td>`).join('')
-      : LOBS.map(l => `<td class="budget-lob-td"><input class="budget-cell-input" type="text" inputmode="decimal"
+      ? LOBS.map(l => `<td class="budget-lob-td">${fmtMoney(row[l.key]||0)}</td>`).join('')
+      : LOBS.map(l => `<td class="budget-lob-td range-selectable" data-kind="${kind}" data-region="${region.id}" data-lob="${l.key}"><input class="budget-cell-input" type="text" inputmode="decimal"
           data-kind="${kind}" data-region="${region.id}" data-lob="${l.key}" value="${formatBudgetInputValue(row[l.key]||0)}"
           onfocus="onBudgetCellFocus(this)" onblur="onBudgetCellBlurFormat(this)" onchange="onBudgetCellChange(this)"></td>`).join('');
     tr.innerHTML = `
@@ -3018,6 +3096,7 @@ function renderBudgetTable(kind, rows){
   document.getElementById(kind+'-gt-all').innerHTML = fmtMoney(grandTotal);
   const label = kind === 'revenue' ? 'Billings target' : 'Bookings target';
   document.getElementById(kind+'-total-meta').textContent = label + ', FY' + currentYear[kind] + ': ' + fmtMoney(grandTotal).replace('&mdash;','—');
+  wireRangeSelect(tbody);
 }
 
 async function onBudgetCellChange(input){
@@ -3062,6 +3141,234 @@ function recomputeBudgetTotalsFromDom(kind){
   document.getElementById(kind+'-gt-all').innerHTML = fmtMoney(grandTotal);
   const label = kind === 'revenue' ? 'Billings target' : 'Bookings target';
   document.getElementById(kind+'-total-meta').textContent = label + ', FY' + currentYear[kind] + ': ' + fmtMoney(grandTotal).replace('&mdash;','—');
+}
+
+/* ============================================================
+   RANGE-SELECT + DELETE on data-entry grids (v1s, 2026-09-06), per
+   Misty's direct request: "select multiple fields and delete all
+   entries." Spreadsheet-style: click-drag or shift-click selects a
+   rectangle of cells across the Sales Budgets annual grid or Monthly
+   Detail's region x LOB x month grid; Delete/Backspace clears every
+   selected cell to $0, saved via one batched request instead of one
+   per cell.
+
+   Generic over both grids via each cell's own row/col index within its
+   table (not by region/LOB identity), so a drag-selected rectangle is
+   "rows i..j, cols k..l" the same way Excel selects a range regardless
+   of what the column headers mean. Only .range-selectable <td>s
+   participate — the read-only Revenue annual grid has none, so it's
+   naturally excluded, no separate "is this table selectable" check
+   needed.
+
+   State is a single shared module: only one grid can have an active
+   selection at a time (matches how only one grid is ever visible/
+   focused at once), reset whenever a fresh drag starts on a different
+   table body.
+   ============================================================ */
+const rangeSelect = {
+  tbody: null,      // the <tbody> currently owning the selection
+  dragging: false,
+  anchor: null,     // {row, col} where the drag/shift-click range started
+  focus: null,      // {row, col} current end of the range
+};
+
+function rangeCellPos(td, tbody){
+  const tr = td.closest('tr');
+  const row = Array.prototype.indexOf.call(tbody.children, tr);
+  const cells = Array.prototype.filter.call(tr.children, c => c.classList.contains('range-selectable'));
+  const col = cells.indexOf(td);
+  return { row, col };
+}
+
+function rangeSelectableCellAt(tbody, row, col){
+  const tr = tbody.children[row];
+  if (!tr) return null;
+  const cells = Array.prototype.filter.call(tr.children, c => c.classList.contains('range-selectable'));
+  return cells[col] || null;
+}
+
+function clearRangeSelectionVisuals(){
+  document.querySelectorAll('td.range-selected').forEach(td => td.classList.remove('range-selected'));
+}
+
+function applyRangeSelectionVisuals(){
+  clearRangeSelectionVisuals();
+  if (!rangeSelect.tbody || !rangeSelect.anchor || !rangeSelect.focus) return;
+  const r0 = Math.min(rangeSelect.anchor.row, rangeSelect.focus.row);
+  const r1 = Math.max(rangeSelect.anchor.row, rangeSelect.focus.row);
+  const c0 = Math.min(rangeSelect.anchor.col, rangeSelect.focus.col);
+  const c1 = Math.max(rangeSelect.anchor.col, rangeSelect.focus.col);
+  for (let r = r0; r <= r1; r++){
+    for (let c = c0; c <= c1; c++){
+      const td = rangeSelectableCellAt(rangeSelect.tbody, r, c);
+      if (td) td.classList.add('range-selected');
+    }
+  }
+}
+
+function rangeSelectStart(event, td, tbody){
+  // Only left-click drags start/extend a range; a plain click still
+  // focuses the cell's input normally via the browser's native behavior.
+  if (event.button !== 0) return;
+  const pos = rangeCellPos(td, tbody);
+  if (event.shiftKey && rangeSelect.tbody === tbody && rangeSelect.anchor){
+    rangeSelect.focus = pos;
+  } else {
+    rangeSelect.tbody = tbody;
+    rangeSelect.anchor = pos;
+    rangeSelect.focus = pos;
+    rangeSelect.dragging = true;
+  }
+  applyRangeSelectionVisuals();
+}
+
+function rangeSelectExtend(td, tbody){
+  if (!rangeSelect.dragging || rangeSelect.tbody !== tbody) return;
+  rangeSelect.focus = rangeCellPos(td, tbody);
+  applyRangeSelectionVisuals();
+}
+
+function rangeSelectEnd(){
+  rangeSelect.dragging = false;
+}
+
+// A single mousedown/mouseover/mouseup listener per table body, added
+// once when each grid's container exists (tables are re-rendered often,
+// but the <tbody> element identity is stable across re-renders since
+// renderBudgetTable/renderRevenueMonthlyTable only replace innerHTML).
+function wireRangeSelect(tbody){
+  if (!tbody || tbody.dataset.rangeWired) return;
+  tbody.dataset.rangeWired = '1';
+  tbody.addEventListener('mousedown', (e) => {
+    const td = e.target.closest('td.range-selectable');
+    if (!td) return;
+    rangeSelectStart(e, td, tbody);
+  });
+  tbody.addEventListener('mouseover', (e) => {
+    const td = e.target.closest('td.range-selectable');
+    if (!td) return;
+    rangeSelectExtend(td, tbody);
+  });
+}
+document.addEventListener('mouseup', rangeSelectEnd);
+
+// A fresh click with no shift/drag on a single cell should clear any
+// prior selection from a DIFFERENT range so stale highlighting doesn't
+// linger; a normal single-cell edit is otherwise untouched (this fires
+// on mousedown, before the input's own onfocus).
+document.addEventListener('mousedown', (e) => {
+  const td = e.target.closest('td.range-selectable');
+  if (!td && rangeSelect.anchor){
+    rangeSelect.tbody = null; rangeSelect.anchor = null; rangeSelect.focus = null;
+    clearRangeSelectionVisuals();
+  }
+});
+
+document.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (!rangeSelect.tbody || !rangeSelect.anchor || !rangeSelect.focus) return;
+  // Only act when the key press isn't just normal text editing inside a
+  // focused input that happens to also sit in the selected range (e.g.
+  // backspacing a digit in the last-clicked cell) — a real range
+  // selection this feature cares about is a drag/shift-click covering
+  // more than one cell, OR a single explicitly-selected cell that is NOT
+  // the currently-focused input (so click-then-Delete on one cell also
+  // works, matching Excel).
+  const r0 = Math.min(rangeSelect.anchor.row, rangeSelect.focus.row);
+  const r1 = Math.max(rangeSelect.anchor.row, rangeSelect.focus.row);
+  const c0 = Math.min(rangeSelect.anchor.col, rangeSelect.focus.col);
+  const c1 = Math.max(rangeSelect.anchor.col, rangeSelect.focus.col);
+  const isMultiCell = r0 !== r1 || c0 !== c1;
+  const active = document.activeElement;
+  const activeIsTextEntry = active && active.tagName === 'INPUT' && active.closest('td.range-selectable');
+  if (!isMultiCell && activeIsTextEntry) return; // let normal backspace-while-typing behave normally
+  e.preventDefault();
+  await clearRangeSelection(r0, r1, c0, c1);
+});
+
+async function clearRangeSelection(r0, r1, c0, c1){
+  const tbody = rangeSelect.tbody;
+  if (!tbody) return;
+  const cellsToClear = [];
+  for (let r = r0; r <= r1; r++){
+    for (let c = c0; c <= c1; c++){
+      const td = rangeSelectableCellAt(tbody, r, c);
+      if (td) cellsToClear.push(td);
+    }
+  }
+  if (cellsToClear.length === 0) return;
+  const kind = cellsToClear[0].dataset.kind;
+
+  // Update the DOM immediately, don't wait on the network round-trip —
+  // same pattern as every other budget-cell mutation in this file.
+  cellsToClear.forEach(td => {
+    const input = td.querySelector('.budget-cell-input');
+    if (input) input.value = '';
+  });
+
+  if (kind === 'revenue-monthly'){
+    recomputeMonthlyTotalsFromDom();
+    renderBudgetTable('revenue', revenueMonthlyRowsToAnnualRows(revenueMonthlyRows, currentYear.revenue));
+    const cells = cellsToClear.map(td => ({ lineOfBusiness: td.dataset.lob, month: parseInt(td.dataset.month, 10) }));
+    cells.forEach(c => {
+      const existing = revenueMonthlyRows.find(r => r.region_id === revenueMonthlyRegionId && r.line_of_business === c.lineOfBusiness && r.month === c.month);
+      if (existing) existing.amount = 0;
+    });
+    try {
+      const res = await workerFetch('/api/baseline/revenue-budgets-monthly-clear', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ regionId: revenueMonthlyRegionId, fiscalYear: currentYear.revenue, cells }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showToast(data.error || 'Could not clear the selected cells.', true); }
+      else showToast(`Cleared ${cells.length} cell${cells.length === 1 ? '' : 's'}.`);
+    } catch(e){
+      showToast('Could not reach the server. The selected cells were not cleared.', true);
+    }
+  } else {
+    // Sales Budgets annual grid.
+    recomputeBudgetTotalsFromDom(kind);
+    const cells = cellsToClear.map(td => ({ regionId: td.dataset.region, lineOfBusiness: td.dataset.lob }));
+    try {
+      const res = await workerFetch('/api/baseline/sales-budgets-clear', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fiscalYear: currentYear[kind], cells }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showToast(data.error || 'Could not clear the selected cells.', true); }
+      else showToast(`Cleared ${cells.length} cell${cells.length === 1 ? '' : 's'}.`);
+    } catch(e){
+      showToast('Could not reach the server. The selected cells were not cleared.', true);
+    }
+  }
+  clearRangeSelectionVisuals();
+}
+
+function recomputeMonthlyTotalsFromDom(){
+  const tbody = document.getElementById('revenue-monthly-tbody');
+  if (!tbody) return;
+  const monthTotals = new Array(13).fill(0);
+  LOBS.forEach(lob => {
+    let lobTotal = 0;
+    for (let month = 1; month <= 12; month++){
+      const input = tbody.querySelector(`.budget-cell-input[data-lob="${lob.key}"][data-month="${month}"]`);
+      const v = input ? parseBudgetInputValue(input.value) : 0;
+      lobTotal += v;
+      monthTotals[month] += v;
+    }
+    const lobTotalCell = document.querySelector(`[data-lob-total="${lob.key}"]`);
+    if (lobTotalCell) lobTotalCell.textContent = fmtMoney(lobTotal);
+  });
+  const grandTotal = monthTotals.reduce((a,b)=>a+b, 0);
+  for (let month = 1; month <= 12; month++){
+    const cell = document.querySelector(`[data-month-total="${month}"]`);
+    if (cell) cell.textContent = fmtMoney(monthTotals[month]);
+  }
+  const tfootRow = document.getElementById('revenue-monthly-tfoot-row');
+  if (tfootRow) {
+    const lastCell = tfootRow.querySelector('td:last-child');
+    if (lastCell) lastCell.textContent = fmtMoney(grandTotal);
+  }
 }
 
 function showBaselineTab(name, btn){
@@ -3645,6 +3952,7 @@ function renderRevenueMonthlyTable(){
   });
 
   const tbody = document.getElementById('revenue-monthly-tbody');
+  if (rangeSelect.tbody === tbody) { rangeSelect.tbody = null; rangeSelect.anchor = null; rangeSelect.focus = null; }
   tbody.innerHTML = '';
   const monthTotals = new Array(13).fill(0); // index 1-12
 
@@ -3656,9 +3964,10 @@ function renderRevenueMonthlyTable(){
       const amount = (byLob[lob.key] && byLob[lob.key][month]) || 0;
       lobTotal += amount;
       monthTotals[month] += amount;
-      return `<td class="budget-lob-td"><input class="budget-cell-input budget-cell-input-monthly" type="text" inputmode="decimal"
+      return `<td class="budget-lob-td range-selectable" data-kind="revenue-monthly" data-lob="${lob.key}" data-month="${month}"><input class="budget-cell-input budget-cell-input-monthly" type="text" inputmode="decimal"
           data-lob="${lob.key}" data-month="${month}" value="${formatBudgetInputValue(amount)}"
-          onfocus="onBudgetCellFocus(this)" onblur="onBudgetCellBlurFormat(this)" onchange="onRevenueMonthlyCellChange(this)"></td>`;
+          onfocus="onBudgetCellFocus(this)" onblur="onBudgetCellBlurFormat(this)" onchange="onRevenueMonthlyCellChange(this)"
+          onpaste="onRevenueMonthlyCellPaste(event, this)"></td>`;
     }).join('');
     tr.innerHTML = `<td class="region-name">${escapeHtml(lob.label)}</td>${cells}<td class="num region-total-cell" data-lob-total="${lob.key}">${fmtMoney(lobTotal)}</td>`;
     tbody.appendChild(tr);
@@ -3669,6 +3978,7 @@ function renderRevenueMonthlyTable(){
   tfootRow.innerHTML = '<td>Region Total</td>' +
     MONTH_LABELS.map((_, idx) => `<td class="budget-lob-td" data-month-total="${idx+1}">${fmtMoney(monthTotals[idx+1])}</td>`).join('') +
     `<td class="num">${fmtMoney(grandTotal)}</td>`;
+  wireRangeSelect(tbody);
 }
 
 async function onRevenueMonthlyCellChange(input){
@@ -3700,6 +4010,55 @@ async function onRevenueMonthlyCellChange(input){
     if (!res.ok) { showToast(data.error || 'Could not save. Your change was not kept.', true); }
   } catch(e){
     showToast('Could not reach the server. Your change was not kept.', true);
+  }
+}
+
+// Paste a row of months at once, e.g. copying Jan-Dec (or a partial run
+// of months) straight out of Misty's real Excel gating workbook and
+// pasting into one Monthly Detail cell. Fills rightward from whichever
+// cell was focused when the paste happened (confirmed with Misty over
+// always resetting to Jan, since a partial-year paste — say Mar-Dec —
+// should land where you click, not force scrolling back to January
+// first). Only the row's own LOB is touched; a multi-row paste (several
+// LOBs at once) isn't supported since PULSE's grid is one region/3-LOB
+// at a time, not a shape that lines up with a whole Excel table.
+async function onRevenueMonthlyCellPaste(event, input){
+  const raw = (event.clipboardData || window.clipboardData).getData('text');
+  if (!raw || !raw.includes('\t')) return; // single value: let the default paste behavior handle it, no special casing needed
+  event.preventDefault();
+
+  const lines = raw.replace(/\r/g, '').split('\n').filter(l => l.length > 0);
+  if (lines.length > 1) {
+    showToast('Pasted the first row only — paste one line of months at a time.', true);
+  }
+  const values = lines[0].split('\t').map(v => parseBudgetInputValue(v));
+
+  const lob = input.dataset.lob;
+  const startMonth = parseInt(input.dataset.month, 10);
+  const cellsToSave = [];
+  values.forEach((amount, i) => {
+    const month = startMonth + i;
+    if (month > 12) return; // stops at December, doesn't wrap to next year
+    cellsToSave.push({ month, amount });
+    const existing = revenueMonthlyRows.find(r => r.region_id === revenueMonthlyRegionId && r.line_of_business === lob && r.month === month);
+    if (existing) existing.amount = amount;
+    else revenueMonthlyRows.push({ region_id: revenueMonthlyRegionId, line_of_business: lob, fiscal_year: currentYear.revenue, month, amount });
+  });
+  if (cellsToSave.length === 0) return;
+
+  renderRevenueMonthlyTable();
+  renderBudgetTable('revenue', revenueMonthlyRowsToAnnualRows(revenueMonthlyRows, currentYear.revenue));
+
+  try {
+    const res = await workerFetch('/api/baseline/revenue-budgets-monthly-batch', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ regionId: revenueMonthlyRegionId, lineOfBusiness: lob, fiscalYear: currentYear.revenue, cells: cellsToSave }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not save the pasted values.', true); }
+    else showToast(`Pasted ${cellsToSave.length} month${cellsToSave.length === 1 ? '' : 's'}.`);
+  } catch(e){
+    showToast('Could not reach the server. Your pasted values were not kept.', true);
   }
 }
 
