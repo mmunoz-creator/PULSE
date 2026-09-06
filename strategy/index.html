@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PULSE Strategy v1i</title>
+<title>PULSE Strategy v1j</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
 <!-- SheetJS (2026-09-04): needed to parse Billed Fact uploads, real
      binary .xlsx files, unlike every other upload type here which is an
@@ -1319,7 +1319,7 @@ td.budget-lob-td{text-align:center}
     <div class="two-col">
       <div class="card">
         <div class="card-head">
-          <h3>Your biggest accounts, and what they're buying</h3>
+          <h3>Top Accounts by Service Line</h3>
         </div>
         <div class="card-pad">
           <div style="overflow-x:auto">
@@ -1330,7 +1330,7 @@ td.budget-lob-td{text-align:center}
               <tbody id="rg-accounts-tbody"></tbody>
             </table>
           </div>
-          <div class="legend-note">Each dot is a service line: Inspections, Design Services, Program Advisory, in that order. An empty dot is room to sell more into an account you already have a relationship with.</div>
+          <div class="legend-note" id="rg-accounts-legend">Each dot is a service line. An empty dot is room to sell more into an account you already have a relationship with. Hover a dot for its name.</div>
           <div class="legend-note" style="margin-top:6px">Active backlog per account isn't shown here yet, it needs a real mapping between Bookings and Backlog account names first.</div>
         </div>
       </div>
@@ -1736,8 +1736,25 @@ td.budget-lob-td{text-align:center}
    so Billed Fact dropped below the first four instead of sitting beside
    them. Changed to a real 5-column grid (repeat(5, minmax(200px,1fr)))
    so all five upload types stay in one row.
+
+   v1j (2026-09-05): Regions screen's Biggest Accounts card, confirmed
+   with Misty. Heading reworded to "Top Accounts by Service Line" (kept
+   as the same h3 card-head style used by every other card on this
+   screen, already consistent). The coverage dots switched from the
+   app-wide
+   3-bucket LOB system (Inspections/Design Services/Program Advisory) to
+   9 real service-family buckets, matching worker_v1g's new
+   mapServiceToAccountFamily grouping: Modernization, Equipment
+   Evaluations, VERIFY, General Consulting, Inspections, CCM (Code
+   Compliance), Design Services, Construction Site Visits, and
+   Maintenance Management (the true remainder, with a hover tooltip
+   listing its real constituent services since it's a catch-all, not one
+   clean source value). VERIFY and General Consulting are carved out of
+   the raw Maintenance Management family server-side so they're never
+   double-counted in that bucket. This grouping is local to this card
+   only, every other screen's LOB logic is unchanged.
    ============================================================ */
-const APP_VERSION = 'v1i';
+const APP_VERSION = 'v1j';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -4106,10 +4123,25 @@ async function onRegionsGrowthTargetChange(input){
 
 function renderRegionsAccounts(data){
   const tbody = document.getElementById('rg-accounts-tbody');
+  const families = data.accountServiceFamilies || [];
+  const mmIncludes = (data.maintenanceManagementIncludes || []).join(', ');
+
+  const legend = document.getElementById('rg-accounts-legend');
+  if (legend && families.length) {
+    legend.textContent = `Each dot is a service line: ${families.join(', ')}, in that order. An empty dot is room to sell more into an account you already have a relationship with. Hover a dot for its name.`;
+  }
+
   tbody.innerHTML = '';
   data.largestAccounts.forEach(a => {
-    const dots = a.coverage.map(on => `<span style="display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:3px; background:${on ? 'var(--accent)' : 'var(--border-strong)'}"></span>`).join('');
-    const opportunity = a.coverageCount >= 3 ? 'Buys everything' : (a.coverageCount === 1 ? 'Only 1 service' : '1 service open');
+    const dots = a.coverage.map((on, i) => {
+      const label = families[i] || '';
+      const title = label === 'Maintenance Management' && mmIncludes
+        ? `${label}: ${mmIncludes}`
+        : label;
+      return `<span title="${escapeHtml(title)}" style="display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:3px; background:${on ? 'var(--accent)' : 'var(--border-strong)'}"></span>`;
+    }).join('');
+    const totalFamilies = families.length || 1;
+    const opportunity = a.coverageCount >= totalFamilies ? 'Buys everything' : (a.coverageCount <= 1 ? `Only ${a.coverageCount} service` : `${totalFamilies - a.coverageCount} services open`);
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="region-name">${escapeHtml(a.name)}</td>
