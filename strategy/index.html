@@ -1483,16 +1483,16 @@ td.budget-lob-td{text-align:center}
             <div style="font-size:11px; font-weight:700; color:var(--text-faint); text-transform:uppercase; letter-spacing:.04em; margin-top:2px">Selective markets</div>
           </div>
         </div>
-        <div id="rg-coverage-pending" class="legend-note">Upload both roster files on Data Updates to see under-covered markets here.</div>
+        <div id="rg-coverage-pending" class="legend-note">Upload both roster files on Data Updates to see growth opportunity markets here.</div>
         <div id="rg-coverage-wrap" class="hidden">
-          <div style="font-size:12.5px; font-weight:700; color:var(--text-body); margin-bottom:8px">Under-Covered Top-Priority Markets (none within <span id="rg-coverage-radius">50</span> miles)</div>
-          <div id="rg-coverage-empty" class="hidden legend-note">Every top-priority market in this region is covered.</div>
+          <div style="font-size:12.5px; font-weight:700; color:var(--text-body); margin-bottom:8px">Growth Opportunity Markets</div>
+          <div id="rg-coverage-region-context" style="display:flex; gap:18px; flex-wrap:wrap; padding:10px 12px; background:var(--paper-sunk); border:1px solid var(--border); border-radius:10px; margin-bottom:12px; font-size:12.5px"></div>
           <table class="rtable hidden" id="rg-coverage-table">
-            <thead><tr><th>City</th><th>State</th><th class="num">Nearest Team Member</th></tr></thead>
+            <thead><tr><th>City</th><th>Tier</th><th>Nearest Team Member</th><th class="num" style="width:220px">Distance</th></tr></thead>
             <tbody id="rg-coverage-tbody"></tbody>
           </table>
           <div id="rg-coverage-missing-note" class="hidden legend-note" style="margin-top:8px"></div>
-          <div class="legend-note" style="margin-top:8px">Field roles only, from the most recent Consultants and Inspectors rosters.</div>
+          <div class="legend-note" style="margin-top:8px">Bookings shown above are the whole region's, not this specific city's, real revenue isn't tracked by city today. Distance is real and city-specific, from the most recent Consultants and Inspectors rosters, field roles only. Sorted farthest first.</div>
         </div>
       </div>
     </div>
@@ -4818,20 +4818,26 @@ function renderRegionsMarketTiers(data){
   }
   pending.classList.add('hidden');
   wrap.classList.remove('hidden');
-  document.getElementById('rg-coverage-radius').textContent = data.coverageRadiusMiles;
 
-  const underCovered = data.underCoveredTierOneCities || [];
+  const markets = data.growthOpportunityMarkets || [];
+  const TIER_LABELS = { tier_1: 'Tier 1', tier_2: 'Tier 2' };
+
+  document.getElementById('rg-coverage-region-context').innerHTML =
+    `<div><b>${escapeHtml(data.regionName)}, ${data.fiscalYear} YTD:</b> ${fmtMoneyShort(data.regionBookingsCurrentYear || 0)} booked</div>` +
+    `<div><b>${markets.length}</b> Tier 1/2 ${markets.length === 1 ? 'market' : 'markets'} in this region</div>`;
+
   const table = document.getElementById('rg-coverage-table');
-  const empty = document.getElementById('rg-coverage-empty');
-  if (underCovered.length === 0) {
+  if (markets.length === 0) {
     table.classList.add('hidden');
-    empty.classList.remove('hidden');
   } else {
-    empty.classList.add('hidden');
     table.classList.remove('hidden');
-    document.getElementById('rg-coverage-tbody').innerHTML = underCovered.map(c => {
-      const nearest = c.nearestMiles === null ? 'No one on the roster yet' : `${c.nearestMiles} mi away`;
-      return `<tr><td>${escapeHtml(c.city)}</td><td>${escapeHtml(c.state)}</td><td class="num">${nearest}</td></tr>`;
+    document.getElementById('rg-coverage-tbody').innerHTML = markets.map(m => {
+      const tierLabel = TIER_LABELS[m.tier] || m.tier;
+      const nearestCell = m.nearestCity
+        ? `${escapeHtml(m.nearestCity)} <span style="font-size:11px; color:var(--text-faint)">(${escapeHtml(m.nearestRole || '')})</span>`
+        : 'No one on the roster yet';
+      const distanceCell = m.nearestMiles === null ? '&mdash;' : `${m.nearestMiles} mi away`;
+      return `<tr><td>${escapeHtml(m.city)}, ${escapeHtml(m.state)}</td><td>${tierLabel}</td><td>${nearestCell}</td><td class="num">${distanceCell}</td></tr>`;
     }).join('');
   }
 
@@ -4839,7 +4845,7 @@ function renderRegionsMarketTiers(data){
   const missing = data.coverageGeocodeMissing || [];
   if (missing.length > 0) {
     missingNote.classList.remove('hidden');
-    missingNote.textContent = `${missing.length} top-priority ${missing.length === 1 ? 'market is' : 'markets are'} missing a stored location and could not be checked: ${missing.join(', ')}. Contact your admin.`;
+    missingNote.textContent = `${missing.length} ${missing.length === 1 ? 'market is' : 'markets are'} missing a stored location and could not be ranked: ${missing.join(', ')}. Contact your admin.`;
   } else {
     missingNote.classList.add('hidden');
   }
