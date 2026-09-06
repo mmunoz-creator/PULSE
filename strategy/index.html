@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PULSE Strategy v1l</title>
+<title>PULSE Strategy v1m</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
 <!-- SheetJS (2026-09-04): needed to parse Billed Fact uploads, real
      binary .xlsx files, unlike every other upload type here which is an
@@ -1480,7 +1480,17 @@ td.budget-lob-td{text-align:center}
             <div style="font-size:11px; font-weight:700; color:var(--text-faint); text-transform:uppercase; letter-spacing:.04em; margin-top:2px">Selective markets</div>
           </div>
         </div>
-        <div class="legend-note">Needs the upcoming Coverage upload to show which top-priority markets have no one nearby. Tiers are a starting point, worth checking against what you see in the field.</div>
+        <div id="rg-coverage-pending" class="legend-note">Needs the Coverage upload to show which top-priority markets have no one nearby. Upload both roster files on Data Updates to populate this section. Tiers are a starting point, worth checking against what you see in the field.</div>
+        <div id="rg-coverage-wrap" class="hidden">
+          <div style="font-size:12.5px; font-weight:700; color:var(--text-body); margin-bottom:8px">Under-covered top-priority markets (no one within <span id="rg-coverage-radius">50</span> miles)</div>
+          <div id="rg-coverage-empty" class="hidden legend-note">Every top-priority market in this region has someone within range. Nice work.</div>
+          <table class="rtable hidden" id="rg-coverage-table">
+            <thead><tr><th>City</th><th>State</th><th class="num">Nearest Team Member</th></tr></thead>
+            <tbody id="rg-coverage-tbody"></tbody>
+          </table>
+          <div id="rg-coverage-missing-note" class="hidden legend-note" style="margin-top:8px"></div>
+          <div class="legend-note" style="margin-top:8px">Based on the most recently uploaded Consultants and Inspectors rosters, field roles only.</div>
+        </div>
       </div>
     </div>
 
@@ -1609,6 +1619,36 @@ td.budget-lob-td{text-align:center}
           <span class="upload-filename" id="upload-filename-billed_fact">No file chosen</span>
           <div class="upload-progress hidden" id="upload-progress-billed_fact"><div class="upload-progress-bar" id="upload-progress-bar-billed_fact"></div></div>
           <div class="upload-status" id="upload-status-billed_fact"></div>
+        </div>
+      </div>
+
+      <!-- Coverage upload (2026-09-06): two independent roster files back
+           the Regions screen's "Under-covered Top-priority Markets" list.
+           Each is its own card since either roster can be updated on its
+           own schedule, re-uploading one replaces only that file's rows.
+           Names are stripped by parseCoverageXlsx below before anything
+           leaves the browser, this Worker never receives a name column. -->
+      <div class="card upload-card">
+        <div class="card-head"><h3>Coverage: Consultants Roster</h3></div>
+        <div class="card-pad" style="padding-top:6px">
+          <div class="upload-hint">Active consultant locations, used to check which top-priority markets have someone nearby. Names are never uploaded, only office/market hub or home city and state, department, and job function. Re-uploading replaces the entire consultants roster.</div>
+          <input type="file" id="upload-file-coverage_consultants" accept=".xlsx,.xls" class="upload-file-input" onchange="onCoverageFileChosen('consultants', this)">
+          <label class="btn-secondary upload-choose-btn" for="upload-file-coverage_consultants">Choose File</label>
+          <span class="upload-filename" id="upload-filename-coverage_consultants">No file chosen</span>
+          <div class="upload-progress hidden" id="upload-progress-coverage_consultants"><div class="upload-progress-bar" id="upload-progress-bar-coverage_consultants"></div></div>
+          <div class="upload-status" id="upload-status-coverage_consultants"></div>
+        </div>
+      </div>
+
+      <div class="card upload-card">
+        <div class="card-head"><h3>Coverage: Inspectors Roster</h3></div>
+        <div class="card-pad" style="padding-top:6px">
+          <div class="upload-hint">Active inspector locations, used the same way as the Consultants roster above. Names are never uploaded, only home city and state, department, and job function. Re-uploading replaces the entire inspectors roster.</div>
+          <input type="file" id="upload-file-coverage_inspectors" accept=".xlsx,.xls" class="upload-file-input" onchange="onCoverageFileChosen('inspectors', this)">
+          <label class="btn-secondary upload-choose-btn" for="upload-file-coverage_inspectors">Choose File</label>
+          <span class="upload-filename" id="upload-filename-coverage_inspectors">No file chosen</span>
+          <div class="upload-progress hidden" id="upload-progress-coverage_inspectors"><div class="upload-progress-bar" id="upload-progress-bar-coverage_inspectors"></div></div>
+          <div class="upload-status" id="upload-status-coverage_inspectors"></div>
         </div>
       </div>
     </div>
@@ -1871,7 +1911,7 @@ td.budget-lob-td{text-align:center}
    (region-scoped for one column, company-wide for the other), not just
    counted.
    ============================================================ */
-const APP_VERSION = 'v1l';
+const APP_VERSION = 'v1m';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -4275,6 +4315,137 @@ async function onBilledFactFileChosen(input){
   }
 }
 
+// Coverage upload (2026-09-06): real column headers confirmed directly
+// from Consultants.xlsx/Inspectors.xlsx, never guessed. Both files carry
+// real legal names (Legal First Name/Legal Last Name/Middle Initial for
+// Consultants), stripped here, before anything leaves the browser, per
+// the confirmed decision: this Worker never receives a name column at
+// all, not even briefly. State codes in both files are 2-letter
+// abbreviations; city_market_tiers/state_region_map/city_geocodes all
+// key on full state names, so STATE_ABBR_TO_NAME converts at parse time
+// (a plain fixed lookup, no real-world ambiguity to resolve here, unlike
+// region_raw_mappings).
+const STATE_ABBR_TO_NAME = {
+  AL:'Alabama', AK:'Alaska', AZ:'Arizona', AR:'Arkansas', CA:'California', CO:'Colorado',
+  CT:'Connecticut', DE:'Delaware', DC:'District of Columbia', FL:'Florida', GA:'Georgia',
+  HI:'Hawaii', ID:'Idaho', IL:'Illinois', IN:'Indiana', IA:'Iowa', KS:'Kansas', KY:'Kentucky',
+  LA:'Louisiana', ME:'Maine', MD:'Maryland', MA:'Massachusetts', MI:'Michigan', MN:'Minnesota',
+  MS:'Mississippi', MO:'Missouri', MT:'Montana', NE:'Nebraska', NV:'Nevada', NH:'New Hampshire',
+  NJ:'New Jersey', NM:'New Mexico', NY:'New York', NC:'North Carolina', ND:'North Dakota',
+  OH:'Ohio', OK:'Oklahoma', OR:'Oregon', PA:'Pennsylvania', RI:'Rhode Island',
+  SC:'South Carolina', SD:'South Dakota', TN:'Tennessee', TX:'Texas', UT:'Utah', VT:'Vermont',
+  VA:'Virginia', WA:'Washington', WV:'West Virginia', WI:'Wisconsin', WY:'Wyoming',
+};
+
+// Consultants' "Location Description" is the assigned office/market hub
+// (e.g. "Austin, TX") when it parses as City, ST; the 10 real rows where
+// it doesn't (legacy brand-name values with no real city/state, like
+// bare "Dominion" or "Sierra, Long Island") fall back to home city/
+// state, per the confirmed decision. Inspectors have no second field,
+// always home city/state.
+const LOCATION_DESC_PATTERN = /^(.+),\s*([A-Za-z]{2})$/;
+
+function parseLocationDescription(desc){
+  const m = LOCATION_DESC_PATTERN.exec(String(desc || '').trim());
+  if (!m) return null;
+  const abbr = m[2].toUpperCase();
+  const stateName = STATE_ABBR_TO_NAME[abbr];
+  if (!stateName) return null;
+  return { city: m[1].trim(), state: stateName };
+}
+
+// Only field-facing roles count toward the coverage gap calculation
+// (COVERAGE_COUNTING_ROLES in the Worker mirrors this same set); every
+// other role is still uploaded and stored so the roster is complete, the
+// role filter is applied server-side too, this is just for the upload
+// summary shown here.
+const COVERAGE_COUNTING_ROLES = new Set(['Consultant', 'Area Manager', 'Field Examiner']);
+
+// Reads the real binary .xlsx via SheetJS (same approach as Billed
+// Fact), strips every name column immediately, and applies the
+// confirmed location-fallback rule. sourceType is 'consultants' or
+// 'inspectors', the two real files have different column sets.
+function parseCoverageXlsx(arrayBuffer, sourceType){
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  if (!sheet) throw new Error('No sheet found in this file.');
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  const rows = [];
+  let fallbackCount = 0;
+  for (const raw of rawRows) {
+    const status = String(raw['Position Status'] || '').trim();
+    if (sourceType === 'consultants' && status && status !== 'Active') continue;
+
+    const homeCity = String(raw['Legal / Preferred Address: City'] || '').trim();
+    const homeStateAbbr = String(raw['Legal / Preferred Address: State / Territory Code'] || '').trim().toUpperCase();
+    const homeState = STATE_ABBR_TO_NAME[homeStateAbbr] || null;
+    const role = String(raw['Job Function Description'] || '').trim();
+    const departmentRaw = String(raw['Home Department Description'] || '').trim();
+    if (!role) continue;
+
+    let city = homeCity, state = homeState;
+    if (sourceType === 'consultants') {
+      const parsed = parseLocationDescription(raw['Location Description']);
+      if (parsed) {
+        city = parsed.city; state = parsed.state;
+      } else {
+        fallbackCount++;
+      }
+    }
+    if (!city || !state) continue;
+
+    rows.push({ role, departmentRaw, city, state });
+  }
+  if (rows.length === 0) throw new Error('No usable rows found (each row needs a role, city, and state).');
+  return { rows, fallbackCount };
+}
+
+async function onCoverageFileChosen(sourceType, input){
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const uploadType = 'coverage_' + sourceType;
+  document.getElementById('upload-filename-' + uploadType).textContent = file.name;
+  setUploadStatus(uploadType, '', null);
+  setUploadProgress(uploadType, 0);
+
+  try {
+    if (typeof XLSX === 'undefined') {
+      setUploadStatus(uploadType, 'The spreadsheet library did not load, check your connection and reload the page.', 'error');
+      return;
+    }
+    setUploadStatus(uploadType, 'Reading file...', 'working');
+    const buffer = await file.arrayBuffer();
+    const { rows, fallbackCount } = parseCoverageXlsx(buffer, sourceType);
+    const countingRows = rows.filter(r => COVERAGE_COUNTING_ROLES.has(r.role)).length;
+
+    setUploadStatus(uploadType, `Parsed ${rows.length.toLocaleString()} rows (${countingRows.toLocaleString()} field roles). This will REPLACE the entire ${sourceType} roster. Uploading...`, 'working');
+    setUploadProgress(uploadType, 30);
+
+    const res = await workerFetch('/api/uploads/coverage-' + sourceType, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sourceFilename: file.name, rows: rows.map(r => ({ role: r.role, departmentRaw: r.departmentRaw, city: r.city, state: r.state })) }),
+    });
+    const data = await res.json();
+    setUploadProgress(uploadType, null);
+    if (!res.ok) { setUploadStatus(uploadType, data.error || 'Upload failed.', 'error'); return; }
+
+    let msg = `Done: ${data.rowsInserted.toLocaleString()} rows replaced the ${sourceType} roster.`;
+    if (sourceType === 'consultants' && fallbackCount > 0) {
+      msg += ` ${fallbackCount} row${fallbackCount === 1 ? '' : 's'} used home address (Location Description wasn't a recognizable city and state).`;
+    }
+    if ((data.unmappedStates || []).length > 0) {
+      msg += ` Some rows had an unrecognized state and were saved without a region: ${data.unmappedStates.join(', ')}.`;
+    }
+    setUploadStatus(uploadType, msg, (data.unmappedStates || []).length > 0 ? 'error' : 'ok');
+    input.value = '';
+    loadUploadHistory();
+  } catch(e){
+    setUploadStatus(uploadType, 'Could not read or upload this file: ' + (e.message || 'unknown error'), 'error');
+    setUploadProgress(uploadType, null);
+  }
+}
+
 function setUploadStatus(uploadType, message, kind){
   const el = document.getElementById('upload-status-' + uploadType);
   el.textContent = message;
@@ -4590,6 +4761,41 @@ function renderRegionsMarketTiers(data){
   document.getElementById('rg-tier1-count').textContent = data.marketTiers.tier_1;
   document.getElementById('rg-tier2-count').textContent = data.marketTiers.tier_2;
   document.getElementById('rg-tier3-count').textContent = data.marketTiers.tier_3;
+
+  const pending = document.getElementById('rg-coverage-pending');
+  const wrap = document.getElementById('rg-coverage-wrap');
+  if (!data.coverageAvailable) {
+    pending.classList.remove('hidden');
+    wrap.classList.add('hidden');
+    return;
+  }
+  pending.classList.add('hidden');
+  wrap.classList.remove('hidden');
+  document.getElementById('rg-coverage-radius').textContent = data.coverageRadiusMiles;
+
+  const underCovered = data.underCoveredTierOneCities || [];
+  const table = document.getElementById('rg-coverage-table');
+  const empty = document.getElementById('rg-coverage-empty');
+  if (underCovered.length === 0) {
+    table.classList.add('hidden');
+    empty.classList.remove('hidden');
+  } else {
+    empty.classList.add('hidden');
+    table.classList.remove('hidden');
+    document.getElementById('rg-coverage-tbody').innerHTML = underCovered.map(c => {
+      const nearest = c.nearestMiles === null ? 'No one on the roster yet' : `${c.nearestMiles} mi away`;
+      return `<tr><td>${escapeHtml(c.city)}</td><td>${escapeHtml(c.state)}</td><td class="num">${nearest}</td></tr>`;
+    }).join('');
+  }
+
+  const missingNote = document.getElementById('rg-coverage-missing-note');
+  const missing = data.coverageGeocodeMissing || [];
+  if (missing.length > 0) {
+    missingNote.classList.remove('hidden');
+    missingNote.textContent = `${missing.length} top-priority ${missing.length === 1 ? 'market is' : 'markets are'} missing a stored location and could not be checked: ${missing.join(', ')}. Contact your admin.`;
+  } else {
+    missingNote.classList.add('hidden');
+  }
 }
 
 function renderRegionsScreen(data){
