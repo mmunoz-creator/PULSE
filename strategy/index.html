@@ -1089,6 +1089,29 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
           <div class="budget-hint">Maps a Service Family (or a specific Service Name within it) to a Line of Business, effective as of the year selected above. Leave Service Name blank to map an entire Service Family at once.</div>
         </div>
       </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-head">
+          <h3>Defaults</h3>
+          <span class="meta">Used when no mapping above applies</span>
+        </div>
+        <div class="card-pad" style="padding-top:6px">
+          <div style="overflow-x:auto">
+            <table class="rtable" id="sa-defaults-table">
+              <thead>
+                <tr>
+                  <th>Service Family</th>
+                  <th>Service Name</th>
+                  <th>Line of Business</th>
+                  <th style="width:1%; white-space:nowrap">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="sa-defaults-tbody"></tbody>
+            </table>
+          </div>
+          <div class="budget-hint">Built-in fallback mapping, used whenever no row above covers a Service Family/Name for the selected year. Not stored in the database, read-only here. If one of these looks wrong for a given year, click Override to add a real mapping above rather than editing this list directly.</div>
+        </div>
+      </div>
     </div>
 
     <!-- Setup Baseline wizard (v1c) -->
@@ -1639,6 +1662,36 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
               <div id="gsr-tenure-bar" style="display:flex; height:28px; border-radius:7px; overflow:hidden; margin-bottom:10px"></div>
               <div id="gsr-tenure-legend" style="display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--text-body)"></div>
               <div class="legend-note" id="gsr-tenure-note" style="margin-top:8px"></div>
+            </div>
+
+            <div class="card-head" style="margin-top:18px"><h3>Line of Business Detail</h3><span class="meta">Inspections vs. Program Advisory attach and retention</span></div>
+            <div class="card-pad" style="padding-top:6px">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:14px">
+                <div style="background:var(--paper-sunk); border-radius:10px; padding:12px 14px">
+                  <div style="font-size:11px; font-weight:800; text-transform:uppercase; color:var(--text-faint); margin-bottom:4px">Inspection Accounts With Advisory Attach</div>
+                  <div id="gsr-lob-attach-pct" style="font-size:24px; font-weight:800"></div>
+                  <div class="legend-note" id="gsr-lob-attach-note" style="margin-top:4px"></div>
+                </div>
+                <div style="background:var(--paper-sunk); border-radius:10px; padding:12px 14px">
+                  <div style="font-size:11px; font-weight:800; text-transform:uppercase; color:var(--text-faint); margin-bottom:4px">Inspection Account Retention</div>
+                  <div id="gsr-lob-retention-pct" style="font-size:24px; font-weight:800"></div>
+                  <div class="legend-note" id="gsr-lob-retention-note" style="margin-top:4px"></div>
+                </div>
+              </div>
+
+              <div style="font-size:11px; font-weight:800; text-transform:uppercase; color:var(--text-faint); margin-bottom:8px">Zero-Attach Accounts, Inspections Only</div>
+              <table class="rtable" id="gsr-lob-zeroattach-table">
+                <thead><tr><th>Account</th><th class="num">Inspections Revenue</th></tr></thead>
+                <tbody></tbody>
+              </table>
+              <div class="legend-note" style="margin-top:4px">Largest inspections-only accounts, natural Program Advisory targets.</div>
+
+              <div style="font-size:11px; font-weight:800; text-transform:uppercase; color:var(--text-faint); margin:16px 0 8px">Softest Renewal Segments</div>
+              <table class="rtable" id="gsr-lob-softsegments-table">
+                <thead><tr><th>Vertical / End Market</th><th class="num">Prior-Year Accounts</th><th class="num">Retained</th><th class="num">Retention</th></tr></thead>
+                <tbody></tbody>
+              </table>
+              <div class="legend-note" id="gsr-lob-softsegments-note" style="margin-top:4px">End markets, by prior-year inspection accounts, with the weakest renewal rate into this year.</div>
             </div>
 
             <div class="card-head" style="margin-top:18px"><h3>Next $1M, Best Opportunity</h3><span class="meta">Every family scored on 3 real signals</span></div>
@@ -2278,8 +2331,37 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    this only ever fills blank months on a still-being-built year, never
    replaces anything already entered, confirmed at the backend level so
    the frontend can't get this wrong even by mistake.
+
+   v1v (2026-09-06): "Line of Business Detail" (Slide 3), Growth Strategy
+   Report. Paired with worker_v1q.mjs. Surfaced a real, previously-
+   undiscovered gap while scoping this: service_alignment (the table
+   meant to map bookings_fact's 9 service families to the 3-way Program
+   Advisory/Design Services/Inspections taxonomy) is confirmed empty in
+   production and was never consumed by any reporting query. Fixed at the
+   root rather than worked around: worker_v1q.mjs adds a real
+   resolveLineOfBusiness() that checks service_alignment overrides first
+   (by service name, then by family, for the exact fiscal year), falling
+   back to a new DEFAULT_LOB_MAP built from Misty's own family-by-family
+   assignments (confirmed live via direct SQL query results for
+   Construction Services' service_name split and the Quality Control
+   Evaluation/QCE spelling under Equipment Evaluation), including the
+   QCE-to-Inspections reclassification she flagged for FY2027. New card
+   here, placed after Account Tenure Mix and before Next $1M: inspection-
+   account advisory attach %, inspection account retention %, a Zero-
+   Attach Accounts table (largest inspections-only accounts, natural
+   Program Advisory targets), and a Softest Renewal Segments table (by
+   backlog_fact.vertical_end_market, lowest prior-year-to-this-year
+   inspection retention first). Per Misty's explicit requirement ("we
+   should have this table visible in the UI so we can make adjustments if
+   I made bad assumptions"), the Service Alignment screen gets a new
+   read-only "Defaults" card below the existing Overrides table, reading
+   worker_v1q.mjs's new GET /api/baseline/service-alignment-defaults
+   route; each row's new Override button opens the existing Add Mapping
+   modal pre-filled with that family/name, so correcting a default always
+   creates a real service_alignment row rather than editing the built-in
+   fallback in place.
    ============================================================ */
-const APP_VERSION = 'v1u';
+const APP_VERSION = 'v1v';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -2485,6 +2567,7 @@ function showApp(){
     populateMergeRegionSelects();
     loadMergeHistory();
     loadServiceAlignment(CURRENT_YEAR);
+    loadServiceAlignmentDefaults();
     wizInit(CURRENT_YEAR);
     loadAccountMapping();
   });
@@ -4340,11 +4423,60 @@ function renderMergeHistory(merges){
    on the mapping table only, per worker_v1b.mjs's own scope note.
    ============================================================ */
 let SERVICE_ALIGNMENTS = [];
+let SA_DEFAULTS = [];
 let saEffectiveYear = 2026;
 const SA_LOB_LABELS = { program_advisory: 'Program Advisory', design_services: 'Design Services', inspections: 'Inspections' };
 
 function onServiceAlignmentYearChange(year){
   loadServiceAlignment(parseInt(year, 10));
+}
+
+async function loadServiceAlignmentDefaults(){
+  try {
+    const res = await workerFetch('/api/baseline/service-alignment-defaults');
+    const data = await res.json();
+    if (!res.ok) { SA_DEFAULTS = []; renderSaDefaultsTable(); return; }
+    SA_DEFAULTS = data.defaults || [];
+    renderSaDefaultsTable();
+  } catch(e){
+    SA_DEFAULTS = [];
+    renderSaDefaultsTable();
+  }
+}
+
+function renderSaDefaultsTable(){
+  const tbody = document.getElementById('sa-defaults-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (SA_DEFAULTS.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-faint)">No defaults loaded.</td></tr>';
+    return;
+  }
+  SA_DEFAULTS.forEach(d=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="region-name">${escapeHtml(d.service_family)}</td>
+      <td>${d.service_name ? escapeHtml(d.service_name) : '<span style="color:var(--text-faint)">(entire family, or by name)</span>'}</td>
+      <td>${escapeHtml(SA_LOB_LABELS[d.line_of_business] || d.line_of_business)}</td>
+      <td>
+        <div class="row-actions">
+          <button class="row-action-btn" onclick="openOverrideSaDefaultModal('${escapeHtml(d.service_family).replace(/'/g,"\\'")}', ${d.service_name ? `'${escapeHtml(d.service_name).replace(/'/g,"\\'")}'` : 'null'})">Override</button>
+        </div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function openOverrideSaDefaultModal(serviceFamily, serviceName){
+  editingSaId = null;
+  document.getElementById('sa-modal-title').textContent = 'Add Mapping';
+  document.getElementById('saServiceFamily').value = serviceFamily;
+  document.getElementById('saServiceName').value = serviceName || '';
+  document.getElementById('saLineOfBusiness').value = 'program_advisory';
+  document.getElementById('saEffectiveYear').value = String(saEffectiveYear);
+  setSaModalError(null);
+  document.getElementById('sa-modal-overlay').classList.remove('hidden');
 }
 
 async function loadServiceAlignment(year){
@@ -5835,6 +5967,33 @@ function renderGrowthStrategyReport(data){
   tmNoteEl.textContent = tm.yearsOfHistoryAvailable <= 1
     ? `Only ${tm.yearsOfHistoryAvailable} fiscal year of bookings history is loaded, so most accounts show as "1 year" until an older bookings file is uploaded.`
     : `Based on ${tm.yearsOfHistoryAvailable} fiscal years of bookings history currently loaded.`;
+
+  // ---- Line of Business Detail ----
+  const lob = data.lineOfBusinessDetail;
+  const lobAttachPctEl = document.getElementById('gsr-lob-attach-pct');
+  const lobAttachNoteEl = document.getElementById('gsr-lob-attach-note');
+  if (lob.inspectionAttach.pct === null) {
+    lobAttachPctEl.textContent = '&mdash;';
+    lobAttachNoteEl.textContent = 'No inspections accounts yet for this region/year.';
+  } else {
+    lobAttachPctEl.textContent = gsrPct(lob.inspectionAttach.pct, 0);
+    lobAttachNoteEl.textContent = `${lob.inspectionAttach.withAdvisoryCount} of ${lob.inspectionAttach.totalInspectionAccounts} inspections accounts also buy Program Advisory.`;
+  }
+  const lobRetentionPctEl = document.getElementById('gsr-lob-retention-pct');
+  const lobRetentionNoteEl = document.getElementById('gsr-lob-retention-note');
+  if (lob.inspectionRetention.pct === null) {
+    lobRetentionPctEl.textContent = '&mdash;';
+    lobRetentionNoteEl.textContent = 'Not enough prior-year inspections data yet to compute.';
+  } else {
+    lobRetentionPctEl.textContent = gsrPct(lob.inspectionRetention.pct, 0);
+    lobRetentionNoteEl.textContent = `${lob.inspectionRetention.retainedCount} of ${lob.inspectionRetention.priorCount} prior-year inspections accounts retained this year.`;
+  }
+  document.querySelector('#gsr-lob-zeroattach-table tbody').innerHTML = lob.zeroAttachAccounts.length
+    ? lob.zeroAttachAccounts.map(a => `<tr><td>${escapeHtml(a.name)}</td><td class="num">${fmtMoneyShort(a.inspections)}</td></tr>`).join('')
+    : `<tr><td colspan="2" class="legend-note">No inspections-only accounts found for this region/year.</td></tr>`;
+  document.querySelector('#gsr-lob-softsegments-table tbody').innerHTML = lob.softestRenewalSegments.length
+    ? lob.softestRenewalSegments.map(s => `<tr><td>${escapeHtml(s.market)}</td><td class="num">${s.priorCount}</td><td class="num">${s.retainedCount}</td><td class="num">${s.retentionPct === null ? '&mdash;' : gsrPct(s.retentionPct, 0)}</td></tr>`).join('')
+    : `<tr><td colspan="4" class="legend-note">Not enough end-market history yet to compute renewal segments.</td></tr>`;
 
   // ---- Where to Focus ----
   const focusText = document.getElementById('gsr-focus-text');
