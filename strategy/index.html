@@ -892,6 +892,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
               <span>Region</span>
               <select id="revenue-monthly-region-select" onchange="onRevenueMonthlyRegionChange(this.value)"></select>
             </label>
+            <button class="btn-secondary" style="font-size:12px; padding:7px 12px" id="revenue-monthly-suggest-btn" onclick="onSuggestRevenueMonthlyFromHistory()">Suggest from History</button>
           </div>
         </div>
         <div class="card-pad" style="padding-top:6px">
@@ -2259,8 +2260,26 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    comment block, wizState/WIZ_STEP_LABELS, etc.) — renaming those would
    be a much larger internal refactor with no user-visible benefit and
    wasn't what was asked.
+
+   v1u (2026-09-06): "Suggest from history" on Monthly Detail, per
+   Misty's direct request to recommend a monthly breakdown from
+   historical budget + actual revenue rather than a blind guess. New
+   button next to the region picker; new onSuggestRevenueMonthlyFromHistory,
+   calling worker_v1p.mjs's new read-only GET revenue-budgets-monthly-
+   suggest route (see that route's own comment for the blend formula).
+   Fills and saves ONLY the {lob, month} cells the backend names in its
+   response — a month with real data entry is never returned by the
+   backend in the first place, so there's nothing to guard against here
+   beyond using the response as given; a month is filled via the same
+   local-cache-update + batch-save path the paste feature already uses,
+   one save request per LOB (the suggestion covers all 3 LOBs in the
+   region at once, unlike paste which is always one row). Per Misty's
+   explicit correction mid-design ("Do not overwrite real data entry"):
+   this only ever fills blank months on a still-being-built year, never
+   replaces anything already entered, confirmed at the backend level so
+   the frontend can't get this wrong even by mistake.
    ============================================================ */
-const APP_VERSION = 'v1t';
+const APP_VERSION = 'v1u';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -4071,6 +4090,68 @@ async function onRevenueMonthlyCellPaste(event, input){
     else showToast(`Pasted ${cellsToSave.length} month${cellsToSave.length === 1 ? '' : 's'}.`);
   } catch(e){
     showToast('Could not reach the server. Your pasted values were not kept.', true);
+  }
+}
+
+// "Suggest from history" (v1u, 2026-09-06), per Misty's direct request:
+// recommend a monthly breakdown from historical budget + actuals so the
+// seasonal split isn't a blind guess for a year that hasn't been entered
+// yet. Reads worker_v1p.mjs's read-only suggest endpoint, then fills
+// ONLY the blank cells it returns — the backend already excludes any
+// month with real data entry, so there's nothing to check client-side,
+// but the render/save path below still only ever touches the specific
+// {lob, month} pairs the response names, never a whole row.
+async function onSuggestRevenueMonthlyFromHistory(){
+  if (!revenueMonthlyRegionId) return;
+  const btn = document.getElementById('revenue-monthly-suggest-btn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Suggesting…';
+  try {
+    const res = await workerFetch(`/api/baseline/revenue-budgets-monthly-suggest?regionId=${encodeURIComponent(revenueMonthlyRegionId)}&fiscalYear=${currentYear.revenue}`);
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not compute a suggestion.', true); return; }
+
+    const lobsWithSuggestions = Object.keys(data.suggestions || {});
+    if (lobsWithSuggestions.length === 0) {
+      showToast(`No FY${data.priorYear} budget or actuals history found for this region to suggest from.`, true);
+      return;
+    }
+
+    let totalCells = 0;
+    for (const lob of lobsWithSuggestions) {
+      const monthAmounts = data.suggestions[lob]; // { month: amount }, already-entered months excluded by the backend
+      const cellsToSave = Object.entries(monthAmounts).map(([month, amount]) => ({ month: parseInt(month, 10), amount }));
+      if (cellsToSave.length === 0) continue;
+      totalCells += cellsToSave.length;
+
+      cellsToSave.forEach(({ month, amount }) => {
+        const existing = revenueMonthlyRows.find(r => r.region_id === revenueMonthlyRegionId && r.line_of_business === lob && r.month === month);
+        if (existing) existing.amount = amount;
+        else revenueMonthlyRows.push({ region_id: revenueMonthlyRegionId, line_of_business: lob, fiscal_year: currentYear.revenue, month, amount });
+      });
+
+      try {
+        const saveRes = await workerFetch('/api/baseline/revenue-budgets-monthly-batch', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ regionId: revenueMonthlyRegionId, lineOfBusiness: lob, fiscalYear: currentYear.revenue, cells: cellsToSave }),
+        });
+        const saveData = await saveRes.json();
+        if (!saveRes.ok) showToast(saveData.error || `Could not save the suggestion for ${(LOBS.find(l => l.key === lob) || {}).label || lob}.`, true);
+      } catch(e){
+        showToast(`Could not reach the server saving the suggestion for ${(LOBS.find(l => l.key === lob) || {}).label || lob}.`, true);
+      }
+    }
+
+    renderRevenueMonthlyTable();
+    renderBudgetTable('revenue', revenueMonthlyRowsToAnnualRows(revenueMonthlyRows, currentYear.revenue));
+    if (totalCells > 0) showToast(`Filled ${totalCells} month${totalCells === 1 ? '' : 's'} from FY${data.priorYear} history. Review before saving further.`);
+    else showToast('Every month already has a value — nothing left to suggest.');
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 }
 
