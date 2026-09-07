@@ -12,15 +12,30 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
-  /* Shared PULSE family tokens, matched to PULSE Pricing's live CSS
-     custom properties (read via getComputedStyle on elevatorpulse.com/pricing) */
+  /* Shared PULSE family tokens. --navy is still matched to PULSE
+     Pricing's live brand color (read via getComputedStyle on
+     elevatorpulse.com/pricing) -- unchanged by the 2026-09-07 aesthetic
+     pass below, that pass only touched --paper/--paper-raised/
+     --paper-sunk/--border/--border-strong. */
   --navy:#0a1628;
   --navy-2:#0d1b2e;
-  --paper:#fafafa;
+  /* Aesthetic pass (2026-09-07, Misty: "in light mode the app looks
+     bland"). Old values (--paper #fafafa, --paper-raised #FFFFFF,
+     --paper-sunk #f6f7f8) were three nearly-indistinguishable off-whites
+     -- HSL-checked before changing anything: 0/0/98, 0/0/100, 210/12/97,
+     almost no separation between page background and card surfaces.
+     New values keep --paper-raised as true white (cards still read as
+     the "lifted" surface, maximum separation against the page) but give
+     --paper and --paper-sunk a real, slightly cooler tint (hue ~248,
+     matching the purple --accent family) so cards visibly sit on top of
+     the page instead of blending into it. Reviewed as a real before/
+     after Playwright-rendered mockup, approved by Misty before this
+     edit ("this looks good, let's move forward"). */
+  --paper:#f3f3f7;
   --paper-raised:#FFFFFF;
-  --paper-sunk:#f6f7f8;
-  --border:#e3e6ea;
-  --border-strong:#d0d5db;
+  --paper-sunk:#eae9f1;
+  --border:#dcdbe6;
+  --border-strong:#c6c4d4;
   --text:#14181f;
   --text-muted:#4d5560;
   --text-faint:#8a919c;
@@ -40,10 +55,25 @@
   --blue-soft:#eaf1fd;
   --shadow: 0 1px 2px rgba(10,22,40,0.05), 0 8px 24px -12px rgba(10,22,40,0.14);
 }
+/* Aesthetic pass (2026-09-07, Misty: "in dark mode strategy looks dark
+   blue what color is it?"). HSL-checked before changing anything: the
+   old dark tokens (--navy #070d18, --paper #0b0f18, --paper-raised
+   #121826, --paper-sunk #161d2e) sat at hue 219-222 degrees, 35-55%
+   saturation -- genuinely blue, not just dark, and these are large-
+   surface-area colors (full sidebar, full page background, the login
+   gradient, the Executive Summary narrative card), so the blue cast
+   dominated the whole screen even though individual card tiles
+   (--paper-raised) were more neutral. Replaced with true neutral
+   charcoal: same lightness ladder as before (L6/L7/L11/L13, so overall
+   contrast and hierarchy are unchanged), saturation dropped to ~5-6%
+   (a bare whisper of the same cool hue, not zero, so it doesn't read as
+   sterile/lifeless against the purple --accent family). Reviewed as a
+   real before/after Playwright-rendered mockup, approved by Misty
+   before this edit ("this looks good, let's move forward"). */
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --navy:#070d18; --navy-2:#0a1220; --paper:#0b0f18; --paper-raised:#121826; --paper-sunk:#161d2e;
-    --border:#232b3d; --border-strong:#333d54; --text:#e7e9ee; --text-muted:#9aa1b3; --text-faint:#6b7385;
+    --navy:#0e0f10; --navy-2:#161618; --paper:#131415; --paper-raised:#1f2023; --paper-sunk:#27282b;
+    --border:#303236; --border-strong:#414349; --text:#e7e9ee; --text-muted:#9aa1b3; --text-faint:#6b7385;
     --accent:#8a78e8; --accent-soft:#221d47; --accent-ink:#b0a2f2;
     --good:#4fcb8e; --good-soft:#0f2e21; --warn:#d9a53f; --warn-soft:#332508; --crit:#e3707c; --crit-soft:#361419;
     --blue:#6c9bf5; --blue-soft:#182742;
@@ -51,8 +81,8 @@
   }
 }
 :root[data-theme="dark"]{
-  --navy:#070d18; --navy-2:#0a1220; --paper:#0b0f18; --paper-raised:#121826; --paper-sunk:#161d2e;
-  --border:#232b3d; --border-strong:#333d54; --text:#e7e9ee; --text-muted:#9aa1b3; --text-faint:#6b7385;
+  --navy:#0e0f10; --navy-2:#161618; --paper:#131415; --paper-raised:#1f2023; --paper-sunk:#27282b;
+  --border:#303236; --border-strong:#414349; --text:#e7e9ee; --text-muted:#9aa1b3; --text-faint:#6b7385;
   --accent:#8a78e8; --accent-soft:#221d47; --accent-ink:#b0a2f2;
   --good:#4fcb8e; --good-soft:#0f2e21; --warn:#d9a53f; --warn-soft:#332508; --crit:#e3707c; --crit-soft:#361419;
   --blue:#6c9bf5; --blue-soft:#182742;
@@ -2468,7 +2498,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    creates a real service_alignment row rather than editing the built-in
    fallback in place.
    ============================================================ */
-const APP_VERSION = 'v2b';
+const APP_VERSION = 'v2c';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -3196,7 +3226,20 @@ function renderExecSummaryBridge(bridge){
 
   let running = 0;
   const runningTotals = bridge.steps.map(s => { running = s.kind === 'total' ? s.value : running + s.value; return running; });
-  const maxV = Math.max(...runningTotals, 1);
+  // Headroom fix (2026-09-06, Misty: "the weighted pipeline value is not
+  // visible"). Weighted Pipeline's running total lands exactly at the
+  // same height as Expected Revenue's own bar (by construction -- it's
+  // the last 'pos' step before the final total), so its bar legitimately
+  // reached 100% of the chart height with zero room left above it for
+  // the .es-bridge-val label, which sits in normal flow above the track
+  // inside a fixed-height, overflow:hidden .card. Reproduced locally
+  // with Playwright: a bar at ~98-100% of maxV clips its own label
+  // completely, even though the underlying data/bar-height math was
+  // always correct. Fix: scale maxV up by a fixed headroom factor so no
+  // bar's top edge can reach the very top of the chart, guaranteeing
+  // room for the label regardless of which step is tallest.
+  const CHART_HEADROOM_FACTOR = 0.82;
+  const maxV = Math.max(...runningTotals, 1) / CHART_HEADROOM_FACTOR;
 
   running = 0;
   chart.innerHTML = bridge.steps.map(s => {
