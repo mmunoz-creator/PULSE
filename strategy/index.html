@@ -262,6 +262,21 @@ h1,h2,h3{text-wrap:balance; margin:0}
 .rtable td.num, .rtable th.num{text-align:right}
 .region-name{font-weight:700}
 
+/* Pipeline & Backlog: Service Mix + Regional Density (2026-09-07) */
+.pb-mix-row{display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border)}
+.pb-mix-row:last-child{border-bottom:none}
+.pb-mix-label{width:170px; flex-shrink:0; font-size:12.5px; font-weight:700; color:var(--text)}
+.pb-mix-bars{flex:1; display:flex; flex-direction:column; gap:5px}
+.pb-mix-bar-line{display:flex; align-items:center; gap:10px}
+.pb-mix-track{flex:1; height:9px; border-radius:999px; background:var(--paper-sunk); overflow:hidden}
+.pb-mix-fill{height:100%; border-radius:999px}
+.pb-mix-fill.proposal{background:var(--blue)}
+.pb-mix-fill.backlog{background:var(--accent)}
+.pb-mix-val{width:64px; text-align:right; font-size:12.5px; font-weight:800; color:var(--text); flex-shrink:0}
+.density-bar-wrap{display:flex; align-items:center; gap:8px}
+.density-bar-track{flex:1; height:6px; border-radius:999px; background:var(--paper-sunk); min-width:60px}
+.density-bar-fill{height:100%; border-radius:999px}
+
 /* Baseline view */
 .subtabs{display:flex; gap:4px; padding:4px; background:var(--paper-sunk); border-radius:11px; margin-bottom:18px; width:fit-content}
 .subtab{
@@ -825,7 +840,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
       Forecast
     </div>
-    <div class="rail-item disabled" title="Not yet built in this pass">
+    <div class="rail-item" data-view="pipeline-backlog" onclick="showView('pipeline-backlog',this)">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
       Pipeline &amp; Backlog
     </div>
@@ -1571,6 +1586,68 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
         <span class="meta">Company-wide, this fiscal year, sorted highest first</span>
       </div>
       <div class="card-pad" style="padding-top:6px" id="es-service-family"></div>
+    </div>
+  </div>
+
+  <!-- ---- Pipeline & Backlog: Service Mix + Regional Density (2026-09-07) ----
+       Real build of the approved mockup. Reframed away from an operational
+       working-list per Misty's direct redirect: this reads service mix
+       health (what's being proposed vs. what's piling up unbilled) and
+       regional staffing density (backlog $ per field staff member), not a
+       line-item lookup tool. -->
+  <div class="main hidden" id="view-pipeline-backlog">
+    <div class="topbar">
+      <div>
+        <div class="eyebrow">Pipeline &amp; Backlog</div>
+        <h1>Service Mix &amp; Regional Density</h1>
+        <div class="period">What we're proposing vs. what's piling up unbilled, by service and by region. A read on long-term book health and where staffing may be thin.</div>
+      </div>
+      <label class="year-picker">
+        <span>Region</span>
+        <select id="pb-region-select" onchange="onPipelineBacklogRegionChange(this.value)">
+          <option value="">All Regions</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>What We're Proposing vs. What's Piling Up</h3>
+        <span class="meta">Open proposal fees by service, next to current unbilled backlog for that same service</span>
+      </div>
+      <div class="card-pad" style="padding-top:6px">
+        <div id="pb-mix-rows"></div>
+        <div class="legend-row" id="pb-mix-legend" style="margin-top:14px">
+          <div class="legend-item"><div class="legend-swatch" style="background:var(--blue)"></div> Open Proposal Fees</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:var(--accent)"></div> Unbilled Backlog</div>
+        </div>
+        <div id="pb-unmapped-note" class="fc-empty-note hidden" style="margin-top:10px"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-head">
+        <h3>Backlog Density by Region</h3>
+        <span class="meta">Current unbilled backlog per field staff member, sorted highest first</span>
+      </div>
+      <div class="card-pad" style="padding-top:6px">
+        <div id="pb-density-empty-note" class="fc-empty-note hidden">No coverage roster uploaded yet, upload Consultants and Inspectors on Data Updates to see staffing density.</div>
+        <div id="pb-density-wrap" style="overflow-x:auto">
+          <table class="rtable" id="pb-density-table">
+            <thead>
+              <tr>
+                <th>Region</th>
+                <th class="num">Backlog</th>
+                <th class="num">Field Staff</th>
+                <th class="num">$ / Staff</th>
+                <th style="width:160px">Density</th>
+              </tr>
+            </thead>
+            <tbody id="pb-density-rows"></tbody>
+          </table>
+        </div>
+        <div class="note" id="pb-density-legend-note">Density = current backlog &divide; field-facing roster count (Consultant, Area Manager, Field Examiner). A region with real backlog and few or zero mapped staff is a gap worth a closer look, not a rank to optimize blindly, some backlog is naturally slower to turn than others.</div>
+      </div>
     </div>
   </div>
 
@@ -2498,7 +2575,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    creates a real service_alignment row rather than editing the built-in
    fallback in place.
    ============================================================ */
-const APP_VERSION = 'v2c';
+const APP_VERSION = 'v2d';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -2729,6 +2806,7 @@ function showView(view, el){
   if (view === 'forecast') loadForecastAll(forecastYear);
   if (view === 'regions') regionsInit();
   if (view === 'executive-summary') execSummaryInit();
+  if (view === 'pipeline-backlog') pipelineBacklogInit();
 }
 
 /* ============================================================
@@ -3304,6 +3382,126 @@ function renderExecSummaryServiceFamily(chartData){
       <div class="v">${fmtMoneyShort(d.total)}</div>
     </div>
   `).join('');
+}
+
+/* ============================================================
+   PIPELINE & BACKLOG — Service Mix + Regional Density (2026-09-07)
+   Real build of the approved mockup. Company-wide by default; the
+   Region picker filters the Service Mix panel only, Regional Density
+   always shows every region since the point of that panel is comparing
+   regions against each other. No fiscal year picker: backlog is a
+   current running balance, not something that happened "in" a year
+   (Misty's direct call).
+   ============================================================ */
+let pbRegionId = '';
+
+function pipelineBacklogInit(){
+  const select = document.getElementById('pb-region-select');
+  if (select && select.options.length <= 1) {
+    select.innerHTML = '<option value="">All Regions</option>' +
+      REGIONS.map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+    select.value = pbRegionId;
+  }
+  loadPipelineBacklog();
+}
+
+function onPipelineBacklogRegionChange(value){
+  pbRegionId = value;
+  loadPipelineBacklog();
+}
+
+async function loadPipelineBacklog(){
+  try {
+    const qs = pbRegionId ? `?regionId=${encodeURIComponent(pbRegionId)}` : '';
+    const res = await workerFetch(`/api/pipeline-backlog${qs}`);
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not load Pipeline & Backlog.', true); return; }
+    renderPipelineBacklogMix(data.serviceMix, data.proposalUnmapped, data.backlogUnmapped);
+    renderPipelineBacklogDensity(data.regionalDensity, data.coverageAvailable);
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+
+function renderPipelineBacklogMix(serviceMix, proposalUnmapped, backlogUnmapped){
+  const container = document.getElementById('pb-mix-rows');
+  if (!serviceMix || !serviceMix.length) { container.innerHTML = '<div class="fc-empty-note">No proposal or backlog data yet.</div>'; return; }
+
+  const sorted = [...serviceMix].sort((a,b) => (b.proposalTotal + b.backlogTotal) - (a.proposalTotal + a.backlogTotal));
+  const maxV = Math.max(...sorted.flatMap(m => [m.proposalTotal, m.backlogTotal]), 1);
+
+  container.innerHTML = sorted.map(m => `
+    <div class="pb-mix-row">
+      <div class="pb-mix-label">${escapeHtml(m.label)}</div>
+      <div class="pb-mix-bars">
+        <div class="pb-mix-bar-line">
+          <div class="pb-mix-track"><div class="pb-mix-fill proposal" style="width:${(m.proposalTotal / maxV) * 100}%"></div></div>
+          <div class="pb-mix-val">${fmtMoneyShort(m.proposalTotal)}</div>
+        </div>
+        <div class="pb-mix-bar-line">
+          <div class="pb-mix-track"><div class="pb-mix-fill backlog" style="width:${(m.backlogTotal / maxV) * 100}%"></div></div>
+          <div class="pb-mix-val">${fmtMoneyShort(m.backlogTotal)}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  const note = document.getElementById('pb-unmapped-note');
+  const unmappedTotal = (proposalUnmapped?.total || 0) + (backlogUnmapped?.total || 0);
+  if (unmappedTotal > 0) {
+    note.classList.remove('hidden');
+    note.textContent = `${fmtMoneyShort(unmappedTotal)} across both sources falls outside the 9 tracked service families and isn't reflected above.`;
+  } else {
+    note.classList.add('hidden');
+  }
+}
+
+function renderPipelineBacklogDensity(regionalDensity, coverageAvailable){
+  const emptyNote = document.getElementById('pb-density-empty-note');
+  const wrap = document.getElementById('pb-density-wrap');
+  const rows = document.getElementById('pb-density-rows');
+
+  if (!coverageAvailable) {
+    emptyNote.classList.remove('hidden');
+    wrap.classList.add('hidden');
+    return;
+  }
+  emptyNote.classList.add('hidden');
+  wrap.classList.remove('hidden');
+
+  if (!regionalDensity || !regionalDensity.length) {
+    rows.innerHTML = '<tr><td colspan="5" class="fc-empty-note">No backlog or staffing data yet.</td></tr>';
+    return;
+  }
+
+  const withDensity = regionalDensity.filter(r => r.densityPerStaff !== null);
+  const maxDensity = Math.max(...withDensity.map(r => r.densityPerStaff), 1);
+
+  rows.innerHTML = regionalDensity.map(r => {
+    let cls = 'good', label = 'Light';
+    if (r.densityPerStaff === null) { cls = 'crit'; label = 'No Staff Mapped'; }
+    else {
+      const ratio = r.densityPerStaff / maxDensity;
+      if (ratio >= 0.66) { cls = 'crit'; label = 'High'; }
+      else if (ratio >= 0.33) { cls = 'warn'; label = 'Moderate'; }
+    }
+    const barPct = r.densityPerStaff !== null ? Math.round((r.densityPerStaff / maxDensity) * 100) : 100;
+    const barColor = cls === 'crit' ? 'var(--crit)' : cls === 'warn' ? 'var(--warn)' : 'var(--good)';
+    return `
+      <tr>
+        <td class="region-name">${escapeHtml(r.regionName)}</td>
+        <td class="num">${fmtMoneyShort(r.backlogTotal)}</td>
+        <td class="num">${r.fieldStaffCount}</td>
+        <td class="num">${r.densityPerStaff !== null ? fmtMoneyShort(r.densityPerStaff) : '&mdash;'}</td>
+        <td>
+          <div class="density-bar-wrap">
+            <div class="density-bar-track"><div class="density-bar-fill" style="width:${barPct}%; background:${barColor}"></div></div>
+            <span class="pace-pill ${cls}">${label}</span>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 /* ============================================================
