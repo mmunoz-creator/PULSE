@@ -1548,6 +1548,9 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
     <!-- Pace Tiles -->
     <div class="fc-tiles" id="es-tiles"></div>
 
+    <!-- Book-to-Bill / Company Backlog / Top Performing Region -->
+    <div class="fc-tiles" id="es-tiles-2"></div>
+
     <!-- Revenue Bridge -->
     <div class="card">
       <div class="card-head">
@@ -1638,7 +1641,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
     <div class="card" style="margin-top:16px">
       <div class="card-head">
         <h3>Backlog Density by Region</h3>
-        <span class="meta">Current unbilled backlog per field staff member, sorted highest first</span>
+        <span class="meta">Current unbilled backlog per staff member, split by who can work it, sorted highest first</span>
       </div>
       <div class="card-pad" style="padding-top:6px">
         <div id="pb-density-empty-note" class="fc-empty-note hidden">No coverage roster uploaded yet, upload Consultants and Inspectors on Data Updates to see staffing density.</div>
@@ -1646,17 +1649,23 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
           <table class="rtable" id="pb-density-table">
             <thead>
               <tr>
-                <th>Region</th>
+                <th rowspan="2" style="vertical-align:bottom">Region</th>
+                <th colspan="3" style="text-align:center; border-bottom:1px solid var(--border)">Inspections (Field Examiners)</th>
+                <th colspan="3" style="text-align:center; border-bottom:1px solid var(--border)">Non-Inspection (Consultants, Area Managers)</th>
+              </tr>
+              <tr>
                 <th class="num">Backlog</th>
-                <th class="num">Field Staff</th>
-                <th class="num">$ / Staff</th>
-                <th style="width:160px">Density</th>
+                <th class="num">Staff</th>
+                <th style="width:150px">$ / Staff</th>
+                <th class="num">Backlog</th>
+                <th class="num">Staff</th>
+                <th style="width:150px">$ / Staff</th>
               </tr>
             </thead>
             <tbody id="pb-density-rows"></tbody>
           </table>
         </div>
-        <div class="note" id="pb-density-legend-note">Density = current backlog &divide; field-facing roster count (Consultant, Area Manager, Field Examiner). A region with real backlog and few or zero mapped staff is a gap worth a closer look, not a rank to optimize blindly, some backlog is naturally slower to turn than others.</div>
+        <div class="note" id="pb-density-legend-note">Inspections backlog &divide; Field Examiners, Non-Inspection backlog &divide; Consultants and Area Managers. Field Examiners only work Inspections, so a blended figure hid staffing pressure on both sides. A region with real backlog and few or zero mapped staff on either side is a gap worth a closer look, not a rank to optimize blindly, some backlog is naturally slower to turn than others.</div>
       </div>
     </div>
   </div>
@@ -2586,7 +2595,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    creates a real service_alignment row rather than editing the built-in
    fallback in place.
    ============================================================ */
-const APP_VERSION = 'v2e';
+const APP_VERSION = 'v2g';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -3205,9 +3214,66 @@ async function loadExecutiveSummary(year){
 function renderExecutiveSummary(data){
   renderExecSummaryNarrative(data.narrative || []);
   renderExecSummaryTiles(data);
+  renderExecSummaryTiles2(data);
   renderExecSummaryBridge(data.revenueBridge);
   renderExecSummaryRegions(data.regionalDrivers);
   renderExecSummaryServiceFamily(data.serviceFamilyChart || []);
+}
+
+// Second tile row: Book-to-Bill Ratio, Company Backlog, Top Performing
+// Region (Sales), Top Performing Region (Revenue) — added 2026-09-08 per
+// the McKinsey-pass gaps confirmed with Misty (§97/§98). Kept as its own
+// render function and its own #es-tiles-2 grid, a clean second 4-tile row,
+// rather than folding into renderExecSummaryTiles, since these four came
+// from a separate approval round and read from different backend fields.
+// Tile copy intentionally trimmed to label/value/one-line-caption, matching
+// the existing four tiles' style — no inline formula explanations (those
+// are meant for a Help Button on each tile once that system is built,
+// still deferred, not part of this round).
+function renderExecSummaryTiles2(data){
+  // No color coding on this tile yet (Misty, 2026-09-08): paceClass's
+  // >=100=good/>=95=warn/else=crit scale is built for pace-vs-budget, not
+  // Book-to-Bill, where a real good/warn/crit range hasn't been defined
+  // yet. Plain value until that judgment call is made deliberately.
+  const btbHtml = `
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon accent"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 12h10M12 7v10"/><circle cx="12" cy="12" r="9"/></svg></div></div>
+      <div class="fc-tile-label">Book-to-Bill Ratio</div>
+      <div class="fc-tile-value">${data.bookToBillRatioPct === null ? '&mdash;' : data.bookToBillRatioPct.toFixed(1) + '%'}</div>
+      <div class="fc-tile-sub">${data.bookToBillRatioPct === null ? 'Revenue not yet available for ' + data.fiscalYear : 'Sales &divide; Revenue, this month'}</div>
+    </div>
+  `;
+
+  const backlogHtml = `
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon blue"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div></div>
+      <div class="fc-tile-label">Company Backlog</div>
+      <div class="fc-tile-value">${fmtMoneyShort(data.companyBacklog || 0)}</div>
+      <div class="fc-tile-sub">All regions, as of today</div>
+    </div>
+  `;
+
+  const tps = data.topPerformingRegionSales;
+  const tpsHtml = `
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon good"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.6 6.6L21 10l-5 4.4L17.5 21 12 17.3 6.5 21 8 14.4 3 10l6.4-1.4L12 2z"/></svg></div></div>
+      <div class="fc-tile-label">Top Performing Region, Sales</div>
+      <div class="fc-tile-value" style="font-size:19px">${tps ? escapeHtml(tps.regionName) : '&mdash;'}</div>
+      <div class="fc-tile-sub">${tps ? `<span class="pace-pill ${paceClass(tps.pacePctOfBudget)}">${tps.pacePctOfBudget.toFixed(1)}%</span> of Sales budget pace` : 'No region has a Sales Budget set for ' + data.fiscalYear}</div>
+    </div>
+  `;
+
+  const tpr = data.topPerformingRegionRevenue;
+  const tprHtml = `
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon good"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.6 6.6L21 10l-5 4.4L17.5 21 12 17.3 6.5 21 8 14.4 3 10l6.4-1.4L12 2z"/></svg></div></div>
+      <div class="fc-tile-label">Top Performing Region, Revenue</div>
+      <div class="fc-tile-value" style="font-size:19px">${tpr ? escapeHtml(tpr.regionName) : '&mdash;'}</div>
+      <div class="fc-tile-sub">${tpr ? `<span class="pace-pill ${paceClass(tpr.pacePctOfBudget)}">${tpr.pacePctOfBudget.toFixed(1)}%</span> of Revenue budget pace` : 'No region has Revenue actuals yet for ' + data.fiscalYear}</div>
+    </div>
+  `;
+
+  document.getElementById('es-tiles-2').innerHTML = btbHtml + backlogHtml + tpsHtml + tprHtml;
 }
 
 function renderExecSummaryNarrative(lines){
@@ -3481,7 +3547,7 @@ function renderPipelineBacklogDensity(regionalDensity, coverageAvailable){
   wrap.classList.remove('hidden');
 
   if (!regionalDensity || !regionalDensity.length) {
-    rows.innerHTML = '<tr><td colspan="5" class="fc-empty-note">No backlog or staffing data yet.</td></tr>';
+    rows.innerHTML = '<tr><td colspan="7" class="fc-empty-note">No backlog or staffing data yet.</td></tr>';
     return;
   }
 
@@ -3489,33 +3555,42 @@ function renderPipelineBacklogDensity(regionalDensity, coverageAvailable){
   // the current result set -- real regions cluster close together, so a
   // relative scale marked nearly every region "High" regardless of actual
   // staffing pressure. Confirmed with Misty: under $250K/staff = Light,
-  // $250K-$450K = Moderate, over $450K = High.
+  // $250K-$450K = Moderate, over $450K = High. Same thresholds apply to
+  // both the Inspections and Non-Inspection figures below (also Misty's
+  // call) -- split into two staffing pools, one dollar scale.
   const DENSITY_LIGHT_MAX = 250000;
   const DENSITY_MODERATE_MAX = 450000;
   const DENSITY_BAR_SCALE = 600000; // bar width still scales visually, against this fixed ceiling rather than the group's max
 
-  rows.innerHTML = regionalDensity.map(r => {
+  // One region has two density figures now (Inspections, Non-Inspection),
+  // each needing its own pill/bar -- factored out so the two <td> groups
+  // below don't duplicate the threshold logic.
+  function densityCellsHtml(densityPerStaff, staffCount, backlogTotal){
     let cls = 'good', label = 'Light';
-    if (r.densityPerStaff === null) { cls = 'crit'; label = 'No Staff Mapped'; }
-    else if (r.densityPerStaff > DENSITY_MODERATE_MAX) { cls = 'crit'; label = 'High'; }
-    else if (r.densityPerStaff > DENSITY_LIGHT_MAX) { cls = 'warn'; label = 'Moderate'; }
-    const barPct = r.densityPerStaff !== null ? Math.min(100, Math.round((r.densityPerStaff / DENSITY_BAR_SCALE) * 100)) : 100;
+    if (densityPerStaff === null) { cls = 'crit'; label = 'No Staff Mapped'; }
+    else if (densityPerStaff > DENSITY_MODERATE_MAX) { cls = 'crit'; label = 'High'; }
+    else if (densityPerStaff > DENSITY_LIGHT_MAX) { cls = 'warn'; label = 'Moderate'; }
+    const barPct = densityPerStaff !== null ? Math.min(100, Math.round((densityPerStaff / DENSITY_BAR_SCALE) * 100)) : 100;
     const barColor = cls === 'crit' ? 'var(--crit)' : cls === 'warn' ? 'var(--warn)' : 'var(--good)';
     return `
+      <td class="num">${fmtMoneyShort(backlogTotal)}</td>
+      <td class="num">${staffCount}</td>
+      <td>
+        <div class="density-bar-wrap">
+          <div class="density-bar-track"><div class="density-bar-fill" style="width:${barPct}%; background:${barColor}"></div></div>
+          <span class="pace-pill ${cls}">${label}</span>
+        </div>
+      </td>
+    `;
+  }
+
+  rows.innerHTML = regionalDensity.map(r => `
       <tr>
         <td class="region-name">${escapeHtml(r.regionName)}</td>
-        <td class="num">${fmtMoneyShort(r.backlogTotal)}</td>
-        <td class="num">${r.fieldStaffCount}</td>
-        <td class="num">${r.densityPerStaff !== null ? fmtMoneyShort(r.densityPerStaff) : '&mdash;'}</td>
-        <td>
-          <div class="density-bar-wrap">
-            <div class="density-bar-track"><div class="density-bar-fill" style="width:${barPct}%; background:${barColor}"></div></div>
-            <span class="pace-pill ${cls}">${label}</span>
-          </div>
-        </td>
+        ${densityCellsHtml(r.inspectionsDensityPerStaff, r.fieldExaminerCount, r.inspectionsBacklogTotal)}
+        ${densityCellsHtml(r.nonInspectionDensityPerStaff, r.consultantCount, r.nonInspectionBacklogTotal)}
       </tr>
-    `;
-  }).join('');
+    `).join('');
 }
 
 /* ============================================================
