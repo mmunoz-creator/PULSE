@@ -1852,6 +1852,33 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       </div>
     </div>
 
+    <!-- Company-Wide Revenue Trend (2026-09-10, per Misty's direct
+         request: "show on the regions and company wide trends and
+         averages for almost 3 years. Billed Fact will be the region and
+         LOB source of truth"). Same real 3-year billed_fact query and
+         trailing-2-year historical average as the Regions screen's own
+         Revenue Trend, summed company-wide instead of filtered to one
+         region. -->
+    <div class="card" style="margin-top:16px">
+      <div class="card-head">
+        <h3>Company-Wide Revenue Trend</h3>
+        <span class="meta">By Line of Business, 3-Year</span>
+      </div>
+      <div class="card-pad">
+        <div id="es-revenue-trend-pending" class="hidden" style="font-size:12.5px; color:var(--text-faint); padding:8px 0">Upload a Billed Fact export on Data Updates to populate this section.</div>
+        <div id="es-revenue-trend-wrap">
+          <table class="rtable" id="es-revenue-trend-table">
+            <thead><tr><th>Year</th><th class="num">Total Revenue</th><th class="num">YoY</th><th class="num">vs. Trailing 2-Yr Avg</th></tr></thead>
+            <tbody id="es-revenue-trend-tbody"></tbody>
+          </table>
+          <table class="rtable" style="margin-top:10px" id="es-revenue-trend-lob-table">
+            <thead><tr id="es-revenue-trend-lob-thead"><th>By Line of Business</th></tr></thead>
+            <tbody id="es-revenue-trend-lob-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- Regions Below Budget Pace -->
     <div class="card">
       <div class="card-head">
@@ -2096,7 +2123,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
         <div id="rg-revenue-pending" class="hidden" style="font-size:12.5px; color:var(--text-faint); padding:8px 0">Upload a Billed Fact export on Data Updates to populate this section.</div>
         <div id="rg-revenue-wrap">
           <table class="rtable" id="rg-revenue-table">
-            <thead><tr><th>Year</th><th class="num">Total Revenue</th><th class="num">YoY</th></tr></thead>
+            <thead><tr><th>Year</th><th class="num">Total Revenue</th><th class="num">YoY</th><th class="num">vs. Trailing 2-Yr Avg</th></tr></thead>
             <tbody id="rg-revenue-tbody"></tbody>
           </table>
           <table class="rtable" style="margin-top:10px" id="rg-revenue-lob-table">
@@ -3652,8 +3679,72 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    handler onGrowthStrategyTargetChange reads gsState.regionId/fiscalYear
    and reloads via loadGrowthStrategyReport (confirmed with Misty: "Move the
    editable target input to Growth Strategy > By Region").
+
+   v2t (2026-09-10): Revenue Trend gained a real trailing 2-year historical
+   average comparison, on both the Regions screen and a new Company-Wide
+   Revenue Trend card on Executive Summary, per Misty's direct request
+   ("show on the regions and company wide trends and averages for almost 3
+   years... Billed Fact will be the region and LOB source of truth").
+   Trailing 2-year average (not a growing all-history average), confirmed
+   with Misty directly ("I think we go trailing 2 years") after flagging
+   the tradeoff: a growing average would dilute toward older, less
+   representative years as more history piles up, where a trailing 2-year
+   window always reflects the two most recent complete years. Only the
+   most recent year in the 3-year window has two full trailing years
+   available, so earlier years show a dash for this comparison, same
+   "explicit gap, don't fake it" convention as every other pace figure in
+   this app. Backend: new shared computeRevenueTrendWithTrailingAvg
+   (worker_v2n.mjs) replaces the inline YoY-only computation Regions'
+   revenueTrend used before, and backs a new getCompanyRevenueTrend used by
+   Executive Summary (both real billed_fact queries, no new table).
+   Frontend: new shared buildRevenueTrendRowHtml renders both Regions' and
+   Executive Summary's Revenue Trend tables from the identical row shape,
+   with a new "vs. Trailing 2-Yr Avg" column.
+
+   Also this round: confirmed with Misty that billed_fact is the source of
+   truth for region/LOB-level Revenue (unchanged from before), while
+   billed_line_item_fact stays scoped to individual/client-level
+   attribution (Top Billers) for now. Separately, Misty flagged that
+   Canada (Gunn) and UK (D2E) still show "Placeholder, no live data yet" on
+   Baseline > Geography even though billed_fact/billed_line_item_fact
+   already resolve those entities to real region_ids via
+   region_raw_mappings on every upload. That badge, the bottom-pinned
+   sort, the dimmed row, and disabled budget-entry cells for those two
+   regions are all driven by one existing is_placeholder flag on the
+   regions table (frontend-only gating; nothing in the worker reads this
+   column) — no code changes needed here, just a data update to flip
+   is_placeholder to 0 for those two rows once Misty confirms she's ready
+   to treat them as fully active regions with real budget entry.
+
+   v2u (2026-09-10): Nav items with embedded subtabs (Forecast, Pipeline &
+   Backlog, Baseline, Data Updates) now always land on their FIRST subtab
+   when clicked, per Misty's direct report: "When I click on Forecast...
+   it should land on the first tab in that panel by default." Root cause:
+   .subtab/.subpane 'active' classes were plain static HTML state that
+   showView() never reset, only the top-level .main panel's visibility —
+   so leaving Forecast on Regional Drivers, navigating elsewhere, then
+   clicking Forecast again left it exactly on Regional Drivers, not Month
+   Pace. New resetToFirstTab(scopeId) helper, called from showView for
+   each of those four panels, resets to whichever .subtab/.subpane is
+   first in DOM order (confirmed against markup: Month Pace, Service Mix,
+   Revenue Budgets, Sales & Financial respectively — already the ones
+   statically marked active in HTML, so this is a behavior fix, not a
+   markup change). Growth Strategy was deliberately left out of this fix:
+   it already has its own different, previously-confirmed behavior
+   (defaults to Company-Wide on first visit, remembers your last tab for
+   the rest of the session after that) via switchGrowthStrategyTab(
+   gsState.tab || 'company-wide') in growthStrategyInit.
+
+   Also fixed while in this code: showBaselineTab was selecting
+   .subtab/.subpane globally (document.querySelectorAll, not scoped to
+   #view-baseline), unlike showForecastTab/showUploadsTab/
+   showPipelineBacklogTab which were already correctly scoped — a latent
+   bug (showUploadsTab's own existing comment already flagged this exact
+   class of risk) that could have let Baseline's tab clicks clobber Data
+   Updates' active subtab, since both panels' subpanes live in the DOM at
+   once. Now scoped to #view-baseline like the others.
    ============================================================ */
-const APP_VERSION = 'v2s';
+const APP_VERSION = 'v2u';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -3874,12 +3965,41 @@ function showApp(){
   execSummaryInit();
 }
 
+// Always lands a nav item with embedded subtabs on its FIRST subtab
+// (2026-09-10, per Misty's direct request: "When I click on Forecast...
+// it should land on the first tab in that panel by default"). Before this,
+// .subtab/.subpane 'active' classes were plain static HTML state, never
+// reset on nav — so leaving Forecast on Regional Drivers and clicking away
+// then back left it on Regional Drivers too, not Month Pace. Scoped to one
+// view exactly like showBaselineTab/showUploadsTab/showPipelineBacklogTab
+// already are, so resetting one panel's tabs can never disturb another's.
+// Growth Strategy is NOT included here — it already has its own correct,
+// deliberately different behavior (switchGrowthStrategyTab(gsState.tab ||
+// 'company-wide') inside growthStrategyInit): first visit defaults to
+// Company-Wide, later visits remember your last tab for the session. That
+// was a separate, already-confirmed design choice, left as-is.
+function resetToFirstTab(scopeId){
+  const scope = document.getElementById(scopeId);
+  if (!scope) return;
+  const firstTab = scope.querySelector('.subtab');
+  const firstPane = scope.querySelector('.subpane');
+  if (!firstTab || !firstPane) return;
+  scope.querySelectorAll('.subtab').forEach(b=>b.classList.remove('active'));
+  scope.querySelectorAll('.subpane').forEach(p=>p.classList.remove('active'));
+  firstTab.classList.add('active');
+  firstPane.classList.add('active');
+}
+
 function showView(view, el){
   document.querySelectorAll('.rail-item').forEach(i=>i.classList.remove('active'));
   if (el) el.classList.add('active');
   document.querySelectorAll('.main').forEach(m=>m.classList.add('hidden'));
   const target = document.getElementById('view-' + view);
   if (target) target.classList.remove('hidden');
+  if (view === 'forecast') resetToFirstTab('view-forecast');
+  if (view === 'pipeline-backlog') resetToFirstTab('view-pipeline-backlog');
+  if (view === 'baseline') resetToFirstTab('view-baseline');
+  if (view === 'uploads') resetToFirstTab('view-uploads');
   if (view === 'users') loadUsers();
   if (view === 'uploads') loadUploadHistory();
   if (view === 'forecast') loadForecastAll(forecastYear);
@@ -4435,8 +4555,35 @@ function renderExecutiveSummary(data){
   // reconciliation sentence, kept per Misty's explicit call), it's just not
   // rendered as a card on this page anymore.
   renderExecSummaryLeaderboards(data.topSalesPerformers, data.topBillers);
+  renderExecSummaryRevenueTrend(data.companyRevenueTrend, data.fiscalYear);
   renderExecSummaryRegions(data.regionalDrivers);
   renderExecSummaryRevenueRegions(data.regionalDrivers);
+}
+
+// Company-Wide Revenue Trend (2026-09-10): reuses buildRevenueTrendRowHtml,
+// the same row-building logic as Regions' own Revenue Trend table, since
+// both read the identical trend-with-trailing-avg shape from the backend.
+function renderExecSummaryRevenueTrend(companyRevenueTrend, fiscalYear){
+  const pending = document.getElementById('es-revenue-trend-pending');
+  const wrap = document.getElementById('es-revenue-trend-wrap');
+  if (!companyRevenueTrend || !companyRevenueTrend.available) {
+    pending.classList.remove('hidden');
+    wrap.classList.add('hidden');
+    return;
+  }
+  pending.classList.add('hidden');
+  wrap.classList.remove('hidden');
+
+  const tbody = document.getElementById('es-revenue-trend-tbody');
+  tbody.innerHTML = companyRevenueTrend.trend.map(t => buildRevenueTrendRowHtml(t, fiscalYear)).join('');
+
+  const lobThead = document.getElementById('es-revenue-trend-lob-thead');
+  lobThead.innerHTML = '<th>By Line of Business</th>' + companyRevenueTrend.trend.map(t => `<th class="num">${t.fiscalYear === fiscalYear ? t.fiscalYear + ' YTD' : t.fiscalYear}</th>`).join('');
+  const lobTbody = document.getElementById('es-revenue-trend-lob-tbody');
+  lobTbody.innerHTML = LOBS.map(lob => {
+    const cells = companyRevenueTrend.trend.map(t => `<td class="num">${fmtMoneyShort(t.byLob[lob.key])}</td>`).join('');
+    return `<tr><td>${escapeHtml(lob.label)}</td>${cells}</tr>`;
+  }).join('');
 }
 
 // Top Sales Performers / Top Billers (2026-09-10): company-wide Top 5,
@@ -5631,9 +5778,16 @@ function recomputeMonthlyTotalsFromDom(){
   }
 }
 
+// Scoped to #view-baseline (2026-09-10 fix): was previously selecting
+// .subtab/.subpane globally, which could clobber Data Updates' own active
+// subtab (subpane-uploads-* IDs collide in spirit with Baseline's
+// subpane-* IDs, both live in the DOM at once since showView only hides
+// at the .main level) — same bug class showUploadsTab's own comment
+// already flagged defensively, just never fixed here until now.
 function showBaselineTab(name, btn){
-  document.querySelectorAll('.subtab').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('.subpane').forEach(p=>p.classList.remove('active'));
+  const scope = document.getElementById('view-baseline');
+  scope.querySelectorAll('.subtab').forEach(b=>b.classList.remove('active'));
+  scope.querySelectorAll('.subpane').forEach(p=>p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('subpane-' + name).classList.add('active');
 }
@@ -8279,6 +8433,20 @@ function renderRegionsAccounts(data){
   }
 }
 
+// Shared by Regions' Revenue Trend table and Executive Summary's new
+// company-wide Revenue Trend card (2026-09-10, per Misty's direct
+// request: "show on the regions and company wide trends and averages
+// for almost 3 years"). vsHistoricalAvgPct is null for any year without
+// two full trailing years in the window (i.e. every year except the
+// most recent), rendered as a plain dash rather than a fake 0%, same
+// convention as YoY's own null handling.
+function buildRevenueTrendRowHtml(t, currentFiscalYear){
+  const yoyHtml = t.yoyPct === null ? '&mdash;' : `<span style="color:${t.yoyPct >= 0 ? 'var(--good)' : 'var(--crit)'}">${t.yoyPct >= 0 ? '+' : ''}${t.yoyPct.toFixed(1)}%</span>`;
+  const avgHtml = t.vsHistoricalAvgPct === null ? '&mdash;' : `<span style="color:${t.vsHistoricalAvgPct >= 0 ? 'var(--good)' : 'var(--crit)'}">${t.vsHistoricalAvgPct >= 0 ? '+' : ''}${t.vsHistoricalAvgPct.toFixed(1)}%</span>`;
+  const yearLabel = t.fiscalYear === currentFiscalYear ? `${t.fiscalYear} YTD` : t.fiscalYear;
+  return `<tr><td>${yearLabel}</td><td class="num">${fmtMoneyShort(t.total)}</td><td class="num">${yoyHtml}</td><td class="num">${avgHtml}</td></tr>`;
+}
+
 function renderRegionsRevenue(data){
   const pending = document.getElementById('rg-revenue-pending');
   const wrap = document.getElementById('rg-revenue-wrap');
@@ -8291,11 +8459,7 @@ function renderRegionsRevenue(data){
   wrap.classList.remove('hidden');
 
   const tbody = document.getElementById('rg-revenue-tbody');
-  tbody.innerHTML = data.revenue.trend.map(t => {
-    const yoyHtml = t.yoyPct === null ? '&mdash;' : `<span style="color:${t.yoyPct >= 0 ? 'var(--good)' : 'var(--crit)'}">${t.yoyPct >= 0 ? '+' : ''}${t.yoyPct.toFixed(1)}%</span>`;
-    const yearLabel = t.fiscalYear === data.fiscalYear ? `${t.fiscalYear} YTD` : t.fiscalYear;
-    return `<tr><td>${yearLabel}</td><td class="num">${fmtMoneyShort(t.total)}</td><td class="num">${yoyHtml}</td></tr>`;
-  }).join('');
+  tbody.innerHTML = data.revenue.trend.map(t => buildRevenueTrendRowHtml(t, data.fiscalYear)).join('');
 
   const lobThead = document.getElementById('rg-revenue-lob-thead');
   lobThead.innerHTML = '<th>By Line of Business</th>' + data.revenue.trend.map(t => `<th class="num">${t.fiscalYear === data.fiscalYear ? t.fiscalYear + ' YTD' : t.fiscalYear}</th>`).join('');
