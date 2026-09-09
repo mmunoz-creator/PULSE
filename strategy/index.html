@@ -1642,7 +1642,14 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
           <div class="legend-row hidden" id="fc-rev-legend">
             <div class="legend-item"><span style="font-weight:700">Plain</span>&nbsp;Actual, closed month</div>
             <div class="legend-item"><span class="cell-current" style="font-weight:800">Blended</span>&nbsp;Current month, actual-to-date + projected</div>
-            <div class="legend-item"><span class="cell-forecast" style="font-style:italic">Forecast</span>&nbsp;Remaining months, at trailing average</div>
+            <!-- Updated 2026-09-10 per Misty's direct request: Revenue's
+                 remaining months now use scheduled Revenue Backlog (real
+                 contract_balance, by end_date month) where it exists,
+                 trailing average only as a fallback for a month with no
+                 scheduled backlog. Sales' own legend above is unchanged
+                 (still pure trailing average — Sales bookings have no
+                 completion-dated backlog the same way). -->
+            <div class="legend-item"><span class="cell-forecast" style="font-style:italic">Forecast</span>&nbsp;Remaining months, from scheduled Revenue Backlog (trailing average where no backlog is scheduled)</div>
           </div>
         </div>
       </div>
@@ -3430,8 +3437,45 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       has no rows yet for the fiscal year — not an empty table). No
       backend changes: revenuePace already carried every field this
       needed (getForecastMonthPace, worker_v2h.mjs).
+
+   v2o (2026-09-10): two more real changes, both per Misty's direct
+   requests, both extending the blended-forecast work above rather than
+   replacing it:
+
+   1. Revenue's Total Year Forecast now blends in real scheduled Revenue
+      Backlog wherever it surfaces ("we should take the run rate but also
+      what's in the backlog mainly", confirmed everywhere Revenue's Total
+      Year Forecast shows, not just Month Pace): Month Pace's Revenue
+      tiles/detail, Business Lines' per-LOB Revenue table (legend text
+      updated to describe the new methodology), and Executive Summary's
+      By-Line-of-Business tiles (via getCompanyLobBacklog's revenueBlended
+      field). buildMonthPaceDetailTableHtml() extended with an optional
+      "Remaining months" breakdown row, shown whenever pace.
+      remainingMonthsDetail is present, splitting the remaining-months
+      total into what came from scheduled backlog vs. trailing-average
+      fallback. Backend: loadRevenueBacklogScheduledByMonth,
+      computeRevenueBlendedForecast in worker_v2h.mjs/worker_v2i.mjs.
+
+   2. Sales' Total Year Forecast, Month Pace only, now blends in real
+      Weighted Pipeline the same way ("should sales look at what's in the
+      proposed opportunities?", confirmed: mirror the Revenue Bridge's own
+      Step 5 Weighted Pipeline methodology exactly, without changing that
+      function itself). Applies ONLY at Month Pace's company-wide Sales
+      computation (getForecastMonthPace) — proposal_pipeline_fact has no
+      line-of-business column at all, so Business Lines' per-LOB Sales
+      table is unchanged and its legend still correctly reads "at trailing
+      average." Backend: loadWeightedPipelineScheduledByMonth,
+      computeSalesBlendedForecast, computeScheduledBlendedForecast (the
+      shared core both Revenue's and Sales' blend functions now wrap) in
+      worker_v2i.mjs. Frontend: buildMonthPaceDetailTableHtml() generalized
+      from a hardcoded backlog/run_rate pair to a MONTH_PACE_SOURCE_LABELS
+      lookup keyed by remainingMonthsDetail's source field ('backlog',
+      'pipeline', or 'run_rate'), so the same function correctly renders
+      either pace object's breakdown row. Executive Summary is unaffected
+      (it doesn't surface Sales' Total Year Forecast the way it does
+      Revenue's).
    ============================================================ */
-const APP_VERSION = 'v2n';
+const APP_VERSION = 'v2o';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -4061,14 +4105,51 @@ function buildMonthPaceTilesHtml(pace, opts){
 // Revenue mirror added 2026-09-10 per Misty's direct request, same field
 // names on revenuePace as on the top-level pace object: trailingWindowLabel,
 // priorActualsSum, currentMonth.{label,actualsToDate,blended,bizDaysElapsed,
-// bizDaysRemaining,totalBizDaysInMonth}, totalYearForecast).
+// bizDaysRemaining,totalBizDaysInMonth}, totalYearForecast). Both pace
+// objects also carry remainingMonthsDetail (Revenue since 2026-09-10:
+// scheduled Revenue Backlog vs. trailing-average fallback; Sales since
+// 2026-09-10, per Misty's "should sales look at what's in the proposed
+// opportunities?": scheduled Weighted Pipeline vs. trailing-average
+// fallback) — when present, an extra row breaks out how many of the
+// remaining months came from each source, so neither blend is a black
+// box. MONTH_PACE_SOURCE_LABELS above keys the row's wording by source
+// so this one function renders either pace object correctly.
+// Remaining-months source labels (2026-09-10): 'backlog' is Revenue's
+// scheduled Revenue Backlog, 'pipeline' is Sales' Weighted Pipeline
+// (mirrors the Revenue Bridge's own Step 5 methodology); 'run_rate' is
+// the trailing-average fallback shared by both. Keyed by source so this
+// table works for either pace object without knowing which one it's
+// rendering.
+const MONTH_PACE_SOURCE_LABELS = {
+  backlog: 'from scheduled Revenue Backlog',
+  pipeline: 'from Weighted Pipeline',
+  run_rate: 'at trailing average',
+};
+
 function buildMonthPaceDetailTableHtml(pace, trailingWindowLabel){
+  let remainingRow = '';
+  if (pace.remainingMonthsDetail && pace.remainingMonthsDetail.length) {
+    const bySource = new Map();
+    for (const d of pace.remainingMonthsDetail) {
+      if (!bySource.has(d.source)) bySource.set(d.source, []);
+      bySource.get(d.source).push(d);
+    }
+    const parts = [];
+    for (const [source, months] of bySource) {
+      const sum = months.reduce((s, d) => s + d.amount, 0);
+      const label = MONTH_PACE_SOURCE_LABELS[source] || source;
+      const suffix = source === 'run_rate' ? ' (nothing scheduled)' : '';
+      parts.push(`${fmtMoneyShort(sum)} ${label} (${months.length} mo)${suffix}`);
+    }
+    remainingRow = `<tr><td>Remaining months (${pace.remainingMonthsDetail.length} mo)</td><td class="num" style="font-size:11.5px; color:var(--text-faint); font-weight:400">${parts.join(' + ')}</td></tr>`;
+  }
   return `
     <table class="rtable">
       <tbody>
         <tr><td>${trailingWindowLabel}</td><td class="num">${fmtMoneyShort(pace.priorActualsSum)}</td></tr>
         <tr><td>${pace.currentMonth.label} actual-to-date (${pace.currentMonth.bizDaysElapsed} of ${pace.currentMonth.totalBizDaysInMonth} business days)</td><td class="num">${fmtMoneyShort(pace.currentMonth.actualsToDate)}</td></tr>
         <tr><td>${pace.currentMonth.label} blended forecast (+${pace.currentMonth.bizDaysRemaining} business days remaining at pace)</td><td class="num cell-current">${fmtMoneyShort(pace.currentMonth.blended)}</td></tr>
+        ${remainingRow}
         <tr class="rtable-total-row"><td>Total Year Forecast</td><td class="num">${fmtMoneyShort(pace.totalYearForecast)}</td></tr>
       </tbody>
     </table>
