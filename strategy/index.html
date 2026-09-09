@@ -708,6 +708,15 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
 .lb-value{margin-left:auto; text-align:right; font-size:14px; font-weight:800; color:var(--text); font-variant-numeric:tabular-nums}
 .lb-value-sub{font-size:10.5px; color:var(--text-faint); font-weight:600}
 
+/* Driver callout (2026-09-10, Regions redesign): "what's driving it"
+   box under the Pace tiles, warn-tinted when behind trailing average,
+   good-tinted when ahead — matches the approved mockup exactly. */
+.driver-box{display:flex; align-items:flex-start; gap:12px; background:var(--warn-soft); border:1px solid var(--warn); border-radius:10px; padding:12px 14px}
+.driver-box.good-box{background:var(--good-soft); border-color:var(--good)}
+.driver-box .driver-icon{color:var(--warn); flex-shrink:0; margin-top:1px}
+.driver-box.good-box .driver-icon{color:var(--good)}
+.driver-box p{margin:0; font-size:13px; line-height:1.55; color:var(--text)}
+
 .rtable td.cell-forecast{color:var(--text-faint); font-style:italic}
 .rtable td.cell-current{color:var(--accent-ink); font-weight:700}
 .rtable tr.rtable-total-row td{font-weight:800; border-top:2px solid var(--border-strong)}
@@ -2026,29 +2035,38 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-head">
-        <h3>Backlog vs. Prior Year and Target</h3>
+    <!-- Pace vs. Budget + Leaderboards (2026-09-10): real build of the
+         approved Regions mockup, replacing "Backlog vs. Prior Year and
+         Target" (moved to Growth Strategy > By Region — see its own
+         rendering below). Pace tiles reuse getForecastRegionalDrivers'
+         already-real per-region blended-forecast-vs-budget computation
+         (regionPace, from getRegionsScreen), the same number already
+         shown on Forecast > Regional Drivers, just for one region.
+         Leaderboards are real, Top 3 by region: bookings_fact.
+         proposal_issued_by (Sales) and billed_line_item_fact.employee_name
+         (Billers, real data starts FY2026). -->
+    <div class="section-eyebrow" style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); margin:0 0 8px">Sales Pace This Month</div>
+    <div class="fc-tiles" id="rg-sales-pace-tiles"></div>
+    <div class="card" style="margin-top:12px" id="rg-sales-driver-card">
+      <div class="card-pad" style="padding:14px 16px" id="rg-sales-driver-body"></div>
+    </div>
+
+    <div class="section-eyebrow" style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); margin:20px 0 8px">Revenue Pace This Month</div>
+    <div id="rg-revenue-pace-pending" class="hidden legend-note">Upload a Billed Fact export on Data Updates to populate Revenue pace for this region.</div>
+    <div class="fc-tiles" id="rg-revenue-pace-tiles"></div>
+    <div class="card hidden" style="margin-top:12px" id="rg-revenue-driver-card">
+      <div class="card-pad" style="padding:14px 16px" id="rg-revenue-driver-body"></div>
+    </div>
+
+    <div class="section-eyebrow" style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); margin:20px 0 8px">Who's Driving It</div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px">
+      <div class="card">
+        <div class="card-head"><h3>Top Sales Performers</h3><span class="meta" id="rg-top-sales-meta">&mdash;</span></div>
+        <div class="card-pad" style="padding-top:6px" id="rg-top-sales-body"></div>
       </div>
-      <div class="card-pad">
-        <div style="overflow-x:auto">
-          <table class="rtable" id="rg-backlog-table">
-            <thead>
-              <tr>
-                <th>Line of Business</th>
-                <th class="num" id="rg-backlog-prior-th">Prior Year</th>
-                <th class="num" id="rg-backlog-current-th">This Year</th>
-                <th class="num">YoY</th>
-                <th class="num" id="rg-backlog-next-th">Next Year Backlog</th>
-                <th>Your Growth Target</th>
-                <th class="num">Target $</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="rg-backlog-tbody"></tbody>
-          </table>
-        </div>
-        <div class="legend-note" id="rg-backlog-next-th-note">Next Year Backlog is already booked. Growth Target is a goal you set.</div>
+      <div class="card">
+        <div class="card-head"><h3>Top Billers</h3><span class="meta" id="rg-top-billers-meta">&mdash;</span></div>
+        <div class="card-pad" style="padding-top:6px" id="rg-top-billers-body"></div>
       </div>
     </div>
 
@@ -3587,8 +3605,55 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    never a fake zero, even while Sales has real data). New shared
    .lb-row/.lb-rank leaderboard CSS, reused as-is when the Regions
    redesign itself is built next (its own Top 3 cards, per-region).
+
+   v2r (2026-09-10): Company Backlog tile on Executive Summary reconciled
+   against Revenue YTD, per Misty's direct request ("Company Backlog tile
+   should reconcile Rev YTD plus current backlog as contributing to the
+   2026 Revenue Budget"). Previously the tile's gap line compared
+   Backlog-this-FY alone against Revenue Budget, understating what's
+   really on track for the year — revenue already billed this year
+   obviously also counts toward it. Headline value is now the combined
+   Rev YTD + Backlog figure (confirmed with Misty over leaving Backlog as
+   the headline and only fixing the gap math underneath). Backend:
+   companyBacklogCurrentYear (getExecutiveSummary, worker_v2l.mjs) gained
+   revenueYtdActual (revenuePace.priorActualsSum + .currentMonthActualsToDate,
+   already-computed real YTD, not re-queried) and backlogPlusYtd;
+   gapToRevenueBudget now compares backlogPlusYtd to Revenue Budget
+   instead of backlog alone. Both stay null, not a fake number, when
+   Revenue isn't available yet for the fiscal year — the tile falls back
+   to showing Backlog alone with an explicit "Revenue not yet available"
+   note, same convention as everywhere else in the app.
+
+   v2s (2026-09-10): Regions screen rebuilt per the approved mockup
+   ("I like this mockup a lot"), addressing Misty's original concern that
+   Regions duplicated Growth Strategy while framing itself around next
+   year's backlog instead of what a region VP needs to act on this month.
+   Removed the "Backlog vs. Prior Year and Target" card (renderRegionsBacklog,
+   onRegionsGrowthTargetChange deleted) along with its growth-snapshot/2027
+   framing. In its place: Sales Pace This Month and Revenue Pace This Month
+   tile rows (blended/vs. trailing avg/vs. budget/FY forecast, same shape as
+   Executive Summary's month-pace tiles), each with a driver box surfacing
+   the worst-performing line of business or service family when pace is
+   below trailing average; Top Sales Performers and Top Billers leaderboards,
+   Top 3 for this region, reusing the exact ranking logic built for
+   Executive Summary's company-wide Top 5 (getTopSalesPerformers,
+   getTopBillers, now called with a regionId filter). Backend: getRegionsScreen
+   (worker_v2m.mjs) gained regionPace (from getForecastRegionalDrivers,
+   already-computed real Sales/Revenue pace-vs-budget-vs-trailing-average
+   with 2-level shortfall drill-down, filtered to this region),
+   topSalesPerformers, topBillers, and asOf. The backlog-by-line-of-business
+   computation itself was NOT removed from getRegionsScreen — getGrowthStrategyReport
+   depends on it directly (base.backlog) — only its rendering moved off the
+   Regions screen. Top Accounts, Revenue Trend, and Market Coverage cards are
+   unchanged. The editable Growth Target % input, previously on Regions,
+   now lives on Growth Strategy's Backlog by Line of Business grid
+   (#gsr-backlog-grid, renderGrowthStrategyReport) instead — same
+   region_growth_targets data and /api/regions/growth-target endpoint, new
+   handler onGrowthStrategyTargetChange reads gsState.regionId/fiscalYear
+   and reloads via loadGrowthStrategyReport (confirmed with Misty: "Move the
+   editable target input to Growth Strategy > By Region").
    ============================================================ */
-const APP_VERSION = 'v2q';
+const APP_VERSION = 'v2s';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -4492,24 +4557,33 @@ function renderExecSummaryTiles2(data){
     </div>
   `;
 
-  // Company Backlog, rescoped to the selected fiscal year (2026-09-09,
-  // Misty: "I need to show 2026 backlog and subline can show the total,
-  // i.e. $35M of $81.3M... does backlog cover this year's gap to budget").
+  // Company Backlog, reconciled against Revenue YTD (2026-09-10, per
+  // Misty's direct request: "Company Backlog tile should reconcile Rev
+  // YTD plus current backlog as contributing to the 2026 Revenue
+  // Budget"). Previously this tile's gap line compared Backlog-this-FY
+  // alone against Revenue Budget, understating what's really on track
+  // for the year (money already billed obviously also counts). Now the
+  // headline value is the combined Rev YTD + Backlog figure, confirmed
+  // with Misty over showing Backlog alone as the headline with only the
+  // gap math fixed underneath.
   // cbcy = data.companyBacklogCurrentYear: { backlogThisYear, backlogTotal,
-  // revenueBudget, gapToRevenueBudget }. Gap basis is Revenue Budget, per
-  // Misty's confirmed call — backlog is booked-but-unbilled work, so this
-  // answers "is what's already booked enough to cover this year's billing
-  // target." gapToRevenueBudget stays null (not a fake $0) when no Revenue
-  // Budget is set for this fiscal year yet.
+  // revenueYtdActual, backlogPlusYtd, revenueBudget, gapToRevenueBudget }.
+  // Both revenueYtdActual/backlogPlusYtd and gapToRevenueBudget stay null
+  // (not a fake $0) when Revenue isn't available yet for this fiscal year
+  // — same "explicit pending state" convention as everywhere else — and
+  // gapToRevenueBudget also stays null with no Revenue Budget set.
   const cbcy = data.companyBacklogCurrentYear || {};
+  const backlogRevenueUnavailable = cbcy.revenueYtdActual === null || cbcy.revenueYtdActual === undefined;
   const backlogHtml = `
     <div class="fc-tile">
       <div class="fc-tile-top"><div class="fc-tile-icon blue"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div></div>
-      <div class="fc-tile-label">Company Backlog, FY${data.fiscalYear}</div>
-      <div class="fc-tile-value">${fmtMoneyShort(cbcy.backlogThisYear || 0)} <span style="font-size:13px; font-weight:600; color:var(--text-faint)">of ${fmtMoneyShort(cbcy.backlogTotal || 0)}</span></div>
-      <div class="fc-tile-sub">${cbcy.gapToRevenueBudget === null || cbcy.gapToRevenueBudget === undefined
-        ? 'No Revenue Budget set for ' + data.fiscalYear
-        : `<span class="pace-pill ${cbcy.gapToRevenueBudget >= 0 ? 'good' : 'crit'}">${cbcy.gapToRevenueBudget >= 0 ? '+' : '–'}${fmtMoneyShort(Math.abs(cbcy.gapToRevenueBudget))}</span> ${cbcy.gapToRevenueBudget >= 0 ? 'above' : 'short of'} FY${data.fiscalYear} Revenue Budget`}</div>
+      <div class="fc-tile-label">Rev YTD + Backlog, FY${data.fiscalYear}</div>
+      <div class="fc-tile-value">${backlogRevenueUnavailable ? fmtMoneyShort(cbcy.backlogThisYear || 0) : fmtMoneyShort(cbcy.backlogPlusYtd || 0)}${cbcy.revenueBudget ? ` <span style="font-size:13px; font-weight:600; color:var(--text-faint)">of ${fmtMoneyShort(cbcy.revenueBudget)}</span>` : ''}</div>
+      <div class="fc-tile-sub">${backlogRevenueUnavailable
+        ? 'Revenue not yet available for ' + data.fiscalYear + ' — showing Backlog only: ' + fmtMoneyShort(cbcy.backlogThisYear || 0)
+        : (cbcy.gapToRevenueBudget === null || cbcy.gapToRevenueBudget === undefined
+          ? 'No Revenue Budget set for ' + data.fiscalYear
+          : `<span class="pace-pill ${cbcy.gapToRevenueBudget >= 0 ? 'good' : 'crit'}">${cbcy.gapToRevenueBudget >= 0 ? '+' : '–'}${fmtMoneyShort(Math.abs(cbcy.gapToRevenueBudget))}</span> ${cbcy.gapToRevenueBudget >= 0 ? 'above' : 'short of'} FY${data.fiscalYear} Revenue Budget`)}</div>
     </div>
   `;
 
@@ -8009,23 +8083,27 @@ async function loadRegionsScreen(){
   }
 }
 
+// Narrative (2026-09-10, rewritten for the Regions redesign): now leads
+// with current-year Sales pace vs. budget instead of next-year backlog
+// gap, since that forward-looking framing moved to Growth Strategy > By
+// Region. regionPace/topSalesPerformers/topBillers all real, from
+// getRegionsScreen (see its own comment for the exact sourcing).
 function renderRegionsNarrative(data){
   const el = document.getElementById('rg-narrative');
-  const total = data.backlog.total;
-  const behindLines = data.backlog.lines.filter(l => !l.onPace);
   const whitespaceAccounts = data.largestAccounts.filter(a => a.coverageCount === 1).length;
+  const rp = data.regionPace;
 
   const parts = [];
-  if (total.yoyPct !== null) {
-    parts.push(`${escapeHtml(data.regionName)} is ${total.yoyPct >= 0 ? 'up' : 'down'} ${Math.abs(total.yoyPct).toFixed(1)}% year over year.`);
+  if (rp && rp.pacePctOfBudget !== null && rp.pacePctOfBudget !== undefined) {
+    parts.push(`${escapeHtml(data.regionName)} is pacing at ${rp.pacePctOfBudget.toFixed(0)}% of Sales Budget this month.`);
   } else {
-    parts.push(`${escapeHtml(data.regionName)} has no prior-year bookings to compare against yet.`);
+    parts.push(`${escapeHtml(data.regionName)}: no Sales Budget set for ${data.fiscalYear} yet.`);
   }
-  if (behindLines.length > 0) {
-    const worst = behindLines.reduce((a, b) => (a.gap < b.gap ? a : b));
-    parts.push(`${fmtMoneyShort(Math.abs(total.gap))} behind target for next year, mostly in ${worst.label}.`);
-  } else if (data.backlog.lines.length > 0) {
-    parts.push(`Backlog for next year is on pace against the targets set below.`);
+  if (rp && rp.revenueActualsAvailable && rp.revenue && rp.revenue.pacePctOfBudget !== null && rp.revenue.pacePctOfBudget !== undefined) {
+    parts.push(`Revenue is pacing at ${rp.revenue.pacePctOfBudget.toFixed(0)}% of Revenue Budget.`);
+  }
+  if (rp && rp.shortfallLob) {
+    parts.push(`${rp.shortfallLob.label} is the main drag on Sales, ${fmtMoneyShort(Math.abs(rp.shortfallLob.dollarGap))} below its own trailing average.`);
   }
   if (whitespaceAccounts > 0) {
     parts.push(`${whitespaceAccounts} of the top ${data.largestAccounts.length} accounts buy only one service line today, the clearest near-term whitespace.`);
@@ -8033,70 +8111,132 @@ function renderRegionsNarrative(data){
   el.textContent = parts.join(' ');
 }
 
-function renderRegionsBacklog(data){
-  document.getElementById('rg-backlog-prior-th').textContent = data.fiscalYear - 1;
-  document.getElementById('rg-backlog-current-th').textContent = data.fiscalYear + ' to date';
-  document.getElementById('rg-backlog-next-th').textContent = (data.fiscalYear + 1) + ' Backlog';
-
-  const tbody = document.getElementById('rg-backlog-tbody');
-  tbody.innerHTML = '';
-  const buildRow = (line, isTotal) => {
-    const tr = document.createElement('tr');
-    if (isTotal) tr.className = 'rtable-total-row';
-    const yoyHtml = line.yoyPct === null ? '&mdash;' : `<span style="color:${line.yoyPct >= 0 ? 'var(--good)' : 'var(--crit)'}">${line.yoyPct >= 0 ? '+' : ''}${line.yoyPct.toFixed(1)}%</span>`;
-    const statusHtml = line.onPace
-      ? `<span class="pill good">On pace</span>`
-      : `<span class="pill crit">&minus;${fmtMoneyShort(Math.abs(line.gap))} to close</span>`;
-    if (isTotal) {
-      tr.innerHTML = `
-        <td>${escapeHtml(line.label)}</td>
-        <td class="num">${fmtMoneyShort(line.prior)}</td>
-        <td class="num">${fmtMoneyShort(line.current)}</td>
-        <td class="num">${yoyHtml}</td>
-        <td class="num">${fmtMoneyShort(line.backlogNext)}</td>
-        <td style="color:var(--text-faint); font-size:11.5px">Sum of the rows above</td>
-        <td class="num">${fmtMoneyShort(line.targetAmount)}</td>
-        <td>${statusHtml}</td>
-      `;
-    } else {
-      const pctValue = line.growthPct !== null ? line.growthPct : line.suggestedPct;
-      tr.innerHTML = `
-        <td class="region-name">${escapeHtml(line.label)}</td>
-        <td class="num">${fmtMoneyShort(line.prior)}</td>
-        <td class="num">${fmtMoneyShort(line.current)}</td>
-        <td class="num">${yoyHtml}</td>
-        <td class="num">${fmtMoneyShort(line.backlogNext)}</td>
-        <td>
-          <div style="display:flex; align-items:center; gap:4px">
-            <input type="number" step="1" value="${pctValue}" data-lob="${line.lob}" style="width:56px; font:inherit; font-weight:700; font-size:12.5px; padding:5px 7px; border-radius:6px; border:1px solid var(--border-strong); background:var(--paper-raised); color:var(--text)" onchange="onRegionsGrowthTargetChange(this)">
-            <span style="font-size:12px; color:var(--text-faint); font-weight:700">%</span>
-          </div>
-          ${line.growthPct === null ? `<div style="font-size:10.5px; color:var(--text-faint); margin-top:4px">Suggested: ${line.suggestedPct}%</div>` : ''}
-        </td>
-        <td class="num">${fmtMoneyShort(line.targetAmount)}</td>
-        <td>${statusHtml}</td>
-      `;
-    }
-    tbody.appendChild(tr);
-  };
-  data.backlog.lines.forEach(line => buildRow(line, false));
-  buildRow({ label: 'Region Total', ...data.backlog.total }, true);
+// Pace vs. Budget tiles + driver callout (2026-09-10): real build of the
+// approved Regions mockup. regionPace is getForecastRegionalDrivers'
+// per-region entry (see getRegionsScreen's comment) — same shape as
+// Forecast > Regional Drivers' own per-region data, {pacePctOfBudget,
+// pacePctOfTrailingAvg, currentMonthBlended, priorAvgPerMonth,
+// annualBudget/monthBudget, totalYearForecast, shortfallLob,
+// shortfallGroup, revenue: {...same shape...}, revenueActualsAvailable}.
+function buildRegionsPaceTilesHtml(scope, opts){
+  const avgCls = paceClass(scope.pacePctOfTrailingAvg);
+  const budgetCls = paceClass(scope.pacePctOfBudget);
+  return `
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon ${opts.blendedIcon}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8 12 14.7l-3.5-3.5L3 16.5"/></svg></div></div>
+      <div class="fc-tile-label">${opts.monthLabel} Blended</div>
+      <div class="fc-tile-value">${fmtMoneyShort(scope.currentMonthBlended)}</div>
+      <div class="fc-tile-sub">${fmtMoneyShort(scope.currentMonthActualsToDate || 0)} actual to date</div>
+    </div>
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon ${avgCls === 'crit' ? 'warn' : 'good'}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></div></div>
+      <div class="fc-tile-label">vs. Trailing Avg</div>
+      <div class="fc-tile-value"><span class="pace-pill ${avgCls}">${scope.pacePctOfTrailingAvg === null ? '&mdash;' : scope.pacePctOfTrailingAvg.toFixed(1) + '%'}</span></div>
+      <div class="fc-tile-sub">${fmtMoneyShort(scope.priorAvgPerMonth)}/mo avg</div>
+    </div>
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon accent"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg></div></div>
+      <div class="fc-tile-label">vs. ${opts.budgetLabel}</div>
+      <div class="fc-tile-value"><span class="pace-pill ${budgetCls}">${scope.pacePctOfBudget === null ? '&mdash;' : scope.pacePctOfBudget.toFixed(1) + '%'}</span></div>
+      <div class="fc-tile-sub">${scope.monthBudget > 0 ? fmtMoneyShort(scope.monthBudget) + '/mo budget' : 'No budget set'}</div>
+    </div>
+    <div class="fc-tile">
+      <div class="fc-tile-top"><div class="fc-tile-icon good"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-6 4 3 5-8"/></svg></div></div>
+      <div class="fc-tile-label">FY Forecast</div>
+      <div class="fc-tile-value">${fmtMoneyShort(scope.totalYearForecast)}</div>
+      <div class="fc-tile-sub">${fmtMoneyShort(scope.priorActualsSum || 0)} actual through last closed month</div>
+    </div>
+  `;
 }
 
-async function onRegionsGrowthTargetChange(input){
-  const lob = input.dataset.lob;
-  const growthPct = Number(input.value);
-  if (!Number.isFinite(growthPct)) { showToast('Enter a valid number.', true); return; }
-  try {
-    const res = await workerFetch('/api/regions/growth-target', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ regionId: rgState.regionId, lineOfBusiness: lob, fiscalYear: rgState.fiscalYear, growthPct }),
-    });
-    const data = await res.json();
-    if (!res.ok) { showToast(data.error || 'Could not save that target.', true); return; }
-    loadRegionsScreen();
-  } catch(e) {
-    showToast('Could not reach the server.', true);
+function buildRegionsDriverBoxHtml(scope, opts){
+  if (scope.shortfallLob) {
+    const groupText = scope.shortfallGroup ? ` Within ${scope.shortfallLob.label}, ${escapeHtml(scope.shortfallGroup.groupLabel)} is the softest ${opts.groupNoun}, ${fmtMoneyShort(Math.abs(scope.shortfallGroup.dollarGap))} below its trailing average.` : '';
+    return `
+      <div class="driver-box">
+        <div class="driver-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg></div>
+        <p><b>What's driving it:</b> ${escapeHtml(scope.shortfallLob.label)} is ${fmtMoneyShort(Math.abs(scope.shortfallLob.dollarGap))} below its own trailing average this month, the biggest drag on ${opts.scopeLabel}'s ${opts.basisLabel} pace.${groupText}</p>
+      </div>`;
+  }
+  if (scope.pacePctOfTrailingAvg !== null && scope.pacePctOfTrailingAvg >= 100) {
+    return `
+      <div class="driver-box good-box">
+        <div class="driver-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
+        <p>${opts.basisLabel} is running at or above its own trailing average this month, no line of business is dragging it down right now.</p>
+      </div>`;
+  }
+  return '';
+}
+
+function renderRegionsPace(data){
+  const rp = data.regionPace;
+  const salesTiles = document.getElementById('rg-sales-pace-tiles');
+  const salesDriverCard = document.getElementById('rg-sales-driver-card');
+  const salesDriverBody = document.getElementById('rg-sales-driver-body');
+  if (!rp) {
+    salesTiles.innerHTML = `<div class="legend-note">No Sales pace data available for this region yet.</div>`;
+    salesDriverCard.classList.add('hidden');
+  } else {
+    salesTiles.innerHTML = buildRegionsPaceTilesHtml(rp, { blendedIcon: 'blue', budgetLabel: 'Sales Budget', monthLabel: 'This Month' });
+    const driverHtml = buildRegionsDriverBoxHtml(rp, { scopeLabel: escapeHtml(data.regionName), basisLabel: 'Sales', groupNoun: 'service family' });
+    if (driverHtml) { salesDriverCard.classList.remove('hidden'); salesDriverBody.innerHTML = driverHtml; }
+    else { salesDriverCard.classList.add('hidden'); }
+  }
+
+  const revenuePendingNote = document.getElementById('rg-revenue-pace-pending');
+  const revenueTiles = document.getElementById('rg-revenue-pace-tiles');
+  const revenueDriverCard = document.getElementById('rg-revenue-driver-card');
+  const revenueDriverBody = document.getElementById('rg-revenue-driver-body');
+  if (!rp || !rp.revenueActualsAvailable || !rp.revenue) {
+    revenuePendingNote.classList.remove('hidden');
+    revenueTiles.innerHTML = '';
+    revenueDriverCard.classList.add('hidden');
+  } else {
+    revenuePendingNote.classList.add('hidden');
+    revenueTiles.innerHTML = buildRegionsPaceTilesHtml(rp.revenue, { blendedIcon: 'accent', budgetLabel: 'Revenue Budget', monthLabel: 'This Month' });
+    const driverHtml = buildRegionsDriverBoxHtml(rp.revenue, { scopeLabel: escapeHtml(data.regionName), basisLabel: 'Revenue', groupNoun: 'revenue subtype' });
+    if (driverHtml) { revenueDriverCard.classList.remove('hidden'); revenueDriverBody.innerHTML = driverHtml; }
+    else { revenueDriverCard.classList.add('hidden'); }
+  }
+}
+
+// Leaderboards, this region (2026-09-10): real, Top 3, from
+// getTopSalesPerformers/getTopBillers scoped by regionId — same fields
+// and same rendering shape as Executive Summary's company-wide Top 5
+// cards (renderExecSummaryLeaderboards), just region-scoped and Top 3.
+function renderRegionsLeaderboards(data){
+  const salesMeta = document.getElementById('rg-top-sales-meta');
+  const salesBody = document.getElementById('rg-top-sales-body');
+  const tsp = data.topSalesPerformers;
+  if (!tsp || !tsp.available) {
+    salesMeta.textContent = '';
+    salesBody.innerHTML = `<div class="legend-note">No bookings with a Proposal Issued By value found for this region this fiscal year yet.</div>`;
+  } else {
+    salesMeta.textContent = 'Booked $, this fiscal year';
+    salesBody.innerHTML = tsp.performers.map((p, i) => `
+      <div class="lb-row">
+        <div class="lb-rank${i === 0 ? ' r1' : ''}">${i + 1}</div>
+        <div><div class="lb-name">${escapeHtml(p.name)}</div><div class="lb-sub">${p.dealCount.toLocaleString()} opportunit${p.dealCount === 1 ? 'y' : 'ies'} won</div></div>
+        <div class="lb-value">${fmtMoneyShort(p.total)}${p.pctOfTotal !== null ? `<div class="lb-value-sub">${p.pctOfTotal.toFixed(1)}% of region</div>` : ''}</div>
+      </div>
+    `).join('');
+  }
+
+  const billersMeta = document.getElementById('rg-top-billers-meta');
+  const billersBody = document.getElementById('rg-top-billers-body');
+  const tb = data.topBillers;
+  if (!tb || !tb.available) {
+    billersMeta.textContent = '';
+    billersBody.innerHTML = `<div class="legend-note">No Billed Line Item data yet for this region this fiscal year. Real data starts FY2026.</div>`;
+  } else {
+    billersMeta.textContent = 'Billed $, this fiscal year';
+    billersBody.innerHTML = tb.billers.map((b, i) => `
+      <div class="lb-row">
+        <div class="lb-rank${i === 0 ? ' r1' : ''}">${i + 1}</div>
+        <div><div class="lb-name">${escapeHtml(b.name)}</div><div class="lb-sub">${b.lineCount.toLocaleString()} billing line${b.lineCount === 1 ? '' : 's'}</div></div>
+        <div class="lb-value">${fmtMoneyShort(b.total)}${b.pctOfTotal !== null ? `<div class="lb-value-sub">${b.pctOfTotal.toFixed(1)}% of region</div>` : ''}</div>
+      </div>
+    `).join('');
   }
 }
 
@@ -8223,7 +8363,8 @@ function renderRegionsMarketTiers(data){
 function renderRegionsScreen(data){
   document.getElementById('rg-title').textContent = data.regionName + ', Growth Snapshot';
   renderRegionsNarrative(data);
-  renderRegionsBacklog(data);
+  renderRegionsPace(data);
+  renderRegionsLeaderboards(data);
   renderRegionsAccounts(data);
   renderRegionsRevenue(data);
   renderRegionsMarketTiers(data);
@@ -8250,6 +8391,26 @@ async function loadGrowthStrategyReport(){
     document.getElementById('gsr-loading').classList.add('hidden');
     document.getElementById('gsr-wrap').classList.remove('hidden');
     initGrowthStrategyJumpnav();
+  } catch(e) {
+    showToast('Could not reach the server.', true);
+  }
+}
+
+// Growth Target % handler moved here from Regions (2026-09-10, Regions
+// redesign) — same endpoint/body shape as the old onRegionsGrowthTargetChange,
+// just reading gsState instead of rgState and reloading this report.
+async function onGrowthStrategyTargetChange(input){
+  const lob = input.dataset.lob;
+  const growthPct = Number(input.value);
+  if (!Number.isFinite(growthPct)) { showToast('Enter a valid number.', true); return; }
+  try {
+    const res = await workerFetch('/api/regions/growth-target', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ regionId: gsState.regionId, lineOfBusiness: lob, fiscalYear: gsState.fiscalYear, growthPct }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not save that target.', true); return; }
+    loadGrowthStrategyReport();
   } catch(e) {
     showToast('Could not reach the server.', true);
   }
@@ -8389,12 +8550,22 @@ function renderGrowthStrategyCompanyWide(data){
 
 function renderGrowthStrategyReport(data){
   // ---- Backlog by Line of Business (reuses live Regions figures) ----
+  // Growth Target % input moved here from Regions (2026-09-10, Regions
+  // redesign): Regions dropped its "Backlog vs. Prior Year and Target"
+  // card since it duplicated this same prior/current/backlog-by-LOB view
+  // and leaned entirely on next-year framing that belongs on this
+  // forward-looking report instead. Same real onchange handler/endpoint
+  // as before (POST /api/regions/growth-target), just reloading this
+  // report instead of the old Regions screen. line.growthPct/
+  // suggestedPct/targetAmount/gap/onPace are unchanged fields already
+  // computed by getRegionsScreen (this report calls it directly).
   const grid = document.getElementById('gsr-backlog-grid');
   grid.innerHTML = data.backlog.lines.map(line => {
     const yoyHtml = line.yoyPct === null ? '&mdash;' : `${line.yoyPct >= 0 ? '&uarr; +' : '&darr; &minus;'}${Math.abs(line.yoyPct).toFixed(1)}% YoY`;
     const gapHtml = line.onPace
       ? `<span style="color:var(--good); font-weight:700; font-size:12px">On pace</span>`
       : `<span style="color:var(--crit); font-weight:700; font-size:12px">&minus;${fmtMoneyShort(Math.abs(line.gap))} to close</span>`;
+    const pctValue = line.growthPct !== null ? line.growthPct : line.suggestedPct;
     return `
       <div style="background:var(--paper-sunk); border:1px solid var(--border); border-radius:9px; padding:14px 16px">
         <div style="font-size:15px; font-weight:800; color:var(--navy); margin-bottom:8px">${escapeHtml(line.label)}</div>
@@ -8403,6 +8574,13 @@ function renderGrowthStrategyReport(data){
         <div style="font-size:12px; color:var(--good); font-weight:700; margin:4px 0 8px">${yoyHtml}</div>
         <div style="border-top:1px solid var(--border); padding-top:8px; font-size:12.5px">
           <div>Next-year backlog: <b>${fmtMoneyShort(line.backlogNext)}</b></div>
+          <div style="display:flex; align-items:center; gap:6px; margin-top:8px">
+            <span style="color:var(--text-faint)">Growth Target:</span>
+            <input type="number" step="1" value="${pctValue}" data-lob="${line.lob}" style="width:52px; font:inherit; font-weight:700; font-size:12px; padding:4px 6px; border-radius:6px; border:1px solid var(--border-strong); background:var(--paper-raised); color:var(--text)" onchange="onGrowthStrategyTargetChange(this)">
+            <span style="color:var(--text-faint); font-weight:700">%</span>
+          </div>
+          ${line.growthPct === null ? `<div style="font-size:10.5px; color:var(--text-faint); margin-top:2px">Suggested: ${line.suggestedPct}%</div>` : ''}
+          <div style="margin-top:6px">Target: <b>${fmtMoneyShort(line.targetAmount)}</b></div>
           <div style="margin-top:2px">${gapHtml}</div>
         </div>
       </div>`;
