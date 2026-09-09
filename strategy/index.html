@@ -61,6 +61,14 @@
   --slate-soft:#e7eaef;
   --blue:#2f6fed;
   --blue-soft:#eaf1fd;
+  /* Company-Wide Tiered Market Coverage bar (2026-09-10), three fixed
+     distance bands rather than a semantic good/warn/crit scale, since all
+     three are "expected, varying degrees of far" rather than a pass/fail
+     state — kept visually distinct from --good/--warn/--crit for that
+     reason. */
+  --cov-near:#2f6fed;
+  --cov-mid:#8ab0f5;
+  --cov-far:#d8e2f7;
   --shadow: 0 1px 2px rgba(10,22,40,0.05), 0 8px 24px -12px rgba(10,22,40,0.14);
 }
 /* Aesthetic pass (2026-09-07, Misty: "in dark mode strategy looks dark
@@ -85,6 +93,7 @@
     --accent:#8a78e8; --accent-soft:#221d47; --accent-ink:#b0a2f2;
     --good:#4fcb8e; --good-soft:#0f2e21; --warn:#d9a53f; --warn-soft:#332508; --crit:#e3707c; --crit-soft:#361419; --slate:#9aa5bd; --slate-soft:#2a2e3a;
     --blue:#6c9bf5; --blue-soft:#182742;
+    --cov-near:#6c9bf5; --cov-mid:#3a5285; --cov-far:#262c3a;
     --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.55);
   }
 }
@@ -94,6 +103,7 @@
   --accent:#8a78e8; --accent-soft:#221d47; --accent-ink:#b0a2f2;
   --good:#4fcb8e; --good-soft:#0f2e21; --warn:#d9a53f; --warn-soft:#332508; --crit:#e3707c; --crit-soft:#361419; --slate:#9aa5bd; --slate-soft:#2a2e3a;
   --blue:#6c9bf5; --blue-soft:#182742;
+  --cov-near:#6c9bf5; --cov-mid:#3a5285; --cov-far:#262c3a;
   --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.55);
 }
 
@@ -295,19 +305,59 @@ h1,h2,h3{text-wrap:balance; margin:0}
 .subpane{display:none}
 .subpane.active{display:block}
 
+/* .print-only: inverse of .print-hide — hidden on screen, shown only
+   when printing. Used for the Growth Strategy print title block below,
+   since the real Region/Year <select> controls don't reliably render
+   as readable text in a printed PDF the way plain text does. */
+.print-only{display:none}
+@media print{ .print-only{display:block !important} }
+
 /* Growth Strategy Report printing (2026-09-06, updated 2026-09-09 when
-   Growth Strategy moved out of Regions into its own top-level nav item):
-   Print to PDF should produce just the report, not the nav rail, topbar,
-   jump nav, or any other view. body.printing-gsr is toggled by the Print
-   to PDF button right before window.print() (see printGrowthStrategyReport())
-   rather than relying only on :has(), so this degrades safely on older
-   browsers. */
+   Growth Strategy moved out of Regions into its own top-level nav item;
+   fixed again 2026-09-10 — Misty reported Print to PDF producing only a
+   small sliver of the report). Print to PDF should produce just the
+   report, not the nav rail, topbar, jump nav, or any other view.
+   body.printing-gsr is toggled by the Print to PDF button right before
+   window.print() (see printGrowthStrategyReport()) rather than relying
+   only on :has(), so this degrades safely on older browsers.
+
+   Root cause of the sliver (2026-09-10): .app is `display:grid` with
+   `min-height:100vh`. #view-growth-strategy is a grid child of .app, so
+   even with every OTHER grid child hidden, Chrome's print layout still
+   treats it as sitting inside that grid's formatting context and clips
+   it to roughly one screen's height instead of flowing the full report
+   across multiple printed pages. The fix takes #view-growth-strategy
+   fully out of grid flow for print (position:static, full-width block,
+   independent of .app's grid-template-columns) rather than just
+   toggling display, and adds an explicit @page rule so the browser
+   isn't left guessing at page size/margins. */
 @media print{
   .print-hide{display:none !important}
   body.printing-gsr .rail,
   body.printing-gsr .main > .topbar{display:none !important}
   body.printing-gsr .main{display:none !important}
-  body.printing-gsr #view-growth-strategy{display:block !important}
+  body.printing-gsr .app{display:block !important; min-height:0 !important}
+  body.printing-gsr #view-growth-strategy{
+    display:block !important;
+    position:static !important;
+    width:100% !important;
+    max-width:none !important;
+    height:auto !important;
+    max-height:none !important;
+    overflow:visible !important;
+    padding:0 !important;
+  }
+  body.printing-gsr #view-growth-strategy .card{break-inside:avoid}
+  /* Print to PDF only lives inside the By Region pane's button, so
+     printing-gsr is only ever toggled from there — but belt-and-braces:
+     Company-Wide (gsc-pane) is never the print target, so it stays
+     suppressed even if printing-gsr somehow gets set while that tab is
+     showing. */
+  body.printing-gsr #gsc-pane{display:none !important}
+}
+@page{
+  size:auto;
+  margin:14mm 12mm;
 }
 
 /* Sticky in-page jump nav (2026-09-09): the Growth Strategy report has 13
@@ -317,6 +367,49 @@ h1,h2,h3{text-wrap:balance; margin:0}
 .jumpnav{position:sticky; top:0; background:var(--paper-raised); border:1px solid var(--border); border-radius:10px; padding:8px 10px; margin-bottom:14px; display:flex; flex-wrap:wrap; gap:5px; font-size:11px; z-index:2}
 .jumpnav a{padding:5px 9px; border-radius:999px; color:var(--text-muted); font-weight:700; text-decoration:none; background:var(--paper-sunk); white-space:nowrap; scroll-margin-top:52px}
 .jumpnav a:hover{background:var(--accent-soft); color:var(--accent-ink)}
+
+/* Growth Strategy — Company-Wide tab (2026-09-10). Company-Wide / By
+   Region subtabs, needle-mover rows (Regions Needing Momentum), tiles,
+   and the mini-list/map-legend pairing, matching the approved mockup's
+   own patterns exactly (mockup_growth_strategy_nav.html). */
+.gs-subtabs{display:flex; gap:6px; border-bottom:1px solid var(--border); margin-bottom:16px}
+.gs-subtab{padding:9px 4px; margin-right:14px; font-size:12.5px; font-weight:700; color:var(--text-faint); border-bottom:2px solid transparent; background:none; border-top:none; border-left:none; border-right:none; cursor:pointer}
+.gs-subtab.active{color:var(--accent-ink); border-bottom-color:var(--accent)}
+.gs-subtab:hover:not(.active){color:var(--text-muted)}
+
+.gs-tile-row{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:14px}
+.gs-tile{background:var(--paper-raised); border:1px solid var(--border); border-radius:10px; padding:13px 15px}
+.gs-tile-label{font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-faint); margin-bottom:6px}
+.gs-tile-value{font-size:19px; font-weight:800; margin-bottom:3px}
+.gs-tile-sub{font-size:11px; color:var(--text-muted)}
+.gs-pill{display:inline-flex; align-items:center; font-size:10px; font-weight:800; padding:2px 7px; border-radius:999px}
+.gs-pill.crit{background:var(--crit-soft); color:var(--crit)}
+.gs-pill.slate{background:var(--slate-soft); color:var(--slate)}
+.gs-pill.good{background:var(--good-soft); color:var(--good)}
+
+.nm-row{display:grid; grid-template-columns:26px 130px 1fr 90px 130px; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); font-size:12px}
+.nm-row:last-child{border-bottom:none}
+.nm-row.head{font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint); padding-bottom:7px}
+.nm-rank{width:22px; height:22px; border-radius:6px; background:var(--paper-sunk); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; color:var(--text-muted)}
+.nm-rank.r1{background:var(--crit-soft); color:var(--crit)}
+.nm-rank.r2{background:var(--slate-soft); color:var(--slate)}
+.nm-name{font-weight:700}
+.nm-bar-track{position:relative; height:8px; border-radius:999px; background:var(--paper-sunk)}
+.nm-bar-fill{position:absolute; top:0; left:0; height:100%; border-radius:999px; background:var(--crit)}
+.nm-gap{font-weight:800; text-align:right; color:var(--crit)}
+.nm-driver{color:var(--text-faint); font-size:11px; text-align:right}
+
+.gs-split{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+.gs-mini-list{font-size:12px}
+.gs-mini-row{display:flex; justify-content:space-between; gap:10px; padding:7px 0; border-bottom:1px solid var(--border)}
+.gs-mini-row:last-child{border-bottom:none}
+.gs-mini-row .n{font-weight:700}
+.gs-mini-row .v{font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap}
+.gs-mini-row .v.crit{color:var(--crit)}
+
+.gs-map-legend{display:flex; gap:16px; font-size:11px; color:var(--text-faint); margin-top:10px; flex-wrap:wrap}
+.gs-map-legend-item{display:flex; align-items:center; gap:5px}
+.gs-map-swatch{width:9px; height:9px; border-radius:3px}
 
 /* Explorer (2026-09-09): dataset switcher buttons and filter chips. */
 .exp-dataset-btn.active{background:var(--accent); color:#fff; border-color:var(--accent)}
@@ -1982,11 +2075,23 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
   <div class="main hidden" id="view-growth-strategy">
     <div class="topbar">
       <div>
-        <div class="eyebrow">Growth Strategy</div>
-        <h1>By Region</h1>
-        <div class="period">Auto-filled from real PULSE data</div>
+        <div class="eyebrow print-hide">Growth Strategy</div>
+        <h1 class="print-hide" id="gs-view-title">Company-Wide</h1>
+        <div class="period print-hide">Auto-filled from real PULSE data</div>
+        <!-- Print-only title (2026-09-10): the Region/Year <select>
+             controls next to this don't render as readable text when
+             printed, so this plain-text line is what actually shows the
+             region and year on the printed report. Kept in sync with
+             the pickers by growthStrategyInit()/onGrowthStrategyYearChange/
+             onGrowthStrategyRegionChange (see gsPrintTitleSync()). Only
+             ever shown printing the By Region pane (Company-Wide has no
+             Print to PDF button), so this title is always "By Region". -->
+        <div class="print-only" style="margin-bottom:4px">
+          <div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint)">Growth Strategy</div>
+          <h1 id="gs-print-title" style="margin:2px 0 4px">By Region</h1>
+        </div>
       </div>
-      <div style="display:flex; align-items:center; gap:10px">
+      <div class="print-hide" style="display:flex; align-items:center; gap:10px" id="gs-byregion-pickers">
         <label class="year-picker">
           <span>Year</span>
           <select id="gs-year-select" onchange="onGrowthStrategyYearChange(this.value)"></select>
@@ -1997,6 +2102,59 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
         </label>
       </div>
     </div>
+
+    <!-- Company-Wide / By Region subtabs (2026-09-10): the real build of
+         the mockup's Section 2, "growth strategy is missing the company
+         rollup." Company-Wide is the default landing tab, matching the
+         approved mockup (its own subtabs render Company-Wide active). -->
+    <div class="gs-subtabs print-hide">
+      <button class="gs-subtab active" id="gs-subtab-companywide" onclick="switchGrowthStrategyTab('company-wide')">Company-Wide</button>
+      <button class="gs-subtab" id="gs-subtab-byregion" onclick="switchGrowthStrategyTab('by-region')">By Region</button>
+    </div>
+
+    <!-- ============== Company-Wide pane ============== -->
+    <div id="gsc-pane">
+      <div id="gsc-loading" class="legend-note">Loading&hellip;</div>
+      <div id="gsc-wrap" class="hidden">
+
+        <div class="card">
+          <div class="card-head"><h3>Regions Needing Momentum</h3><span class="meta">Ranked by dollar gap to growth target</span></div>
+          <div class="card-pad">
+            <div class="nm-row head">
+              <div></div><div>Region</div><div>Gap to target</div><div style="text-align:right">$ Gap</div><div style="text-align:right">Held back by</div>
+            </div>
+            <div id="gsc-momentum-rows"></div>
+          </div>
+        </div>
+
+        <div class="gs-tile-row" id="gsc-tiles"></div>
+
+        <div class="card">
+          <div class="card-head"><h3>Largest Accounts, Company-Wide</h3><span class="meta">Top 10 by bookings, with service-family coverage</span></div>
+          <div class="card-pad">
+            <div class="gs-split">
+              <div class="gs-mini-list" id="gsc-accounts-list"></div>
+              <div class="gs-mini-list" id="gsc-accounts-summary"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Tiered Market Coverage, Company-Wide</h3><span class="meta">Tier 1/2 cities ranked by distance to nearest team member</span></div>
+          <div class="card-pad">
+            <div id="gsc-coverage-empty" class="legend-note hidden">Upload both roster files on Data Updates to see coverage here.</div>
+            <div id="gsc-coverage-wrap">
+              <div style="display:flex; height:30px; border-radius:7px; overflow:hidden; margin-bottom:10px" id="gsc-coverage-bar"></div>
+              <div class="gs-map-legend" id="gsc-coverage-legend"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ============== By Region pane (existing 13-section report) ============== -->
+    <div id="gsr-pane" class="hidden">
 
     <div class="jumpnav print-hide" id="gsr-jumpnav">
       <a href="#gsr-sec-backlog">Backlog by LOB</a><a href="#gsr-sec-revenue">Revenue Mix</a><a href="#gsr-sec-whitespace">Whitespace</a><a href="#gsr-sec-concentration">Concentration</a><a href="#gsr-sec-markettier">Market Tiers</a><a href="#gsr-sec-lowest">Lowest Services</a><a href="#gsr-sec-winrate">Win Rate</a><a href="#gsr-sec-leaderboard">Leaderboards</a><a href="#gsr-sec-oneservice">One-Service Accts</a><a href="#gsr-sec-tenure">Tenure Mix</a><a href="#gsr-sec-lobdetail">LOB Attach</a><a href="#gsr-sec-nextmillion">Next $1M</a><a href="#gsr-sec-focus">Focus Rec.</a>
@@ -2159,6 +2317,9 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
         </div>
       </div>
     </div>
+
+    </div>
+    <!-- /gsr-pane -->
   </div>
 
   <!-- ---- Explorer (pivot-table-style builder over Backlog and Sales
@@ -3160,8 +3321,65 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    This closes out the four pieces from the Growth Strategy nav /
    Explorer / Calculator / Client Vintage mockup round Misty approved
    ("this is great, let's build it — build all of them in sequence").
+
+   v2m (2026-09-10): three real fixes/gaps Misty reported from the live
+   app, via screenshots of #gsr-sec-focus (By Region view):
+
+   1. Print to PDF "small sliver" bug (fixed). Root cause: .app is
+      `display:grid` (232px rail + 1fr content, min-height:100vh) and
+      #view-growth-strategy is a grid child of it — printing a grid
+      child while the parent stays in grid layout clips Chrome's print
+      output to roughly one page/viewport height, and there was no
+      @page rule at all to guide pagination. Not a display/hidden
+      toggle bug (ID selectors were already correctly beating class
+      selectors regardless of source order). Fix: body.printing-gsr
+      takes .app out of grid mode (display:block) for print and pulls
+      #view-growth-strategy fully out of grid flow (position:static,
+      full-width block, height:auto, overflow:visible), adds
+      .card{break-inside:avoid} for pagination, and adds an explicit
+      @page{size:auto; margin:14mm 12mm} rule.
+
+   2. Missing print-readable Region/Year title (fixed). The Year/Region
+      <select> elements had no print-hide class and no plain-text
+      equivalent, so printed output showed unreliable dropdown chrome
+      instead of which region/year the report was for. Fix: print-hide
+      added to the existing topbar/picker elements, new .print-only
+      title block (#gs-print-title) added, kept in sync by a new
+      gsPrintTitleSync() called from growthStrategyInit(),
+      onGrowthStrategyYearChange(), and onGrowthStrategyRegionChange().
+
+   3. Company-Wide tab, real build (was a genuine gap — Section 2 of the
+      approved mockup was never actually built when Growth Strategy was
+      extracted from Regions in v2l/v2g, only "By Region" was). New
+      Company-Wide / By Region subtabs inside #view-growth-strategy
+      (gs-subtabs), Company-Wide as the default landing tab per the
+      approved mockup. Real data throughout, no placeholders:
+        - Regions Needing Momentum: every region ranked by $ gap to its
+          own growth target, reusing the exact backlog-vs-target math
+          getRegionsScreen already computes per region (same
+          region_growth_targets, same suggestGrowthPct fallback), just
+          run for every region and sorted instead of read one at a time.
+        - 4 tiles: Regions Below Target, Largest Untapped Account (by
+          service-family coverage count), Farthest Underserved Tier-1/2
+          Market, Account Concentration (top 10 share of company
+          bookings).
+        - Largest Accounts, Company-Wide: same parent_company/service-
+          family whitespace logic each region's report already computes,
+          WHERE region_id = ? dropped.
+        - Tiered Market Coverage, Company-Wide: getGrowthOpportunityMarkets's
+          own query/distance logic, region filter dropped, bucketed into
+          near/mid/far (<50mi / 50-100mi / >100mi) client-side from the
+          same real per-city distances the By Region tab's Market Tier
+          section already uses — one source of truth for "how far is the
+          nearest team member," not a second backend metric.
+      New backend: getGrowthStrategyCompanyWide(env, fiscalYear) in
+      worker_v2h.mjs, new route GET /api/growth-strategy/company-wide
+      (requireAdmin-gated, same pattern as the other Growth Strategy
+      routes). Print to PDF stays scoped to By Region only (no picker
+      row or print button on Company-Wide, since there's no single
+      region/print target for a roll-up).
    ============================================================ */
-const APP_VERSION = 'v2l';
+const APP_VERSION = 'v2m';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -7034,8 +7252,9 @@ function onRegionsRegionChange(value){
    onward) is unchanged from the old subtab, only the state/init/trigger
    layer around it changed.
    ============================================================ */
-let gsState = { fiscalYear: CURRENT_YEAR, regionId: null };
+let gsState = { fiscalYear: CURRENT_YEAR, regionId: null, tab: 'company-wide' };
 let gsrLoadedOnce = false;
+let gscLoadedOnce = false;
 
 function growthStrategyInit(){
   populateYearSelect('gs-year-select', { selectedYear: gsState.fiscalYear || CURRENT_YEAR });
@@ -7044,17 +7263,59 @@ function growthStrategyInit(){
   if (!gsState.regionId && REGIONS.length) gsState.regionId = REGIONS[0].id;
   if (gsState.regionId) regionSelect.value = gsState.regionId;
   gsState.fiscalYear = parseInt(document.getElementById('gs-year-select').value, 10);
-  loadGrowthStrategyReport();
+  gsPrintTitleSync();
+  // Company-Wide is the default landing tab (matches the approved mockup,
+  // and answers "how's the company doing" before drilling into one
+  // region). switchGrowthStrategyTab handles first-load fetching either
+  // way, so this is safe to call every time the view is opened.
+  switchGrowthStrategyTab(gsState.tab || 'company-wide');
+}
+
+// Company-Wide has no year/region pickers of its own (it rolls up every
+// region for the current fiscal year — the mockup's own framing), so the
+// topbar picker row and Print to PDF only make sense on By Region. Toggles
+// them alongside the pane swap rather than leaving Company-Wide with
+// controls that don't do anything on that tab.
+function switchGrowthStrategyTab(tab){
+  gsState.tab = tab;
+  const isByRegion = tab === 'by-region';
+  document.getElementById('gs-subtab-companywide').classList.toggle('active', !isByRegion);
+  document.getElementById('gs-subtab-byregion').classList.toggle('active', isByRegion);
+  document.getElementById('gsc-pane').classList.toggle('hidden', isByRegion);
+  document.getElementById('gsr-pane').classList.toggle('hidden', !isByRegion);
+  document.getElementById('gs-byregion-pickers').classList.toggle('hidden', !isByRegion);
+  document.getElementById('gs-view-title').textContent = isByRegion ? 'By Region' : 'Company-Wide';
+  if (isByRegion) {
+    initGrowthStrategyJumpnav();
+    if (!gsrLoadedOnce) loadGrowthStrategyReport();
+  } else if (!gscLoadedOnce) {
+    loadGrowthStrategyCompanyWide();
+  }
 }
 
 function onGrowthStrategyYearChange(value){
   gsState.fiscalYear = parseInt(value, 10);
+  gsPrintTitleSync();
   loadGrowthStrategyReport();
 }
 
 function onGrowthStrategyRegionChange(value){
   gsState.regionId = value;
+  gsPrintTitleSync();
   loadGrowthStrategyReport();
+}
+
+// Keeps the print-only title (2026-09-10 fix) in sync with the real
+// Region/Year pickers, since that plain-text line is what actually
+// shows up on the printed report — the <select> controls next to it
+// are hidden for print and don't reliably render as text anyway.
+function gsPrintTitleSync(){
+  const titleEl = document.getElementById('gs-print-title');
+  if (!titleEl) return;
+  const region = REGIONS.find(r => r.id === gsState.regionId);
+  const regionName = region ? region.name : 'By Region';
+  const year = gsState.fiscalYear || CURRENT_YEAR;
+  titleEl.textContent = `${regionName} — FY${year}`;
 }
 
 // Highlights the jump-nav link for whichever section is currently in
@@ -7581,6 +7842,133 @@ async function loadGrowthStrategyReport(){
 function gsrPct(n, decimals){
   if (n === null || n === undefined || !Number.isFinite(n)) return '&mdash;';
   return n.toFixed(decimals === undefined ? 1 : decimals) + '%';
+}
+
+// ---- Growth Strategy: Company-Wide (2026-09-10) ----
+// Real build of the approved mockup's Company-Wide tab. Rolls every
+// region up for the current fiscal year via /api/growth-strategy/
+// company-wide — no region picker on this tab, since "company-wide" is
+// the point.
+async function loadGrowthStrategyCompanyWide(){
+  gscLoadedOnce = true;
+  document.getElementById('gsc-loading').classList.remove('hidden');
+  document.getElementById('gsc-wrap').classList.add('hidden');
+  try {
+    const res = await workerFetch(`/api/growth-strategy/company-wide?fiscalYear=${gsState.fiscalYear}`);
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not load the company-wide rollup.', true); return; }
+    renderGrowthStrategyCompanyWide(data);
+    document.getElementById('gsc-loading').classList.add('hidden');
+    document.getElementById('gsc-wrap').classList.remove('hidden');
+  } catch(e) {
+    showToast('Could not reach the server.', true);
+  }
+}
+
+function renderGrowthStrategyCompanyWide(data){
+  // ---- Regions Needing Momentum ----
+  const rows = data.regionsNeedingMomentum || [];
+  const behind = rows.filter(r => !r.onPace);
+  const maxGap = Math.max(1, ...behind.map(r => Math.abs(r.gap)));
+  const rankClass = i => i === 0 ? 'r1' : (i === 1 ? 'r2' : '');
+  document.getElementById('gsc-momentum-rows').innerHTML = behind.length
+    ? behind.map((r, i) => `
+        <div class="nm-row">
+          <div class="nm-rank ${rankClass(i)}">${i + 1}</div>
+          <div class="nm-name">${escapeHtml(r.regionName)}</div>
+          <div class="nm-bar-track"><div class="nm-bar-fill" style="width:${Math.min(100, (Math.abs(r.gap) / maxGap) * 100)}%; ${i > 1 ? 'background:var(--slate)' : ''}"></div></div>
+          <div class="nm-gap" style="${i > 1 ? 'color:var(--slate)' : ''}">&minus;${fmtMoneyShort(Math.abs(r.gap))}</div>
+          <div class="nm-driver">${r.heldBackBy ? escapeHtml(r.heldBackBy) : '&mdash;'}</div>
+        </div>`).join('')
+    : `<div class="legend-note" style="padding:10px 0">Every region is at or ahead of its growth target for FY${data.fiscalYear}.</div>`;
+
+  // ---- Tiles ----
+  const regionsBelowCount = behind.length;
+  const regionsBelowNames = behind.map(r => r.regionName).join(', ') || 'None';
+  const accounts = data.largestAccounts || { rows: [] };
+  const topUntapped = (accounts.rows || []).slice().sort((a, b) => a.coverageCount - b.coverageCount)[0];
+  const markets = data.growthOpportunityMarkets || [];
+  const farthestMarket = markets.length ? markets[0] : null; // already sorted farthest-first
+
+  document.getElementById('gsc-tiles').innerHTML = `
+    <div class="gs-tile">
+      <div class="gs-tile-label">Regions Below Target</div>
+      <div class="gs-tile-value">${regionsBelowCount} <span style="font-size:13px; font-weight:600; color:var(--text-faint)">of ${rows.length}</span></div>
+      <div class="gs-tile-sub">${regionsBelowCount ? `<span class="gs-pill crit">${escapeHtml(regionsBelowNames)}</span>` : 'All regions on pace'}</div>
+    </div>
+    <div class="gs-tile">
+      <div class="gs-tile-label">Largest Untapped Account</div>
+      <div class="gs-tile-value" style="font-size:16px">${topUntapped ? escapeHtml(topUntapped.name) : '&mdash;'}</div>
+      <div class="gs-tile-sub">${topUntapped ? `${topUntapped.coverageCount} of ${accounts.accountFamilies.length} service families` : 'No account data yet'}</div>
+    </div>
+    <div class="gs-tile">
+      <div class="gs-tile-label">Farthest Underserved Tier-1/2 Market</div>
+      <div class="gs-tile-value" style="font-size:16px">${farthestMarket ? `${escapeHtml(farthestMarket.city)}, ${escapeHtml(farthestMarket.state)}` : '&mdash;'}</div>
+      <div class="gs-tile-sub">${farthestMarket && farthestMarket.nearestMiles !== null ? `${farthestMarket.nearestMiles} mi to nearest coverage` : (data.coverageAvailable ? 'All markets geocoded' : 'No coverage data yet')}</div>
+    </div>
+    <div class="gs-tile">
+      <div class="gs-tile-label">Account Concentration</div>
+      <div class="gs-tile-value">${gsrPct(accounts.concentrationPct, 0)}</div>
+      <div class="gs-tile-sub">Top 10 accounts, share of company bookings</div>
+    </div>`;
+
+  // ---- Largest Accounts, Company-Wide ----
+  const acctRows = accounts.rows || [];
+  document.getElementById('gsc-accounts-list').innerHTML = acctRows.length
+    ? acctRows.map((a, i) => `<div class="gs-mini-row"><span class="n">${i + 1}. ${escapeHtml(a.name)}</span><span class="v">${fmtMoneyShort(a.total)}</span></div>`).join('')
+    : '<div class="legend-note">No bookings yet for this fiscal year.</div>';
+
+  if (acctRows.length) {
+    const missingCounts = {};
+    (accounts.accountFamilies || []).forEach((label, idx) => { missingCounts[label] = 0; });
+    acctRows.forEach(a => {
+      (a.coverage || []).forEach((has, idx) => {
+        if (!has) {
+          const label = accounts.accountFamilies[idx];
+          missingCounts[label] = (missingCounts[label] || 0) + 1;
+        }
+      });
+    });
+    const topMissing = Object.entries(missingCounts).sort((a, b) => b[1] - a[1]).filter(([, n]) => n > 0).slice(0, 2);
+    document.getElementById('gsc-accounts-summary').innerHTML = `
+      ${topMissing.map(([label, n]) => `<div class="gs-mini-row"><span class="n">Missing ${escapeHtml(label)} most often</span><span class="v crit">${n} of top ${acctRows.length}</span></div>`).join('')}
+      <div class="gs-mini-row"><span class="n">Full ${accounts.accountFamilies.length}-family coverage</span><span class="v">${accounts.fullCoverageCount} of top ${acctRows.length}</span></div>
+      <div class="gs-mini-row"><span class="n">Concentration, top ${acctRows.length} of company bookings</span><span class="v">${gsrPct(accounts.concentrationPct, 0)}</span></div>`;
+  } else {
+    document.getElementById('gsc-accounts-summary').innerHTML = '';
+  }
+
+  // ---- Tiered Market Coverage, Company-Wide ----
+  // Bucketed client-side from the same per-city distances the By Region
+  // tab's Market Tier section already fetches (getGrowthOpportunityMarkets,
+  // company-wide here), rather than a second backend metric — one real
+  // source of truth for "how far is the nearest team member" either way.
+  const emptyEl = document.getElementById('gsc-coverage-empty');
+  const wrapEl = document.getElementById('gsc-coverage-wrap');
+  if (!data.coverageAvailable || !markets.length) {
+    emptyEl.classList.remove('hidden');
+    wrapEl.classList.add('hidden');
+  } else {
+    emptyEl.classList.add('hidden');
+    wrapEl.classList.remove('hidden');
+    let near = 0, mid = 0, far = 0;
+    markets.forEach(m => {
+      if (m.nearestMiles === null || m.nearestMiles === undefined) return;
+      if (m.nearestMiles <= 50) near++;
+      else if (m.nearestMiles <= 100) mid++;
+      else far++;
+    });
+    const total = Math.max(1, near + mid + far);
+    const nearPct = (near / total) * 100, midPct = (mid / total) * 100, farPct = (far / total) * 100;
+    document.getElementById('gsc-coverage-bar').innerHTML = `
+      <div style="flex:${Math.max(nearPct, 0.001)}; background:var(--cov-near)"></div>
+      <div style="flex:${Math.max(midPct, 0.001)}; background:var(--cov-mid)"></div>
+      <div style="flex:${Math.max(farPct, 0.001)}; background:var(--cov-far)"></div>`;
+    document.getElementById('gsc-coverage-legend').innerHTML = `
+      <div class="gs-map-legend-item"><div class="gs-map-swatch" style="background:var(--cov-near)"></div>Covered, under 50 mi (${gsrPct(nearPct, 0)})</div>
+      <div class="gs-map-legend-item"><div class="gs-map-swatch" style="background:var(--cov-mid)"></div>50&ndash;100 mi (${gsrPct(midPct, 0)})</div>
+      <div class="gs-map-legend-item"><div class="gs-map-swatch" style="background:var(--cov-far)"></div>Over 100 mi (${gsrPct(farPct, 0)})</div>`;
+  }
 }
 
 function renderGrowthStrategyReport(data){
