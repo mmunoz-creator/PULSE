@@ -3743,8 +3743,38 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    class of risk) that could have let Baseline's tab clicks clobber Data
    Updates' active subtab, since both panels' subpanes live in the DOM at
    once. Now scoped to #view-baseline like the others.
+
+   v2v (2026-09-10): Fixed a real Revenue YTD discrepancy Misty caught
+   directly by comparing two live screens on the same data — Forecast's
+   "Revenue Company Blended Forecast" tile showed $95.20M actual while
+   Executive Summary's Revenue YTD showed $89.05M. Root cause: Executive
+   Summary built its company-wide revenuePace by summing per-region
+   Revenue figures from getForecastRegionalDrivers, whose billed_fact
+   query is WHERE region_id IS NOT NULL (correct for that function's own
+   job — it can't attribute an unmapped row to a specific region). Any
+   billed_fact row whose raw region text never resolved through
+   region_raw_mappings was silently excluded from Executive Summary's
+   Revenue YTD, Company Backlog reconciliation tile, and Book-to-Bill
+   Ratio, while Forecast's own tile (getForecastMonthPace, no region
+   filter) kept counting it. Confirmed with Misty: company-wide totals
+   should include unmapped dollars rather than silently drop them.
+   Backend-only fix (worker_v2o.mjs): getExecutiveSummary now uses
+   monthPace.revenuePace directly as its own revenuePace instead of
+   reconstructing a second, different total from a per-region sum — no
+   frontend changes needed, the field names already matched (two flat
+   aliases, currentMonthActualsToDate/currentMonthBlended, added to
+   getForecastMonthPace's revenuePace object so the shapes line up
+   exactly). Per-region screens (Regions, Top Performing Region, Regions
+   Below Budget Pace) are unaffected and unchanged — they still correctly
+   need region_id-filtered data, since they're inherently about
+   attributing performance to a specific region, which an unmapped-region
+   dollar genuinely can't be. That per-region mapping gap is real and
+   still open, same class of issue as the still-unresolved "APEX" region
+   on billed_line_item_fact — fixing which raw region string(s) in
+   billed_fact never mapped would let this same revenue also show up
+   correctly attributed on the Regions screen, not just in company totals.
    ============================================================ */
-const APP_VERSION = 'v2u';
+const APP_VERSION = 'v2v';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
