@@ -1555,6 +1555,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       <button class="subtab active" data-subtab="month-pace" onclick="showForecastTab('month-pace',this)">Month Pace</button>
       <button class="subtab" data-subtab="business-lines" onclick="showForecastTab('business-lines',this)">Business Lines</button>
       <button class="subtab" data-subtab="regional-drivers" onclick="showForecastTab('regional-drivers',this)">Regional Drivers</button>
+      <button class="subtab" data-subtab="revenue-bridge" onclick="showForecastTab('revenue-bridge',this)">Revenue Bridge</button>
     </div>
 
     <!-- Month Pace -->
@@ -1576,10 +1577,24 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
 
       <div class="card" style="margin-top:16px">
         <div class="card-head">
-          <h3>Company Blended Forecast Detail</h3>
+          <h3>Sales Company Blended Forecast Detail</h3>
           <span class="meta" id="fc-mp-asof-meta">&mdash;</span>
         </div>
         <div class="card-pad" style="padding-top:6px" id="fc-mp-detail"></div>
+      </div>
+
+      <!-- Revenue Company Blended Forecast Detail (2026-09-10, per Misty's
+           direct request: mirrors the Sales detail table above exactly,
+           same fields off revenuePace instead of the top-level pace
+           object). Same revenueAvailable gate as the Revenue tiles above
+           it, so it's hidden with the same pending note rather than an
+           empty table when billed_fact has no rows yet for this year. -->
+      <div class="card" style="margin-top:16px" id="fc-mp-revenue-detail-card">
+        <div class="card-head">
+          <h3>Revenue Company Blended Forecast Detail</h3>
+          <span class="meta" id="fc-mp-revenue-asof-meta">&mdash;</span>
+        </div>
+        <div class="card-pad" style="padding-top:6px" id="fc-mp-revenue-detail"></div>
       </div>
     </div>
 
@@ -1702,16 +1717,55 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       </div>
     </div>
 
+    <!-- Revenue Bridge (2026-09-10: moved here from Executive Summary, per
+         Misty's direct request — belongs with the rest of Forecast's
+         detail, not the exec-level summary. Same card/chart/slider
+         markup, ids renamed es-bridge-* -> fc-rb-* to stay unique now
+         that both views are in the same document. Driven by
+         forecastYear (loadForecastAll), not a separate picker — Revenue
+         Bridge has no year control of its own here, same as the other
+         three Forecast subtabs. The one-line reconciliation sentence
+         this data also feeds stays on Executive Summary's "This Month at
+         a Glance" narrative (kept, per Misty's explicit call) — only the
+         chart/table/slider moved. -->
+    <div class="subpane" id="fc-subpane-revenue-bridge">
+      <div class="card">
+        <div class="card-head">
+          <h3>YTD Actuals to Expected Revenue</h3>
+          <span class="meta" id="fc-rb-meta">All Regions, company-wide</span>
+        </div>
+        <div class="card-pad" style="padding-top:6px">
+          <div style="overflow-x:auto; padding-bottom:6px">
+            <div class="es-bridge-chart" id="fc-rb-chart"></div>
+          </div>
+          <div class="legend-row" id="fc-rb-recon" style="margin-top:14px"></div>
+
+          <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border)" id="fc-rb-slider-card">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px">
+              <div style="font-size:12px; font-weight:700; color:var(--text-faint); text-transform:uppercase; letter-spacing:.04em">Stage-Default Probability</div>
+              <div style="font-size:15px; font-weight:800; color:var(--accent-ink)" id="fc-rb-slider-value">&mdash;%</div>
+            </div>
+            <input type="range" min="0" max="100" step="1" value="40" id="fc-rb-slider" style="width:100%; accent-color:var(--accent)" oninput="onFcBridgeSliderInput(this.value)" onchange="onFcBridgeSliderChange(this.value)">
+            <div style="display:flex; justify-content:space-between; font-size:10px; color:var(--text-faint); margin-top:3px"><span>0%</span><span>100%</span></div>
+            <div class="fc-tile-sub" style="margin-top:8px" id="fc-rb-slider-note">&mdash;</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
-  <!-- ---- Executive Summary (2026-09-06): pace tiles, Revenue Bridge,
-       Regions Below Budget Pace, Service Family — in that order, per
-       Misty's confirmed layout call. Composes getForecastMonthPace,
-       getForecastRegionalDrivers and getRevenueBridge (all real,
-       already built for Forecast/Regions) plus a new Service Family
-       chart and an auto-generated narrative, via GET
-       /api/executive-summary. Not an editable page — read-only, same as
-       Forecast. ---- -->
+  <!-- ---- Executive Summary (2026-09-06): pace tiles, Regions Below
+       Budget Pace, Service Family — in that order, per Misty's confirmed
+       layout call. Composes getForecastMonthPace, getForecastRegionalDrivers
+       and getRevenueBridge (all real, already built for Forecast/Regions)
+       plus a new Service Family chart and an auto-generated narrative, via
+       GET /api/executive-summary. Not an editable page — read-only, same
+       as Forecast. Revenue Bridge's chart/table/slider moved to Forecast
+       (2026-09-10, per Misty's direct request); the narrative card below
+       still carries one reconciliation sentence derived from the same
+       data (kept, per her explicit call), so getRevenueBridge stays part
+       of this composition even though its card is gone from this page. ---- -->
   <div class="main" id="view-executive-summary">
     <div class="topbar">
       <div>
@@ -1748,46 +1802,8 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
     <div class="section-eyebrow" style="margin:20px 0 10px; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint)">By Line of Business</div>
     <div id="es-tiles-lob" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:16px"></div>
 
-    <!-- Revenue Bridge -->
-    <div class="card">
-      <div class="card-head">
-        <h3>YTD Actuals to Expected Revenue</h3>
-        <span class="meta" id="es-bridge-meta">All Regions, company-wide</span>
-      </div>
-      <div class="card-pad" style="padding-top:6px">
-        <div style="overflow-x:auto; padding-bottom:6px">
-          <div class="es-bridge-chart" id="es-bridge-chart"></div>
-        </div>
-        <div class="legend-row" id="es-bridge-recon" style="margin-top:14px"></div>
-
-        <!-- Stage-default probability slider (2026-09-08, §91/§97, revised
-             2026-09-08 for clunkiness feedback): controls only the
-             probability applied to stage-default (currently-75%)
-             Negotiation/Review + Proposal/Price Quote rows in Weighted
-             Pipeline above. Fetch-on-release: dragging updates the
-             displayed number only; on release we save the setting, then
-             refetch and re-render only the Revenue Bridge itself (via
-             GET /api/regions/revenue-bridge, company-wide) rather than
-             the whole Executive Summary, so Expected Revenue matches the
-             server's real math without reloading tiles/LOB/regions.
-             Flattened out of its own nested card into an inline section
-             of the Revenue Bridge card, matching the divider style used
-             elsewhere (e.g. .legend-row), since a card-in-card read as
-             heavier than the control warranted. -->
-        <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border)" id="es-bridge-slider-card">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px">
-            <div style="font-size:12px; font-weight:700; color:var(--text-faint); text-transform:uppercase; letter-spacing:.04em">Stage-Default Probability</div>
-            <div style="font-size:15px; font-weight:800; color:var(--accent-ink)" id="es-bridge-slider-value">&mdash;%</div>
-          </div>
-          <input type="range" min="0" max="100" step="1" value="40" id="es-bridge-slider" style="width:100%; accent-color:var(--accent)" oninput="onEsBridgeSliderInput(this.value)" onchange="onEsBridgeSliderChange(this.value)">
-          <div style="display:flex; justify-content:space-between; font-size:10px; color:var(--text-faint); margin-top:3px"><span>0%</span><span>100%</span></div>
-          <div class="fc-tile-sub" style="margin-top:8px" id="es-bridge-slider-note">&mdash;</div>
-        </div>
-      </div>
-    </div>
-
     <!-- Regions Below Budget Pace -->
-    <div class="card" style="margin-top:16px">
+    <div class="card">
       <div class="card-head">
         <h3>Regions Below Budget Pace</h3>
         <span class="meta" id="es-regions-meta">Sales basis, sorted worst pace first</span>
@@ -3378,8 +3394,44 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       routes). Print to PDF stays scoped to By Region only (no picker
       row or print button on Company-Wide, since there's no single
       region/print target for a roll-up).
+
+   v2n (2026-09-10): two real changes on Forecast/Executive Summary, both
+   per Misty's direct requests:
+
+   1. Revenue Bridge moved from Executive Summary to Forecast. New 4th
+      Forecast subtab "Revenue Bridge" (fc-subpane-revenue-bridge),
+      alongside Month Pace / Business Lines / Regional Drivers, driven by
+      the same forecastYear state and loadForecastAll() as the other
+      three (no separate year picker for it). Same card/chart/stage-
+      default-probability-slider markup and math as before, ids renamed
+      es-bridge-* -> fc-rb-*, functions renamed renderExecSummaryBridge ->
+      renderForecastBridge, renderExecSummaryBridgeSlider ->
+      renderForecastBridgeSlider, onEsBridgeSlider{Input,Change} ->
+      onFcBridgeSlider{Input,Change} (now saves/refetches against
+      forecastYear instead of esYear). Same backend, no changes:
+      GET /api/regions/revenue-bridge, POST /api/regions/pipeline-
+      default-probability. Executive Summary's "This Month at a Glance"
+      narrative keeps its one reconciliation sentence (Expected Revenue
+      vs. Revenue Budget) — that's still server-computed from the same
+      getRevenueBridge call inside getExecutiveSummary, just no longer
+      rendered as its own card on that page. Regions Below Budget Pace
+      moves up to close the gap; no replacement card added (confirmed
+      with Misty: the tables below it already answer "who's behind and
+      why").
+
+   2. Revenue Company Blended Forecast Detail, new card on Month Pace.
+      Mirrors the existing Sales Company Blended Forecast Detail table
+      exactly (renamed "Sales Company Blended Forecast Detail" for
+      clarity now that there are two), reading data.revenuePace instead
+      of the top-level pace fields — same field shape, so
+      buildMonthPaceDetailTableHtml() is now shared by both tables
+      rather than duplicated. Same revenueAvailable gate as the Revenue
+      tiles directly above it (hidden, no card at all, when billed_fact
+      has no rows yet for the fiscal year — not an empty table). No
+      backend changes: revenuePace already carried every field this
+      needed (getForecastMonthPace, worker_v2h.mjs).
    ============================================================ */
-const APP_VERSION = 'v2m';
+const APP_VERSION = 'v2n';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -3690,6 +3742,22 @@ function loadForecastAll(year){
   loadForecastBusinessLines(year);
   loadForecastRegionalDrivers(year);
   loadForecastMonthPace(year);
+  loadForecastRevenueBridge(year);
+}
+
+// Revenue Bridge (2026-09-10, moved here from Executive Summary). Company-
+// wide only (regionId omitted), same as it was on Executive Summary — no
+// region picker on this subtab, matching the other three Forecast subtabs'
+// company-wide default view.
+async function loadForecastRevenueBridge(year){
+  try {
+    const res = await workerFetch(`/api/regions/revenue-bridge?fiscalYear=${year}`);
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not load the Revenue Bridge.', true); return; }
+    renderForecastBridge(data);
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
 }
 
 function fmtMoneyShort(n){
@@ -3989,6 +4057,24 @@ function buildMonthPaceTilesHtml(pace, opts){
   `;
 }
 
+// Shared by both Company Blended Forecast Detail tables (Sales, and the
+// Revenue mirror added 2026-09-10 per Misty's direct request, same field
+// names on revenuePace as on the top-level pace object: trailingWindowLabel,
+// priorActualsSum, currentMonth.{label,actualsToDate,blended,bizDaysElapsed,
+// bizDaysRemaining,totalBizDaysInMonth}, totalYearForecast).
+function buildMonthPaceDetailTableHtml(pace, trailingWindowLabel){
+  return `
+    <table class="rtable">
+      <tbody>
+        <tr><td>${trailingWindowLabel}</td><td class="num">${fmtMoneyShort(pace.priorActualsSum)}</td></tr>
+        <tr><td>${pace.currentMonth.label} actual-to-date (${pace.currentMonth.bizDaysElapsed} of ${pace.currentMonth.totalBizDaysInMonth} business days)</td><td class="num">${fmtMoneyShort(pace.currentMonth.actualsToDate)}</td></tr>
+        <tr><td>${pace.currentMonth.label} blended forecast (+${pace.currentMonth.bizDaysRemaining} business days remaining at pace)</td><td class="num cell-current">${fmtMoneyShort(pace.currentMonth.blended)}</td></tr>
+        <tr class="rtable-total-row"><td>Total Year Forecast</td><td class="num">${fmtMoneyShort(pace.totalYearForecast)}</td></tr>
+      </tbody>
+    </table>
+  `;
+}
+
 function renderForecastMonthPace(data){
   document.getElementById('fc-mp-asof-meta').innerHTML = fmtAsOf(data.asOf);
 
@@ -4000,6 +4086,7 @@ function renderForecastMonthPace(data){
 
   const revenueTiles = document.getElementById('fc-mp-revenue-tiles');
   const revenuePendingNote = document.getElementById('fc-mp-revenue-pending-note');
+  const revenueDetailCard = document.getElementById('fc-mp-revenue-detail-card');
   if (data.revenueAvailable && data.revenuePace) {
     revenuePendingNote.classList.add('hidden');
     revenueTiles.classList.remove('hidden');
@@ -4007,25 +4094,20 @@ function renderForecastMonthPace(data){
       blendedIcon: 'accent', budgetLabel: 'Revenue Budget', budgetAmount: data.companyMonthRevenueBudget,
       trailingWindowLabel: data.trailingWindowLabel, fiscalYear: data.fiscalYear,
     });
+    revenueDetailCard.classList.remove('hidden');
+    document.getElementById('fc-mp-revenue-asof-meta').innerHTML = fmtAsOf(data.asOf);
+    document.getElementById('fc-mp-revenue-detail').innerHTML = buildMonthPaceDetailTableHtml(data.revenuePace, data.trailingWindowLabel);
   } else {
     revenueTiles.innerHTML = '';
     revenueTiles.classList.add('hidden');
     revenuePendingNote.classList.remove('hidden');
+    revenueDetailCard.classList.add('hidden');
   }
 
   renderCriticalActions(data.criticalActions || []);
 
   const detail = document.getElementById('fc-mp-detail');
-  detail.innerHTML = `
-    <table class="rtable">
-      <tbody>
-        <tr><td>${data.trailingWindowLabel}</td><td class="num">${fmtMoneyShort(data.priorActualsSum)}</td></tr>
-        <tr><td>${data.currentMonth.label} actual-to-date (${data.currentMonth.bizDaysElapsed} of ${data.currentMonth.totalBizDaysInMonth} business days)</td><td class="num">${fmtMoneyShort(data.currentMonth.actualsToDate)}</td></tr>
-        <tr><td>${data.currentMonth.label} blended forecast (+${data.currentMonth.bizDaysRemaining} business days remaining at pace)</td><td class="num cell-current">${fmtMoneyShort(data.currentMonth.blended)}</td></tr>
-        <tr class="rtable-total-row"><td>Total Year Forecast</td><td class="num">${fmtMoneyShort(data.totalYearForecast)}</td></tr>
-      </tbody>
-    </table>
-  `;
+  detail.innerHTML = buildMonthPaceDetailTableHtml(data, data.trailingWindowLabel);
 }
 
 // Critical Actions (2026-09-08): a short, rule-based list of concrete
@@ -4086,7 +4168,12 @@ function renderExecutiveSummary(data){
   renderExecSummaryTiles(data);
   renderExecSummaryTiles2(data);
   renderExecSummaryLob(data.lobBacklog || []);
-  renderExecSummaryBridge(data.revenueBridge);
+  // Revenue Bridge's chart/table/slider moved to Forecast > Revenue Bridge
+  // (2026-09-10, per Misty's direct request) — renderExecSummaryBridge no
+  // longer runs here. data.revenueBridge itself is still fetched server-side
+  // (getExecutiveSummary composes it for buildExecutiveNarrative's
+  // reconciliation sentence, kept per Misty's explicit call), it's just not
+  // rendered as a card on this page anymore.
   renderExecSummaryRegions(data.regionalDrivers);
   renderExecSummaryRevenueRegions(data.regionalDrivers);
 }
@@ -4324,9 +4411,35 @@ function renderExecSummaryTiles(data){
 // adjusting here either — the bar was only "off the chart" visually
 // because the dollar value itself was too large, not because of a
 // fixed axis max.
-function renderExecSummaryBridge(bridge){
-  const chart = document.getElementById('es-bridge-chart');
-  const recon = document.getElementById('es-bridge-recon');
+// Revenue Bridge (2026-09-10: moved to Forecast > Revenue Bridge from
+// Executive Summary, per Misty's direct request — ids renamed
+// es-bridge-* -> fc-rb-*, driven by forecastYear instead of esYear, same
+// otherwise). bridge.steps is the real step array from getRevenueBridge
+// (YTD Actuals, Inspections Run Rate, PA Backlog, DS Backlog, Weighted
+// Pipeline, Expected Revenue) — 'total' steps are drawn from $0, 'pos'
+// steps stack on the running total, exactly matching the approved bridge
+// mockup's chart logic. This renders whatever steps the backend returns
+// generically (no hardcoded count or index), which is what let the
+// 2026-09-06 removal of the Proposal Volume x Win Rate step (real
+// double-count with Weighted Pipeline — see worker changelog) land as a
+// backend-only change with zero frontend edits required. reconciliation
+// compares Expected Revenue to the stated Revenue Budget, a check beyond
+// the original spec.
+//
+// v2b (2026-09-06, worker_v2b.mjs): Weighted Pipeline's dollar value
+// dropped further after a live-data investigation found ~98-99% of
+// Negotiation/Review and Proposal/Price Quote deals carried the exact
+// same 75% probability_pct (a Salesforce stage default, not real
+// per-deal assessment) — those stage-default rows now use VDA's real
+// dollar-weighted historical win rate instead. See worker changelog for
+// the full investigation. barHeightPct is computed dynamically off
+// Math.max(...runningTotals, 1), so no hardcoded chart scale needed
+// adjusting here either — the bar was only "off the chart" visually
+// because the dollar value itself was too large, not because of a
+// fixed axis max.
+function renderForecastBridge(bridge){
+  const chart = document.getElementById('fc-rb-chart');
+  const recon = document.getElementById('fc-rb-recon');
   if (!bridge || !bridge.steps || !bridge.steps.length) {
     chart.innerHTML = '';
     recon.innerHTML = '<div class="legend-item" style="color:var(--text-faint)">Revenue Bridge is not available for this fiscal year yet.</div>';
@@ -4375,20 +4488,20 @@ function renderExecSummaryBridge(bridge){
     recon.innerHTML = '<div class="legend-item" style="color:var(--text-faint)">No Revenue Budget set for this fiscal year to reconcile against.</div>';
   }
 
-  renderExecSummaryBridgeSlider(bridge);
+  renderForecastBridgeSlider(bridge);
 }
 
-// Stage-default probability slider (2026-09-08): initializes from
-// bridge.pipelineDefaultProbability (the persisted setting, defaulting to
-// 40 server-side if nobody's ever set one) and bridge.detail's
-// pipelineStageDefaultOverride (row count/dollars affected, plus the
-// historical dollar-weighted win rate shown as reference only, never
-// applied automatically).
-function renderExecSummaryBridgeSlider(bridge){
-  const card = document.getElementById('es-bridge-slider-card');
-  const slider = document.getElementById('es-bridge-slider');
-  const valueEl = document.getElementById('es-bridge-slider-value');
-  const note = document.getElementById('es-bridge-slider-note');
+// Stage-default probability slider (2026-09-08, relocated with the bridge
+// 2026-09-10): initializes from bridge.pipelineDefaultProbability (the
+// persisted setting, defaulting to 40 server-side if nobody's ever set
+// one) and bridge.detail's pipelineStageDefaultOverride (row count/dollars
+// affected, plus the historical dollar-weighted win rate shown as
+// reference only, never applied automatically).
+function renderForecastBridgeSlider(bridge){
+  const card = document.getElementById('fc-rb-slider-card');
+  const slider = document.getElementById('fc-rb-slider');
+  const valueEl = document.getElementById('fc-rb-slider-value');
+  const note = document.getElementById('fc-rb-slider-note');
   const override = bridge.detail && bridge.detail.pipelineStageDefaultOverride;
   if (!bridge.pipelineDefaultProbability || !override || override.count === 0) {
     card.classList.add('hidden');
@@ -4404,36 +4517,34 @@ function renderExecSummaryBridgeSlider(bridge){
   note.innerHTML = `Applies to ${override.count} deal${override.count === 1 ? '' : 's'} (${fmtMoneyShort(override.totalFees)}) in Negotiation/Review or Proposal/Price Quote still carrying Salesforce's unassessed ${override.defaultProbability}% stage default.${refHtml}`;
 }
 
-function onEsBridgeSliderInput(value){
-  document.getElementById('es-bridge-slider-value').textContent = Number(value).toFixed(0) + '%';
+function onFcBridgeSliderInput(value){
+  document.getElementById('fc-rb-slider-value').textContent = Number(value).toFixed(0) + '%';
 }
 
 // Refetches and re-renders only the Revenue Bridge card (not the whole
-// Executive Summary) after the slider is released, so tiles, the LOB
-// section, and Regions Below Budget Pace don't flicker/reload along with
-// it. Revised 2026-09-08 in response to feedback that the slider felt
-// clunky -- the prior version called loadExecutiveSummary(esYear), which
-// re-fetched and re-rendered the entire page on every release.
-async function onEsBridgeSliderChange(value){
+// Forecast tab) after the slider is released, so the other three
+// subtabs' data doesn't flicker/reload along with it. Same fetch-on-
+// release pattern as before the move.
+async function onFcBridgeSliderChange(value){
   const pct = Number(value);
   if (!Number.isFinite(pct)) return;
-  const slider = document.getElementById('es-bridge-slider');
-  const note = document.getElementById('es-bridge-slider-note');
+  const slider = document.getElementById('fc-rb-slider');
+  const note = document.getElementById('fc-rb-slider-note');
   const priorNoteHtml = note.innerHTML;
   slider.disabled = true;
   note.textContent = 'Saving…';
   try {
     const res = await workerFetch('/api/regions/pipeline-default-probability', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ fiscalYear: esYear, probabilityPct: pct }),
+      body: JSON.stringify({ fiscalYear: forecastYear, probabilityPct: pct }),
     });
     const data = await res.json();
     if (!res.ok) { showToast(data.error || 'Could not update the probability setting.', true); note.innerHTML = priorNoteHtml; return; }
 
-    const bridgeRes = await workerFetch(`/api/regions/revenue-bridge?fiscalYear=${esYear}`);
+    const bridgeRes = await workerFetch(`/api/regions/revenue-bridge?fiscalYear=${forecastYear}`);
     const bridgeData = await bridgeRes.json();
     if (!bridgeRes.ok) { showToast(bridgeData.error || 'Saved, but could not refresh the Revenue Bridge.', true); note.innerHTML = priorNoteHtml; return; }
-    renderExecSummaryBridge(bridgeData);
+    renderForecastBridge(bridgeData);
   } catch(e){
     showToast('Could not reach the server. The slider was not saved.', true);
     note.innerHTML = priorNoteHtml;
