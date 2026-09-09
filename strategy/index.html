@@ -2610,6 +2610,31 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
           <div class="upload-status" id="upload-status-billed_fact"></div>
         </div>
       </div>
+
+      <!-- Billed Line Item Fact (2026-09-10): a second, complementary real
+           billing source, per Misty's direct correction — Details_1.xlsx
+           above (Power BI, history back to 2024) stays untouched. This is a
+           real Salesforce billing-line export, 2026-forward only, at
+           line-item grain with real per-employee attribution (~144,000
+           rows/year), the source the Regions leaderboard work needs. Same
+           HTML-table-as-.xls shape as Bookings/Backlog/Proposal Pipeline
+           (chunked upload), but replaces one fiscal year at a time like
+           Billed Fact above, not the whole table. -->
+      <div class="card upload-card">
+        <div class="card-head"><h3>Billed Line Item Fact (Billing Detail)</h3></div>
+        <div class="card-pad" style="padding-top:6px">
+          <div class="upload-hint">Real Salesforce billing-line detail, including who billed it, 2026 forward. Re-uploading for a fiscal year replaces that year's data entirely, other years are untouched. Real export columns: Billing Line Name, Total, Project, Project Task, Service Family, Service Name, Region, Parent Customer, Employee, Revenue Type, Period Year, Period Start Date.</div>
+          <div class="upload-input-row">
+            <label class="upload-field-label" for="upload-billed-line-item-year">Fiscal Year</label>
+            <select id="upload-billed-line-item-year" class="upload-year-select"></select>
+          </div>
+          <input type="file" id="upload-file-billed_line_item" accept=".xls,.xlsx,.html,.htm" class="upload-file-input" onchange="onBilledLineItemFileChosen(this)">
+          <label class="btn-secondary upload-choose-btn" for="upload-file-billed_line_item">Choose File</label>
+          <span class="upload-filename" id="upload-filename-billed_line_item">No file chosen</span>
+          <div class="upload-progress hidden" id="upload-progress-billed_line_item"><div class="upload-progress-bar" id="upload-progress-bar-billed_line_item"></div></div>
+          <div class="upload-status" id="upload-status-billed_line_item"></div>
+        </div>
+      </div>
     </div>
     </div>
 
@@ -3474,8 +3499,46 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       either pace object's breakdown row. Executive Summary is unaffected
       (it doesn't surface Sales' Total Year Forecast the way it does
       Revenue's).
+
+   v2p (2026-09-10): new upload type, Billed Line Item Fact, the first
+   half of Misty's Regions redesign request ("top 3 sales performers and
+   billers"). Real Salesforce billing-line export (Billing Line Name,
+   Total, Project, Project Task, Service Family, Service Name, Profit
+   Center: Region, Invoice: Parent Customer, Employee: Full Name, Product:
+   Revenue Type, Invoice: Period Year, Invoice: Period Start Date),
+   2026-forward, confirmed ~144,000 rows/year. Complementary to the
+   existing Billed Fact upload above (Details_1.xlsx, Power BI, history
+   back to 2024), which is untouched and stays the source for anything
+   before 2026. This is the real per-employee billing data PULSE never
+   had (§99's "Sales & Billing Leaderboard" idea flagged billed_fact has
+   no individual field at all); this new table does.
+
+   New table: billed_line_item_fact (see chat for the real CREATE TABLE +
+   index statements run in D1). Region resolves through the existing
+   region_raw_mappings table; Revenue Type maps through the existing
+   REVENUE_TYPE_TO_LOB lookup at query time, not pre-computed; Total
+   Currency dropped (USD-only, same as every other source); Invoice:
+   Period Start Date parsed into fiscal_year/month for real querying
+   (parseLineItemPeriodStartDate, worker_v2j.mjs). Chunked upload, not
+   single-request like Billed Fact (real row count is far past
+   MAX_ROWS_PER_REQUEST), but replace-per-fiscal-year, not whole-table
+   replace like Bookings/Backlog/Proposal Pipeline/Proposal Volume — its
+   own route pair (POST /api/uploads/billed-line-item/start, POST
+   /api/uploads/billed-line-item/:id/rows) and its own backend function
+   (saveBilledLineItemRows), deliberately kept off the shared
+   saveUploadRows path so year-scoped replace can never leak into the
+   four whole-table-replace types or vice versa. New "Billed Line Item
+   Fact (Billing Detail)" card on Data Updates, own fiscal year picker,
+   reuses parseSalesforceHtmlExport (confirmed same real HTML-table-as-
+   .xls export shape as Bookings/Backlog/Proposal Pipeline, not Billed
+   Fact's binary-.xlsx/SheetJS path).
+
+   Not yet built: the actual Top Sales Performers / Top Billers cards on
+   Regions, or the Regions redesign itself (removing the Backlog vs.
+   Prior Year and Target card, current-year framing). Confirmed with
+   Misty to sequence this ingestion first, Regions redesign next.
    ============================================================ */
-const APP_VERSION = 'v2o';
+const APP_VERSION = 'v2p';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -3672,6 +3735,7 @@ function showApp(){
   populateYearSelect('wiz-year-select');
   populateYearSelect('forecast-year-select');
   populateYearSelect('upload-billed-fact-year', { yearsBack: 2, yearsForward: 1 });
+  populateYearSelect('upload-billed-line-item-year', { yearsBack: 2, yearsForward: 1 });
 
   loadRegions().then(() => {
     loadBudgetYear('revenue', CURRENT_YEAR);
@@ -7068,7 +7132,7 @@ async function onResendPin(userId){
    ============================================================ */
 
 const UPLOAD_CHUNK_SIZE = 500; // rows per request to /api/uploads/:id/rows
-const UPLOAD_TYPE_LABELS = { bookings: 'Bookings', backlog: 'Backlog', proposal_pipeline: 'Proposal Pipeline', proposal_volume: 'Proposal Volume', billed_fact: 'Billed Fact' };
+const UPLOAD_TYPE_LABELS = { bookings: 'Bookings', backlog: 'Backlog', proposal_pipeline: 'Proposal Pipeline', proposal_volume: 'Proposal Volume', billed_fact: 'Billed Fact', billed_line_item: 'Billed Line Item' };
 
 // Parses a Salesforce "HTML table saved as .xls" export into an array of
 // row objects keyed by the real header text (verbatim, including spaces,
@@ -7155,6 +7219,75 @@ async function onBilledFactFileChosen(input){
   } catch(e){
     setUploadStatus('billed_fact', 'Could not read or upload this file: ' + (e.message || 'unknown error'), 'error');
     setUploadProgress('billed_fact', null);
+  }
+}
+
+// Billed Line Item Fact (2026-09-10): a second, complementary real
+// billing source, per Misty's direct correction — Details_1.xlsx (the
+// existing Billed Fact upload above, Power BI, real history back to
+// 2024) stays exactly as-is. This is a genuinely different export: a
+// real Salesforce billing-line pull, 2026-forward only, at line-item
+// grain with real per-employee attribution, confirmed ~144,000 rows for
+// one fiscal year. Same real "HTML table saved as .xls" shape as
+// Bookings/Backlog/Proposal Pipeline (confirmed directly by Misty), so
+// this reuses parseSalesforceHtmlExport, not Billed Fact's SheetJS path.
+// Chunked like onUploadFileChosen above (real row count is far past one
+// request), but replace-per-fiscal-year like Billed Fact, not whole-
+// table replace like the four append-turned-replace types — so this is
+// its own handler against its own /start + /:id/rows routes, fiscalYear
+// sent on every chunk since upload_batches has no fiscal_year column to
+// remember it between requests.
+async function onBilledLineItemFileChosen(input){
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const fiscalYear = parseInt(document.getElementById('upload-billed-line-item-year').value, 10);
+  document.getElementById('upload-filename-billed_line_item').textContent = file.name;
+  setUploadStatus('billed_line_item', '', null);
+  setUploadProgress('billed_line_item', 0);
+
+  try {
+    setUploadStatus('billed_line_item', 'Reading file...', 'working');
+    const text = await file.text();
+    const rows = parseSalesforceHtmlExport(text);
+    if (rows.length === 0) { setUploadStatus('billed_line_item', 'No data rows found in this file.', 'error'); setUploadProgress('billed_line_item', null); return; }
+
+    setUploadStatus('billed_line_item', `Parsed ${rows.length.toLocaleString()} rows. This will REPLACE all FY${fiscalYear} Billed Line Item data. Starting upload...`, 'working');
+
+    const startRes = await workerFetch('/api/uploads/billed-line-item/start', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sourceFilename: file.name }),
+    });
+    const startData = await startRes.json();
+    if (!startRes.ok) { setUploadStatus('billed_line_item', startData.error || 'Could not start upload.', 'error'); setUploadProgress('billed_line_item', null); return; }
+    const uploadBatchId = startData.uploadBatchId;
+
+    let sent = 0;
+    const unmappedRegions = new Set();
+    for (let i = 0; i < rows.length; i += UPLOAD_CHUNK_SIZE){
+      const chunk = rows.slice(i, i + UPLOAD_CHUNK_SIZE);
+      const res = await workerFetch(`/api/uploads/billed-line-item/${uploadBatchId}/rows`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fiscalYear, rows: chunk }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setUploadStatus('billed_line_item', data.error || `Upload failed after ${sent.toLocaleString()} of ${rows.length.toLocaleString()} rows.`, 'error'); setUploadProgress('billed_line_item', null); return; }
+      sent += data.inserted || chunk.length;
+      (data.unmappedRegions || []).forEach(r => unmappedRegions.add(r));
+      setUploadProgress('billed_line_item', (sent / rows.length) * 100);
+      setUploadStatus('billed_line_item', `Uploaded ${sent.toLocaleString()} of ${rows.length.toLocaleString()} rows...`, 'working');
+    }
+
+    setUploadProgress('billed_line_item', null);
+    if (unmappedRegions.size > 0){
+      setUploadStatus('billed_line_item', `Done: ${sent.toLocaleString()} rows replaced FY${fiscalYear}. Some rows had an unrecognized region and were saved without one: ${Array.from(unmappedRegions).join(', ')}. Contact your admin to add these to the region mapping.`, 'error');
+    } else {
+      setUploadStatus('billed_line_item', `Done: ${sent.toLocaleString()} rows replaced FY${fiscalYear}'s Billed Line Item data.`, 'ok');
+    }
+    input.value = '';
+    loadUploadHistory();
+  } catch(e){
+    setUploadStatus('billed_line_item', 'Could not read or upload this file: ' + (e.message || 'unknown error'), 'error');
+    setUploadProgress('billed_line_item', null);
   }
 }
 
