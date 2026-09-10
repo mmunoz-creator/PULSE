@@ -413,6 +413,10 @@ h1,h2,h3{text-wrap:balance; margin:0}
 
 /* Explorer (2026-09-09): dataset switcher buttons and filter chips. */
 .exp-dataset-btn.active{background:var(--accent); color:#fff; border-color:var(--accent)}
+.gt-mode-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px}
+.gt-mode-label{font-size:12px; font-weight:700; color:var(--text-muted); margin-right:2px}
+.gt-mode-btn.active{background:var(--blue); color:#fff; border-color:var(--blue)}
+.gt-mode-explain{font-size:11.5px; color:var(--text-faint); margin-left:4px}
 .exp-filter-chip{display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent-ink); font-size:11.5px; font-weight:700}
 .exp-filter-chip button{background:none; border:none; color:var(--accent-ink); font-weight:800; cursor:pointer; padding:0; font-size:12px; line-height:1}
 
@@ -2251,11 +2255,29 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
              breakdown apportioned by each one's own historical trend so
              the company-wide total still nets out to the flat target. -->
         <div class="card" style="border-left:4px solid var(--blue)">
-          <div class="card-head"><h3>Growth Target</h3><span class="meta">Set once, applies company-wide</span></div>
+          <div class="card-head"><h3>Growth Target</h3><span class="meta" id="gt-mode-meta">Set once, applies company-wide</span></div>
           <div class="card-pad">
+
+            <!-- Target Year toggle (2026-09-10), per Misty's direct request
+                 for a picker to confirm "is this current year growth or is
+                 this next year growth." Dedicated to this card only, does
+                 not touch the section-wide Year picker above. This Year =
+                 target is the selected fiscal year, base is the year
+                 before it. Next Year = target is the year after the
+                 selected fiscal year, base is the selected fiscal year's
+                 own actual (this was this card's original, only behavior,
+                 kept as the default so already-saved targets keep their
+                 real meaning). -->
+            <div class="gt-mode-row">
+              <span class="gt-mode-label">Target Year</span>
+              <button type="button" class="btn-secondary gt-mode-btn" data-mode="this_year" onclick="onGrowthTargetModeChange('this_year')" style="width:auto">This Year</button>
+              <button type="button" class="btn-secondary gt-mode-btn active" data-mode="next_year" onclick="onGrowthTargetModeChange('next_year')" style="width:auto">Next Year</button>
+              <span class="gt-mode-explain" id="gt-mode-explain"></span>
+            </div>
+
             <div class="wiz-group-label blue">Revenue Growth Target</div>
             <div class="wiz-flat-row">
-              <label>Flat company-wide Revenue growth</label>
+              <label id="gt-slider-label">Flat Revenue growth</label>
               <input type="range" id="gt-target-slider" min="-10" max="40" value="0" oninput="onGrowthTargetSliderInput(this.value)" onchange="onGrowthTargetSliderCommit(this.value)">
               <div class="wiz-val" id="gt-target-val">0%</div>
             </div>
@@ -2263,6 +2285,9 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
             <div id="gt-pending" class="legend-note">Loading&hellip;</div>
             <div id="gt-wrap" class="hidden">
               <div class="gs-tile-row" id="gt-summary-tiles"></div>
+
+              <div class="wiz-group-label blue" style="margin-top:18px">Target vs. Reality</div>
+              <div class="gs-tile-row" id="gt-reality-tiles" style="grid-template-columns:repeat(2,1fr)"></div>
 
               <div class="wiz-group-label purple" style="margin-top:18px">Required Sales Growth</div>
               <div class="wiz-panel purple">
@@ -3998,8 +4023,101 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    real billed_fact) is now "Revenue Trend (Billed Revenue)" — both
    cards' meta captions and the jumpnav link updated to match. Neither
    card's underlying data or computation changed, labeling only.
+
+   v2z (2026-09-10): Two real bugs Misty caught, both fixed.
+
+   1. Character-encoding bug: a real employee name with an accented
+   character ("Mike Muñoz") was showing up corrupted in the UI. Root
+   cause: every text/HTML upload (Bookings, Backlog, Proposal Pipeline,
+   Proposal Volume, Billed Line Item Fact when uploaded as .html/.xls)
+   read the file via File.text()/Blob.text(), which per spec ALWAYS
+   decodes as UTF-8 regardless of the file's real encoding — Salesforce/
+   Excel HTML-table exports are very commonly saved as Windows-1252, so
+   every accented character was corrupted at parse time, before the name
+   ever reached the database. This meant already-uploaded names with
+   accents are likely already stored wrong in D1, not just displayed
+   wrong. New shared helper readFileWithDetectedEncoding(file): reads
+   raw bytes, sniffs the file's own declared <meta charset> (checked via
+   a safe ASCII/Latin-1 decode of just the first 4KB, since the
+   declaration itself is always plain ASCII), decodes the FULL buffer
+   with that real charset, falls back to windows-1252 (not UTF-8) when
+   no charset is declared. Replaces file.text() at both call sites
+   (onBilledLineItemFileChosen, onUploadFileChosen). Fixes future
+   uploads; any already-corrupted name needs that file re-uploaded to
+   fix the stored data, since already-corrupted bytes can't be
+   un-corrupted without the original file.
+
+   2. Revenue duplication bug (worker_v2s.mjs): Misty caught real,
+   impossible numbers on the Company-Wide Revenue Trend card (2024
+   showing $241.26M, 2025 showing $263.09M, both far past real company
+   scale — company has never billed $240M in a year, FY2026 growth
+   budget is ~$137M). Root cause: replaceBilledFactForYear only ever
+   deleted billed_fact rows WHERE fiscal_year = the ONE year selected in
+   the upload picker, but inserted EVERY row in the uploaded file
+   regardless of that row's own year — correct only if the file were
+   pre-filtered to one year, the original 2026-09-04 design assumption.
+   Confirmed directly with Misty: the real Details_1.xlsx file has
+   always contained all 3 real years (2024-2026) in one export, and she
+   uploads that same full file every time, never pre-filtered. So every
+   re-upload selecting "2026" correctly replaced 2026 but ALSO
+   re-inserted a full duplicate copy of every 2024/2025 row on top of
+   what was already there, compounding on each subsequent upload. Fixed
+   by deleting every DISTINCT fiscal_year actually found in the parsed
+   rows, not just the picker's value — correct whether the file covers
+   one year or several, and idempotent regardless of re-upload count.
+   Same root-cause bug found and fixed in saveBilledLineItemRows too
+   (billed_line_item_fact is documented 2026-forward-only today, so
+   lower risk right now, but nothing enforced that and a future
+   multi-year export would have hit the identical bug) — that fix is
+   chunk-safe (deletes WHERE fiscal_year = (year in this chunk) AND
+   upload_batch_id != (this batch), correct regardless of chunk order,
+   since it can never delete rows this same upload already inserted in
+   an earlier chunk). Frontend copy updated to name every year actually
+   replaced (new yearsReplaced field in the upload response) instead of
+   only ever naming the picker's single selected year. One clean
+   re-upload of Details_1.xlsx, now that the fix is live, replaces 2024/
+   2025/2026 all at once with correct, non-duplicated totals — flagged
+   directly to Misty as the needed next step.
+   ============================================================
+
+   v2aa (2026-09-10): Growth Target card — Target Year picker plus two new
+   "Target vs. Reality" comparisons, all per Misty's direct requests this
+   round.
+
+   1. Target Year toggle (This Year / Next Year), dedicated to this card
+      only. The card originally always used the selected fiscal year's own
+      (partial-year) actual as the growth base while labeling the result
+      as if it were also that same year's target — structurally already
+      "next year" math under a misleading "This Year" label. Misty: "I
+      want a year picker to confirm is this current year growth or is
+      this next year growth. Originally I was thinking next year growth."
+      Default is Next Year (target = selected year + 1, base = selected
+      year's actual) so already-saved targets and everything already seen
+      on this card keep their real meaning; This Year (target = selected
+      year, base = selected year - 1) is the new explicit alternative.
+      Every label on the card now names both the real target year and the
+      real base year (e.g. "Revenue Target, FY2027" / "vs. $137.0M
+      FY2026"), so which comparison is which is never ambiguous again.
+
+   2. "Target vs. Reality" — two new tiles comparing the flat Revenue
+      Target against real, already-verified figures instead of only
+      against last year: Target vs. YTD Actual + Backlog, and Target vs.
+      Revenue Budget. Both reuse the exact same numbers as Executive
+      Summary's own Company Backlog tile (new shared worker helper,
+      getCompanyBacklogCurrentYear) rather than a second parallel
+      derivation. In Next Year mode the target year hasn't started, so
+      there's no real YTD Actual yet — confirmed with Misty ("Just vs.
+      Backlog") — that tile falls back to Target vs. Backlog Already
+      Scheduled for the target year instead of a fabricated $0 YTD term.
+
+   3. Required Sales gained a third comparison, Required Sales vs. Sales
+      Budget (same target year as the Revenue Target, confirmed with
+      Misty), plus a small reference-only line showing Sales YTD Actual
+      for the base year — her own framing: "I need a small note on Sales
+      YTD so I can gauge if the growth is realistic... I care how much
+      topline is needed to support the bottom line growth."
    ============================================================ */
-const APP_VERSION = 'v2y';
+const APP_VERSION = 'v2aa';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -7861,6 +7979,48 @@ async function onResendPin(userId){
 const UPLOAD_CHUNK_SIZE = 500; // rows per request to /api/uploads/:id/rows
 const UPLOAD_TYPE_LABELS = { bookings: 'Bookings', backlog: 'Backlog', proposal_pipeline: 'Proposal Pipeline', proposal_volume: 'Proposal Volume', billed_fact: 'Billed Fact', billed_line_item: 'Billed Line Item' };
 
+// Reads a File as text with the RIGHT character encoding, instead of
+// File.text()/Blob.text(), which per spec always decodes as UTF-8
+// regardless of the file's actual encoding (2026-09-10 fix: a real name
+// with an accented character, e.g. "Muñoz" in a Billed Line Item
+// Employee: Full Name column, was showing up corrupted in the UI —
+// traced to this exact bug. Salesforce/Excel HTML-table exports are
+// very commonly saved as Windows-1252, not UTF-8, so file.text() was
+// silently mangling every non-ASCII byte before parseSalesforceHtmlExport
+// ever saw the string, meaning the corruption was baked into the parsed
+// row data and then into whatever got uploaded to D1, not just a display
+// issue). This reads the raw bytes, looks for a declared charset in the
+// file's own <meta charset> or <meta http-equiv="Content-Type" ...
+// charset=...> tag (checked against a safe ASCII-only decode of the
+// first portion of the file, since the declaration itself is always
+// plain ASCII regardless of the body's encoding), and decodes the FULL
+// buffer with that real declared charset. Falls back to windows-1252
+// (not UTF-8) when no charset is declared, since that's the realistic
+// default for these exports, confirmed against the real corruption
+// pattern seen — a silent re-fall-back to UTF-8 here would reproduce
+// the exact bug this function exists to fix.
+async function readFileWithDetectedEncoding(file){
+  const buffer = await file.arrayBuffer();
+  // Sniff only the first 4KB (charset declarations are always near the
+  // top of an HTML document) as plain ASCII/Latin-1, which is always a
+  // safe, lossless way to read the declaration itself even when the rest
+  // of the document is in a different encoding.
+  const sniffBytes = buffer.slice(0, Math.min(4096, buffer.byteLength));
+  const sniffText = new TextDecoder('iso-8859-1').decode(sniffBytes);
+  let charset = null;
+  const metaCharsetMatch = /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i.exec(sniffText);
+  if (metaCharsetMatch) charset = metaCharsetMatch[1].trim().toLowerCase();
+  if (!charset) charset = 'windows-1252';
+  try {
+    return new TextDecoder(charset).decode(buffer);
+  } catch(e) {
+    // An unrecognized/unsupported charset label falls back to the same
+    // windows-1252 default rather than throwing, so a weird declared
+    // value never blocks the upload outright.
+    return new TextDecoder('windows-1252').decode(buffer);
+  }
+}
+
 // Parses a Salesforce "HTML table saved as .xls" export into an array of
 // row objects keyed by the real header text (verbatim, including spaces,
 // colons, parens — e.g. "Probability (%)", "Proposal Issued By:") so the
@@ -7925,7 +8085,13 @@ async function onBilledFactFileChosen(input){
     const buffer = await file.arrayBuffer();
     const rows = parseBilledFactXlsx(buffer);
 
-    setUploadStatus('billed_fact', `Parsed ${rows.length.toLocaleString()} rows. This will REPLACE all FY${fiscalYear} Billed Fact data. Uploading...`, 'working');
+    // Copy no longer names only the picker's fiscalYear (2026-09-10 fix):
+    // the real source file has always contained multiple real years
+    // (2024-2026) in one export, and the Worker now replaces every year
+    // actually found in the file, not just this one — see
+    // replaceBilledFactForYear's fix comment for the full story (this
+    // was silently duplicating 2024/2025 rows on every FY2026 re-upload).
+    setUploadStatus('billed_fact', `Parsed ${rows.length.toLocaleString()} rows. This will REPLACE Billed Fact data for every fiscal year found in this file. Uploading...`, 'working');
     setUploadProgress('billed_fact', 30);
 
     const res = await workerFetch('/api/uploads/billed-fact', {
@@ -7936,10 +8102,13 @@ async function onBilledFactFileChosen(input){
     setUploadProgress('billed_fact', null);
     if (!res.ok) { setUploadStatus('billed_fact', data.error || 'Upload failed.', 'error'); return; }
 
+    const yearsLabel = (data.yearsReplaced && data.yearsReplaced.length)
+      ? `FY${data.yearsReplaced.join(', FY')}`
+      : `FY${fiscalYear}`;
     if ((data.unmappedRegions || []).length > 0){
-      setUploadStatus('billed_fact', `Done: ${data.rowsInserted.toLocaleString()} rows replaced FY${fiscalYear}. Some rows had an unrecognized region and were saved without one: ${data.unmappedRegions.join(', ')}. Map them on Data Updates > Unmapped Regions.`, 'error');
+      setUploadStatus('billed_fact', `Done: ${data.rowsInserted.toLocaleString()} rows replaced ${yearsLabel}. Some rows had an unrecognized region and were saved without one: ${data.unmappedRegions.join(', ')}. Map them on Data Updates > Unmapped Regions.`, 'error');
     } else {
-      setUploadStatus('billed_fact', `Done: ${data.rowsInserted.toLocaleString()} rows replaced FY${fiscalYear}'s Billed Fact data.`, 'ok');
+      setUploadStatus('billed_fact', `Done: ${data.rowsInserted.toLocaleString()} rows replaced ${yearsLabel}'s Billed Fact data.`, 'ok');
     }
     input.value = '';
     loadUploadHistory();
@@ -7974,7 +8143,7 @@ async function onBilledLineItemFileChosen(input){
 
   try {
     setUploadStatus('billed_line_item', 'Reading file...', 'working');
-    const text = await file.text();
+    const text = await readFileWithDetectedEncoding(file);
     const rows = parseSalesforceHtmlExport(text);
     if (rows.length === 0) { setUploadStatus('billed_line_item', 'No data rows found in this file.', 'error'); setUploadProgress('billed_line_item', null); return; }
 
@@ -8172,7 +8341,7 @@ async function onUploadFileChosen(uploadType, input){
 
   try {
     setUploadStatus(uploadType, 'Reading file...', 'working');
-    const text = await file.text();
+    const text = await readFileWithDetectedEncoding(file);
     const rows = parseSalesforceHtmlExport(text);
     if (rows.length === 0) { setUploadStatus(uploadType, 'No data rows found in this file.', 'error'); setUploadProgress(uploadType, null); return; }
 
@@ -9137,13 +9306,21 @@ function renderGrowthStrategyCompanyWide(data){
    server and reloads the plan) so dragging feels responsive without
    firing a network request on every pixel of movement.
    ============================================================ */
-let gtState = { plan: null, sliderDirty: false };
+// mode ('this_year' | 'next_year', default 'next_year') added 2026-09-10,
+// per Misty's direct request for a picker to confirm "is this current
+// year growth or is this next year growth. Originally I was thinking next
+// year growth." Kept in gtState, not gsState — dedicated to this card
+// only, confirmed with Misty, so it never touches the section-wide Year
+// picker or any other Growth Strategy tab. Default 'next_year' preserves
+// the card's original (always next-year-off-current-actual) math so any
+// already-saved growth_pct keeps its real meaning.
+let gtState = { plan: null, sliderDirty: false, mode: 'next_year' };
 
 async function loadGrowthTargetPlan(){
   document.getElementById('gt-pending').classList.remove('hidden');
   document.getElementById('gt-wrap').classList.add('hidden');
   try {
-    const res = await workerFetch(`/api/growth-strategy/target-plan?fiscalYear=${gsState.fiscalYear}`);
+    const res = await workerFetch(`/api/growth-strategy/target-plan?fiscalYear=${gsState.fiscalYear}&mode=${gtState.mode}`);
     const data = await res.json();
     if (!res.ok) { showToast(data.error || 'Could not load the growth target.', true); return; }
     gtState.plan = data;
@@ -9153,6 +9330,13 @@ async function loadGrowthTargetPlan(){
   } catch(e) {
     showToast('Could not reach the server.', true);
   }
+}
+
+function onGrowthTargetModeChange(mode){
+  if (mode === gtState.mode) return;
+  gtState.mode = mode;
+  document.querySelectorAll('.gt-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  loadGrowthTargetPlan();
 }
 
 function onGrowthTargetSliderInput(value){
@@ -9165,7 +9349,7 @@ async function onGrowthTargetSliderCommit(value){
   try {
     const res = await workerFetch('/api/growth-strategy/target-plan', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ fiscalYear: gsState.fiscalYear, growthPct }),
+      body: JSON.stringify({ fiscalYear: gsState.fiscalYear, mode: gtState.mode, growthPct }),
     });
     const data = await res.json();
     if (!res.ok) { showToast(data.error || 'Could not save the growth target.', true); return; }
@@ -9175,22 +9359,47 @@ async function onGrowthTargetSliderCommit(value){
   }
 }
 
+// Gap coloring shared by the two "Target vs. Reality" tiles and the
+// Required Sales vs. Sales Budget line: positive gap = target still needs
+// more than what's already on track/booked/budgeted (amber/red depending
+// on size), zero-or-negative = target already covered (green). Thresholds
+// are simple and mechanical, matching this app's existing good/warn/crit
+// convention elsewhere (no invented precision beyond what's useful to
+// scan at a glance).
+function gtGapClass(gapPct){
+  if (gapPct === null) return '';
+  if (gapPct <= 0) return 'good';
+  if (gapPct <= 15) return 'warn';
+  return 'crit';
+}
+function gtGapWord(gapPct){
+  if (gapPct === null) return '';
+  return gapPct <= 0 ? 'ahead of' : 'more needed than';
+}
+
 function renderGrowthTargetPlan(data){
   const slider = document.getElementById('gt-target-slider');
   slider.value = data.targetPct;
   document.getElementById('gt-target-val').textContent = `${data.targetPct >= 0 ? '+' : ''}${data.targetPct}%`;
 
+  // ---- Mode-aware labels: which year is the target, which is the base ----
+  document.getElementById('gt-slider-label').textContent = `Flat Revenue growth, FY${data.baseYear} → FY${data.targetYear}`;
+  document.getElementById('gt-mode-meta').textContent = `Target: FY${data.targetYear} · vs. FY${data.baseYear} actual`;
+  document.getElementById('gt-mode-explain').textContent = data.mode === 'this_year'
+    ? `Growing FY${data.targetYear} over last year's (FY${data.baseYear}) actual.`
+    : `Growing FY${data.targetYear} over this year's (FY${data.baseYear}) actual.`;
+
   // ---- Summary tiles: Revenue target (input) and required Sales ----
   document.getElementById('gt-summary-tiles').innerHTML = `
     <div class="gs-tile">
-      <div class="gs-tile-label">Revenue Target, FY${data.fiscalYear}</div>
+      <div class="gs-tile-label">Revenue Target, FY${data.targetYear}</div>
       <div class="gs-tile-value">${data.revenueAvailable ? fmtMoneyShort(data.revenueTargetAmount) : '&mdash;'}</div>
-      <div class="gs-tile-sub">${data.revenueAvailable ? `vs. ${fmtMoneyShort(data.revenueCurrent)} this year (${data.targetPct >= 0 ? '+' : ''}${data.targetPct}%)` : 'Upload Billed Fact to populate'}</div>
+      <div class="gs-tile-sub">${data.revenueAvailable ? `vs. ${fmtMoneyShort(data.revenueCurrent)} FY${data.baseYear} (${data.targetPct >= 0 ? '+' : ''}${data.targetPct}%)` : 'Upload Billed Fact to populate'}</div>
     </div>
     <div class="gs-tile">
-      <div class="gs-tile-label">Required Sales, FY${data.fiscalYear}</div>
+      <div class="gs-tile-label">Required Sales, FY${data.targetYear}</div>
       <div class="gs-tile-value">${data.requiredSalesAmount !== null ? fmtMoneyShort(data.requiredSalesAmount) : '&mdash;'}</div>
-      <div class="gs-tile-sub">${data.requiredSalesGrowthPct !== null ? `${data.requiredSalesGrowthPct >= 0 ? '+' : ''}${data.requiredSalesGrowthPct.toFixed(1)}% vs. this year's Sales` : 'Needs Sales and Revenue history'}</div>
+      <div class="gs-tile-sub">${data.requiredSalesGrowthPct !== null ? `${data.requiredSalesGrowthPct >= 0 ? '+' : ''}${data.requiredSalesGrowthPct.toFixed(1)}% vs. FY${data.baseYear} Sales` : 'Needs Sales and Revenue history'}</div>
     </div>
     <div class="gs-tile">
       <div class="gs-tile-label">Sales-to-Revenue Ratio</div>
@@ -9198,10 +9407,40 @@ function renderGrowthTargetPlan(data){
       <div class="gs-tile-sub">3-yr average, real bookings &divide; real billed revenue</div>
     </div>
     <div class="gs-tile">
-      <div class="gs-tile-label">Sales, FY${data.fiscalYear} (Actual)</div>
+      <div class="gs-tile-label">Sales, FY${data.baseYear} (Actual)</div>
       <div class="gs-tile-value">${data.salesAvailable ? fmtMoneyShort(data.salesCurrent) : '&mdash;'}</div>
-      <div class="gs-tile-sub">From bookings_fact, this fiscal year</div>
+      <div class="gs-tile-sub">From bookings_fact, FY${data.baseYear}</div>
     </div>`;
+
+  // ---- Target vs. Reality: Revenue Target vs. YTD Actual + Backlog (or
+  // Backlog only in next_year mode, since the target year hasn't started
+  // yet), and vs. Revenue Budget. See getGrowthTargetPlan's own comment
+  // block in the worker for the full mode-by-mode methodology. ----
+  const realityEl = document.getElementById('gt-reality-tiles');
+  if (!data.revenueAvailable) {
+    realityEl.innerHTML = '<div class="legend-note">Upload Billed Fact to compare the target against real YTD, Backlog and Budget figures.</div>';
+  } else {
+    const ytd = data.vsYtdPlusBacklog;
+    const ytdLabel = ytd && ytd.basis === 'ytd_plus_backlog' ? `Target vs. YTD Actual + Backlog` : `Target vs. Backlog Scheduled, FY${data.targetYear}`;
+    const ytdSub = ytd && ytd.basis === 'ytd_plus_backlog'
+      ? `${fmtMoneyShort(ytd.revenueYtdActual)} billed YTD + ${fmtMoneyShort(ytd.backlogThisYear)} backlog`
+      : (ytd ? `FY${data.targetYear} hasn't started — real backlog already booked with an end date in FY${data.targetYear}` : '');
+    const ytdGapCls = ytd ? gtGapClass(ytd.gapPct) : '';
+    const revBudget = data.vsRevenueBudget;
+
+    realityEl.innerHTML = `
+      <div class="gs-tile">
+        <div class="gs-tile-label">${ytdLabel}</div>
+        <div class="gs-tile-value">${ytd ? `${fmtMoneyShort(data.revenueTargetAmount)} vs. ${fmtMoneyShort(ytd.amount)}` : '&mdash;'}</div>
+        <div class="gs-tile-sub ${ytdGapCls}">${ytd ? (ytd.gapToTarget > 0 ? `${fmtMoneyShort(ytd.gapToTarget)} more needed beyond this` : `${fmtMoneyShort(Math.abs(ytd.gapToTarget))} already ${gtGapWord(ytd.gapPct)} target`) : 'Not enough data yet'}</div>
+        <div class="gs-tile-sub" style="margin-top:4px">${ytdSub}</div>
+      </div>
+      <div class="gs-tile">
+        <div class="gs-tile-label">Target vs. Revenue Budget, FY${data.targetYear}</div>
+        <div class="gs-tile-value">${revBudget ? `${fmtMoneyShort(data.revenueTargetAmount)} vs. ${fmtMoneyShort(revBudget.amount)}` : '&mdash;'}</div>
+        <div class="gs-tile-sub ${revBudget ? gtGapClass(revBudget.gapPct) : ''}">${revBudget ? (revBudget.gapToTarget > 0 ? `${fmtMoneyShort(revBudget.gapToTarget)} more aggressive than budget` : `${fmtMoneyShort(Math.abs(revBudget.gapToTarget))} below budget`) : `No Revenue Budget set for FY${data.targetYear} yet`}</div>
+      </div>`;
+  }
 
   // ---- Required Sales detail ----
   const salesUnavailEl = document.getElementById('gt-sales-unavailable');
@@ -9211,11 +9450,14 @@ function renderGrowthTargetPlan(data){
     salesDetailEl.innerHTML = '';
   } else {
     salesUnavailEl.classList.add('hidden');
+    const vsb = data.vsSalesBudget;
     salesDetailEl.innerHTML = `
-      <div class="gs-mini-row"><span class="n">Revenue target, FY${data.fiscalYear}</span><span class="v">${fmtMoneyShort(data.revenueTargetAmount)}</span></div>
+      <div class="gs-mini-row"><span class="n">Revenue target, FY${data.targetYear}</span><span class="v">${fmtMoneyShort(data.revenueTargetAmount)}</span></div>
       <div class="gs-mini-row"><span class="n">&times; 3-yr Sales-to-Revenue ratio</span><span class="v">${data.salesToRevenueRatio.toFixed(2)}&times;</span></div>
       <div class="gs-mini-row"><span class="n"><b>Required Sales to fund that Revenue</b></span><span class="v"><b>${fmtMoneyShort(data.requiredSalesAmount)}</b></span></div>
-      <div class="gs-mini-row" style="margin-top:6px; padding-top:6px; border-top:1px solid var(--border)"><span class="n">vs. this year's actual Sales (${fmtMoneyShort(data.salesCurrent)})</span><span class="v">${data.requiredSalesGrowthPct !== null ? `${data.requiredSalesGrowthPct >= 0 ? '+' : ''}${data.requiredSalesGrowthPct.toFixed(1)}%` : '&mdash;'}</span></div>`;
+      <div class="gs-mini-row" style="margin-top:6px; padding-top:6px; border-top:1px solid var(--border)"><span class="n">vs. FY${data.baseYear} actual Sales (${fmtMoneyShort(data.salesCurrent)})</span><span class="v">${data.requiredSalesGrowthPct !== null ? `${data.requiredSalesGrowthPct >= 0 ? '+' : ''}${data.requiredSalesGrowthPct.toFixed(1)}%` : '&mdash;'}</span></div>
+      <div class="gs-mini-row"><span class="n">Required Sales vs. Sales Budget, FY${data.targetYear}</span><span class="v ${vsb ? gtGapClass(vsb.gapPct) : ''}">${vsb ? `${fmtMoneyShort(vsb.amount)} budgeted (${vsb.gapToTarget > 0 ? '+' : ''}${fmtMoneyShort(vsb.gapToTarget)} vs. required)` : `No Sales Budget set for FY${data.targetYear} yet`}</span></div>
+      <div class="gs-mini-row" style="opacity:.75"><span class="n" style="font-weight:600; font-size:11.5px">Sales YTD, FY${data.baseYear} (Actual) &mdash; for reference</span><span class="v" style="font-weight:700; font-size:11.5px">${data.salesAvailable ? fmtMoneyShort(data.salesCurrent) : '&mdash;'}</span></div>`;
   }
 
   // ---- By-LOB tiles ----
