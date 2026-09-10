@@ -4105,19 +4105,43 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       Revenue Budget. Both reuse the exact same numbers as Executive
       Summary's own Company Backlog tile (new shared worker helper,
       getCompanyBacklogCurrentYear) rather than a second parallel
-      derivation. In Next Year mode the target year hasn't started, so
-      there's no real YTD Actual yet — confirmed with Misty ("Just vs.
-      Backlog") — that tile falls back to Target vs. Backlog Already
-      Scheduled for the target year instead of a fabricated $0 YTD term.
+      derivation. (First shipped checking the TARGET year's Budget/
+      Backlog — corrected same day in v3a below, see that entry.)
 
    3. Required Sales gained a third comparison, Required Sales vs. Sales
-      Budget (same target year as the Revenue Target, confirmed with
-      Misty), plus a small reference-only line showing Sales YTD Actual
+      Budget, plus a small reference-only line showing Sales YTD Actual
       for the base year — her own framing: "I need a small note on Sales
       YTD so I can gauge if the growth is realistic... I care how much
       topline is needed to support the bottom line growth."
+   ============================================================
+
+   v3a (2026-09-10): two fixes/additions, same day as v2aa above.
+
+   1. Target vs. Reality year fix — Misty caught this immediately after
+      seeing v2aa live: "If the toggle is next year, everything should be
+      based on 2026." The three reality-check comparisons (vs. YTD Actual
+      + Backlog, vs. Revenue Budget, Required Sales vs. Sales Budget)
+      originally checked the TARGET year's Budget/Backlog, so Next Year
+      mode was checking FY2027 — a year with no budget entered yet, since
+      we're still in FY2026. Real YTD actuals/Backlog/Budget only exist
+      for the year that's actually happening right now. Fixed: all three
+      now always check selectedFiscalYear (the section's own Year
+      picker), in both modes — only the two headline figures (Revenue
+      Target, Required Sales) are actually FOR the target year; everything
+      they're compared against is real, current, selectedFiscalYear data.
+      This also simplified the worker: the separate "Backlog only, target
+      year hasn't started" branch for Next Year mode is gone entirely,
+      since selectedFiscalYear always has real YTD by definition.
+
+   2. Book-to-Bill Ratio, YTD (Executive Summary) — per Misty's direct
+      request: "for book to bill ratio can you give me a YTD percentage
+      as well... that's on exec summary." Added as a second line on the
+      existing Book-to-Bill Ratio tile (Sales YTD ÷ Revenue YTD × 100),
+      not a new tile. Reuses monthPace's own real Sales actuals-to-date
+      and the same real revenueYtdActual the Company Backlog tile already
+      computes, rather than a third independent derivation of either.
    ============================================================ */
-const APP_VERSION = 'v2aa';
+const APP_VERSION = 'v3a';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -5069,12 +5093,18 @@ function renderExecSummaryTiles2(data){
   // >=100=good/>=95=warn/else=crit scale is built for pace-vs-budget, not
   // Book-to-Bill, where a real good/warn/crit range hasn't been defined
   // yet. Plain value until that judgment call is made deliberately.
+  // YTD figure added 2026-09-10, per Misty's direct request ("for book to
+  // bill ratio can you give me a YTD percentage as well... that's on exec
+  // summary") — same Sales/Revenue relationship as the current-month
+  // figure above, just full-year-to-date instead of one month, shown as a
+  // second line on the same tile rather than a whole new tile.
   const btbHtml = `
     <div class="fc-tile">
       <div class="fc-tile-top"><div class="fc-tile-icon accent"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 12h10M12 7v10"/><circle cx="12" cy="12" r="9"/></svg></div></div>
       <div class="fc-tile-label">Book-to-Bill Ratio</div>
       <div class="fc-tile-value">${data.bookToBillRatioPct === null ? '&mdash;' : data.bookToBillRatioPct.toFixed(1) + '%'}</div>
       <div class="fc-tile-sub">${data.bookToBillRatioPct === null ? 'Revenue not yet available for ' + data.fiscalYear : 'Sales &divide; Revenue, this month'}</div>
+      <div class="fc-tile-sub" style="margin-top:4px; padding-top:4px; border-top:1px dashed var(--border)">${data.bookToBillRatioYtdPct === null ? 'YTD not yet available' : `<b>${data.bookToBillRatioYtdPct.toFixed(1)}%</b> YTD &middot; Sales &divide; Revenue, FY${data.fiscalYear} to date`}</div>
     </div>
   `;
 
@@ -9412,33 +9442,35 @@ function renderGrowthTargetPlan(data){
       <div class="gs-tile-sub">From bookings_fact, FY${data.baseYear}</div>
     </div>`;
 
-  // ---- Target vs. Reality: Revenue Target vs. YTD Actual + Backlog (or
-  // Backlog only in next_year mode, since the target year hasn't started
-  // yet), and vs. Revenue Budget. See getGrowthTargetPlan's own comment
-  // block in the worker for the full mode-by-mode methodology. ----
+  // ---- Target vs. Reality: Revenue Target vs. real YTD Actual + Backlog
+  // and vs. real Revenue Budget. Fixed 2026-09-10, same day as first
+  // shipped: both originally checked the TARGET year's Budget/Backlog, so
+  // Next Year mode checked a future year with no budget entered yet.
+  // Misty caught it directly: "If the toggle is next year, everything
+  // should be based on 2026." Both comparisons now always check
+  // selectedFiscalYear (the section's own Year picker) — the year that's
+  // actually happening right now, regardless of which year the growth %
+  // target itself is solved for. See getGrowthTargetPlan's own comment
+  // block in the worker for the full methodology. ----
   const realityEl = document.getElementById('gt-reality-tiles');
   if (!data.revenueAvailable) {
     realityEl.innerHTML = '<div class="legend-note">Upload Billed Fact to compare the target against real YTD, Backlog and Budget figures.</div>';
   } else {
     const ytd = data.vsYtdPlusBacklog;
-    const ytdLabel = ytd && ytd.basis === 'ytd_plus_backlog' ? `Target vs. YTD Actual + Backlog` : `Target vs. Backlog Scheduled, FY${data.targetYear}`;
-    const ytdSub = ytd && ytd.basis === 'ytd_plus_backlog'
-      ? `${fmtMoneyShort(ytd.revenueYtdActual)} billed YTD + ${fmtMoneyShort(ytd.backlogThisYear)} backlog`
-      : (ytd ? `FY${data.targetYear} hasn't started — real backlog already booked with an end date in FY${data.targetYear}` : '');
     const ytdGapCls = ytd ? gtGapClass(ytd.gapPct) : '';
     const revBudget = data.vsRevenueBudget;
 
     realityEl.innerHTML = `
       <div class="gs-tile">
-        <div class="gs-tile-label">${ytdLabel}</div>
+        <div class="gs-tile-label">Target vs. YTD Actual + Backlog, FY${data.selectedFiscalYear}</div>
         <div class="gs-tile-value">${ytd ? `${fmtMoneyShort(data.revenueTargetAmount)} vs. ${fmtMoneyShort(ytd.amount)}` : '&mdash;'}</div>
         <div class="gs-tile-sub ${ytdGapCls}">${ytd ? (ytd.gapToTarget > 0 ? `${fmtMoneyShort(ytd.gapToTarget)} more needed beyond this` : `${fmtMoneyShort(Math.abs(ytd.gapToTarget))} already ${gtGapWord(ytd.gapPct)} target`) : 'Not enough data yet'}</div>
-        <div class="gs-tile-sub" style="margin-top:4px">${ytdSub}</div>
+        <div class="gs-tile-sub" style="margin-top:4px">${ytd ? `${fmtMoneyShort(ytd.revenueYtdActual)} billed YTD + ${fmtMoneyShort(ytd.backlogThisYear)} backlog` : ''}</div>
       </div>
       <div class="gs-tile">
-        <div class="gs-tile-label">Target vs. Revenue Budget, FY${data.targetYear}</div>
+        <div class="gs-tile-label">Target vs. Revenue Budget, FY${data.selectedFiscalYear}</div>
         <div class="gs-tile-value">${revBudget ? `${fmtMoneyShort(data.revenueTargetAmount)} vs. ${fmtMoneyShort(revBudget.amount)}` : '&mdash;'}</div>
-        <div class="gs-tile-sub ${revBudget ? gtGapClass(revBudget.gapPct) : ''}">${revBudget ? (revBudget.gapToTarget > 0 ? `${fmtMoneyShort(revBudget.gapToTarget)} more aggressive than budget` : `${fmtMoneyShort(Math.abs(revBudget.gapToTarget))} below budget`) : `No Revenue Budget set for FY${data.targetYear} yet`}</div>
+        <div class="gs-tile-sub ${revBudget ? gtGapClass(revBudget.gapPct) : ''}">${revBudget ? (revBudget.gapToTarget > 0 ? `${fmtMoneyShort(revBudget.gapToTarget)} more aggressive than budget` : `${fmtMoneyShort(Math.abs(revBudget.gapToTarget))} below budget`) : `No Revenue Budget set for FY${data.selectedFiscalYear} yet`}</div>
       </div>`;
   }
 
@@ -9456,7 +9488,7 @@ function renderGrowthTargetPlan(data){
       <div class="gs-mini-row"><span class="n">&times; 3-yr Sales-to-Revenue ratio</span><span class="v">${data.salesToRevenueRatio.toFixed(2)}&times;</span></div>
       <div class="gs-mini-row"><span class="n"><b>Required Sales to fund that Revenue</b></span><span class="v"><b>${fmtMoneyShort(data.requiredSalesAmount)}</b></span></div>
       <div class="gs-mini-row" style="margin-top:6px; padding-top:6px; border-top:1px solid var(--border)"><span class="n">vs. FY${data.baseYear} actual Sales (${fmtMoneyShort(data.salesCurrent)})</span><span class="v">${data.requiredSalesGrowthPct !== null ? `${data.requiredSalesGrowthPct >= 0 ? '+' : ''}${data.requiredSalesGrowthPct.toFixed(1)}%` : '&mdash;'}</span></div>
-      <div class="gs-mini-row"><span class="n">Required Sales vs. Sales Budget, FY${data.targetYear}</span><span class="v ${vsb ? gtGapClass(vsb.gapPct) : ''}">${vsb ? `${fmtMoneyShort(vsb.amount)} budgeted (${vsb.gapToTarget > 0 ? '+' : ''}${fmtMoneyShort(vsb.gapToTarget)} vs. required)` : `No Sales Budget set for FY${data.targetYear} yet`}</span></div>
+      <div class="gs-mini-row"><span class="n">Required Sales vs. Sales Budget, FY${data.selectedFiscalYear}</span><span class="v ${vsb ? gtGapClass(vsb.gapPct) : ''}">${vsb ? `${fmtMoneyShort(vsb.amount)} budgeted (${vsb.gapToTarget > 0 ? '+' : ''}${fmtMoneyShort(vsb.gapToTarget)} vs. required)` : `No Sales Budget set for FY${data.selectedFiscalYear} yet`}</span></div>
       <div class="gs-mini-row" style="opacity:.75"><span class="n" style="font-weight:600; font-size:11.5px">Sales YTD, FY${data.baseYear} (Actual) &mdash; for reference</span><span class="v" style="font-weight:700; font-size:11.5px">${data.salesAvailable ? fmtMoneyShort(data.salesCurrent) : '&mdash;'}</span></div>`;
   }
 
