@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2x';
+const APP_VERSION = 'v2y';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1091,9 +1091,27 @@ const SERVICES = [
     desc:'Good/Better/Best construction-administration support — Essential, Enhanced, or Comprehensive tier, plus optional extra hours/visits beyond what’s included.' },
   { id:'modernization', name:'Modernization Services', pricingModel:'task_line', staffPool:'consultants',
     desc:'Feasibility through deployment — Survey, Spec, RFP, Award, Submittal Review, phased Construction, Closeout. Priced as individual task lines.' },
-  { id:'construction', name:'Construction Services', pricingModel:'task_line', staffPool:'consultants',
+    { id:'construction', name:'Construction Services', pricingModel:'task_line', staffPool:'consultants',
     desc:'Site visits (Progress Check, Punchlist, Final Review) plus meeting participation. Priced as individual task lines.' },
 ];
+
+// v2y: Year Breakout category map (Misty, 2026-09-03). 'uncapped'
+// services can be re-delivered across multiple years (percentages can
+// legitimately exceed 100% total) -- 'capped' services are a single
+// one-time deliverable whose percentages represent WHEN it gets billed
+// across the contract, so exceeding 100% total triggers a warning
+// banner (not blocked). Deliberately a separate lookup, not a field on
+// SERVICES itself -- Year Breakout is a per-offer wizard behavior, not
+// a property of the service/pricing-model definition.
+const YEAR_BREAKOUT_CATEGORY = {
+  comp_eval: 'uncapped',
+  qce: 'uncapped',
+  general_consulting: 'uncapped',
+  due_diligence: 'capped',
+  project_management: 'capped',
+  modernization: 'capped',
+  construction: 'capped',
+};
 
 // Suggested task-line catalog — from the real VDA Project "Add Task Line"
 // dropdown plus the real "View task lines" panel. Users can also add a
@@ -1604,6 +1622,10 @@ function freshWizardState(){
     portfolioName: '',
     propertyCount: '',
     unitCountEstimate: '',
+    // v2y: Year Breakout state -- { [svcId]: { enabled, years, pctByYear: [] } }.
+    // Each breakout-eligible service is independent; nothing here until
+    // the user turns it on for a given service.
+    yearBreakout: {},
     uploadedSites: [],       // portfolio: reconciled site rows
     singleUnits: [{ id:'u1', equipment_type:'Hydraulic', floors_served:4 }], // single: inline unit list
     selectedServices: ['verify'],
@@ -1664,7 +1686,105 @@ function setWizardSlider(svcId, pct){
   if(label) label.textContent = `${pct>0?'+':''}${pct}%`;
 }
 function wizardStep(n){ setWizard({ step:n }); }
-
+/* ============================================================
+   YEAR BREAKOUT (v2y, Misty 2026-09-03)
+   Shared by all 7 breakout-eligible services (comp_eval, qce,
+   general_consulting, due_diligence, project_management,
+   modernization, construction). Each service's breakout state is
+   independent -- toggling one on/off never touches another's.
+   Each service also has its OWN years count, defaulting to the shared
+   offer-level w.contractTermYears but independently overridable, per
+   Misty's explicit design call.
+   ============================================================ */
+function toggleYearBreakout(svcId){
+  const w = state.wizard;
+  const existing = w.yearBreakout[svcId];
+  if(existing && existing.enabled){
+    // Turn off -- keep the years/pctByYear the user set, in case they
+    // flip it back on, rather than throwing that work away.
+    w.yearBreakout = { ...w.yearBreakout, [svcId]: { ...existing, enabled: false } };
+  } else {
+    const years = (existing && existing.years) || w.contractTermYears || 1;
+    // Default: 100% in year 1, 0% every other year -- this exactly
+    // matches today's flat one-time total, so turning the toggle on
+    // alone never changes the price until the user actually redistributes.
+    const pctByYear = (existing && existing.pctByYear && existing.pctByYear.length === years)
+      ? existing.pctByYear
+      : Array.from({length: years}, (_, i) => i === 0 ? 100 : 0);
+    w.yearBreakout = { ...w.yearBreakout, [svcId]: { enabled: true, years, pctByYear } };
+  }
+  refreshPricing(); render();
+}
+function updateBreakoutYears(svcId, val){
+  const w = state.wizard;
+  const years = Math.max(1, Math.min(10, Number(val) || 1));
+  const cur = w.yearBreakout[svcId] || { enabled: true, years, pctByYear: [] };
+  const pctByYear = Array.from({length: years}, (_, i) => cur.pctByYear[i] != null ? cur.pctByYear[i] : (i === 0 ? 100 : 0));
+  w.yearBreakout = { ...w.yearBreakout, [svcId]: { ...cur, years, pctByYear } };
+  refreshPricing(); render();
+}
+function updateBreakoutPct(svcId, yearIndex, val){
+  const w = state.wizard;
+  const cur = w.yearBreakout[svcId];
+  if(!cur) return;
+  const pctByYear = cur.pctByYear.slice();
+  pctByYear[yearIndex] = val === '' ? 0 : Number(val);
+  w.yearBreakout = { ...w.yearBreakout, [svcId]: { ...cur, pctByYear } };
+  refreshPricing(); render();
+}
+function renderYearBreakoutBlock(svcId, baselineAmount){
+  const w = state.wizard;
+  const category = YEAR_BREAKOUT_CATEGORY[svcId];
+  if(!category) return ''; // not a breakout-eligible service
+  const bo = w.yearBreakout[svcId];
+  const enabled = bo && bo.enabled;
+  const totalPct = enabled ? bo.pctByYear.reduce((a,p) => a + (Number(p)||0), 0) : 0;
+  const overCap = category === 'capped' && totalPct > 100;
+  // v2y follow-up (Misty): General Consulting is $/mo-denominated per
+  // year, NOT a one-time/annual total like the other 6 breakout
+  // services -- each year's % scales the SAME monthly rate, it does
+  // not represent a real dollar amount that's meaningful to sum
+  // across years. So its per-year figures show "/mo", and the
+  // "full contract total" summary line (which WOULD sum real dollars
+  // for the other 6) is suppressed here as not a meaningful number.
+  const isMonthlyRate = svcId === 'general_consulting';
+  const contractTotal = enabled ? bo.pctByYear.reduce((a,p) => a + baselineAmount * (Number(p)||0) / 100, 0) : 0;
+  return `
+  <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; cursor:pointer;">
+        <input type="checkbox" ${enabled?'checked':''} onchange="toggleYearBreakout('${svcId}')">
+        Year Breakout
+      </label>
+      ${enabled ? `<span style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+        Years:
+        <input class="text-input" style="width:50px; text-align:center; padding:4px;" type="text" inputmode="numeric" value="${bo.years}" onchange="updateBreakoutYears('${svcId}', this.value.replace(/[^0-9]/g,''))">
+      </span>` : ''}
+    </div>
+    ${enabled ? `
+    <p style="color:var(--text-muted); font-size:11px; margin:8px 0 10px 0;">${isMonthlyRate
+      ? 'Assign what % of the monthly rate applies each year — e.g. 100% in year 1, then step up or down as the client\u2019s purchased hours change.'
+      : category==='uncapped'
+        ? 'Assign what % of the total gets delivered each year. Can exceed 100% total for services re-delivered across multiple years.'
+        : 'Assign what % of the total gets billed each year. Should generally sum to 100% across the whole project.'}</p>
+    ${overCap ? `<div class="notional-banner" style="margin-bottom:10px;"><span class="ic">${icon('warn')}</span>Years add up to ${totalPct}% — over the full value of this service.</div>` : ''}
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      ${bo.pctByYear.map((pct,i) => `
+        <div style="min-width:82px;">
+          <label style="display:block; font-size:10.5px; color:var(--text-muted); margin-bottom:3px;">Year ${i+1}</label>
+          <div style="display:flex; align-items:center; gap:3px;">
+            <input class="text-input" style="width:52px; text-align:right; padding:6px;" type="text" inputmode="numeric" value="${pct}" onchange="updateBreakoutPct('${svcId}', ${i}, this.value.replace(/[^0-9]/g,''))">
+            <span style="font-size:11px; color:var(--text-muted);">%</span>
+          </div>
+          <div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;">${fmtMoney(baselineAmount * (Number(pct)||0) / 100)}${isMonthlyRate?'/mo':''}</div>
+        </div>`).join('')}
+    </div>
+    <p style="font-size:11px; color:var(--text-muted); margin:10px 0 0 0;">${isMonthlyRate
+      ? `Year 1 rate (feeds this offer's $/mo total): <strong style="color:var(--text-primary);">${fmtMoney(bo.pctByYear[0] != null ? baselineAmount * (Number(bo.pctByYear[0])||0)/100 : 0)}/mo</strong>`
+      : `Full contract total across breakout: <strong style="color:var(--text-primary);">${fmtMoney(contractTotal)}</strong> · Year 1 (feeds this offer's total): <strong style="color:var(--text-primary);">${fmtMoney(bo.pctByYear[0] != null ? baselineAmount * (Number(bo.pctByYear[0])||0)/100 : 0)}</strong>`}</p>
+    ` : ''}
+  </div>`;
+}
 /* ============================================================
    AHJ auto-suggest (single-property mode, Inspection service only).
    Reported 2026-08-26: this used to fire automatically on Step 1 as
@@ -2249,6 +2369,10 @@ function refreshPricing(){
       // was never really Inspection's data to depend on. See
       // computeOfferTotals' per_ahj_category branch.
       contractTermYears: w.contractTermYears,
+      // v2y: Year Breakout -- sent as-is, keyed by svcId. The Worker
+      // only acts on entries where enabled is true; everything else
+      // falls through to each pricing model's normal flat behavior.
+      yearBreakout: w.yearBreakout,
       // v2j: Inspection's (ahjId, region) pair -- single sends the one
       // confirmed pair; portfolio sends one per confirmed property (an
       // unconfirmed property is sent with null ahjId/region, and
@@ -2741,10 +2865,11 @@ function renderServicePricingCard(svcId, units){
           </div>
         </div>
         ${pct!==0 ? `<button class="btn btn-sm" style="margin-top:8px;" onclick="resetPriceAdjust('${svcId}')">${icon('history')} Reset to recommended</button>` : ''}
+        ${renderYearBreakoutBlock(svcId, subtotal)}
       </div>
     </div>`;
   }
-   if(svc.pricingModel === 'unit_tiered'){
+  if(svc.pricingModel === 'unit_tiered'){
     // CCM (Batch B, 2026-08-28): restructured off the equipment x
     // stops grid to unit-count tier bands, mirroring VERIFY's tier-
     // breakdown table presentation.
@@ -2807,6 +2932,8 @@ function renderServicePricingCard(svcId, units){
         <label class="field-label">Monthly Fee</label>
         <input class="text-input" type="number" min="0" step="100" value="${fee}" oninput="updateRetainerFee('${svcId}', this.value)">
       </div>
+      <p style="font-size:11px; color:var(--text-muted); margin:8px 0 0 0;">${fmtMoney(fee)}/mo · <strong style="color:var(--text-primary);">${fmtMoney(fee*12)}/yr</strong> equivalent</p>
+      ${renderYearBreakoutBlock(svcId, fee)}
     </div>`;
   }
   if(svc.pricingModel === 'pm_tiered'){
@@ -2862,6 +2989,7 @@ function renderServicePricingCard(svcId, units){
           ${extraVisits>0 ? `<div class="kv-row"><span class="k">Extra visits (${extraVisits} × ${fmtMoney(result.visitRate)})</span><span class="v">${fmtMoney(result.extraVisitsAmount)}</span></div>` : ''}
           <div class="kv-row"><span class="k">Total</span><span class="v" style="font-weight:750;">${fmtMoney(result.subtotal)}</span></div>
         </div>` : ''}
+        ${renderYearBreakoutBlock(svcId, result.subtotal)}
       </div>
     </div>`;
   }
@@ -2947,6 +3075,7 @@ function renderServicePricingCard(svcId, units){
         </table>
       </div>` : `<div class="empty-state" style="padding:22px;"><div class="ic">☷</div>No task lines yet.</div>`}
       <button class="btn btn-sm" style="margin-top:10px;" onclick="addTaskLine('${svcId}')">+ Add Task Line</button>
+      ${renderYearBreakoutBlock(svcId, taskLineTotal(svcId))}
     </div>
   </div>`;
 }
