@@ -852,6 +852,36 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
 .legend-note{font-size:11.5px; color:var(--text-faint); line-height:1.5; margin-top:8px}
 .note{font-size:11.5px; color:var(--text-faint); line-height:1.5; margin-top:8px}
 
+/* Scenario Modeling (2026-09-12, v3i fix): rebuilt to actually match the
+   approved mockup_month_pace_and_scenario.html, which the initial v3h
+   build had reverted to generic .fc-tile/.legend-row treatments for --
+   real slider inputs and a real proportional bar chart, not a number
+   spinner grid and a plain text sequence. Bar heights are computed at
+   render time (scaled to the largest of the real figures shown), unlike
+   the mockup's fixed illustrative px values. */
+.assump-grid{display:grid; grid-template-columns:repeat(5,1fr); gap:10px}
+.assump-cell{background:var(--paper-sunk); border:1px solid var(--border); border-radius:9px; padding:12px}
+.assump-cell label{display:block; font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-faint); margin-bottom:8px}
+.assump-slider-row{display:flex; align-items:center; gap:8px}
+.assump-slider-row input[type=range]{flex:1; accent-color:var(--accent)}
+.assump-val{font-size:14px; font-weight:800; color:var(--accent-ink); width:38px; text-align:right}
+
+.waterfall{display:flex; align-items:flex-end; gap:6px; height:200px; margin:6px 0 6px; padding:0 4px}
+.wf-bar-wrap{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; min-width:0}
+.wf-bar-value{font-size:10.5px; font-weight:800; color:var(--text); margin-bottom:5px; white-space:nowrap}
+.wf-bar{width:100%; border-radius:5px 5px 0 0; min-height:2px}
+.wf-label{font-size:9.5px; color:var(--text-faint); text-align:center; margin-top:8px; line-height:1.3}
+
+.gap-banner{display:flex; align-items:center; justify-content:space-between; gap:16px; background:var(--warn-soft); border:1px solid var(--border); border-radius:9px; padding:12px 16px; margin-top:16px; flex-wrap:wrap}
+.gap-banner.good{background:var(--good-soft)}
+.gap-banner .gb-text{font-size:13px; color:var(--warn); font-weight:700}
+.gap-banner.good .gb-text{color:var(--good)}
+.gap-banner .gb-amt{font-size:20px; font-weight:800; color:var(--text)}
+
+@media (max-width: 760px){
+  .assump-grid{grid-template-columns:repeat(2,1fr)}
+}
+
 .fc-empty-note{font-size:12px; color:var(--text-faint); padding:16px 18px; line-height:1.5}
 
 /* ================= EXECUTIVE SUMMARY (2026-09-06) =================
@@ -1909,7 +1939,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
         </div>
         <div class="card-pad">
           <div class="legend-note" style="margin-top:0; margin-bottom:14px">These five rates drive the Supported Budget calculation below, company-wide. They start at the Waterfall (VDA) values from the source planning model and can be adjusted and saved.</div>
-          <div class="fc-tiles" id="sm-assumptions-grid"></div>
+          <div class="assump-grid" id="sm-assumptions-grid"></div>
           <div style="margin-top:14px; display:flex; align-items:center; gap:12px">
             <button class="btn-primary" style="width:auto; margin-top:0" onclick="saveScenarioModelingAssumptions()">Save Assumption Rates</button>
             <div class="fc-tile-sub" id="sm-assumptions-save-note">&mdash;</div>
@@ -1920,11 +1950,13 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       <div class="card">
         <div class="card-head">
           <h3>Supported Budget Waterfall</h3>
-          <span class="meta">Company-wide, before Backlog Actualization applied at the end</span>
+          <span class="meta">Company-wide &middot; Supported Budget shown after Backlog Actualization</span>
         </div>
         <div class="card-pad">
-          <div class="legend-row" id="sm-waterfall" style="margin-bottom:10px"></div>
-          <div class="fc-tiles" id="sm-summary-tiles"></div>
+          <div class="waterfall" id="sm-waterfall"></div>
+          <div class="legend-note" id="sm-waterfall-note" style="margin-top:0"></div>
+          <div class="gap-banner" id="sm-gap-banner"></div>
+          <div class="fc-tiles" id="sm-summary-tiles" style="margin-top:16px"></div>
         </div>
       </div>
 
@@ -4852,45 +4884,60 @@ function renderScenarioModeling(data){
   document.getElementById('sm-assumptions-meta').textContent = a.isDefault
     ? 'Waterfall (VDA) starting values (not yet saved for ' + data.fiscalYear + ')'
     : 'Saved for ' + data.fiscalYear + (a.updatedAt ? ', last updated ' + new Date(a.updatedAt).toLocaleDateString('en-US') : '');
-  document.getElementById('sm-assumptions-grid').innerHTML = `
-    <div class="fc-tile">
-      <div class="fc-tile-label">Backlog Actualization</div>
-      <input type="number" min="0" max="100" step="1" id="sm-input-backlog-actualization" value="${a.backlogActualizationPct}" style="width:100%; font-size:16px; font-weight:800; padding:4px 6px">
-      <div class="fc-tile-sub">Applied once, to the company total only</div>
+  const ASSUMP_FIELDS = [
+    { id: 'backlog-actualization', label: 'Backlog Actualization', value: a.backlogActualizationPct, sub: 'Applied once, to the company total only' },
+    { id: 'inspection-retention', label: 'Inspection Retention', value: a.inspectionRetentionPct, sub: 'Inspections rows only' },
+    { id: 'inspection-hit-rate', label: 'Inspection Hit Rate', value: a.inspectionHitRatePct, sub: "Applied to Inspections' Open Opportunity" },
+    { id: 'ei-hit-rate', label: 'EI Hit Rate', value: a.eiHitRatePct, sub: "Applied to Program Advisory's Open Opportunity" },
+    { id: 'nd-hit-rate', label: 'ND Hit Rate', value: a.ndHitRatePct, sub: "Applied to Design Services' Open Opportunity" },
+  ];
+  document.getElementById('sm-assumptions-grid').innerHTML = ASSUMP_FIELDS.map(f => `
+    <div class="assump-cell">
+      <label>${f.label}</label>
+      <div class="assump-slider-row">
+        <input type="range" min="0" max="100" step="1" id="sm-input-${f.id}" value="${f.value}"
+          oninput="document.getElementById('sm-val-${f.id}').textContent = this.value + '%'">
+        <span class="assump-val" id="sm-val-${f.id}">${f.value}%</span>
+      </div>
+      <div class="fc-tile-sub" style="margin-top:6px">${f.sub}</div>
     </div>
-    <div class="fc-tile">
-      <div class="fc-tile-label">Inspection Retention</div>
-      <input type="number" min="0" max="100" step="1" id="sm-input-inspection-retention" value="${a.inspectionRetentionPct}" style="width:100%; font-size:16px; font-weight:800; padding:4px 6px">
-      <div class="fc-tile-sub">Inspections rows only</div>
-    </div>
-    <div class="fc-tile">
-      <div class="fc-tile-label">Inspection Hit Rate</div>
-      <input type="number" min="0" max="100" step="1" id="sm-input-inspection-hit-rate" value="${a.inspectionHitRatePct}" style="width:100%; font-size:16px; font-weight:800; padding:4px 6px">
-      <div class="fc-tile-sub">Applied to Inspections' Open Opportunity</div>
-    </div>
-    <div class="fc-tile">
-      <div class="fc-tile-label">EI Hit Rate</div>
-      <input type="number" min="0" max="100" step="1" id="sm-input-ei-hit-rate" value="${a.eiHitRatePct}" style="width:100%; font-size:16px; font-weight:800; padding:4px 6px">
-      <div class="fc-tile-sub">Applied to Program Advisory's Open Opportunity</div>
-    </div>
-    <div class="fc-tile">
-      <div class="fc-tile-label">ND Hit Rate</div>
-      <input type="number" min="0" max="100" step="1" id="sm-input-nd-hit-rate" value="${a.ndHitRatePct}" style="width:100%; font-size:16px; font-weight:800; padding:4px 6px">
-      <div class="fc-tile-sub">Applied to Design Services' Open Opportunity</div>
-    </div>
-  `;
+  `).join('');
   document.getElementById('sm-assumptions-save-note').textContent = '—';
 
+  // Real proportional bar chart (2026-09-12, v3i), matching the approved
+  // mockup_month_pace_and_scenario.html's .waterfall/.wf-bar treatment --
+  // side-by-side bars scaled to the largest figure shown, not a true
+  // stacked/floating waterfall (the mockup's own legend-note flagged that
+  // Excel's native "total vs. delta" stacking wasn't safe to reconstruct
+  // from the source file alone; this keeps the same honest simplification).
   const ct = data.companyTotals;
-  document.getElementById('sm-waterfall').innerHTML = `
-    <div class="legend-item"><b>${fmtMoneyShort(ct.backlog)}</b> Backlog</div>
-    <div class="legend-item">+ <b>${fmtMoneyShort(ct.retention)}</b> Retention</div>
-    <div class="legend-item">+ <b>${fmtMoneyShort(ct.organicGrowth)}</b> Organic Growth</div>
-    <div class="legend-item">+ <b>${fmtMoneyShort(ct.weightedFunnel)}</b> Weighted Funnel</div>
-    <div class="legend-item">= <b>${fmtMoneyShort(ct.supportedBudgetBeforeActualization)}</b> Supported Budget (pre-Actualization)</div>
-    <div class="legend-item">&times; ${a.backlogActualizationPct}% Backlog Actualization</div>
-    <div class="legend-item"><b>${fmtMoneyShort(ct.supportedBudgetFinal)}</b> Supported Budget (final)</div>
+  const WF_BARS = [
+    { label: 'Backlog', value: ct.backlog, color: 'var(--slate)' },
+    { label: 'Retention', value: ct.retention, color: 'var(--good)' },
+    { label: 'Organic Growth', value: ct.organicGrowth, color: 'var(--good)' },
+    { label: 'Weighted Funnel', value: ct.weightedFunnel, color: 'var(--good)' },
+    { label: 'Supported Budget (Final)', value: ct.supportedBudgetFinal, color: 'var(--accent)' },
+    { label: data.fiscalYear + ' Sales Budget', value: ct.budget, color: 'var(--navy)' },
+  ];
+  const wfMax = Math.max(1, ...WF_BARS.map(b => b.value || 0));
+  document.getElementById('sm-waterfall').innerHTML = WF_BARS.map(b => `
+    <div class="wf-bar-wrap">
+      <div class="wf-bar-value">${fmtMoneyShort(b.value)}</div>
+      <div class="wf-bar" style="height:${Math.max(2, Math.round((b.value || 0) / wfMax * 200))}px; background:${b.color}"></div>
+      <div class="wf-label">${b.label}</div>
+    </div>
+  `).join('');
+  document.getElementById('sm-waterfall-note').textContent =
+    `Supported Budget (Final) = (${fmtMoneyShort(ct.backlog)} Backlog + ${fmtMoneyShort(ct.retention)} Retention + ${fmtMoneyShort(ct.organicGrowth)} Organic Growth + ${fmtMoneyShort(ct.weightedFunnel)} Weighted Funnel = ${fmtMoneyShort(ct.supportedBudgetBeforeActualization)} pre-Actualization) × ${a.backlogActualizationPct}% Backlog Actualization.`;
+
+  const gapGood = ct.variance >= 0;
+  const coveragePct = ct.variancePct === null ? null : (100 + ct.variancePct * 100);
+  document.getElementById('sm-gap-banner').className = 'gap-banner' + (gapGood ? ' good' : '');
+  document.getElementById('sm-gap-banner').innerHTML = `
+    <div class="gb-text">Supported Budget covers ${coveragePct === null ? '&mdash;' : coveragePct.toFixed(1) + '%'} of ${data.fiscalYear} Sales Budget</div>
+    <div class="gb-amt">${gapGood ? '+' : '&minus;'}${fmtMoneyShort(Math.abs(ct.variance))} ${gapGood ? 'surplus' : 'gap'}</div>
   `;
+
   const varCls = ct.variance >= 0 ? 'good' : 'crit';
   document.getElementById('sm-summary-tiles').innerHTML = `
     <div class="fc-tile">
@@ -8698,8 +8745,14 @@ const UPLOAD_TYPE_LABELS = { bookings: 'Bookings', backlog: 'Backlog', proposal_
 // default for these exports, confirmed against the real corruption
 // pattern seen — a silent re-fall-back to UTF-8 here would reproduce
 // the exact bug this function exists to fix.
-async function readFileWithDetectedEncoding(file){
-  const buffer = await file.arrayBuffer();
+// Buffer-based core of readFileWithDetectedEncoding below, factored out
+// (2026-09-12, v3i) so the Backlog History one-time import can read the
+// file's raw bytes ONCE, check for a real-binary-xlsx signature, and only
+// run this decode when the file actually turns out to be HTML text,
+// without changing readFileWithDetectedEncoding's own File-in signature,
+// which the three other, unrelated call sites (Bookings/Backlog/Proposal
+// Pipeline/Proposal Volume, Billed Line Item Fact) keep using as-is.
+function decodeBufferWithDetectedEncoding(buffer){
   // Sniff only the first 4KB (charset declarations are always near the
   // top of an HTML document) as plain ASCII/Latin-1, which is always a
   // safe, lossless way to read the declaration itself even when the rest
@@ -8718,6 +8771,40 @@ async function readFileWithDetectedEncoding(file){
     // value never blocks the upload outright.
     return new TextDecoder('windows-1252').decode(buffer);
   }
+}
+
+async function readFileWithDetectedEncoding(file){
+  const buffer = await file.arrayBuffer();
+  return decodeBufferWithDetectedEncoding(buffer);
+}
+
+// Real binary .xlsx/.xlsm files are ZIP containers and always start with
+// the two bytes 'PK' (0x50, 0x4B), while the Salesforce "HTML table saved as
+// .xls/.xlsx" export every regular upload in this app expects is plain
+// text and never starts this way. Used only by the Backlog History
+// one-time import below (2026-09-12 fix): an archived historical export,
+// unlike a live Salesforce pull, may well be a genuine Excel workbook
+// (e.g. if it was opened and re-saved along the way) rather than the
+// live-export HTML shape, so this lets that one upload accept either
+// without changing what the other upload types accept.
+function looksLikeBinaryXlsx(buffer){
+  const bytes = new Uint8Array(buffer.slice(0, 2));
+  return bytes[0] === 0x50 && bytes[1] === 0x4B;
+}
+
+// Generic real-.xlsx parser (2026-09-12), for the Backlog History
+// one-time import only. Same SheetJS approach as parseBilledFactXlsx
+// below, minus that function's Billed-Fact-specific period filtering:
+// first sheet, first row as headers, kept verbatim so the returned rows
+// are shaped identically to parseSalesforceHtmlExport's output (header-
+// text-keyed objects) and every downstream consumer (chunking here,
+// /api/backlog-snapshots/import plus importHistoricalBacklogSnapshot in
+// the Worker) needs no changes regardless of which parser produced rows.
+function parseGenericXlsxToRows(arrayBuffer){
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  if (!sheet) throw new Error('No sheet found in this file.');
+  return XLSX.utils.sheet_to_json(sheet, { defval: '' });
 }
 
 // Parses a Salesforce "HTML table saved as .xls" export into an array of
@@ -9055,8 +9142,17 @@ async function onBacklogSnapshotFileChosen(input){
 
   try {
     setUploadStatus(uploadType, 'Reading file...', 'working');
-    const text = await readFileWithDetectedEncoding(file);
-    const rows = parseSalesforceHtmlExport(text);
+    // 2026-09-12 fix: this one-time import is the one upload in this app
+    // where the real file may be a genuine binary .xlsx (an archived
+    // historical export, possibly opened/re-saved along the way) rather
+    // than the live Salesforce "HTML table saved as .xls" shape every
+    // regular upload expects, so this reads the raw bytes once and
+    // branches on the real file signature instead of assuming HTML the
+    // way every other upload type safely can.
+    const buffer = await file.arrayBuffer();
+    const rows = looksLikeBinaryXlsx(buffer)
+      ? parseGenericXlsxToRows(buffer)
+      : parseSalesforceHtmlExport(decodeBufferWithDetectedEncoding(buffer));
     if (rows.length === 0) { setUploadStatus(uploadType, 'No data rows found in this file.', 'error'); setUploadProgress(uploadType, null); return; }
 
     setUploadStatus(uploadType, `Parsed ${rows.length.toLocaleString()} rows. Importing as a ${snapshotDate} snapshot...`, 'working');
