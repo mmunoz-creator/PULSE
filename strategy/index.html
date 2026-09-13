@@ -1211,6 +1211,15 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
       Sign out
     </button>
+    <!-- Hub SSO (2026-09-13) — "Back to Hub" icon, same inconspicuous,
+         icon-only pattern as Modernization's #sb-back-to-hub-btn: hidden
+         by default, only shown when this session actually arrived via
+         Hub SSO (see tryHubSso()/completeSsoLogin(), toggled in showApp()
+         below). A manually-logged-in admin never sees this. -->
+    <button type="button" class="rail-signout-btn" id="railBackToHubBtn" onclick="window.location.href='/home/'" title="Back to PULSE Hub" style="display:none">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+      Back to Hub
+    </button>
     <!-- v1a — build-version label, matching PULSE-Mod's pattern of a
          quiet footer line under Sign out. Text set at boot from
          APP_VERSION (see script block) so it never has to be hand-edited
@@ -4535,10 +4544,16 @@ function populateYearSelect(select, { yearsBack = 1, yearsForward = 2, selectedY
 let sessionToken = null;
 let currentUser = null; // { id, name, role }
 let pendingResetToken = null;
+// Hub SSO (2026-09-13): true only when this session actually arrived via
+// PULSE Hub SSO (see tryHubSso()/completeSsoLogin() below), never for a
+// manual name+PIN login. Drives the "Back to Hub" sidebar icon only —
+// same lifetime/persistence as the rest of the session, so it survives a
+// page refresh, matching Modernization's own real, live pattern.
+let ssoActive = false;
 
 const SESSION_STORAGE_KEY = 'pulse_strategy_session';
 function saveSessionToStorage(){
-  try { sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ token: sessionToken, user: currentUser })); }
+  try { sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ token: sessionToken, user: currentUser, ssoActive })); }
   catch(e){ /* sessionStorage unavailable, session restore just won't work */ }
 }
 function clearSessionStorage(){
@@ -4553,7 +4568,79 @@ function tryRestoreSession(){
   if (!saved || !saved.token || !saved.user) return false;
   sessionToken = saved.token;
   currentUser = saved.user;
+  ssoActive = !!saved.ssoActive;
   showApp();
+  return true;
+}
+
+/* ============================================================
+   PULSE HUB SSO (2026-09-13)
+   Built after reading Modernization's real, live handleSsoLogin/
+   tryHubSso/completeSsoLogin and confirming with Misty how Strategy's
+   different auth model (real D1 users table, admin-only role, no
+   Access PINs lookup) should adapt it — not a direct copy. Two
+   deliberate differences from Modernization's client code, mirroring
+   the worker-side comment in handleSsoLogin:
+     1. No role picker: Strategy has exactly one role (admin) today, so
+        there is nothing to choose between the way Modernization's Hub
+        Admins choose PM/Consultant/Client/IT Admin. A future
+        "executive" role would need a picker equivalent to
+        Modernization's showSsoRolePicker — not built here since Misty
+        confirmed gating is Hub-Admin-only for now.
+     2. No client-side fallback/auto-provision path: if the worker
+        denies the SSO attempt (not a Hub Admin, or no matching active
+        Strategy users row), this simply falls through to Strategy's
+        normal login screen unchanged, same "falls through silently"
+        contract Modernization's tryHubSso already uses when
+        access.modernization isn't granted.
+   ============================================================ */
+async function requestSsoSession(hubToken){
+  try{
+    const r = await fetch(WORKER_URL + '/sso-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hubToken }),
+    });
+    return await r.json();
+  }catch(e){
+    console.error('requestSsoSession failed:', e);
+    return { ok:false, message:'Could not verify your Hub session.' };
+  }
+}
+
+// Completes login for a resolved SSO identity, reusing the exact same
+// state doLogin() sets on a fresh manual login (sessionToken/currentUser/
+// saveSessionToStorage/showApp), so nothing downstream needs to know a
+// session came from SSO rather than a typed-in PIN — same principle as
+// Modernization's completeSsoLogin.
+function completeSsoLogin(result){
+  sessionToken = result.token;
+  currentUser = result.user;
+  ssoActive = true; // drives the "Back to Hub" sidebar icon, see showApp()
+  saveSessionToStorage();
+  showApp();
+}
+
+// Entry point, called once on page load before tryRestoreSession().
+// Returns true if SSO handled login (caller should skip the normal
+// login screen entirely), false if there's no valid Hub session or the
+// Hub session doesn't grant Strategy access (caller falls through to
+// Strategy's own login screen, unchanged).
+//
+// Reads the Hub's session token from sessionStorage rather than relying
+// on a cookie crossing to this page — sessionStorage is shared across
+// same-origin pages within one browser tab (elevatorpulse.com/login/,
+// /home/, /strategy/ all qualify), matching the real navigation path
+// (clicking the Hub tile from /home/). A fresh direct visit to
+// /strategy/ in a new tab correctly has none and falls through to the
+// normal login screen, same as Modernization's tryHubSso.
+async function tryHubSso(){
+  let hubToken = null;
+  try { hubToken = sessionStorage.getItem('pulse_hub_token') || null; } catch(e){}
+  if (!hubToken) return false;
+  const result = await requestSsoSession(hubToken);
+  if (!result || !result.ok) return false; // falls through to normal login screen
+  completeSsoLogin(result);
   return true;
 }
 
@@ -4616,6 +4703,10 @@ async function doLogin() {
     }
     sessionToken = data.token;
     currentUser = data.user;
+    // A manual login is never an SSO session — clear the flag explicitly
+    // so a stale true from an earlier SSO session this tab can't leak
+    // the "Back to Hub" icon into a manually-logged-in session.
+    ssoActive = false;
     saveSessionToStorage();
     showApp();
   } catch (e) {
@@ -4650,6 +4741,9 @@ async function submitNewPermanentPin() {
     }
     sessionToken = data.token;
     currentUser = data.user;
+    // Same explicit clear as doLogin() — a reset-PIN completion is still
+    // a manual credential flow, never SSO.
+    ssoActive = false;
     saveSessionToStorage();
     document.getElementById('reset-pin-screen').classList.add('hidden');
     showApp();
@@ -4663,6 +4757,7 @@ async function submitNewPermanentPin() {
 async function doLogout(){
   try { await workerFetch('/logout', { method: 'POST' }); } catch(e){}
   sessionToken = null; currentUser = null;
+  ssoActive = false;
   clearSessionStorage();
   document.getElementById('app-root').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
@@ -4680,6 +4775,12 @@ function showApp(){
   // request, matching PULSE-Mod's #sb-internal-build pattern.
   const _buildEl = document.getElementById('railBuild');
   if (_buildEl) _buildEl.textContent = APP_VERSION;
+  // Hub SSO (2026-09-13) — only shown when this session actually arrived
+  // via Hub SSO (see tryHubSso()/completeSsoLogin()), never for a manual
+  // name+PIN login. Same inconspicuous icon-only pattern as
+  // Modernization's live #sb-back-to-hub-btn.
+  const _backToHubBtn = document.getElementById('railBackToHubBtn');
+  if (_backToHubBtn) _backToHubBtn.style.display = ssoActive ? 'flex' : 'none';
   // Fiscal year dropdowns (2026-09-05): populate every year select from
   // the real current date (CURRENT_YEAR/populateYearSelect, defined
   // above) before anything tries to set a .value on one of them, rather
@@ -10899,9 +11000,18 @@ function toggleFocusEdit(){
 /* ============================================================
    BOOT
    ============================================================ */
-if (!tryRestoreSession()) {
-  // Login screen already visible by default.
-}
+// Hub SSO (2026-09-13) is checked FIRST, before a normal session
+// restore, matching Modernization's real boot order — a Hub-arrived
+// visit should never flash Strategy's own login screen first. If there
+// is no Hub token, or the Hub session doesn't grant Strategy access,
+// tryHubSso() resolves false and falls through to the existing
+// tryRestoreSession()/manual-login path unchanged.
+(async () => {
+  if (await tryHubSso()) return;
+  if (!tryRestoreSession()) {
+    // Login screen already visible by default.
+  }
+})();
 </script>
 </body>
 </html>
