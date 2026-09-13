@@ -4519,8 +4519,26 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    successful login, and silently fell through to the login screen every
    time. Fixed: tryHubSso() now checks `result.token` instead of
    `result.ok`, matching what the worker actually sends.
+
+   v3k (2026-09-13): Misty reported that after the v3j fix, a Hub-arrived
+   visit now works but briefly flashes Strategy's own login screen before
+   landing on Executive Summary. Root cause: #login-screen has no
+   `hidden` class in the markup, so it's the first thing painted on every
+   page load, and it only got hidden inside showApp(), which only runs
+   after tryHubSso()'s full round trip (read sessionStorage, call Hub's
+   /session, call Strategy's own /sso-login) resolves. That round trip,
+   not anything wrong with the fix itself, was the visible flash.
+   No worker change, still paired with worker_v3i.mjs.
+
+   Fixed by hiding #login-screen synchronously, before tryHubSso() makes
+   any network call, whenever a Hub token is present to check — a direct
+   visit to Strategy with no Hub token is completely unaffected and still
+   shows the login screen immediately, same as always. If SSO doesn't
+   pan out (expired token, no matching Strategy account), the login
+   screen is revealed again at that point, same fallback behavior as
+   before, just without the initial flash on the success path.
    ============================================================ */
-const APP_VERSION = 'v3j';
+const APP_VERSION = 'v3k';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -4656,12 +4674,23 @@ async function tryHubSso(){
   let hubToken = null;
   try { hubToken = sessionStorage.getItem('pulse_hub_token') || null; } catch(e){}
   if (!hubToken) return false;
+  // v3k (2026-09-13): hide the login screen the instant we know there's
+  // a Hub token to check, before the /session and /sso-login network
+  // calls below, so a Hub-arrived visit never paints the login form at
+  // all. If SSO doesn't pan out, it's revealed again just below.
+  const _loginScreenEl = document.getElementById('login-screen');
+  if (_loginScreenEl) _loginScreenEl.classList.add('hidden');
   const result = await requestSsoSession(hubToken);
   // v3j (2026-09-13): checks result.token, not result.ok — the worker's
   // /sso-login success response has never included an `ok` field (every
   // login path here returns { token, user }), so the old check was
   // always false even on a genuine 200 success. See changelog above.
-  if (!result || !result.token) return false; // falls through to normal login screen
+  if (!result || !result.token) {
+    // v3k (2026-09-13): SSO didn't pan out, reveal the login screen we
+    // hid above so the normal manual-login fallback is still visible.
+    if (_loginScreenEl) _loginScreenEl.classList.remove('hidden');
+    return false; // falls through to normal login screen
+  }
   completeSsoLogin(result);
   return true;
 }
