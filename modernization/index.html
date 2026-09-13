@@ -4369,6 +4369,12 @@ window.addEventListener('error', function(ev){
 });
 // ── AIRTABLE VIA CLOUDFLARE WORKER ───────────────────────────────────
 const WORKER_URL = 'https://pulse-api.misty-munoz.workers.dev';
+// v68p — PULSE Hub SSO. Separate worker/domain from WORKER_URL above; a
+// Hub session lives as a cookie on elevatorpulse.com, checked here via
+// plain fetch()+credentials:'include' (NOT workerFetch(), which would
+// incorrectly attach this app's own, unrelated Bearer token instead of
+// letting the Hub cookie ride along). See tryHubSso() below.
+const HUB_WORKER_URL = 'https://pulse-hub-api.misty-munoz.workers.dev';
 // v51a. Session token issued by the Worker's /login endpoint at sign in.
 // Every Worker call goes through workerFetch(), which attaches it as a
 // Bearer header. The Worker refuses (almost) everything without it.
@@ -7300,7 +7306,16 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-dot" style="width:6px;height:6px;border-radius:50%;background:var(--gray-light);flex-shrink:0;transition:background .3s"></span>
   <span id="at-label">Connecting...</span>
 </div>
-<button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
+<div style="display:flex;gap:6px">
+  <button class="logout-btn" onclick="doLogout()" style="flex:1"><i class="ti ti-logout"></i>Sign out</button>
+  <!-- v68p — Hub SSO exit icon. Hidden by default; only unhidden by
+  setupPortal() when window._ssoActive is true (this session arrived via
+  Hub SSO), so a person who logged into Modernization directly (the interim
+  fallback path) never sees a "back to Hub" link that would be a dead end
+  for them. Deliberately icon-only/inconspicuous per Misty's direct spec:
+  "something inconspicuous to ordinary PULSE mod users." -->
+  <button id="sb-back-to-hub-btn" onclick="window.location.href='/home/'" title="Back to PULSE Hub" style="display:none;width:32px;padding:6px;font-size:13px;color:rgba(255,255,255,.35);background:none;border:1px solid rgba(255,255,255,.1);border-radius:var(--radius-sm);cursor:pointer;align-items:center;justify-content:center"><i class="ti ti-layout-grid"></i></button>
+</div>
       <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68o</div>
     </div>
   </nav>
@@ -9325,6 +9340,10 @@ async function doLogin(){
     const unrestrictedCb=document.getElementById('login-consultant-unrestricted');
     const isUnrestrictedConsultant=(role==='consultant'&&unrestrictedCb&&unrestrictedCb.checked);
     const nameToSend=isUnrestrictedConsultant?'Pulse Consultant':(role==='admin'?null:nameEl.value);
+    // v68p — a manual login is never an SSO session; clear the flag
+    // explicitly so a stale true from an earlier SSO session this tab
+    // can't leak the "Back to Hub" icon into a manually-logged-in session.
+    window._ssoActive=false;
     const result=await verifyPinLogin(role,nameToSend,pinEl.value);
     if(!result.ok){
       errEl.textContent=result.message;errEl.style.display='block';
@@ -9412,6 +9431,157 @@ async function verifyRestoredSessionStillActive(recordId){
     }
   }catch(e){/* can't verify right now — fail open, don't punish an already-restored session for a transient network issue */}
 }
+// v68p — PULSE Hub SSO. Checks whether this visitor already has a valid
+// Hub session (elevatorpulse.com/login) before ever showing Modernization's
+// own login screen. Per the approved design: Modernization keeps its own
+// Access PINs table and role model unchanged, Hub SSO just skips asking
+// for name+PIN again when the identity can be resolved automatically.
+//
+// Maps Hub Users' "Modernization Role" values to Modernization's internal
+// role keys. Hub Admins don't get a single automatic mapping — they get a
+// role picker (showSsoRolePicker) since they need to move between roles
+// for troubleshooting.
+const HUB_ROLE_TO_MOD_ROLE = {
+  'Project Manager': 'pm',
+  'Consultant': 'consultant',
+  'Client': 'client',
+};
+
+// Calls Modernization's OWN worker (not the Hub worker) to mint a real
+// Modernization session token for an SSO-authenticated identity. The
+// worker independently re-verifies the Hub token server-to-server (never
+// trusts roleKey/name from the client alone) before minting anything, then
+// does its own Access PINs lookup exactly like handleLogin() does today,
+// just without a PIN check. See worker's handleSsoLogin().
+async function requestSsoSession(roleKey, hubToken){
+  try{
+    const r=await fetch(`${WORKER_URL}/sso-login`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({role:roleKey,hubToken}),
+    });
+    return await r.json();
+  }catch(e){
+    console.error('requestSsoSession failed:',e);
+    return {ok:false,message:'Could not verify your Hub session.'};
+  }
+}
+
+// Completes login for a resolved SSO identity, reusing the exact same
+// shape verifyPinLogin() produces on a fresh manual login, so
+// _finishLogin() needs no changes. `result` is the worker's /sso-login
+// response (real session token included, same as a manual /login).
+async function completeSsoLogin(roleKey, result){
+  window._sessionToken=result.token;
+  role=roleKey;
+  client='park'; // only real client today — see design decision, 2026-09-13
+  window._userName=result.name;
+  window._lastLoginResult={ok:true,name:result.name,recordId:result.recordId||null,needsPinSetup:false};
+  if(roleKey==='consultant'){
+    currentConsultantName=result.name;
+    sessionStorage.setItem('pulse_consultant',result.name);
+  }
+  window._marliRecordId=result.recordId||null;
+  window._marliSessionId=(result.recordId||'sso')+':'+Date.now();
+  window._ssoActive=true; // drives the "Back to Hub" sidebar icon, see setupPortal()
+  try{
+    sessionStorage.setItem('pulse_session',JSON.stringify({
+      role,client,userName:result.name,recordId:result.recordId||null,
+      sessionToken:result.token,marliSessionId:window._marliSessionId,ssoActive:true,
+    }));
+  }catch(e){}
+  document.getElementById('login-screen').style.display='none';
+  await _finishLogin();
+}
+
+// Renders the "Continue as..." role picker shown only to Hub Admins, who
+// need to move between roles for troubleshooting rather than being
+// auto-assigned one. Reuses the login screen's real role-grid markup/CSS.
+function showSsoRolePicker(hubUser, hubToken){
+  const screen=document.getElementById('login-screen');
+  const left=screen.querySelector('.login-left');
+  left.innerHTML=`
+    <div class="login-logo-wrap">
+      <div class="login-logo-mark"><i class="ti ti-activity"></i></div>
+      <div class="login-logo-name">PULSE<span>.</span></div>
+    </div>
+    <div style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:4px 10px;border-radius:20px;background:rgba(240,181,44,.15);color:#B8860B;margin-bottom:1.1rem">Signed in via PULSE Hub</div>
+    <div class="login-card-title">Continue as...</div>
+    <div style="font-size:12.5px;color:var(--gray-mid);margin-bottom:1.4rem;padding:10px 12px;background:#f5f8fb;border-radius:8px">Signed in as <strong style="color:var(--navy)">${hubUser.name}</strong>. As a Hub Admin, choose which role to view PULSE Modernization as.</div>
+    <div class="field-label">Sign in as</div>
+    <div class="role-grid">
+      <button class="role-btn" onclick="chooseSsoRole('admin')"><i class="ti ti-shield-lock" style="display:block;font-size:22px;margin-bottom:6px"></i>IT Admin</button>
+      <button class="role-btn" onclick="chooseSsoRole('pm')"><i class="ti ti-clipboard-list" style="display:block;font-size:22px;margin-bottom:6px"></i>Project Mgr</button>
+      <button class="role-btn" onclick="chooseSsoRole('consultant')"><i class="ti ti-tool" style="display:block;font-size:22px;margin-bottom:6px"></i>Consultant</button>
+      <button class="role-btn" onclick="chooseSsoRole('client')"><i class="ti ti-building" style="display:block;font-size:22px;margin-bottom:6px"></i>Client</button>
+    </div>
+    <div id="sso-role-error" style="display:none;color:var(--red);font-size:12px;margin-top:8px"></div>
+    <a href="#" onclick="exitSsoRolePicker();return false;" style="display:block;text-align:center;font-size:12px;color:var(--gray-mid);text-decoration:underline;margin-top:.9rem">Not you? Sign out</a>
+  `;
+  window._ssoHubToken=hubToken;
+  screen.style.display='flex';
+}
+async function chooseSsoRole(roleKey){
+  const errEl=document.getElementById('sso-role-error');
+  if(errEl)errEl.style.display='none';
+  const result=await requestSsoSession(roleKey, window._ssoHubToken);
+  if(!result||!result.ok){
+    if(errEl){errEl.textContent=(result&&result.message)||'Could not sign in as that role.';errEl.style.display='block';}
+    return;
+  }
+  await completeSsoLogin(roleKey, result);
+}
+// "Not you? Sign out" — signs out of the Hub entirely (real /logout call)
+// and returns to the Hub's own login screen, per Misty's direct answer.
+async function exitSsoRolePicker(){
+  try{
+    await fetch(`${HUB_WORKER_URL}/logout`,{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+(window._ssoHubToken||'')},
+    });
+  }catch(e){}
+  try{sessionStorage.removeItem('pulse_hub_token');}catch(e){}
+  window.location.href='/login/';
+}
+
+// Entry point, called once on page load before tryRestorePulseSession().
+// Returns true if SSO handled login (caller should skip the normal login
+// screen entirely), false if there's no valid Hub session (caller falls
+// through to Modernization's own login screen, unchanged).
+//
+// Reads the Hub's session token directly from sessionStorage rather than
+// relying on the Hub's session cookie crossing to this page: sessionStorage
+// is shared across same-origin pages within one browser tab (elevatorpulse.
+// com/login/, /home/, /modernization/ all qualify), which is exactly the
+// real navigation path (click the Hub tile from /home/) — a fresh direct
+// visit to /modernization/ in a new tab correctly has none and falls
+// through to the normal login screen, same as today.
+async function tryHubSso(){
+  let hubToken=null;
+  try{ hubToken=sessionStorage.getItem('pulse_hub_token')||null; }catch(e){}
+  if(!hubToken)return false;
+  let data=null;
+  try{
+    const r=await fetch(`${HUB_WORKER_URL}/session`,{headers:{'Authorization':'Bearer '+hubToken}});
+    if(!r.ok)return false;
+    data=await r.json();
+  }catch(e){
+    console.error('tryHubSso: Hub session check failed:',e);
+    return false;
+  }
+  if(!data||!data.ok||!data.user)return false;
+  const hubUser=data.user;
+  if(hubUser.hubRole==='Admin'){
+    showSsoRolePicker(hubUser, hubToken);
+    return true;
+  }
+  const roleKey=HUB_ROLE_TO_MOD_ROLE[hubUser.access&&hubUser.access.modernization];
+  if(!roleKey)return false; // no Modernization access granted on the Hub side
+  const result=await requestSsoSession(roleKey, hubToken);
+  if(!result||!result.ok)return false; // falls through to normal login screen
+  await completeSsoLogin(roleKey, result);
+  return true;
+}
 // v42h — Restore a session after a browser refresh. Re-verifies the saved
 // Access PINs recordId is still Active before trusting it (so a
 // deactivated user's old session can't silently keep working just because
@@ -9446,6 +9616,10 @@ async function tryRestorePulseSession(){
   role=saved.role;
   client=saved.client;
   window._userName=saved.userName||null;
+  // v68p — restore the Hub SSO flag across a refresh, same lifetime as
+  // everything else here, so the "Back to Hub" sidebar icon (see
+  // setupPortal()) doesn't disappear just because the page reloaded.
+  window._ssoActive=!!saved.ssoActive;
   if(role==='consultant'){
     currentConsultantName=sessionStorage.getItem('pulse_consultant')||saved.userName||'';
     // v66f — restore the Portfolio-wide access flag across a refresh, same
@@ -9848,6 +10022,11 @@ function setFirstNavActive(viewId){
 }
 
 function setupPortal(){
+  // v68p — Hub SSO exit icon. Only shown when this session actually
+  // arrived via Hub SSO (see tryHubSso()/completeSsoLogin()), never for
+  // the direct/interim Modernization login path.
+  const backToHubBtn=document.getElementById('sb-back-to-hub-btn');
+  if(backToHubBtn)backToHubBtn.style.display=window._ssoActive?'flex':'none';
   const cn=CLIENTS[client]||'Park Hotels & Resorts';const short=cn.split(' ').slice(0,2).join(' ');
   document.getElementById('sb-client-name').textContent=short;
   document.getElementById('dash-sub').textContent=cn+' · Elevator Modernization Program';
@@ -45538,7 +45717,14 @@ window.addEventListener('load', async () => {
   // browser tab set sessionStorage.pulse_session; a genuinely new tab/
   // window (or one after actual logout) still lands on the login screen
   // as before.
-  await tryRestorePulseSession();
+  const restored=await tryRestorePulseSession();
+  // v68p — PULSE Hub SSO. Only attempted when this tab has no existing
+  // Modernization session to restore (a fresh tab/window, or one after a
+  // real Modernization logout). Checks for a valid Hub session and either
+  // signs the user straight in (regular users) or shows the "Continue
+  // as..." role picker (Hub Admins). Falls through to Modernization's own
+  // login screen, unchanged, if there's no Hub session at all.
+  if(!restored)await tryHubSso();
 });
 
 // Debug helper - call window.debugPulse() in console to test connection
