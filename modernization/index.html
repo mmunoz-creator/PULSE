@@ -4509,6 +4509,14 @@ function consultantSeesProperty(propName){
   if(window._consultantUnrestricted)return true;
   return propertyHasConsultant(propName,currentConsultantName);
 }
+// v68r — Billing Add/Edit permission helper. Per Misty's direct
+// confirmation: consultants may Add and Edit Billing Log entries on their
+// own assigned properties (Delete stays PM/Admin-only, unchanged). Despite
+// the name, this also gates Edit — see the "canEditThisBilling" call sites
+// in renderBudgetTab()/openBillingHistoryPopout() below.
+function canAddBillingFor(propName){
+  return role==='pm'||role==='admin'||(role==='consultant'&&consultantSeesProperty(propName));
+}
 // v37j -- Scorecard KPI attribution helper. The 5 KPI functions below were
 // attributing every metric event (milestone completion, closed action
 // item, budget variance, CO savings) to a property's stale p.v field
@@ -5173,6 +5181,10 @@ async function loadAllData() {
       // timeframe" check for historical data. Read it back now.
       closedDate: r.fields['Closed Date']||'',
       scopeId: (r.fields['Linked Scope']||[])[0]||'',
+      // v68r — "Last updated by [name] on [date]" attribution, written by
+      // saveActionItem() on both create and edit. See lastUpdatedCaptionHtml().
+      lastUpdatedBy: r.fields['Last Updated By']||'',
+      lastUpdatedOn: r.fields['Last Updated On']||'',
     }));
     siteVisits = visits.map(r => ({
       id: r.id,
@@ -5301,6 +5313,9 @@ async function loadAllData() {
       includedCOs: (r.fields['Included Change Orders']||[]).map(x=>x.id||x),
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
+      // v68r — "Last updated by/on" attribution, written by
+      // saveBillingModal() on both create and edit. See lastUpdatedCaptionHtml().
+      loggedOn: r.fields['Logged On']||'',
       // v55o — optimistic-locking conflict detection (task #90).
       conflictTs: r.fields['Billing Log Last Modified']||'',
     })).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
@@ -9169,6 +9184,21 @@ const SUBFOLDERS=['Field Updates','PM Updates','Meeting Minutes','Closed Actions
 function escHtml(t){return (t==null?'':String(t)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}// v51b: hardened. Ampersand first, plus both quote types, so
 // interpolations inside attributes (value="...") are also safe.
 
+// v68r — shared "Last updated by [name] on [date]" caption, reused by
+// every Field Update / Action Item / Billing Log render site that shows a
+// record's full content, per Misty's confirmed decision: always "Last
+// updated" (never "Submitted"), even on first save. Visual style is an
+// exact reuse of the Milestone tracker's existing "Marked complete today"
+// caption (same #854F0B text + ti-clock icon), wrapped in the approved
+// amber pill (background #FDF3E3, border #F3D9A8). One shared helper so
+// all three record types stay visually identical and any future style
+// tweak is one line here instead of N call sites.
+function lastUpdatedCaptionHtml(byName,onDate){
+  if(!byName||!onDate)return'';
+  const dateLabel=(()=>{const isoLike=/^\d{4}-\d{2}-\d{2}$/.test(String(onDate).split('T')[0]);const d=new Date(isoLike?String(onDate).split('T')[0]+'T12:00:00':onDate);return isNaN(d.getTime())?escHtml(onDate):d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});})();
+  return `<div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#854F0B;background:#FDF3E3;border:1px solid #F3D9A8;border-radius:5px;padding:4px 9px;margin-top:6px"><i class="ti ti-clock" style="font-size:11px"></i>Last updated by ${escHtml(byName)} on ${dateLabel}</div>`;
+}
+
 // Phase construction milestone templates by equipment type
 // All steps are optional — PM selects which apply per job
 // v49a — the two step sequences that were duplicated across product types are
@@ -10050,7 +10080,20 @@ function setupPortal(){
   const _buildEl=document.getElementById('sb-internal-build');
   if(_buildEl)_buildEl.style.display='block';
   const canEdit=role==='pm'||role==='admin';
-  ['prop-budget-btn','prop-meeting-btn','prop-visit-btn','prop-billing-inline-btn','prop-retainage-inline-btn','prop-visit-inline-btn'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=canEdit?'':'none';});
+  ['prop-meeting-btn','prop-visit-btn','prop-retainage-inline-btn','prop-visit-inline-btn'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=canEdit?'':'none';});
+  // v68r — Billing Add/Edit permissions widened to eligible consultants
+  // (PM/Admin unrestricted; consultant only on their own assigned
+  // properties), per Misty's direct confirmation. Pulled out of the
+  // generic canEdit forEach above since these two buttons now need a
+  // per-property check the other PM/Admin-only buttons don't. currentProp
+  // is null here (setupPortal runs once at login, before any property is
+  // opened) so this is just the safe initial default — canAddBillingFor('')
+  // is always true for PM/Admin and always false for a consultant with no
+  // property in context yet. The real per-property answer is re-derived in
+  // renderBudgetTab() every time the Budget tab actually renders.
+  const _billingCanAdd=canAddBillingFor(currentProp?.n||'');
+  const bb=document.getElementById('prop-budget-btn');if(bb)bb.style.display=_billingCanAdd?'':'none';
+  const bib=document.getElementById('prop-billing-inline-btn');if(bib)bib.style.display=_billingCanAdd?'':'none';
   const eb=document.getElementById('prop-edit-btn');if(eb)eb.style.display=canEdit?'':'none';
   const eib=document.getElementById('prop-edit-inline-btn');if(eib)eib.style.display=canEdit?'':'none';
   const db=document.getElementById('prop-delete-btn');if(db)db.style.display=canEdit?'':'none';
@@ -15578,7 +15621,14 @@ async function saveActionItem(){
     // explicit [] when cleared, not omitted — omitting a link field on PATCH
     // leaves Airtable's existing value untouched, unlike create where
     // omitting it is correct because there's nothing to clear yet.
-    const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Linked Scope':aiScopeId?[aiScopeId]:[]};
+    // v68r — "Last updated by [name] on [date]" attribution (see
+    // lastUpdatedCaptionHtml()). Same name-resolution convention used
+    // elsewhere in this file (Billing/Change Order loggedBy pattern):
+    // consultant's own name when the actor is a consultant, PM/Admin's own
+    // name (window._userName) otherwise, falling back to a role label.
+    const _aiEditorName=role==='consultant'?(currentConsultantName||'Consultant'):(window._userName||(role==='admin'?'Admin':'PM'));
+    const _aiEditDate=new Date().toISOString().split('T')[0];
+    const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Linked Scope':aiScopeId?[aiScopeId]:[],'Last Updated By':_aiEditorName,'Last Updated On':_aiEditDate};
     const res=demoMode?null:await atUpdate('Action Items',editId,fields);
     if(!demoMode&&!res?.id){
       showToast('Could not save changes to Airtable. Check your connection and try again.','error');
@@ -15587,7 +15637,7 @@ async function saveActionItem(){
       return;
     }
     const existing=actionItems.find(x=>x.id===editId);
-    if(existing)Object.assign(existing,{property,description,owner,due,priority,scopeId:aiScopeId||''});
+    if(existing)Object.assign(existing,{property,description,owner,due,priority,scopeId:aiScopeId||'',lastUpdatedBy:_aiEditorName,lastUpdatedOn:_aiEditDate});
     document.getElementById('action-item-overlay')?.remove();
     refreshDashActions();
     if(currentProp)renderPropMeetings(currentProp);
@@ -15597,7 +15647,10 @@ async function saveActionItem(){
     if(saveBtn)saveBtn.disabled=false;
     return;
   }
-  const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Status':'Open'};
+  // v68r — same "Last updated by/on" attribution as the edit path above.
+  const _aiEditorNameNew=role==='consultant'?(currentConsultantName||'Consultant'):(window._userName||(role==='admin'?'Admin':'PM'));
+  const _aiEditDateNew=new Date().toISOString().split('T')[0];
+  const fields={'Property Name':propertyNameToLink(property),'Description':description,'Owner':owner,'Due Date':due||null,'Priority':priority,'Status':'Open','Last Updated By':_aiEditorNameNew,'Last Updated On':_aiEditDateNew};
   if(aiScopeId)fields['Linked Scope']=[aiScopeId];
   const res=demoMode?null:await atCreate('Action Items',fields);
   if(res?.error){console.error('saveActionItem Airtable error:',res);}
@@ -15612,7 +15665,7 @@ async function saveActionItem(){
     return;
   }
   const newId=res?.records?.[0]?.id||'ai_'+Date.now();
-  actionItems.push({id:newId,property,description,owner,due,priority,status:'Open',meetingId:null,scopeId:aiScopeId||''});
+  actionItems.push({id:newId,property,description,owner,due,priority,status:'Open',meetingId:null,scopeId:aiScopeId||'',lastUpdatedBy:_aiEditorNameNew,lastUpdatedOn:_aiEditDateNew});
   notifyActionItemOwner(owner,description,property,due,priority);
   document.getElementById('action-item-overlay')?.remove();
   refreshDashActions();
@@ -16087,7 +16140,7 @@ function renderPropMeetings(p){
       const scopeTag=aiScope?`<span style="font-size:9px;background:var(--blue-xpale);color:var(--blue-dark);border:1px solid var(--blue-light);border-radius:4px;padding:1px 5px;margin-left:4px">${escHtml(aiScope.name)}</span>`:''; 
       return `<div class="action-item-row">
         <div class="action-dot dot-open"></div>
-        <div class="action-desc"><strong>${escHtml(a.description)}</strong>${scopeTag}<br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · <span class="badge b-${a.priority.toLowerCase()}" style="font-size:9px">${a.priority}</span></span></div>
+        <div class="action-desc"><strong>${escHtml(a.description)}</strong>${scopeTag}<br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · <span class="badge b-${a.priority.toLowerCase()}" style="font-size:9px">${a.priority}</span></span>${lastUpdatedCaptionHtml(a.lastUpdatedBy,a.lastUpdatedOn)}</div>
         ${role==='pm'||role==='admin'||role==='consultant'?`<button class="btn btn-icon" onclick="openActionItemModal('${(a.property||'').replace(/'/g,"\\'")}','${a.id}')" title="Edit action item"><i class="ti ti-pencil" style="font-size:14px"></i></button><button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>`:''}
       </div>`;
     }).join('');
@@ -16286,7 +16339,7 @@ function printMeetingMinutes(meetingId){
   ${m.attVDA||m.attElev||m.attClient?`<h2>Attendees</h2><table>${m.attVDA?row('VDA Team',m.attVDA):''}${m.attElev?row('Elevator Company',m.attElev):''}${m.attClient?row('Client / Owner',m.attClient):''}</table>`:''}
   ${m.agenda?`<h2>Agenda</h2><p style="font-size:13px;white-space:pre-wrap">${esc(m.agenda)}</p>`:''}
   <h2>Discussion Notes &amp; Decisions</h2><p style="font-size:13px;white-space:pre-wrap">${esc(m.notes)}</p>
-  ${propActions.length>0?`<h2>Action Items (${propActions.length})</h2>${propActions.map((a,i)=>`<div style="margin-bottom:10px;padding:8px 12px;background:#f8f9fa;border-radius:4px"><strong>${i+1}. ${esc(a.description)}</strong><br><span style="font-size:11px;color:#666">Owner: ${esc(a.owner)} — Due: ${esc(a.due)} — Priority: ${esc(a.priority)}</span></div>`).join('')}`:''}
+  ${propActions.length>0?`<h2>Action Items (${propActions.length})</h2>${propActions.map((a,i)=>`<div style="margin-bottom:10px;padding:8px 12px;background:#f8f9fa;border-radius:4px"><strong>${i+1}. ${esc(a.description)}</strong><br><span style="font-size:11px;color:#666">Owner: ${esc(a.owner)} — Due: ${esc(a.due)} — Priority: ${esc(a.priority)}</span>${lastUpdatedCaptionHtml(a.lastUpdatedBy,a.lastUpdatedOn)}</div>`).join('')}`:''}
   <hr style="margin-top:32px;border:none;border-top:1px solid #e0e0e0">
   <div style="text-align:center;padding-top:12px">
     <p style="font-size:11px;color:#666;margin:0 0 3px">PULSE Portal, Park Hotels and Resorts Modernization Program</p>
@@ -16323,6 +16376,7 @@ function printFieldUpdate(subId){
   <p class="sub">Week of ${esc(s.week)} — Submitted ${esc(s.submittedAt)}</p>
   <h2>Update Details</h2><table>${row('Property',s.property)}${row('Report Week',s.week)}${row('Submitted By',s.consultant)}${row('Review Status',statusLabel)}${row('Phase',s.phase)}${row('Progress Status',s.status)}</table>
   <h2>Weekly Notes</h2><p style="font-size:13px;white-space:pre-wrap">${esc(s.notes)}</p>
+  ${lastUpdatedCaptionHtml(s.consultant,s.submittedAt)}
   ${s.savings?`<h2>Savings Identified</h2><p style="font-size:13px"><strong>${esc(s.savings)}</strong></p>`:''}
   ${s.returnNote?`<h2>Return Note from PM</h2><p style="font-size:13px;white-space:pre-wrap">${esc(s.returnNote)}</p>`:''}
   <hr style="margin-top:32px;border:none;border-top:1px solid #e0e0e0">
@@ -16386,7 +16440,7 @@ function renderAllMeetings(){
     `<div class="empty-state" style="padding:1rem"><i class="ti ti-circle-check" style="color:var(--green)"></i><div class="empty-state-title">No Open Actions</div></div>`:
     openAI.map(a=>`<div class="action-item-row">
       <div class="action-dot dot-open"></div>
-      <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">${escHtml(a.property)} · ${escHtml(a.owner)} · Due: ${a.due}</span></div>
+      <div class="action-desc"><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">${escHtml(a.property)} · ${escHtml(a.owner)} · Due: ${a.due}</span>${lastUpdatedCaptionHtml(a.lastUpdatedBy,a.lastUpdatedOn)}</div>
       <button class="btn btn-icon" onclick="openActionItemModal('${(a.property||'').replace(/'/g,"\\'")}','${a.id}')" title="Edit action item"><i class="ti ti-pencil" style="font-size:14px"></i></button>
       <button class="btn" style="font-size:10px;padding:3px 8px;background:var(--gray-pale);color:var(--gray-mid);border-color:var(--border-strong)" onclick="closeAction('${a.id}')">Close</button>
     </div>`).join('');
@@ -18794,6 +18848,7 @@ function renderActionItemsPortfolioList(){
               ${a.owner?`<span style="font-size:11px;color:var(--gray-mid)">${a._scopeName?'· ':''}${escHtml(a.owner)}</span>`:''}
               <span style="font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:8px;background:${a._overdue?'var(--red-pale)':'var(--gray-pale)'};color:${a._overdue?'var(--red)':'var(--gray-mid)'}">${dueLabel}</span>
             </div>
+            ${lastUpdatedCaptionHtml(a.lastUpdatedBy,a.lastUpdatedOn)}
           </div>
           ${canEdit?`<div style="display:flex;gap:4px;flex-shrink:0">
             ${(/^Enter Contract Rates/.test(a.description)&&a.scopeId)?`<button class="btn" style="font-size:10px;padding:3px 8px" onclick="closeActionItemsPanel();openScopeEditModal('${a.scopeId}')" title="Enter contract rates for this project"><i class="ti ti-currency-dollar" style="font-size:12px"></i>Enter Rates</button>`:''}
@@ -21666,19 +21721,31 @@ function openBillingHistoryPopout(propName){
   const p=(window.PORTFOLIO||(demoMode?PORTFOLIO:[])).find(x=>x.n===propName);
   if(!p)return;
   const canPM=role==='pm'||role==='admin';
+  // v68r — split from the old single canPM gate: an eligible consultant
+  // (Add-and-Edit only, per canAddBillingFor()) gets Edit here too, while
+  // Delete stays PM/Admin-only via the unchanged canPM. See the matching
+  // renderBudgetTab() billingRow site for the same split.
+  const canEditThisBilling=canAddBillingFor(propName);
   const budget=getBillingBasis(p).amount;
   const propBilling=(window.BILLING_LOG||[]).filter(b=>b.property===propName).sort((a,b)=>{const d=new Date(b.entryDate)-new Date(a.entryDate);return d!==0?d:Number(b.billedYTD)-Number(a.billedYTD);});
   // v62l — task #51: "%" column removed here too, matching the inline
   // card table (see renderBudgetTab's billingRow for rationale).
-  const rows=propBilling.map(b=>`<tr id="billing-row-${b.id}">
+  const rows=propBilling.map(b=>{
+    // v68r — "Last updated by" caption (see lastUpdatedCaptionHtml()),
+    // appended inside the Notes cell below the notes text — same approach
+    // as the matching renderBudgetTab() billingRow site, so both tables
+    // stay visually consistent.
+    const _caption=lastUpdatedCaptionHtml(b.loggedBy,b.loggedOn);
+    return `<tr id="billing-row-${b.id}">
         <td style="font-size:12px">${b.entryDate}</td>
         <td style="font-size:12px;color:var(--gray-mid)">${b.invoiceNumber||'—'}</td>
         <td style="font-size:12px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
-        <td style="font-size:12px;color:var(--gray-mid)">${escHtml(b.notes||'—')}</td>
-        ${canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
-          <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="closeHistoryPopout();editBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}');openBillingHistoryPopout('${propName.replace(/'/g,"\\'")}')">Remove</button>
+        <td style="font-size:12px;color:var(--gray-mid)">${escHtml(b.notes||'—')}${_caption?`<div style="margin-top:4px">${_caption}</div>`:''}</td>
+        ${(canEditThisBilling||canPM)?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
+          ${canEditThisBilling?`<button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="closeHistoryPopout();editBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}')">Edit</button>`:''}${canPM?`<button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${propName.replace(/'/g,"\\'")}');openBillingHistoryPopout('${propName.replace(/'/g,"\\'")}')">Remove</button>`:''}
         </td>`:''}
-      </tr>`).join('');
+      </tr>`;
+  }).join('');
   const overlay=document.createElement('div');
   overlay.id='history-popout-overlay';
   overlay.style.cssText='position:fixed;inset:0;background:rgba(10,22,40,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -21692,7 +21759,7 @@ function openBillingHistoryPopout(propName){
     </div>
     <div style="overflow-y:auto;padding:20px 24px;flex:1">
       <table class="data-table" style="width:100%">
-        <thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>Notes</th>${canPM?'<th></th>':''}</tr></thead>
+        <thead><tr><th>Date</th><th>Invoice #</th><th>Amount</th><th>Notes</th>${(canEditThisBilling||canPM)?'<th></th>':''}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -21743,7 +21810,14 @@ function printBillingHistory(propName){
   const esc=escHtml;
   // v62l — task #51: "%" column removed here too, matching the inline
   // card table and popout (see renderBudgetTab's billingRow for rationale).
-  const rows=propBilling.map(b=>`<tr><td>${esc(b.entryDate)}</td><td>${esc(b.invoiceNumber||'—')}</td><td>${esc(fmtCurrencyFull(b.billedYTD))}</td><td>${esc(b.notes||'—')}</td></tr>`).join('');
+  // v68r — "Last updated by" caption (see lastUpdatedCaptionHtml()).
+  // Judgment call: this print table is a strict 4-column layout, so the
+  // caption renders as a full-width row spanning all columns immediately
+  // below each entry's own row, rather than breaking the fixed columns.
+  const rows=propBilling.map(b=>{
+    const _caption=lastUpdatedCaptionHtml(b.loggedBy,b.loggedOn);
+    return `<tr><td>${esc(b.entryDate)}</td><td>${esc(b.invoiceNumber||'—')}</td><td>${esc(fmtCurrencyFull(b.billedYTD))}</td><td>${esc(b.notes||'—')}</td></tr>${_caption?`<tr><td colspan="4" style="border-bottom:1px solid #eee;padding:0 8px 6px">${_caption}</td></tr>`:''}`;
+  }).join('');
   const html=`<!DOCTYPE html><html><head><title>Billing History — ${esc(propName)}</title>
   <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{font-size:18px;margin:0 0 4px;border-bottom:2px solid #185a9d;padding-bottom:8px}p.sub{font-size:12px;color:#888;margin:8px 0 20px}table{border-collapse:collapse;width:100%;font-size:12px}th{text-align:left;border-bottom:1px solid #ccc;padding:6px 8px;color:#5f6368}td{padding:6px 8px;border-bottom:1px solid #eee}</style>
   </head><body>
@@ -21800,6 +21874,15 @@ function renderBudgetTab(p){
   if(logBtn)logBtn.style.display=canPM?'':'none';
   const addPhaseBtn=document.getElementById('unit-add-phase-btn');
   if(addPhaseBtn)addPhaseBtn.style.display=canPM?'':'none';
+  // v68r — real per-property re-derivation of Billing Add/Edit visibility
+  // (see canAddBillingFor()/setupPortal() comment). This runs every time
+  // the Budget tab actually renders, with the real property in scope, so
+  // an eligible consultant sees these buttons here even though
+  // setupPortal()'s one-time login-time default couldn't know the property
+  // yet.
+  const _billingCanAdd=canAddBillingFor(p.n);
+  const _bb=document.getElementById('prop-budget-btn');if(_bb)_bb.style.display=_billingCanAdd?'':'none';
+  const _bib=document.getElementById('prop-billing-inline-btn');if(_bib)_bib.style.display=_billingCanAdd?'':'none';
 
   // Billing data — v28l: filtered by currentScope.id (each Scope is a
   // separate contract with its own billing history)
@@ -21891,16 +21974,32 @@ function renderBudgetTab(p){
   // cumulative "% Billed" figure already shown above the table (from
   // Billed YTD/budget) is the number that actually matters. Column
   // widths redistributed across the remaining four columns.
-  const billingRow=(b,showActions)=>`<tr id="billing-row-${b.id}">
+  const billingRow=(b,showActions)=>{
+    // v68r — Edit and Delete now gate separately: an eligible consultant
+    // (Add-and-Edit only, per canAddBillingFor()) sees Edit but never
+    // Delete, which stays PM/Admin-only via the unchanged canPM. Both
+    // buttons share the same cell as before; each is now conditional on
+    // its own boolean rather than one shared gate.
+    const canEditThisBilling=canAddBillingFor(p.n);
+    // v68r — "Last updated by" caption (see lastUpdatedCaptionHtml()).
+    // Judgment call: this table renders as a fixed-layout <tr> per entry
+    // with no room for an extra row without breaking the compact history
+    // list, so the caption is appended inside the existing Notes cell,
+    // below the notes text — same approach used at the matching
+    // openBillingHistoryPopout() site so both stay visually consistent.
+    const _caption=lastUpdatedCaptionHtml(b.loggedBy,b.loggedOn);
+    return `<tr id="billing-row-${b.id}">
         <td style="font-size:11px">${b.entryDate}</td>
         <td style="font-size:11px;color:var(--gray-mid)">${b.invoiceNumber||'—'}</td>
         <td style="font-size:11px;font-weight:600">${fmtCurrencyFull(b.billedYTD)}</td>
-        <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(b.notes||'—')}</td>
-        ${showActions&&canPM?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
-          <button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button><button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>
+        <td style="font-size:11px;color:var(--gray-mid);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(b.notes||'—')}${_caption?`<div style="white-space:normal;margin-top:4px">${_caption}</div>`:''}</td>
+        ${showActions&&(canEditThisBilling||canPM)?`<td style="white-space:nowrap;text-align:right;padding-right:4px">
+          ${canEditThisBilling?`<button class="btn btn-edit" style="font-size:10px;padding:2px 6px;margin-right:4px" onclick="editBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Edit</button>`:''}${canPM?`<button class="btn btn-delete" style="font-size:10px;padding:2px 6px" onclick="deleteBillingEntry('${b.id}','${p.n.replace(/'/g,"\\'")}')">Remove</button>`:''}
         </td>`:showActions?'<td></td>':''}
       </tr>`;
+  };
   const BILLING_PREVIEW_COUNT=6;
+  const _billingHeaderCanEdit=canAddBillingFor(p.n);
   histEl.innerHTML=propBilling.length===0?
     `<div style="font-size:12px;color:var(--gray-mid);text-align:center;padding:12px">${canPM?'No Billing Entries Yet. Click "Log billing entry" to start.':'No billing entries logged yet.'}</div>`:
     `<table class="data-table" style="margin-top:0;table-layout:fixed;width:100%">
@@ -21909,7 +22008,7 @@ function renderBudgetTab(p){
         <th style="width:20%">Invoice #</th>
         <th style="width:20%">Amount</th>
         <th style="width:24%">Notes</th>
-        ${canPM?'<th style="width:22%"></th>':''}
+        ${(_billingHeaderCanEdit||canPM)?'<th style="width:22%"></th>':''}
       </tr></thead>
       <tbody>${propBilling.slice(0,BILLING_PREVIEW_COUNT).map(b=>billingRow(b,true)).join('')}</tbody>
     </table>
@@ -25366,16 +25465,25 @@ async function saveBillingModal(){
   // Contract Award Value (edited on the project's Edit panel), so this
   // modal no longer writes to Properties.Project Budget at all. Every
   // save is now a single Billing Log invoice entry.
+  // v68r — "Logged by [name] on [date]" attribution (see
+  // lastUpdatedCaptionHtml()), same name-resolution convention used
+  // elsewhere in this file (e.g. the Change Order loggedBy pattern):
+  // consultant's own name when the actor is a consultant, PM/Admin's own
+  // name (window._userName) otherwise. Replaces the old hardcoded
+  // 'PM User' literal on create, and is now also written on the edit path,
+  // which previously sent no Logged By/On at all.
+  const _billLoggerName=role==='consultant'?(currentConsultantName||'Consultant'):(window._userName||(role==='admin'?'Admin':'PM'));
+  const _billLogDate=new Date().toISOString().split('T')[0];
   if(editingId){
     // Edit mode — update existing entry
     const existing=(window.BILLING_LOG||[]).find(b=>b.id===editingId);
     if(existing){
-      const priorVals={billedYTD:existing.billedYTD,entryDate:existing.entryDate,invoiceNumber:existing.invoiceNumber,notes:existing.notes,includedCOs:existing.includedCOs};
-      existing.billedYTD=invoiceAmount;existing.entryDate=date;existing.invoiceNumber=invoiceNumber;existing.notes=notes;existing.includedCOs=includedCOs;
+      const priorVals={billedYTD:existing.billedYTD,entryDate:existing.entryDate,invoiceNumber:existing.invoiceNumber,notes:existing.notes,includedCOs:existing.includedCOs,loggedBy:existing.loggedBy,loggedOn:existing.loggedOn};
+      existing.billedYTD=invoiceAmount;existing.entryDate=date;existing.invoiceNumber=invoiceNumber;existing.notes=notes;existing.includedCOs=includedCOs;existing.loggedBy=_billLoggerName;existing.loggedOn=_billLogDate;
       if(!demoMode){
         const updRes=await atUpdate('Billing Log',editingId,{
           'Invoice Amount':invoiceAmount,'Entry Date':date,'Invoice #':invoiceNumber||'','Notes':notes||'',
-          'Included Change Orders':includedCOs,
+          'Included Change Orders':includedCOs,'Logged By':_billLoggerName,'Logged On':_billLogDate,
         });
         if(updRes&&updRes.fields?.['Billing Log Last Modified'])existing.conflictTs=updRes.fields['Billing Log Last Modified'];
         if(!updRes){
@@ -25397,7 +25505,7 @@ async function saveBillingModal(){
     // entry shows up on the per-project Budget Performance tab (which
     // filters by scopeId) instead of only ever appearing on property-wide
     // views. Confirmed live this was silently missing before.
-    const newEntry={id:'bl-'+Date.now(),property:currentProp.n,scopeId,billedYTD:invoiceAmount,entryDate:date,invoiceNumber,notes,includedCOs,loggedBy:'PM User'};
+    const newEntry={id:'bl-'+Date.now(),property:currentProp.n,scopeId,billedYTD:invoiceAmount,entryDate:date,invoiceNumber,notes,includedCOs,loggedBy:_billLoggerName,loggedOn:_billLogDate};
     if(!demoMode){
       const fields={
         'Property Name':propertyNameToLink(currentProp.n),
@@ -25405,7 +25513,8 @@ async function saveBillingModal(){
         'Entry Date':date,
         'Invoice #':invoiceNumber||'',
         'Notes':notes||'',
-        'Logged By':'PM User',
+        'Logged By':_billLoggerName,
+        'Logged On':_billLogDate,
       };
       if(scopeId)fields['Linked Scope']=[scopeId];
       if(includedCOs.length>0)fields['Included Change Orders']=includedCOs;
@@ -35706,6 +35815,7 @@ function previewDoc(docId, syntheticDoc){
       </div>
       <div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Weekly Notes</div>
       <div style="font-size:13px;color:var(--gray-dark);line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(s.notes||'—')}</div>
+      ${lastUpdatedCaptionHtml(s.consultant,s.submittedAt)}
       ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Return Note:</strong> ${escHtml(s.returnNote)}</div>`:''}`;
   } else if(d.subfolder==='Meeting Minutes'&&d._meetingId){
     const m=meetings.find(x=>x.id===d._meetingId);
@@ -35723,7 +35833,7 @@ function previewDoc(docId, syntheticDoc){
       </div>
       ${m.agenda?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Agenda</div><div style="font-size:13px;line-height:1.7;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(m.agenda)}</div></div>`:''}
       ${m.notes?`<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Discussion Notes</div><div style="font-size:13px;line-height:1.7;white-space:pre-line;background:var(--gray-xpale);padding:12px;border-radius:6px">${escHtml(m.notes)}</div></div>`:''}
-      ${propActions.length>0?`<div><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Action Items</div>${propActions.map(a=>`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-top:4px;flex-shrink:0"></div><div><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · ${a.priority}</span></div></div>`).join('')}</div>`:''}`;
+      ${propActions.length>0?`<div><div style="font-size:11px;font-weight:600;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Action Items</div>${propActions.map(a=>`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--blue-dark);margin-top:4px;flex-shrink:0"></div><div><strong>${escHtml(a.description)}</strong><br><span style="color:var(--gray-mid)">Owner: ${escHtml(a.owner)} · Due: ${a.due} · ${a.priority}</span>${lastUpdatedCaptionHtml(a.lastUpdatedBy,a.lastUpdatedOn)}</div></div>`).join('')}</div>`:''}`;
   } else {showToast('Preview not available','warn');return;}
   const overlay=document.createElement('div');
   overlay.id='doc-preview-overlay';
@@ -36762,7 +36872,7 @@ function previewFieldUpdateCard(subId){
         <div><span style="color:var(--gray-mid)">Phase</span><br><strong>${escHtml(s.phase||'—')}</strong></div>
         <div><span style="color:var(--gray-mid)">Status</span><br><span class="badge ${scl[s.reviewStatus]||'b-nac'}">${s.reviewStatus}</span></div>
       </div>
-      <div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:4px">Weekly Notes</div><div style="font-size:13px;line-height:1.6">${escHtml(s.notes||'—')}</div></div>
+      <div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-mid);margin-bottom:4px">Weekly Notes</div><div style="font-size:13px;line-height:1.6">${escHtml(s.notes||'—')}</div>${lastUpdatedCaptionHtml(s.consultant,s.submittedAt)}</div>
       ${s.savings?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--green-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--green);margin-bottom:2px">Savings Identified</div><div style="font-size:13px;font-weight:600">${escHtml(s.savings)}</div></div>`:''}
       ${s.returnNote?`<div style="margin-bottom:12px;padding:10px 14px;background:var(--red-pale);border-radius:6px"><div style="font-size:11px;font-weight:600;color:var(--red);margin-bottom:2px">Return Note</div><div style="font-size:13px">${escHtml(s.returnNote)}</div></div>`:''}
     </div>
@@ -36881,6 +36991,7 @@ function renderPropUpdates(p){
     </div>
     <div class="update-card-meta">Submitted by <strong>${escHtml(s.consultant||'—')}</strong></div>
     <div class="update-card-body">${escHtml(s.notes)}</div>
+    ${lastUpdatedCaptionHtml(s.consultant,s.submittedAt)}
     <div class="update-card-tags"><span class="badge b-nac">${escHtml(s.issueStatus)}</span>${s.savings?`<span class="badge b-track">${escHtml(s.savings)}</span>`:''}</div>
   </div>`;
   }).join('')
@@ -37466,6 +37577,7 @@ function previewQueueItem(subId){
         <button class="btn btn-icon" style="font-size:11px;padding:4px 10px;width:auto" onclick="saveQueueItemNotes('${subId}')" title="Save note changes"><i class="ti ti-device-floppy" style="font-size:12px"></i> Save</button>
       </div>
       <textarea id="queue-preview-notes-${subId}" style="width:100%;min-height:110px;font-size:13px;color:var(--gray-dark);line-height:1.7;background:var(--gray-xpale);padding:12px;border-radius:6px;border:1px solid var(--border);font-family:inherit;resize:vertical" onclick="event.stopPropagation()">${escHtml(s.notes||'')}</textarea>
+      ${lastUpdatedCaptionHtml(s.consultant,s.submittedAt)}
       ${s.returnNote?`<div style="margin-top:12px;padding:10px;background:var(--amber-pale);border-radius:6px;font-size:12px"><strong>Previous Return Note:</strong> ${escHtml(s.returnNote)}</div>`:''}
       ${s.draftAction?`<div style="margin-top:12px;padding:12px;background:var(--blue-xpale);border:1px solid var(--blue-pale);border-radius:6px">
         <div style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px"><i class="ti ti-flag" style="margin-right:4px"></i>Consultant-flagged follow-up</div>
@@ -37504,14 +37616,25 @@ async function saveQueueItemNotes(subId){
   const ta=document.getElementById(`queue-preview-notes-${subId}`);if(!ta)return;
   const newNotes=ta.value;
   if(newNotes===s.notes){showToast('No changes to save','info');return;}
+  // v68r — a PM editing Weekly Notes here is a genuine content edit outside
+  // the consultant's own resubmit flow, so per the confirmed "Last updated
+  // by [whoever last edited it]" decision this now also stamps Consultant
+  // Name/Submitted Date to the editor, same name-resolution convention
+  // used elsewhere in this file (e.g. the Billing/Change Order loggedBy
+  // pattern) — otherwise the caption would keep crediting the original
+  // consultant for text a PM actually wrote.
+  const editorName=role==='consultant'?(currentConsultantName||'Consultant'):(window._userName||'PM User');
+  const editDate=new Date().toISOString().split('T')[0];
   if(s.atId){
-    const res=await atUpdate('Field Updates',s.atId,{'Weekly Notes':newNotes});
+    const res=await atUpdate('Field Updates',s.atId,{'Weekly Notes':newNotes,'Consultant Name':editorName,'Submitted Date':editDate});
     if(!res){
       showToast('Could not save note changes. Please try again.','error');
       return;
     }
   }
   s.notes=newNotes;
+  s.consultant=editorName;
+  s.submittedAt=editDate;
   showToast('Weekly Notes updated','success');
 }
 window.saveQueueItemNotes=saveQueueItemNotes;
@@ -39737,6 +39860,10 @@ async function pollBudget(){
       includedCOs: (r.fields['Included Change Orders']||[]).map(x=>x.id||x),
       notes: r.fields['Notes']||'',
       loggedBy: r.fields['Logged By']||'',
+      // v68r — must stay current here too, same reason as the conflictTs
+      // comment below -- pollBudget() reassigns window.BILLING_LOG wholesale
+      // every ~45s. See lastUpdatedCaptionHtml().
+      loggedOn: r.fields['Logged On']||'',
       // v55o — optimistic-locking conflict detection (task #90). Must stay
       // current here too -- pollBudget() reassigns window.BILLING_LOG
       // wholesale every ~45s.
