@@ -4501,8 +4501,26 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       not a new tile. Reuses monthPace's own real Sales actuals-to-date
       and the same real revenueYtdActual the Company Backlog tile already
       computes, rather than a third independent derivation of either.
+
+   v3j (2026-09-13): fixed the real Hub SSO bug Misty reported (clicking
+   the Strategy tile from PULSE Hub dropped the user on Strategy's own
+   login screen instead of signing them in). Paired with worker_v3i.mjs
+   (no functional change on the worker side; its /sso-login already
+   returned a correct, successful session).
+
+   Traced live rather than guessed: DevTools confirmed sessionStorage
+   held a real pulse_hub_token, the /sso-login request returned status
+   200, and the response body was a fully valid { token, user } session.
+   Root cause was in tryHubSso() below: it checked `result.ok`, a field
+   this worker's success responses never send on ANY login path (manual
+   login, PIN-reset login, and SSO login all return { token, user } via
+   the shared json() helper, confirmed by reading the worker source
+   directly) — so the check was always false, even on a genuine,
+   successful login, and silently fell through to the login screen every
+   time. Fixed: tryHubSso() now checks `result.token` instead of
+   `result.ok`, matching what the worker actually sends.
    ============================================================ */
-const APP_VERSION = 'v3a';
+const APP_VERSION = 'v3j';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -4639,7 +4657,11 @@ async function tryHubSso(){
   try { hubToken = sessionStorage.getItem('pulse_hub_token') || null; } catch(e){}
   if (!hubToken) return false;
   const result = await requestSsoSession(hubToken);
-  if (!result || !result.ok) return false; // falls through to normal login screen
+  // v3j (2026-09-13): checks result.token, not result.ok — the worker's
+  // /sso-login success response has never included an `ok` field (every
+  // login path here returns { token, user }), so the old check was
+  // always false even on a genuine 200 success. See changelog above.
+  if (!result || !result.token) return false; // falls through to normal login screen
   completeSsoLogin(result);
   return true;
 }
