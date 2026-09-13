@@ -4579,7 +4579,104 @@ async function verifyPinLogin(roleKey,nameInput,pinInput){
     return {ok:false,message:(d&&d.message)||'Sign in failed. Try again.'};
   }
   window._sessionToken=d.token;
-  return {ok:true,name:d.name,tourCompleted:d.tourCompleted||null,recordId:d.recordId||null};
+  return {ok:true,name:d.name,tourCompleted:d.tourCompleted||null,recordId:d.recordId||null,needsPinSetup:!!d.needsPinSetup};
+}
+
+// v68o — Forgot-PIN self-serve. Asks for name only (role comes from the
+// login screen's own current selection); server always replies with the
+// same generic message whether or not a match was found, so this can't be
+// used to enumerate valid names. This also doubles as PULSE's only
+// "change my PIN" path — there's no separate change-PIN feature, since
+// this covers that case too (issue a fresh one-time PIN, log back in,
+// choose a new permanent one).
+function openForgotPin(){
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('forgot-pin-screen').style.display='flex';
+  document.getElementById('forgot-pin-form-wrap').style.display='block';
+  document.getElementById('forgot-pin-confirm').style.display='none';
+  document.getElementById('forgot-pin-intro').style.display='block';
+  const err=document.getElementById('forgot-pin-error');if(err){err.style.display='none';err.textContent='';}
+  const nameInput=document.getElementById('forgot-pin-name-input');
+  if(nameInput)nameInput.value=document.getElementById('login-name-input')?document.getElementById('login-name-input').value:'';
+}
+function closeForgotPin(){
+  document.getElementById('forgot-pin-screen').style.display='none';
+  document.getElementById('login-screen').style.display='flex';
+}
+async function submitForgotPin(){
+  const nameInput=document.getElementById('forgot-pin-name-input');
+  const errEl=document.getElementById('forgot-pin-error');
+  const name=(nameInput.value||'').trim();
+  if(!name){
+    errEl.textContent='Enter your name to continue.';errEl.style.display='block';
+    return;
+  }
+  errEl.style.display='none';
+  let d=null;
+  try{
+    const r=await workerFetch(`${WORKER_URL}/forgot-pin`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({role,name}),
+    });
+    d=await r.json();
+  }catch(e){
+    console.error('Forgot-PIN request failed:',e);
+    errEl.textContent='Could not process your request. Check your connection and try again.';
+    errEl.style.display='block';
+    return;
+  }
+  document.getElementById('forgot-pin-form-wrap').style.display='none';
+  document.getElementById('forgot-pin-intro').style.display='none';
+  const confirmEl=document.getElementById('forgot-pin-confirm');
+  confirmEl.textContent=(d&&d.message)||"If that name and role match an account on file, a one-time PIN has been sent to the email on record.";
+  confirmEl.style.display='block';
+}
+
+// v68o — Choose-your-permanent-PIN interstitial, shown when a login
+// succeeds with needsPinSetup:true (their current PIN was a one-time
+// credential, no User PIN on file yet). Calls POST /set-user-pin with the
+// session token doLogin() already stored in window._sessionToken.
+function openPinSetup(){
+  document.getElementById('pin-setup-new-input').value='';
+  document.getElementById('pin-setup-confirm-input').value='';
+  const err=document.getElementById('pin-setup-error');if(err){err.style.display='none';err.textContent='';}
+  document.getElementById('pin-setup-screen').style.display='flex';
+}
+async function submitPinSetup(){
+  const newPin=(document.getElementById('pin-setup-new-input').value||'').trim();
+  const confirmPin=(document.getElementById('pin-setup-confirm-input').value||'').trim();
+  const errEl=document.getElementById('pin-setup-error');
+  if(!/^[A-Za-z0-9]{6}$/.test(newPin)){
+    errEl.textContent='PIN must be 6 letters/numbers.';errEl.style.display='block';
+    return;
+  }
+  if(newPin!==confirmPin){
+    errEl.textContent='PINs do not match.';errEl.style.display='block';
+    return;
+  }
+  errEl.style.display='none';
+  let d=null;
+  try{
+    const r=await workerFetch(`${WORKER_URL}/set-user-pin`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+(window._sessionToken||'')},
+      body:JSON.stringify({newPin,confirmPin}),
+    });
+    d=await r.json();
+  }catch(e){
+    console.error('Set-user-pin request failed:',e);
+    errEl.textContent='Could not save your PIN. Check your connection and try again.';
+    errEl.style.display='block';
+    return;
+  }
+  if(!d||!d.ok){
+    errEl.textContent=(d&&d.message)||'Could not save your PIN. Try again.';
+    errEl.style.display='block';
+    return;
+  }
+  document.getElementById('pin-setup-screen').style.display='none';
+  _finishLogin();
 }
 
 // Build 2 — auto-launch Orientation Tour on first login only.
@@ -5955,10 +6052,13 @@ window.PROPERTIES_SEED = [
           <button type="button" onclick="togglePinVisibility('login-pin-input',this)" title="Show PIN" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;color:var(--gray-mid)"><i class="ti ti-eye" style="font-size:16px"></i></button>
         </div>
         <div id="login-pin-error" style="display:none;color:var(--red);font-size:12px;margin-top:8px"></div>
+        <div id="login-forgot-pin-wrap" style="text-align:right;margin-top:6px">
+          <a href="#" onclick="openForgotPin();return false;" style="font-size:12px;color:var(--gray-mid);text-decoration:underline">Forgot your PIN?</a>
+        </div>
       </div>
       <button class="login-btn" onclick="doLogin()"><i class="ti ti-login"></i>Enter Portal</button>
     </div>
-    <div class="login-version">PULSE v1.0 · elevatorpulse.com</div>
+    <div class="login-version">PULSE v1.0 · elevatorpulse.com/modernization</div>
   </div>
   <!-- RIGHT — dark hero panel -->
   <div class="login-right">
@@ -6011,6 +6111,48 @@ window.PROPERTIES_SEED = [
   <div style="font-size:22px;font-weight:600;color:white;margin-bottom:8px;letter-spacing:-.3px">Coming soon</div>
   <div style="font-size:13px;color:rgba(255,255,255,.4);max-width:320px;line-height:1.6;margin-bottom:2rem">This portfolio is not yet configured. Contact your project manager to get access.</div>
   <button onclick="document.getElementById('under-construction-screen').style.display='none';document.getElementById('login-screen').style.display='flex';" style="padding:9px 20px;background:rgba(255,255,255,.1);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15);border-radius:6px;font-size:13px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">← Back to login</button>
+</div>
+
+<!-- v68o: FORGOT PIN — asks for name + role (role is inherited from the
+     login screen's own selection so it isn't asked twice), calls
+     POST /forgot-pin, always shows the same generic confirmation message
+     regardless of whether a matching account was found. -->
+<div id="forgot-pin-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center">
+  <div style="width:100%;max-width:380px">
+    <div style="width:56px;height:56px;background:rgba(255,255,255,.08);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 1.5rem"><i class="ti ti-key" style="color:rgba(255,255,255,.5);font-size:28px"></i></div>
+    <div style="font-size:22px;font-weight:600;color:white;margin-bottom:8px;letter-spacing:-.3px">Forgot your PIN?</div>
+    <div id="forgot-pin-intro" style="font-size:13px;color:rgba(255,255,255,.5);line-height:1.6;margin-bottom:1.5rem">Enter your name and we'll email a one-time PIN to the address on file, so you can sign back in and choose a new one.</div>
+    <div id="forgot-pin-form-wrap">
+      <input type="text" class="styled" id="forgot-pin-name-input" placeholder="First and last name" autocomplete="off" style="margin-bottom:12px;width:100%" onkeydown="if(event.key==='Enter')submitForgotPin()">
+      <div id="forgot-pin-error" style="display:none;color:#F4A0B0;font-size:12px;margin-bottom:12px"></div>
+      <button class="login-btn" style="width:100%;justify-content:center" onclick="submitForgotPin()"><i class="ti ti-send"></i>Send one-time PIN</button>
+    </div>
+    <div id="forgot-pin-confirm" style="display:none;font-size:13px;color:rgba(255,255,255,.7);line-height:1.6;margin-bottom:1.5rem;background:rgba(255,255,255,.06);border-radius:8px;padding:14px"></div>
+    <button onclick="closeForgotPin()" style="margin-top:1.5rem;padding:9px 20px;background:rgba(255,255,255,.1);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15);border-radius:6px;font-size:13px;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">← Back to login</button>
+  </div>
+</div>
+
+<!-- v68o: CHOOSE YOUR PERMANENT PIN — shown right after a successful login
+     where the server signals needsPinSetup:true (their current PIN was a
+     one-time credential, no User PIN on file yet for that person). Calls
+     POST /set-user-pin with the session token doLogin() already stored.
+     Not shown for Admin, which never has this concept. -->
+<div id="pin-setup-screen" style="display:none;position:fixed;inset:0;background:var(--navy);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center">
+  <div style="width:100%;max-width:380px">
+    <div style="width:56px;height:56px;background:rgba(93,202,165,.15);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 1.5rem"><i class="ti ti-lock" style="color:#5DCAA5;font-size:28px"></i></div>
+    <div style="font-size:22px;font-weight:600;color:white;margin-bottom:8px;letter-spacing:-.3px">Choose your permanent PIN</div>
+    <div style="font-size:13px;color:rgba(255,255,255,.5);line-height:1.6;margin-bottom:1.5rem">This is a one-time step. Pick a 6-character PIN (letters and/or numbers) that's different from the one you just used, you'll use this one to sign in from now on.</div>
+    <div style="position:relative;margin-bottom:12px">
+      <input type="password" class="styled" id="pin-setup-new-input" placeholder="New 6-character PIN" maxlength="6" autocomplete="off" style="width:100%;padding-right:36px">
+      <button type="button" onclick="togglePinVisibility('pin-setup-new-input',this)" title="Show PIN" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;color:var(--gray-mid)"><i class="ti ti-eye" style="font-size:16px"></i></button>
+    </div>
+    <div style="position:relative;margin-bottom:12px">
+      <input type="password" class="styled" id="pin-setup-confirm-input" placeholder="Confirm new PIN" maxlength="6" autocomplete="off" style="width:100%;padding-right:36px" onkeydown="if(event.key==='Enter')submitPinSetup()">
+      <button type="button" onclick="togglePinVisibility('pin-setup-confirm-input',this)" title="Show PIN" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;color:var(--gray-mid)"><i class="ti ti-eye" style="font-size:16px"></i></button>
+    </div>
+    <div id="pin-setup-error" style="display:none;color:#F4A0B0;font-size:12px;margin-bottom:12px"></div>
+    <button class="login-btn" style="width:100%;justify-content:center" onclick="submitPinSetup()"><i class="ti ti-check"></i>Save my PIN</button>
+  </div>
 </div>
 
 <!-- MEETING SLIDE PANEL -->
@@ -7157,7 +7299,7 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-label">Connecting...</span>
 </div>
 <button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68n</div>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68o</div>
     </div>
   </nav>
 
@@ -9108,6 +9250,11 @@ function selectRole(r,btn){
     wrap.style.display=(r==='pm'||r==='client'||r==='admin'||r==='consultant')?'block':'none';
     if(nameGroup)nameGroup.style.display=(r==='admin')?'none':'block';
     const err=document.getElementById('login-pin-error');if(err)err.style.display='none';
+    // v68o — Forgot-PIN self-serve looks a person up by name, so it only
+    // makes sense where a name field is showing (not Admin's fixed shared
+    // PIN, not the portfolio-wide Consultant's fixed shared identity).
+    const forgotWrap=document.getElementById('login-forgot-pin-wrap');
+    if(forgotWrap)forgotWrap.style.display=(nameGroup&&nameGroup.style.display!=='none')?'block':'none';
   }
   // v66f — Portfolio-wide access checkbox only ever makes sense under
   // Consultant. Switching away from Consultant resets it, so a stray check
@@ -9130,6 +9277,8 @@ function toggleConsultantUnrestrictedField(){
   const nameGroup=document.getElementById('login-name-field-group');
   if(!cb||!nameGroup||role!=='consultant')return;
   nameGroup.style.display=cb.checked?'none':'block';
+  const forgotWrap=document.getElementById('login-forgot-pin-wrap');
+  if(forgotWrap)forgotWrap.style.display=cb.checked?'none':'block';
 }
 
 // Show/hide toggle for masked PIN fields (login + consultant picker).
@@ -9228,6 +9377,16 @@ async function doLogin(){
     window._prevLoginTime=prev?new Date(prev):null;
     localStorage.setItem('pulse_last_login_time',new Date().toISOString());
   }catch(e){window._prevLoginTime=null;}
+  // v68o — their PIN worked, but it was still a one-time credential (no
+  // User PIN on file yet). Everything above this point (session storage,
+  // consultant identity, MARLI session id) is already set up correctly,
+  // so once they finish choosing their permanent PIN, submitPinSetup()
+  // can go straight into _finishLogin() without redoing any of it.
+  if(window._lastLoginResult&&window._lastLoginResult.needsPinSetup){
+    document.getElementById('login-screen').style.display='none';
+    openPinSetup();
+    return;
+  }
   _finishLogin();
 }
 // v45m — background half of the optimistic restore in
@@ -36966,7 +37125,7 @@ async function sendWeeklyReminders(){
     const htmlBody=buildPulseEmail({
       title:'Weekly Update Reminder',
       subtitle:{property:'Weekly Field Update',detail:`This is a reminder to submit your weekly field update by ${dueDay}.`},
-      rows:[['Due by',dueDay],['Submit at','<a href="https://elevatorpulse.com" style="color:#185FA5">elevatorpulse.com</a>']],
+      rows:[['Due by',dueDay],['Submit at','<a href="https://elevatorpulse.com/modernization" style="color:#185FA5">elevatorpulse.com/modernization</a>']],
     });
     let sentCount=0;
     for(const c of missing){
