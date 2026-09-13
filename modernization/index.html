@@ -13216,8 +13216,34 @@ function scopeUnitChipsHtml(s){
     <div id="${collapsedId}" data-collapsed="1">${scopeUnitChipsInner(units,showToggle,PREVIEW_COUNT,false)}</div>
   </div>`;
 }
+// v68p — task: Overview scope card unit chips now pick up phase color
+// coding, approved mockup mockup_scope_card_unit_colors.html (Misty
+// approved as-is). Per Misty's direct simplification, this reuses the
+// EXISTING per-Unit-Group phase status already computed and shown on the
+// Unit Phases tab (derivePhaseStatus(), ~line 22834) rather than
+// inventing any new boundary logic -- a unit's Unit Group found "In
+// Progress" gets the exact same blue already used for that badge
+// (#E6F1FB/#185FA5, the .b-nip/.b-cip class colors), "Complete" gets the
+// exact same green (#EAF3DE/#3B6D11, the .b-done class colors). Any other
+// status (Not Started/Behind/Ahead) or a unit with no Unit Group assigned
+// yet keeps today's plain gray chip, unchanged. getUnitGroupForUnit()
+// reuses the same reverse-lookup pattern already established elsewhere in
+// this file (e.g. derivePhaseStatusFromSteps's phaseId resolution) --
+// window.UNIT_GROUPS is already loaded globally by the time scope cards
+// render, so this adds no new data fetching.
+function getUnitGroupForUnit(unitId){
+  return (window.UNIT_GROUPS||[]).find(g=>(g.linkedUnitIds||[]).includes(unitId));
+}
+function unitChipPhaseStyle(u){
+  const ug=getUnitGroupForUnit(u.id);
+  if(!ug)return'background:var(--gray-xpale);color:var(--navy)';
+  const status=derivePhaseStatus(ug.id,u.property,ug.phase);
+  if(status==='Complete')return'background:#EAF3DE;color:#3B6D11;font-weight:600';
+  if(status==='In Progress')return'background:#E6F1FB;color:#185FA5;font-weight:600';
+  return'background:var(--gray-xpale);color:var(--navy)';
+}
 function scopeUnitChipsInner(units,showToggle,previewCount,expanded){
-  const chip=u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;background:var(--gray-xpale);border-radius:4px;padding:3px 8px;color:var(--navy)">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>`;
+  const chip=u=>`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;border-radius:4px;padding:3px 8px;${unitChipPhaseStyle(u)}">${(u.name||'(unnamed)').replace(/</g,'&lt;')}</span>`;
   if(!showToggle||expanded)return units.map(chip).join('');
   return units.slice(0,previewCount).map(chip).join('')+`<span style="display:inline-block;margin:0 6px 6px 0;font-size:12px;color:var(--gray-mid)">+${units.length-previewCount} more</span>`;
 }
