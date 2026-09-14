@@ -34,6 +34,13 @@
   --paper:#f3f3f7;
   --paper-raised:#FFFFFF;
   --paper-sunk:#eae9f1;
+  /* Stat-tile-only surface token (2026-09-14), light mode keeps the
+     existing true-white card surface, already high contrast against
+     --paper here; the lighter dark-mode value below is what actually
+     fixes the flagged contrast gap. Scoped to .fc-tile only, not the
+     shared --paper-raised token every other card type uses, per
+     Misty's direct confirmation not to restyle cards app-wide. */
+  --tile-raised:#FFFFFF;
   --border:#dcdbe6;
   --border-strong:#c6c4d4;
   --text:#14181f;
@@ -89,6 +96,7 @@
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --navy:#0e0f10; --navy-2:#161618; --paper:#131415; --paper-raised:#1f2023; --paper-sunk:#27282b;
+    --tile-raised:#2b2d33;
     --border:#303236; --border-strong:#414349; --text:#e7e9ee; --text-muted:#9aa1b3; --text-faint:#6b7385;
     --accent:#8a78e8; --accent-soft:#221d47; --accent-ink:#b0a2f2;
     --good:#4fcb8e; --good-soft:#0f2e21; --warn:#d9a53f; --warn-soft:#332508; --crit:#e3707c; --crit-soft:#361419; --slate:#9aa5bd; --slate-soft:#2a2e3a;
@@ -99,6 +107,7 @@
 }
 :root[data-theme="dark"]{
   --navy:#0e0f10; --navy-2:#161618; --paper:#131415; --paper-raised:#1f2023; --paper-sunk:#27282b;
+  --tile-raised:#2b2d33;
   --border:#303236; --border-strong:#414349; --text:#e7e9ee; --text-muted:#9aa1b3; --text-faint:#6b7385;
   --accent:#8a78e8; --accent-soft:#221d47; --accent-ink:#b0a2f2;
   --good:#4fcb8e; --good-soft:#0f2e21; --warn:#d9a53f; --warn-soft:#332508; --crit:#e3707c; --crit-soft:#361419; --slate:#9aa5bd; --slate-soft:#2a2e3a;
@@ -736,7 +745,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
 .fc-tiles{display:grid; grid-template-columns:repeat(4, 1fr); gap:14px; margin-bottom:16px}
 @media (max-width:1100px){ .fc-tiles{grid-template-columns:repeat(2, 1fr)} }
 @media (max-width:560px){ .fc-tiles{grid-template-columns:1fr} }
-.fc-tile{background:var(--paper-raised); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); padding:16px 18px}
+.fc-tile{background:var(--tile-raised); border:1px solid var(--border-strong); border-radius:12px; box-shadow:var(--shadow); padding:16px 18px}
 .fc-tile-top{display:flex; align-items:center; gap:10px; margin-bottom:10px}
 .fc-tile-icon{
   width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0;
@@ -2114,10 +2123,12 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
       <div class="card">
         <div class="card-head"><h3>Top Sales Performers</h3><span class="meta" id="es-top-sales-meta">&mdash;</span></div>
         <div class="card-pad" style="padding-top:6px" id="es-top-sales-body"></div>
+        <div class="card-pad" style="padding-top:0"><a href="#" class="legend-note" onclick="openTopPerformersPanel(event)">Show more &rsaquo;</a></div>
       </div>
       <div class="card">
         <div class="card-head"><h3>Top Revenue Performers</h3><span class="meta" id="es-top-billers-meta">&mdash;</span></div>
         <div class="card-pad" style="padding-top:6px" id="es-top-billers-body"></div>
+        <div class="card-pad" style="padding-top:0"><a href="#" class="legend-note" onclick="openTopPerformersPanel(event)">Show more &rsaquo;</a></div>
       </div>
     </div>
 
@@ -3472,6 +3483,28 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
   </div>
 </div>
 
+<!-- Top Performers slide-out panel (2026-09-14): Executive Summary's Top 5
+     Sales Performers / Top 5 Revenue Performers cards each gain a "Show
+     more" link opening this panel, Top 10 of both stacked together, plus
+     a region filter (default Company-Wide, matching the cards it expands
+     from). Reuses the same .slide-out-overlay/.slide-out-panel pattern as
+     the missing-service panel above rather than a new one. -->
+<div class="slide-out-overlay hidden" id="top-performers-overlay" onclick="if(event.target===this) closeTopPerformersPanel()">
+  <div class="slide-out-panel">
+    <button class="slide-out-close" onclick="closeTopPerformersPanel()">&times;</button>
+    <h4>Top Performers</h4>
+    <div class="sub" id="top-performers-sub">&mdash;</div>
+    <div class="region-filter" style="display:flex; align-items:center; gap:8px; margin-bottom:16px">
+      <label style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-faint)">Region</label>
+      <select id="top-performers-region-select" onchange="loadTopPerformersPanel()" style="background:var(--paper-sunk); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:5px 8px; font-size:12.5px; font-family:inherit"></select>
+    </div>
+    <div style="margin-bottom:8px; font-size:12.5px; font-weight:700">Top 10 Sales Performers</div>
+    <div id="top-performers-sales-rows"></div>
+    <div style="margin:18px 0 8px; font-size:12.5px; font-weight:700">Top 10 Revenue Performers</div>
+    <div id="top-performers-billers-rows"></div>
+  </div>
+</div>
+
 <script>
 /* ============================================================
    AUTH — real server-side session against the live Worker, same
@@ -4621,8 +4654,39 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    where users type or reconcile exact amounts) are intentionally out
    of scope, confirmed with Misty. No worker change, still paired with
    worker_v3m.mjs.
+
+   v3o (2026-09-14): first batch clearing the continuity brief's open
+   list, three items, all confirmed with Misty (mockup reviewed and
+   approved) before building. (1) Dark-mode stat tile contrast: .fc-tile
+   gets its own --tile-raised token (a lighter #2b2d33 in dark mode,
+   defaults to the existing --paper-raised white in light mode, no
+   change there) plus a stronger border, scoped to stat tiles only per
+   Misty's direct confirmation not to restyle every card app-wide (the
+   shared --paper-raised token stays untouched, still used by 20 other
+   card types). (2) Executive Summary's Top 5 Sales Performers / Top 5
+   Revenue Performers cards each gain a "Show more" link opening a new
+   slide-out panel (reusing the existing .slide-out-overlay/.slide-out-
+   panel pattern built for the missing-service drill-down, not a new
+   one) with Top 10 of each stacked, plus a region filter defaulting to
+   Company-Wide, matching the cards it expands from. Backed by a new
+   GET /api/top-performers-detail route, itself just
+   getTopSalesPerformers/getTopBillers at limit 10 instead of 5, no new
+   backend query logic. (3) buildMonthPaceDetailTableHtml() and its
+   MONTH_PACE_SOURCE_LABELS map, unused since the 2026-09-12 Month Pace
+   consolidation (§122) and left in place then as a lower-risk choice,
+   removed now as its own scoped cleanup, confirmed zero remaining call
+   sites first.
+
+   Not included in v3o, still open: the 2023 billed_fact seed (SQL
+   pasted separately in chat per standing rule 6, not a code change);
+   the Canada/UK is_placeholder flip (a D1 data update, not a code
+   change); Backlog History's "fell out" methodology question (Misty
+   confirmed staying with the combined approximate figure for now); the
+   old Top 10 leaderboard ask (superseded by item 2 above, now closed).
+   Worker: worker_v3o.mjs adds one new route only
+   (/api/top-performers-detail), reusing existing functions unchanged.
    ============================================================ */
-const APP_VERSION = 'v3n';
+const APP_VERSION = 'v3o';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -5616,60 +5680,15 @@ function buildMonthPaceTilesHtml(pace, opts){
   `;
 }
 
-// Shared by both Company Blended Forecast Detail tables (Sales, and the
-// Revenue mirror added 2026-09-10 per Misty's direct request, same field
-// names on revenuePace as on the top-level pace object: trailingWindowLabel,
-// priorActualsSum, currentMonth.{label,actualsToDate,blended,bizDaysElapsed,
-// bizDaysRemaining,totalBizDaysInMonth}, totalYearForecast). Both pace
-// objects also carry remainingMonthsDetail (Revenue since 2026-09-10:
-// scheduled Revenue Backlog vs. trailing-average fallback; Sales since
-// 2026-09-10, per Misty's "should sales look at what's in the proposed
-// opportunities?": scheduled Weighted Pipeline vs. trailing-average
-// fallback) — when present, an extra row breaks out how many of the
-// remaining months came from each source, so neither blend is a black
-// box. MONTH_PACE_SOURCE_LABELS above keys the row's wording by source
-// so this one function renders either pace object correctly.
-// Remaining-months source labels (2026-09-10): 'backlog' is Revenue's
-// scheduled Revenue Backlog, 'pipeline' is Sales' Weighted Pipeline
-// (mirrors the Revenue Bridge's own Step 5 methodology); 'run_rate' is
-// the trailing-average fallback shared by both. Keyed by source so this
-// table works for either pace object without knowing which one it's
-// rendering.
-const MONTH_PACE_SOURCE_LABELS = {
-  backlog: 'from scheduled Revenue Backlog',
-  pipeline: 'from Weighted Pipeline',
-  run_rate: 'at trailing average',
-};
-
-function buildMonthPaceDetailTableHtml(pace, trailingWindowLabel){
-  let remainingRow = '';
-  if (pace.remainingMonthsDetail && pace.remainingMonthsDetail.length) {
-    const bySource = new Map();
-    for (const d of pace.remainingMonthsDetail) {
-      if (!bySource.has(d.source)) bySource.set(d.source, []);
-      bySource.get(d.source).push(d);
-    }
-    const parts = [];
-    for (const [source, months] of bySource) {
-      const sum = months.reduce((s, d) => s + d.amount, 0);
-      const label = MONTH_PACE_SOURCE_LABELS[source] || source;
-      const suffix = source === 'run_rate' ? ' (nothing scheduled)' : '';
-      parts.push(`${fmtMoneyShort(sum)} ${label} (${months.length} mo)${suffix}`);
-    }
-    remainingRow = `<tr><td>Remaining months (${pace.remainingMonthsDetail.length} mo)</td><td class="num" style="font-size:11.5px; color:var(--text-faint); font-weight:400">${parts.join(' + ')}</td></tr>`;
-  }
-  return `
-    <table class="rtable">
-      <tbody>
-        <tr><td>${trailingWindowLabel}</td><td class="num">${fmtMoneyShort(pace.priorActualsSum)}</td></tr>
-        <tr><td>${pace.currentMonth.label} actual-to-date (${pace.currentMonth.bizDaysElapsed} of ${pace.currentMonth.totalBizDaysInMonth} business days)</td><td class="num">${fmtMoneyShort(pace.currentMonth.actualsToDate)}</td></tr>
-        <tr><td>${pace.currentMonth.label} blended forecast (+${pace.currentMonth.bizDaysRemaining} business days remaining at pace)</td><td class="num cell-current">${fmtMoneyShort(pace.currentMonth.blended)}</td></tr>
-        ${remainingRow}
-        <tr class="rtable-total-row"><td>Total Year Forecast</td><td class="num">${fmtMoneyShort(pace.totalYearForecast)}</td></tr>
-      </tbody>
-    </table>
-  `;
-}
+// buildMonthPaceDetailTableHtml() and its MONTH_PACE_SOURCE_LABELS map
+// (built 2026-09-08, extended 2026-09-10) rendered the "Blended Forecast
+// Detail" tables removed from Month Pace in the 2026-09-12 consolidation
+// (Business Lines' own per-LOB tables replaced them, each LOB table's
+// Company Total row carries the identical Total Year Forecast figure,
+// confirmed lossless at the time). The function had been left in place
+// as unused code since then per the original cleanup note ("lower risk
+// to leave than to risk an incomplete removal"); removed now as its own
+// scoped cleanup item, confirmed zero remaining call sites first.
 
 function renderForecastMonthPace(data){
   document.getElementById('fc-mp-asof-meta').innerHTML = fmtAsOf(data.asOf);
@@ -5853,6 +5872,79 @@ function renderExecSummaryLeaderboards(topSalesPerformers, topBillers){
         <div class="lb-rank${i === 0 ? ' r1' : ''}">${i + 1}</div>
         <div><div class="lb-name">${escapeHtml(b.name)}</div><div class="lb-sub">${b.regionName ? escapeHtml(b.regionName) + ' &middot; ' : ''}${b.lineCount.toLocaleString()} billing line${b.lineCount === 1 ? '' : 's'}</div></div>
         <div class="lb-value">${fmtMoneyShort(b.total)}${b.pctOfTotal !== null ? `<div class="lb-value-sub">${b.pctOfTotal.toFixed(1)}% of company</div>` : ''}</div>
+      </div>
+    `).join('');
+  }
+}
+
+// Top Performers slide-out (2026-09-14): "Show more" on either Top 5 card
+// opens the same panel, Top 10 Sales and Top 10 Revenue Performers stacked
+// together, with an independent region filter defaulting to Company-Wide
+// (matching the cards it expands from, per Misty's direct confirmation).
+// Backed by GET /api/top-performers-detail, which is just
+// getTopSalesPerformers/getTopBillers at limit 10 -- the same functions
+// the Top 5 cards and Regions' own Top 3 cards already call.
+function openTopPerformersPanel(evt){
+  if (evt) evt.preventDefault();
+  const select = document.getElementById('top-performers-region-select');
+  select.innerHTML = '<option value="">Company-Wide</option>' + REGIONS.filter(r => !r.is_placeholder).map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+  select.value = '';
+  document.getElementById('top-performers-overlay').classList.remove('hidden');
+  loadTopPerformersPanel();
+}
+
+function closeTopPerformersPanel(){
+  document.getElementById('top-performers-overlay').classList.add('hidden');
+}
+
+async function loadTopPerformersPanel(){
+  const regionId = document.getElementById('top-performers-region-select').value || null;
+  const salesRows = document.getElementById('top-performers-sales-rows');
+  const billersRows = document.getElementById('top-performers-billers-rows');
+  const sub = document.getElementById('top-performers-sub');
+  sub.textContent = `Fiscal Year ${esYear} · full ranking`;
+  salesRows.innerHTML = `<div class="legend-note">Loading&hellip;</div>`;
+  billersRows.innerHTML = '';
+  try {
+    const qs = new URLSearchParams({ fiscalYear: esYear });
+    if (regionId) qs.set('regionId', regionId);
+    const res = await workerFetch(`/api/top-performers-detail?${qs.toString()}`);
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not load the full ranking.', true); return; }
+    renderTopPerformersPanel(data);
+  } catch(e) {
+    showToast('Could not reach the server.', true);
+  }
+}
+
+function renderTopPerformersPanel(data){
+  const salesRows = document.getElementById('top-performers-sales-rows');
+  const billersRows = document.getElementById('top-performers-billers-rows');
+  const regionId = document.getElementById('top-performers-region-select').value || null;
+  const scopeLabel = regionId ? 'region' : 'company';
+
+  const topSalesPerformers = data.topSalesPerformers;
+  if (!topSalesPerformers || !topSalesPerformers.available) {
+    salesRows.innerHTML = `<div class="legend-note">No bookings with a Proposal Issued By value found for this fiscal year yet.</div>`;
+  } else {
+    salesRows.innerHTML = topSalesPerformers.performers.map((p, i) => `
+      <div class="lb-row">
+        <div class="lb-rank${i === 0 ? ' r1' : ''}">${i + 1}</div>
+        <div><div class="lb-name">${escapeHtml(p.name)}</div><div class="lb-sub">${p.regionName ? escapeHtml(p.regionName) + ' &middot; ' : ''}${p.dealCount.toLocaleString()} opportunit${p.dealCount === 1 ? 'y' : 'ies'} won</div></div>
+        <div class="lb-value">${fmtMoneyShort(p.total)}${p.pctOfTotal !== null ? `<div class="lb-value-sub">${p.pctOfTotal.toFixed(1)}% of ${scopeLabel}</div>` : ''}</div>
+      </div>
+    `).join('');
+  }
+
+  const topBillers = data.topBillers;
+  if (!topBillers || !topBillers.available) {
+    billersRows.innerHTML = `<div class="legend-note">No Billed Line Item data yet for this fiscal year. Upload a Billed Line Item export on Data Updates to populate this section (real data starts FY2026).</div>`;
+  } else {
+    billersRows.innerHTML = topBillers.billers.map((b, i) => `
+      <div class="lb-row">
+        <div class="lb-rank${i === 0 ? ' r1' : ''}">${i + 1}</div>
+        <div><div class="lb-name">${escapeHtml(b.name)}</div><div class="lb-sub">${b.regionName ? escapeHtml(b.regionName) + ' &middot; ' : ''}${b.lineCount.toLocaleString()} billing line${b.lineCount === 1 ? '' : 's'}</div></div>
+        <div class="lb-value">${fmtMoneyShort(b.total)}${b.pctOfTotal !== null ? `<div class="lb-value-sub">${b.pctOfTotal.toFixed(1)}% of ${scopeLabel}</div>` : ''}</div>
       </div>
     `).join('');
   }
