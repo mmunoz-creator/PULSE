@@ -4686,7 +4686,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    Worker: worker_v3o.mjs adds one new route only
    (/api/top-performers-detail), reusing existing functions unchanged.
    ============================================================ */
-const APP_VERSION = 'v3o';
+const APP_VERSION = 'v3p';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -5995,7 +5995,7 @@ function renderExecSummaryLob(lines){
     }
 
     return `
-      <div style="background:var(--paper-sunk); border:1px solid var(--border); border-radius:9px; padding:14px 16px">
+      <div style="background:var(--paper-raised); border:1px solid var(--border-strong); border-radius:9px; padding:14px 16px; box-shadow:var(--shadow)">
         <div style="font-size:15px; font-weight:800; color:var(--navy); margin-bottom:8px">${escapeHtml(line.label)}</div>
         <div style="font-size:12px; color:var(--text-faint)">${esYear - 1}: <b style="color:var(--text)">${fmtMoneyShort(line.prior)}</b></div>
         <div style="font-size:12px; color:var(--text-faint)">${esYear}: <b style="color:var(--text)">${fmtMoneyShort(line.current)}</b></div>
@@ -6012,16 +6012,23 @@ function renderExecSummaryLob(lines){
 }
 
 // By Line of Business (Revenue) tiles (2026-09-11, Open Items
-// 1(b)/1(f)/1(g)): mirrors renderExecSummaryLob's tile markup exactly,
-// same 3-tile grid, but fed from the Revenue-basis fields
-// getCompanyLobBacklog already computes per line (revenueBlended,
-// revenueGapToBudget, revenueOnPace) — these existed in the API response
-// all along, they just weren't rendered as their own tile row before now.
-// yoyPct here is intentionally the Sales-basis YoY from the same `line`
-// object (getCompanyLobBacklog has no separate Revenue YoY field yet;
-// this row's own current/prior figures are the real Revenue numbers, only
-// the YoY badge is a known gap — same "explicit pending state" pattern
-// used elsewhere: shown as em-dash rather than a borrowed, misleading %).
+// 1(b)/1(f)/1(g)): mirrors renderExecSummaryLob's tile markup, same
+// 3-tile grid, fed from the Revenue-basis fields getCompanyLobBacklog
+// computes per line (revenueBlended, revenueGapToBudget, revenueOnPace).
+// Background fixed 2026-09-14 (v3p): these tiles and the Sales tiles
+// above were the only two tile types in the app reading from
+// --paper-sunk as a full tile surface, everywhere else that token is a
+// small recessed element (a track, a button), not a card background --
+// that's why they read gray next to every white .fc-tile/card elsewhere.
+// Switched both to --paper-raised, matching every other tile app-wide,
+// per Misty's direct confirmation ("the tiles look gray while all the
+// other tiles look white").
+// Revenue YoY added 2026-09-14 (v3p): previously this tile had no YoY
+// line at all (the earlier comment here called it a known gap, borrowing
+// nothing rather than showing a misleading Sales-basis figure).
+// getCompanyLobBacklog now computes a real revenueYoyPct per line from a
+// new prior-year billed_fact-by-LOB query, same em-dash-if-unavailable
+// convention as every other YoY figure in this app.
 function renderExecSummaryLobRevenue(lines){
   const html = lines.map(line => {
     let gapHtml;
@@ -6033,13 +6040,19 @@ function renderExecSummaryLobRevenue(lines){
       gapHtml = `<span style="color:var(--crit); font-weight:700; font-size:12px">&minus;${fmtMoneyShort(Math.abs(line.revenueGapToBudget))} to close vs. ${esYear} Revenue Budget</span>`;
     }
     const revenueBlendedKnown = line.revenueBlended !== null && line.revenueBlended !== undefined;
+    const revenueYoyHtml = line.revenueYoyPct === null || line.revenueYoyPct === undefined
+      ? '&mdash;'
+      : `${line.revenueYoyPct >= 0 ? '&uarr; +' : '&darr; &minus;'}${Math.abs(line.revenueYoyPct).toFixed(1)}% YoY`;
+    const revenueYoyColor = (line.revenueYoyPct === null || line.revenueYoyPct === undefined) ? 'var(--text-faint)' : (line.revenueYoyPct >= 0 ? 'var(--good)' : 'var(--crit)');
 
     return `
-      <div style="background:var(--paper-sunk); border:1px solid var(--border); border-radius:9px; padding:14px 16px">
+      <div style="background:var(--paper-raised); border:1px solid var(--border-strong); border-radius:9px; padding:14px 16px; box-shadow:var(--shadow)">
         <div style="font-size:15px; font-weight:800; color:var(--navy); margin-bottom:8px">${escapeHtml(line.label)}</div>
+        <div style="font-size:12px; color:var(--text-faint)">${esYear - 1}: <b style="color:var(--text)">${line.revenuePrior !== null && line.revenuePrior !== undefined ? fmtMoneyShort(line.revenuePrior) : '&mdash;'}</b></div>
         <div style="font-size:12px; color:var(--text-faint)">${esYear} Revenue Budget: <b style="color:var(--text)">${line.revenueBudget ? fmtMoneyShort(line.revenueBudget) : '&mdash;'}</b></div>
         <div style="font-size:12px; color:var(--text-faint)">${esYear} Blended: <b style="color:var(--text)">${revenueBlendedKnown ? fmtMoneyShort(line.revenueBlended) : '&mdash;'}</b></div>
-        <div style="font-size:12px; color:var(--text-faint); margin:4px 0 8px">${revenueBlendedKnown ? '' : 'Revenue not yet available for ' + esYear}</div>
+        <div style="font-size:12px; color:${revenueYoyColor}; font-weight:700; margin:4px 0 8px">${revenueYoyHtml}</div>
+        <div style="font-size:12px; color:var(--text-faint); margin-bottom:8px">${revenueBlendedKnown ? '' : 'Revenue not yet available for ' + esYear}</div>
         <div style="border-top:1px solid var(--border); padding-top:8px; font-size:12.5px">
           ${gapHtml}
         </div>
