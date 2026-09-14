@@ -338,7 +338,7 @@ table.data-table td.num, table.data-table th.num{text-align:center}
    class rather than widening .slide-out-panel itself, since the
    missing-service drill-down panel (§119) shares that base class and
    was never part of this request. */
-.slide-out-panel-wide{width:460px}
+.slide-out-panel-wide{width:560px}
 .slide-out-panel h4{margin:0 0 2px; font-size:15px; color:var(--navy)}
 .slide-out-panel .sub{font-size:11.5px; color:var(--text-faint); margin-bottom:14px}
 .slide-out-close{position:absolute; top:16px; right:16px; width:26px; height:26px; border-radius:7px; background:var(--paper-sunk); color:var(--text-faint); border:none; cursor:pointer; font-size:15px}
@@ -440,6 +440,12 @@ table.data-table td.num, table.data-table th.num{text-align:center}
 .gs-pill.slate{background:var(--slate-soft); color:var(--slate)}
 .gs-pill.good{background:var(--good-soft); color:var(--good)}
 .gs-pill.accent{background:var(--accent-soft); color:var(--accent-ink)}
+/* Dynamic-year pill (v3r): a small blue badge wrapping every fiscal-year
+   reference in Growth Strategy, so a glance confirms the year is computed
+   from real data (mode + fiscal-year picker), never a hardcoded literal.
+   Matches the approved mockup's .dyn-tag exactly, reusing the real
+   --blue/--blue-soft tokens rather than the mockup's one-off hex. */
+.dyn-tag{display:inline-flex; align-items:center; background:var(--blue-soft); color:var(--blue); border-radius:5px; padding:1px 6px; font-size:11px; font-weight:700}
 
 /* ============================================================
    Growth Strategy Company-Wide redesign (2026-09-14, v3q): mode-first
@@ -2703,20 +2709,15 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
               </div>
             </div>
 
-            <!-- Starting-point basis toggle (Open Items 3(a), 2026-09-11):
-                 "let me pick, Growth on Budget or Actual + Run Rate... this
-                 should also accommodate a scenario where I've hit budget by
-                 Q4, so maybe I want to set a new growth target for the
-                 current year." Kept as a real secondary control (basis
-                 still changes the actual math), restyled to sit quietly
-                 under the mode cards rather than reading as a second
-                 equal-weight toggle row. -->
-            <div class="gt-mode-row" style="margin-bottom:16px">
-              <span class="gt-mode-label">Starting Point</span>
-              <button type="button" class="btn-secondary gt-basis-btn active" data-basis="budget" onclick="onGrowthTargetBasisChange('budget')" style="width:auto">Budget</button>
-              <button type="button" class="btn-secondary gt-basis-btn" data-basis="actual_run_rate" onclick="onGrowthTargetBasisChange('actual_run_rate')" style="width:auto">CY Actual + Run Rate</button>
-              <span class="gt-mode-explain" id="gt-basis-explain"></span>
-            </div>
+            <!-- Starting-point basis toggle REMOVED (v3r, per approved mockup:
+                 confirmed the mockup has no toggle anywhere, Starting Base is
+                 always the full YTD Actual + Run Rate + Backlog breakdown for
+                 both modes -- Misty confirmed this is a genuine scope
+                 simplification, not a relocation: "Yes, always show
+                 YTD+RunRate+Backlog." "Budget" is no longer a selectable
+                 basis; gtState.basis stays hardcoded to 'actual_run_rate' in
+                 JS below so the existing workerFetch contract (basis param)
+                 is unchanged, just no longer user-facing. -->
 
             <div class="wiz-group-label blue" id="gt-base-strip-label">Starting Base</div>
             <div class="gt-base-strip" id="gt-base-strip"></div>
@@ -2765,7 +2766,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
                 <div class="gt-path-body-title">Required Sales Growth</div>
                 <div class="gt-path-body-sub">Sales-basis, backsolved from the 3-yr Sales-to-Revenue ratio</div>
                 <div id="gt-sales-unavailable" class="legend-note hidden">Not enough Sales/Revenue history yet to backsolve a required Sales growth rate.</div>
-                <div id="gt-sales-detail"></div>
+                <div class="gs-tile-row" id="gt-sales-detail"></div>
               </div>
             </div>
 
@@ -2783,7 +2784,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
               <div class="gt-path-body">
                 <div class="gt-path-body-title">Revenue by Region</div>
                 <div class="gt-path-body-sub">Revenue-basis (billed_fact), apportioned by each region's own historical trend</div>
-                <div id="gt-region-list"></div>
+                <div class="gs-tile-row" id="gt-region-list"></div>
               </div>
             </div>
 
@@ -4824,7 +4825,7 @@ td.budget-lob-td.range-selected{background:var(--accent-soft); box-shadow:inset 
    Worker: worker_v3o.mjs adds one new route only
    (/api/top-performers-detail), reusing existing functions unchanged.
    ============================================================ */
-const APP_VERSION = 'v3q';
+const APP_VERSION = 'v3r';
 
 // Confirmed 2026-09-03 against the real deployed Worker (Cloudflare
 // Overview page): this is the live URL, not a placeholder.
@@ -10921,7 +10922,12 @@ function renderGrowthStrategyCompanyWide(data){
 // picker or any other Growth Strategy tab. Default 'next_year' preserves
 // the card's original (always next-year-off-current-actual) math so any
 // already-saved growth_pct keeps its real meaning.
-let gtState = { plan: null, sliderDirty: false, mode: 'next_year', basis: 'budget' };
+// basis locked to 'actual_run_rate' (v3r): Starting Point toggle removed
+// per the approved mockup -- YTD Actual + Run Rate + Backlog is now the
+// only starting-base methodology, not a user choice. Kept as a field
+// (rather than deleting basis from the API contract) so the worker's
+// existing basis param and getGrowthTargetPlan signature stay unchanged.
+let gtState = { plan: null, sliderDirty: false, mode: 'next_year', basis: 'actual_run_rate' };
 
 async function loadGrowthTargetPlan(){
   document.getElementById('gt-pending').classList.remove('hidden');
@@ -10943,13 +10949,6 @@ function onGrowthTargetModeChange(mode){
   if (mode === gtState.mode) return;
   gtState.mode = mode;
   document.querySelectorAll('.gt-mode-card').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-  loadGrowthTargetPlan();
-}
-
-function onGrowthTargetBasisChange(basis){
-  if (basis === gtState.basis) return;
-  gtState.basis = basis;
-  document.querySelectorAll('.gt-basis-btn').forEach(b => b.classList.toggle('active', b.dataset.basis === basis));
   loadGrowthTargetPlan();
 }
 
@@ -11030,21 +11029,6 @@ function renderGrowthTargetPlan(data){
   document.getElementById('gt-mode-meta').textContent = `Target: FY${data.targetYear} · vs. FY${data.baseYear} actual`;
   document.getElementById('gt-path-title').textContent = `Closing the gap to FY${data.targetYear}'s target`;
 
-  // ---- Basis explain text (Open Items 3(a)): confirms which starting
-  // point actually got used. runRateApplied is false when Actual + Run
-  // Rate was requested but baseYear isn't the year real data is currently
-  // tracking in (a closed prior year has no "remaining months" left to
-  // blend) — falls back to the full actual in that case, and says so
-  // rather than silently substituting.
-  const basisExplainEl = document.getElementById('gt-basis-explain');
-  if (data.basis === 'actual_run_rate' && data.runRateApplied) {
-    basisExplainEl.textContent = `Using FY${data.baseYear} YTD actual + trailing run rate for the rest of the year as the starting point.`;
-  } else if (data.basis === 'actual_run_rate' && !data.runRateApplied) {
-    basisExplainEl.textContent = `FY${data.baseYear} is closed, so Actual + Run Rate isn't available, using the full FY${data.baseYear} actual instead.`;
-  } else {
-    basisExplainEl.textContent = `Using FY${data.baseYear}'s full actual as the starting point.`;
-  }
-
   // ---- Historical-performance recommendation (Open Items 3(b)): real
   // company-wide Revenue YoY, shown next to the slider with a one-click
   // apply, rather than replacing the slider (Misty: "Keep the slider...
@@ -11069,7 +11053,7 @@ function renderGrowthTargetPlan(data){
   const baseStripEl = document.getElementById('gt-base-strip');
   if (!data.revenueAvailable) {
     baseStripEl.innerHTML = '<div class="legend-note" style="margin:0">Upload Billed Fact to see the real starting base here.</div>';
-  } else if (data.basis === 'actual_run_rate' && data.runRateApplied && data.revenueBaseBreakdown) {
+  } else if (data.runRateApplied && data.revenueBaseBreakdown) {
     const b = data.revenueBaseBreakdown;
     baseStripEl.innerHTML = `
       ${gtBasePartHtml('YTD Actual', b.ytdActual)}
@@ -11080,6 +11064,10 @@ function renderGrowthTargetPlan(data){
       <div class="gt-base-op">=</div>
       <div class="gt-base-total"><div><div class="gt-base-total-label">Starting Base, FY${data.baseYear}</div><div class="gt-base-total-value">${fmtMoneyShort(data.revenueCurrent)}</div></div></div>`;
   } else {
+    // runRateApplied is false only when baseYear is a closed prior year
+    // (no "remaining months" left to blend a run rate against) -- basis
+    // itself is no longer a variable (v3r), so this is purely a data-
+    // availability fallback, not a user choice.
     baseStripEl.innerHTML = `
       ${gtBasePartHtml(`FY${data.baseYear} Actual`, data.revenueCurrent)}
       <div class="gt-base-op">=</div>
@@ -11096,7 +11084,7 @@ function renderGrowthTargetPlan(data){
     <div class="gt-ht-block">
       <div class="gt-ht-label">Starting Base, FY${data.baseYear}</div>
       <div class="gt-ht-value">${fmtMoneyShort(data.revenueCurrent)}</div>
-      <div class="gt-ht-sub">${data.basis === 'actual_run_rate' && data.runRateApplied ? 'YTD Actual + Run Rate + Backlog' : `FY${data.baseYear} Actual`}</div>
+      <div class="gt-ht-sub">${data.runRateApplied ? 'YTD Actual + Run Rate + Backlog' : `FY${data.baseYear} Actual`}</div>
     </div>
     <div class="gt-ht-arrow">&rarr;</div>
     <div class="gt-ht-block">
@@ -11173,7 +11161,7 @@ function renderGrowthTargetPlan(data){
       <div class="gs-tile">
         <div class="gs-tile-label">Sales YTD, FY${data.baseYear} (reference)</div>
         <div class="gs-tile-value">${data.salesAvailable ? fmtMoneyShort(data.salesCurrent) : '&mdash;'}</div>
-        <div class="gs-tile-sub">FY${data.baseYear} actual${data.basis === 'actual_run_rate' && data.runRateApplied ? ' + run rate' : ''}</div>
+        <div class="gs-tile-sub">FY${data.baseYear} actual${data.runRateApplied ? ' + run rate' : ''}</div>
       </div>`;
   }
 
@@ -11191,20 +11179,26 @@ function renderGrowthTargetPlan(data){
       </div>`).join('');
   }
 
-  // ---- By-Region list ----
-  // backlogNext (Open Items 3(e)) is real backlog_fact.contract_balance,
-  // ending in the target year, this region only — see the backend
-  // comment on getGrowthTargetPlan's backlogByRegion query.
+  // ---- By-Region tiles (v3r: switched from .gs-mini-row list rows to
+  // .gs-tile-row/.gs-tile cards, matching the approved mockup exactly and
+  // matching the By-LOB tiles just above -- Misty: "revenue by regions...
+  // looks better in the mockup." backlogNext (Open Items 3(e)) is real
+  // backlog_fact.contract_balance, ending in the target year, this region
+  // only (see the backend comment on getGrowthTargetPlan's
+  // backlogByRegion query). Kept as a second sub-line, same pattern as the
+  // By-LOB tiles, rather than dropped, since it's real data the mockup's
+  // placeholder tiles simply didn't have room to also show. ----
   const regionListEl = document.getElementById('gt-region-list');
   if (!data.byRegion.length) {
     regionListEl.innerHTML = '<div class="legend-note">Upload Billed Fact on Data Updates to see per-region targets here.</div>';
   } else {
     regionListEl.innerHTML = data.byRegion.slice().sort((a, b) => b.currentAmount - a.currentAmount).map(r => `
-      <div class="gs-mini-row">
-        <span class="n">${escapeHtml(r.label)}</span>
-        <span class="v">${fmtMoneyShort(r.targetAmount)} <span style="color:var(--text-faint); font-weight:600">(${r.apportionedGrowthPct >= 0 ? '+' : ''}${r.apportionedGrowthPct}%)</span></span>
-      </div>
-      <div class="gs-mini-row" style="opacity:.75"><span class="n" style="font-size:11px">Backlog already booked, FY${data.targetYear}</span><span class="v" style="font-size:11px">${fmtMoneyShort(r.backlogNext || 0)}</span></div>`).join('');
+      <div class="gs-tile">
+        <div class="gs-tile-label">${escapeHtml(r.label)}</div>
+        <div class="gs-tile-value">${fmtMoneyShort(r.targetAmount)}</div>
+        <div class="gs-tile-sub">${r.apportionedGrowthPct >= 0 ? '+' : ''}${r.apportionedGrowthPct}% needed</div>
+        <div class="gs-tile-sub" style="margin-top:2px">Backlog already booked: <b>${fmtMoneyShort(r.backlogNext || 0)}</b></div>
+      </div>`).join('');
   }
 }
 
