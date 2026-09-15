@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ab';
+const APP_VERSION = 'v2ac';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1309,16 +1309,33 @@ async function resumeDraft(id){
     showToast('Could not reach the server.', true);
   }
 }
-async function discardDraft(id){
-  if(!confirm('Discard this saved draft? This cannot be undone.')) return;
+// Confirm-before-destroy modal, same state-driven .modal.narrow pattern as
+// openDeleteOffer/closeDeleteOffer/submitDeleteOffer (see renderOfferDetail)
+// -- not a native confirm(), which is both inconsistent with the rest of
+// this app's UI and, incidentally, unusable in an automated browser.
+let discardDraftTargetId = null;
+function openDiscardDraft(id, client){
+  discardDraftTargetId = id;
+  state.discardDraftClient = client;
+  state.discardDraftError = null;
+  state.discardDraftBusy = false;
+  state.showDiscardDraft = true;
+  render();
+}
+function closeDiscardDraft(){ discardDraftTargetId = null; state.showDiscardDraft = false; state.discardDraftError = null; render(); }
+async function submitDiscardDraft(){
+  state.discardDraftBusy = true; render();
   try {
-    const res = await workerFetch(`/api/offer-drafts/${id}`, { method:'DELETE' });
-    const data = await res.json();
-    if(!res.ok){ showToast((data && data.error) || 'Could not discard this draft.', true); return; }
+    const res = await workerFetch(`/api/offer-drafts/${discardDraftTargetId}`, { method:'DELETE' });
+    const data = await res.json().catch(()=>({}));
+    state.discardDraftBusy = false;
+    if(!res.ok){ state.discardDraftError = data.error || 'Could not discard this draft.'; render(); return; }
+    state.showDiscardDraft = false; state.discardDraftError = null;
     showToast('Draft discarded.');
     loadOfferDrafts();
   } catch(e){
-    showToast('Could not reach the server.', true);
+    state.discardDraftBusy = false;
+    state.discardDraftError = 'Could not reach the server. Check your connection and try again.'; render();
   }
 }
 
@@ -1621,13 +1638,25 @@ function renderDraftsTable(){
               <td><span class="tag-pill ${d.type==='portfolio'?'core':''}">${d.type==='portfolio'?'Portfolio':d.type==='single'?'Single Property':'—'}</span></td>
               <td>Step ${d.step} of 4</td>
               <td>${d.updated}</td>
-              <td><button class="btn" onclick="event.stopPropagation(); discardDraft('${d.id}')">Discard</button></td>
+              <td><button class="btn" onclick="event.stopPropagation(); openDiscardDraft('${d.id}', ${escapeHtml(JSON.stringify(d.client || '(untitled)'))})">Discard</button></td>
             </tr>`).join('')}
         </tbody>
       </table>
       ${DRAFTS.length===0 ? `<div class="empty-state"><div class="ic">☷</div>No saved drafts. Use "Save &amp; Exit" from inside the wizard to save your progress.</div>` : ''}
     </div>
-  </div>`;
+  </div>
+  ${state.showDiscardDraft ? `
+  <div class="modal-backdrop" onclick="if(event.target===this) closeDiscardDraft()">
+    <div class="modal narrow">
+      <div class="modal-title"><span style="color:var(--red);">${icon('warn')}</span>Discard Draft</div>
+      <div class="modal-desc">This permanently discards the saved draft for <strong>${escapeHtml(state.discardDraftClient)}</strong>. This cannot be undone.</div>
+      ${state.discardDraftError ? `<div class="form-error">${escapeHtml(state.discardDraftError)}</div>` : ''}
+      <div class="modal-footer">
+        <button class="btn" onclick="closeDiscardDraft()" ${state.discardDraftBusy?'disabled':''}>Cancel</button>
+        <button class="btn btn-danger" onclick="submitDiscardDraft()" ${state.discardDraftBusy?'disabled':''}>${state.discardDraftBusy?'Discarding…':'Discard Draft'}</button>
+      </div>
+    </div>
+  </div>` : ''}`;
 }
 function openOffer(id){
   setState({ view:'offer-detail', activeOfferId:id, offerDetail:null });
