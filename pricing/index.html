@@ -4,6 +4,30 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PULSE Pricing</title>
+<!-- Anti-flash (2026-09-16): #login-screen is visible by default further
+     down and only gets hidden once boot logic resolves on window 'load' --
+     for a Hub SSO arrival or a same-tab refresh, that's a real, visible
+     flash of the login screen before it swaps to the app a moment later.
+     Runs first, before anything else, and only when there's an actual
+     signal we're about to auto-authenticate (a Hub token, or an existing
+     Pricing session from this tab) -- a genuinely fresh/direct visitor
+     with neither sees the exact same instant login screen as always, zero
+     behavior change. document.write() here lands a <style> tag before
+     #login-screen is even parsed, so it never paints in the first place;
+     the boot handler near the bottom of the main script removes this tag
+     again if both tryHubSso() and tryRestoreSession() end up failing, so
+     a rejected/expired token never leaves the page stuck blank.
+-->
+<script>
+try {
+  // 'pulse_pricing_session' is SESSION_STORAGE_KEY's literal value (main
+  // script, far below) -- hardcoded here since this runs before that
+  // constant exists. Keep the two in sync if that key ever changes.
+  if (sessionStorage.getItem('pulse_hub_token') || sessionStorage.getItem('pulse_pricing_session')) {
+    document.write('<style id="anti-flash-style">#login-screen{display:none!important}</style>');
+  }
+} catch(e) { /* sessionStorage unavailable -- just show the login screen normally */ }
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&display=swap" rel="stylesheet">
@@ -745,7 +769,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ad';
+const APP_VERSION = 'v2ae';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -5662,9 +5686,22 @@ function render(){
 // resolves false (no Hub token present -- the normal case for anyone not
 // arriving via the Hub -- or the Hub/local-account checks failed),
 // everything continues exactly as it did before this existed.
+//
+// Anti-flash (2026-09-16): the <head> snippet near the top of this file
+// pre-emptively hides #login-screen before first paint whenever a Hub
+// token or an existing Pricing session was present, so neither of the two
+// paths below has to fight a visible flash. If BOTH end up failing anyway
+// (e.g. an expired Hub token, or a stale/invalid saved session) that
+// pre-emptive hide needs to be undone, or the page is left blank with no
+// way to sign in -- remove the injected style tag so #login-screen falls
+// back to its normal always-visible default.
 window.addEventListener('load', async () => {
   const ssoOk = await tryHubSso();
-  if (!ssoOk) tryRestoreSession();
+  const restored = ssoOk ? true : tryRestoreSession();
+  if (!ssoOk && !restored) {
+    const antiFlash = document.getElementById('anti-flash-style');
+    if (antiFlash) antiFlash.remove();
+  }
 });
 </script>
 </body>
