@@ -745,11 +745,15 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ac';
+const APP_VERSION = 'v2ad';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
 let currentUser = null; // { id, name, role }
+// PULSE Hub SSO (2026-09-15) -- true only for a session established via
+// tryHubSso()/completeSsoLogin() below, never for a manual PIN login.
+// Drives the "Back to Hub" sidebar button and nothing else.
+let ssoActive = false;
 
 // SESSION PERSISTENCE ACROSS A REFRESH — same real pattern as PULSE Mod's
 // tryRestorePulseSession()/sessionStorage.pulse_session (confirmed by
@@ -766,7 +770,7 @@ let currentUser = null; // { id, name, role }
 const SESSION_STORAGE_KEY = 'pulse_pricing_session';
 function saveSessionToStorage(){
   try {
-    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ token: sessionToken, user: currentUser }));
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ token: sessionToken, user: currentUser, ssoActive }));
   } catch(e){ /* sessionStorage unavailable (private browsing, etc.) -- session restore just won't work, not fatal */ }
 }
 function clearSessionStorage(){
@@ -790,6 +794,7 @@ function tryRestoreSession(){
   if (!saved || !saved.token || !saved.user) return false;
   sessionToken = saved.token;
   currentUser = saved.user;
+  ssoActive = !!saved.ssoActive;
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('root').classList.remove('hidden');
   // Bug fix (2026-08-27, found by Misty): a restored session used to call
@@ -910,6 +915,7 @@ async function doLogin() {
     }
     sessionToken = data.token;
     currentUser = data.user;
+    ssoActive = false; // manual PIN login is never a Hub-originated session, see tryHubSso() below
     saveSessionToStorage();
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('root').classList.remove('hidden');
@@ -922,6 +928,53 @@ async function doLogin() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// PULSE Hub SSO (2026-09-15) -- see PULSE_Hub_SSO_Handoff_2026-09-13.md at
+// the repo root. A user who signed into the shared Hub (elevatorpulse.com/
+// home/) and clicked the Pricing tile has a Hub token sitting in
+// sessionStorage under 'pulse_hub_token' (shared same-origin, same tab --
+// not set by this app). If present, skip Pricing's own login screen
+// entirely and mint a real Pricing session from it via the Worker's new
+// POST /sso-login (see handleSsoLogin on the Worker for the actual gate +
+// local-user-resolution logic -- this function only drives the client side
+// of an already-decided outcome).
+//
+// Deliberately does NOT call the Hub's /session endpoint directly from the
+// browser the way the Modernization/Strategy reference implementations do
+// -- that exists there to feed a role-picker before completing login.
+// Pricing has no role picker (local users.role always governs, confirmed
+// with Michael 2026-09-15), so that call would just be a redundant
+// cross-origin round-trip; the Worker already makes the authoritative call.
+async function tryHubSso(){
+  let hubToken = null;
+  try { hubToken = sessionStorage.getItem('pulse_hub_token'); } catch(e) { return false; }
+  if (!hubToken) return false;
+  try {
+    const res = await fetch(WORKER_URL + '/sso-login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hubToken }),
+    });
+    const data = await res.json();
+    // Any failure here (expired Hub token, no Pricing access, no matching
+    // local account, HUB_API misconfigured) falls through to the normal
+    // login screen rather than showing an error -- a rejected SSO attempt
+    // shouldn't dead-end someone who can still PIN-login normally, and Hub
+    // token issues aren't this app's to explain.
+    if (!res.ok || !data.token || !['admin', 'sales'].includes(data.user && data.user.role)) return false;
+    completeSsoLogin(data);
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+function completeSsoLogin(data){
+  sessionToken = data.token;
+  currentUser = data.user;
+  ssoActive = true;
+  saveSessionToStorage();
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('root').classList.remove('hidden');
+  goTo('offers');
 }
 
 function setResetPinError(message) {
@@ -1473,7 +1526,7 @@ function roleDisplayLabel(role){
 }
 async function signOut(){
   try { await workerFetch('/logout', { method:'POST' }); } catch(e) {}
-  sessionToken = null; currentUser = null; pendingResetToken = null;
+  sessionToken = null; currentUser = null; pendingResetToken = null; ssoActive = false;
   clearSessionStorage();
   document.getElementById('root').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
@@ -1523,6 +1576,7 @@ function renderSidebar(){
         <div class="avatar">${initials(currentUser && currentUser.name)}</div>
         <div class="who"><div class="name">${currentUser ? currentUser.name : ''}</div><div class="role">${currentUser ? roleDisplayLabel(currentUser.role) : ''}</div></div>
       </div>
+      ${ssoActive ? `<button class="sidebar-signout-btn" onclick="location.href='/home/'"><i class="ti ti-arrow-back-up"></i>Back to Hub</button>` : ''}
       <button class="sidebar-signout-btn" onclick="signOut()"><i class="ti ti-logout-2"></i>Sign out</button>
       <div class="sidebar-version">PULSE Pricing ${APP_VERSION}</div>
     </div>
@@ -5601,7 +5655,17 @@ function render(){
 // full reasoning). Nothing in this app renders before a real session
 // exists either way -- login screen is what's visible by default in the
 // HTML, and only one of these two paths ever hides it.
-window.addEventListener('load', () => { tryRestoreSession(); });
+//
+// PULSE Hub SSO (2026-09-15): tryHubSso() is checked FIRST, before the
+// existing restore-from-sessionStorage logic -- a Hub token takes priority
+// over a stale Pricing session from an earlier direct visit. If it
+// resolves false (no Hub token present -- the normal case for anyone not
+// arriving via the Hub -- or the Hub/local-account checks failed),
+// everything continues exactly as it did before this existed.
+window.addEventListener('load', async () => {
+  const ssoOk = await tryHubSso();
+  if (!ssoOk) tryRestoreSession();
+});
 </script>
 </body>
 </html>
