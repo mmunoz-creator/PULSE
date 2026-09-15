@@ -745,7 +745,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2z';
+const APP_VERSION = 'v2aa';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1267,6 +1267,61 @@ async function loadOffers(){
   render();
 }
 
+// Temp Save (Option B): in-progress wizard drafts, D1-backed, owner-only.
+// Kept as a separate list from OFFERS on purpose -- a draft is a raw,
+// possibly-incomplete wizard state, not a priced/structured offer (see the
+// Worker's offer_drafts table comment). normalizeDraft mirrors
+// normalizeOffer's snake_case-to-camelCase pattern above.
+let DRAFTS = [];
+function normalizeDraft(r){
+  return {
+    id: r.id,
+    client: r.client_name || '',
+    portfolio: r.portfolio_name || '',
+    type: r.offer_type,
+    step: r.step || 1,
+    updated: r.updated_at ? String(r.updated_at).slice(0,10) : '',
+  };
+}
+async function loadOfferDrafts(){
+  try {
+    const res = await workerFetch('/api/offer-drafts');
+    const data = await res.json();
+    DRAFTS = res.ok ? data.map(normalizeDraft) : [];
+    if(!res.ok) showToast((data && data.error) || 'Could not load saved drafts.', true);
+  } catch(e){
+    DRAFTS = [];
+    showToast('Could not reach the server to load saved drafts.', true);
+  }
+  render();
+}
+async function resumeDraft(id){
+  try {
+    const res = await workerFetch(`/api/offer-drafts/${id}`);
+    const data = await res.json();
+    if(!res.ok){ showToast((data && data.error) || 'Could not load this draft.', true); return; }
+    // Spread the saved blob over fresh defaults, not the other way around --
+    // a draft saved before a newer wizard field existed (e.g. yearBreakout)
+    // would otherwise resume with that field simply missing and crash.
+    setState({ view:'wizard', wizard: { ...freshWizardState(), ...data.wizardState, draftId: id } });
+    refreshPricing(); // pricingResult in the saved blob may be stale against current rates; no-ops unless step is 3/4
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+async function discardDraft(id){
+  if(!confirm('Discard this saved draft? This cannot be undone.')) return;
+  try {
+    const res = await workerFetch(`/api/offer-drafts/${id}`, { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok){ showToast((data && data.error) || 'Could not discard this draft.', true); return; }
+    showToast('Draft discarded.');
+    loadOfferDrafts();
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+
 /* ============================================================
    STATE
    ============================================================ */
@@ -1357,6 +1412,9 @@ function goTo(view){
   if(view==='offers' || view==='admin'){
     setState(patch);
     loadOffers();
+    // Saved drafts only ever show on the Offers Roster itself (the "In
+    // Progress" tab) -- Pricing Analytics has no use for them.
+    if(view==='offers') loadOfferDrafts();
     return;
   }
   setState(patch);
@@ -1510,12 +1568,13 @@ function renderOffersRoster(){
   </div>
 
   <div class="filter-tabs">
-    ${['all','draft','sent','accepted','expired'].map(f => `
+    ${['all','inprogress','draft','sent','accepted','expired'].map(f => `
       <div class="filter-tab ${state.offerFilter===f?'active':''}" onclick="setState({offerFilter:'${f}'})">
-        ${f==='all'?'All':offerStatusLabel(f)} (${filterCounts[f]})
+        ${f==='all'?'All':f==='inprogress'?'In Progress':offerStatusLabel(f)} (${f==='inprogress'?DRAFTS.length:filterCounts[f]})
       </div>`).join('')}
   </div>
 
+  ${state.offerFilter==='inprogress' ? renderDraftsTable() : `
   <div class="table-card">
     <div class="table-scroll">
       <table class="data-table">
@@ -1539,6 +1598,34 @@ function renderOffersRoster(){
         </tbody>
       </table>
       ${filtered.length===0 ? `<div class="empty-state"><div class="ic">☷</div>No offers match this filter.</div>` : ''}
+    </div>
+  </div>`}`;
+}
+// Temp Save (Option B) -- "In Progress" tab. Separate small table, same
+// .table-card/.data-table classes as the real roster above, but lighter
+// columns since a draft has no pricing/deliverables yet. Row click resumes
+// (mirrors openOffer's row-click-to-detail pattern); Discard is a distinct
+// explicit action so a stray click on the row never loses saved work.
+function renderDraftsTable(){
+  return `
+  <div class="table-card">
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead><tr>
+          <th>Offer</th><th>Type</th><th>Step</th><th>Last Saved</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${DRAFTS.map(d => `
+            <tr onclick="resumeDraft('${d.id}')">
+              <td><span class="row-link">${escapeHtml(d.client) || '(untitled)'}</span><div class="row-sub">${escapeHtml(d.portfolio)} · ${d.id}</div></td>
+              <td><span class="tag-pill ${d.type==='portfolio'?'core':''}">${d.type==='portfolio'?'Portfolio':d.type==='single'?'Single Property':'—'}</span></td>
+              <td>Step ${d.step} of 4</td>
+              <td>${d.updated}</td>
+              <td><button class="btn" onclick="event.stopPropagation(); discardDraft('${d.id}')">Discard</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      ${DRAFTS.length===0 ? `<div class="empty-state"><div class="ic">☷</div>No saved drafts. Use "Save &amp; Exit" from inside the wizard to save your progress.</div>` : ''}
     </div>
   </div>`;
 }
@@ -1570,6 +1657,12 @@ async function loadOfferDetail(id){
 function freshWizardState(){
   return {
     step: 1,
+    // Temp Save (Option B): null until this wizard has been saved to the
+    // server at least once (see saveDraftAndExit/resumeDraft). Present so a
+    // second Save & Exit on the same session PUTs the existing draft row
+    // instead of creating a duplicate.
+    draftId: null,
+    draftSaving: false,
     offerType: null,        // 'single' | 'portfolio'
     clientName: '',
     address: '',
@@ -3232,6 +3325,10 @@ async function confirmGenerateOffer(){
     deliverables: w.deliverables,
     // Same portfolio-only rule as refreshPricing() -- see comment there.
     discountTiers: w.offerType === 'portfolio' ? w.discountTiers : [],
+    // Temp Save (Option B): if this wizard started from a saved draft, tell
+    // the Worker so it can delete that draft row now that a real offer
+    // exists -- see createOffer()'s draftId handling.
+    draftId: w.draftId,
   };
   try {
     const res = await workerFetch('/api/offers', {
@@ -3244,6 +3341,33 @@ async function confirmGenerateOffer(){
   } catch(e){
     showToast('Could not reach the server. Check your connection and try again.', true);
     w.generating = false; render();
+  }
+}
+
+async function saveDraftAndExit(){
+  const w = state.wizard;
+  if(w.draftSaving) return; // guard against a double-click double-saving
+  // Snapshot before flipping the busy flag -- draftSaving is itself part of
+  // the wizard object, and w mutates in place, so serializing after
+  // w.draftSaving=true would persist "true" into the saved draft and leave
+  // a later Resume looking permanently (though harmlessly) stuck saving.
+  const payload = JSON.stringify({ ...w, draftSaving: false });
+  w.draftSaving = true; render();
+  try {
+    const res = w.draftId
+      ? await workerFetch(`/api/offer-drafts/${w.draftId}`, {
+          method: 'PUT', headers: { 'Content-Type':'application/json' }, body: payload,
+        })
+      : await workerFetch('/api/offer-drafts', {
+          method: 'POST', headers: { 'Content-Type':'application/json' }, body: payload,
+        });
+    const data = await res.json();
+    if(!res.ok){ showToast((data && data.error) || 'Could not save this draft.', true); w.draftSaving = false; render(); return; }
+    showToast('Draft saved.');
+    goTo('offers');
+  } catch(e){
+    showToast('Could not reach the server. Check your connection and try again.', true);
+    w.draftSaving = false; render();
   }
 }
 
@@ -3509,8 +3633,15 @@ function renderWizard(){
   else if(w.step===4) body = renderWizardStep4();
   return `
   <div class="page-topline">PULSE Pricing</div>
-  <h1 class="page-title">New Offer</h1>
-  <p class="page-sub" style="margin-bottom:16px;">Create pricing, select services, and generate a client-ready estimate.</p>
+  <div class="page-header-row">
+    <div>
+      <h1 class="page-title">New Offer</h1>
+      <p class="page-sub" style="margin-bottom:16px;">Create pricing, select services, and generate a client-ready estimate.</p>
+    </div>
+    <div class="page-actions">
+      <button class="btn" ${w.draftSaving?'disabled':''} onclick="saveDraftAndExit()">${w.draftSaving?'Saving…':'Save & Exit'}</button>
+    </div>
+  </div>
   ${wizardStepHeader()}
   ${body}`;
 }
