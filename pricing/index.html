@@ -769,7 +769,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ae';
+const APP_VERSION = 'v2af';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2924,14 +2924,17 @@ function renderSiteAssignmentRow(p, idx){
 // results that get summed here into a portfolio-wide per-year total (the
 // finer per-property-per-category breakout is the still-separate,
 // not-yet-built "Inspection CAT breakout" backup-detail item).
-function renderInspectionPricingDetail(li, termYears, isPortfolio){
-  if(!li || !li.detail){
-    return `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>Calculating…</div>`;
-  }
-  const d = li.detail;
-  const placeholderNote = d.isPlaceholder
-    ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${isPortfolio?'One or more matched regions use':'This region uses'} a placeholder (not-yet-vetted) rate — treat this total as notional.</div>`
-    : '';
+// Pulled out of renderInspectionPricingDetail (2026-09-16) so the new
+// Estimate Sheet/Narrative Proposal Year-by-Year Breakdown section (see
+// lineItemYearBreakdownHTML/renderYearByYearBreakdownSectionHTML below) shares this
+// exact computation with the live wizard card, rather than reimplementing
+// it a second time. Same single-vs-portfolio shape split as before: single
+// returns real per-category yearBreakdown rows, portfolio returns rows
+// summed across perSite. Returns null only when there's no detail yet
+// (still loading) -- callers handle that themselves.
+function inspectionYearRows(li, termYears, isPortfolio){
+  const d = li && li.detail;
+  if(!d) return null;
   if(isPortfolio){
     const n = d.termYears || termYears || 1;
     const years = Array.from({length:n}, (_, i) => ({
@@ -2939,6 +2942,20 @@ function renderInspectionPricingDetail(li, termYears, isPortfolio){
       amount: (d.perSite||[]).reduce((a,s) => a + (s.yearBreakdown && s.yearBreakdown[i] ? s.yearBreakdown[i].amount : 0), 0),
     }));
     const unresolvedCount = (d.perSite||[]).filter(s=>s.unresolved).length;
+    return { years, contractTotal: d.contractTotal||0, isPlaceholder: !!d.isPlaceholder, unresolvedCount };
+  }
+  return { years: d.yearBreakdown || [], contractTotal: d.contractTotal||0, isPlaceholder: !!d.isPlaceholder, unresolvedCount: 0 };
+}
+function renderInspectionPricingDetail(li, termYears, isPortfolio){
+  if(!li || !li.detail){
+    return `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>Calculating…</div>`;
+  }
+  const info = inspectionYearRows(li, termYears, isPortfolio);
+  const placeholderNote = info.isPlaceholder
+    ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${isPortfolio?'One or more matched regions use':'This region uses'} a placeholder (not-yet-vetted) rate — treat this total as notional.</div>`
+    : '';
+  if(isPortfolio){
+    const { years, contractTotal, unresolvedCount } = info;
     return placeholderNote + `
     ${unresolvedCount>0 ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${unresolvedCount} propert${unresolvedCount===1?'y':'ies'} not yet confirmed — excluded from this total.</div>` : ''}
     <div class="table-card" style="margin-top:10px;">
@@ -2946,19 +2963,19 @@ function renderInspectionPricingDetail(li, termYears, isPortfolio){
         <thead><tr><th>Contract Year</th><th class="num">Amount (all confirmed properties)</th></tr></thead>
         <tbody>
           ${years.map(y => `<tr><td>Year ${y.year}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')}
-          <tr style="font-weight:750;"><td>Full contract (${n}yr)</td><td class="num">${fmtMoney(d.contractTotal||0)}</td></tr>
+          <tr style="font-weight:750;"><td>Full contract (${years.length}yr)</td><td class="num">${fmtMoney(contractTotal)}</td></tr>
         </tbody>
       </table>
     </div>`;
   }
-  const years = d.yearBreakdown || [];
+  const { years, contractTotal } = info;
   return placeholderNote + `
   <div class="table-card" style="margin-top:10px;">
     <table class="data-table rc-table">
       <thead><tr><th>Contract Year</th><th>Categories Billed</th><th class="num">Amount</th></tr></thead>
       <tbody>
         ${years.map(y => `<tr><td>Year ${y.year} <span style="color:var(--text-muted); font-size:10.5px;">(${y.date})</span></td><td>${y.categories.length ? y.categories.map(c=>escapeHtml(c.name)).join(', ') : '<span style="color:var(--text-muted);">none</span>'}${y.missingPriceCategoryIds && y.missingPriceCategoryIds.length ? ` <span style="color:var(--amber);">+${y.missingPriceCategoryIds.length} missing price</span>` : ''}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')}
-        <tr style="font-weight:750;"><td colspan="2">Full contract (${years.length}yr)</td><td class="num">${fmtMoney(d.contractTotal||0)}</td></tr>
+        <tr style="font-weight:750;"><td colspan="2">Full contract (${years.length}yr)</td><td class="num">${fmtMoney(contractTotal)}</td></tr>
       </tbody>
     </table>
   </div>`;
@@ -3513,9 +3530,91 @@ function renderEstimateSheetHTML(){
         <tr class="es-total-row"><td>Total Estimated Offer</td><td class="num">${fmtMoney(totals.total)}</td></tr>
       </tbody>
     </table>
+    ${renderYearByYearBreakdownSectionHTML(totals, w)}
     ${renderPerformanceTimelineSectionHTML(w, units)}
     <div class="es-footnote">Pricing generated from ${RATE_CARD_DISPLAY_NAME}. This estimate is valid for 30 days from the date above.</div>
   </div>`;
+}
+
+// New (2026-09-16), shared by both the Estimate Sheet and the Narrative
+// Proposal's Year-by-Year Breakdown section below. Returns the label + a
+// ready-to-embed <table class="es-table">...</table> fragment for one line
+// item, or null when that line item has no year breakdown to show -- a
+// flat one-time service with Year Breakout left off stays a single flat
+// row in Services Included/Commercial Model, untouched, nothing rendered
+// here.
+function lineItemYearBreakdownHTML(li, w){
+  if(li.serviceId === 'inspection'){
+    const isPortfolio = w.offerType==='portfolio';
+    const info = inspectionYearRows(li, w.contractTermYears, isPortfolio);
+    if(!info || !info.years.length) return null;
+    const rowsHTML = isPortfolio
+      ? info.years.map(y => `<tr><td>Year ${y.year}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')
+      : info.years.map(y => `<tr><td>Year ${y.year} <span style="color:var(--text-muted); font-size:10.5px;">(${y.date})</span></td><td>${y.categories && y.categories.length ? y.categories.map(c=>escapeHtml(c.name)).join(', ') : '<span style="color:var(--text-muted);">none</span>'}${y.missingPriceCategoryIds && y.missingPriceCategoryIds.length ? ` <span style="color:var(--amber);">+${y.missingPriceCategoryIds.length} missing price</span>` : ''}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('');
+    const colspan = isPortfolio ? 1 : 2;
+    return `<table class="es-table">
+      <thead><tr>${isPortfolio ? '<th>Contract Year</th><th class="num">Amount</th>' : '<th>Contract Year</th><th>Categories Billed</th><th class="num">Amount</th>'}</tr></thead>
+      <tbody>
+        ${rowsHTML}
+        <tr class="es-total-row"><td colspan="${colspan}">Full contract (${info.years.length}yr)</td><td class="num">${fmtMoney(info.contractTotal)}</td></tr>
+      </tbody>
+    </table>`;
+  }
+  if(li.svc.pricingModel === 'verify_tiered' || li.svc.pricingModel === 'unit_tiered'){
+    // VERIFY/CCM: flat annual charge x contract term, no per-year variance
+    // (see CLAUDE.md's Contract Term note) -- but annualTotal/contractTotal
+    // are already computed server-side (priceVerify()/priceCcm()), so this
+    // is just laying that out as a table, not new math.
+    const d = li.detail || {};
+    const n = w.contractTermYears || 1;
+    const annual = d.annualTotal != null ? d.annualTotal : li.amount;
+    const contractTotal = d.contractTotal != null ? d.contractTotal : annual * n;
+    return `<table class="es-table">
+      <thead><tr><th>Contract Year</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        ${Array.from({length:n}, (_,i) => `<tr><td>Year ${i+1}</td><td class="num">${fmtMoney(annual)}</td></tr>`).join('')}
+        <tr class="es-total-row"><td>Full contract (${n}yr)</td><td class="num">${fmtMoney(contractTotal)}</td></tr>
+      </tbody>
+    </table>`;
+  }
+  const bo = li.detail && li.detail.yearBreakout;
+  if(!bo || !Array.isArray(bo.pctByYear) || !bo.pctByYear.length) return null;
+  // General Consulting is $/mo-denominated -- each year's % scales the same
+  // monthly rate, it's not a real dollar amount meaningful to sum across
+  // years, so no contract-total row. Same isMonthlyRate rule as
+  // renderYearBreakoutBlock's live editor (see its own comment).
+  const isMonthlyRate = li.serviceId === 'general_consulting';
+  const rowsHTML = bo.pctByYear.map((pct,i) => `<tr><td>Year ${i+1}</td><td class="num">${pct}%</td><td class="num">${fmtMoney(bo.yearlyAmounts[i]||0)}${isMonthlyRate?'/mo':''}</td></tr>`).join('');
+  return `<table class="es-table">
+    <thead><tr><th>Contract Year</th><th class="num">% Allocated</th><th class="num">Amount</th></tr></thead>
+    <tbody>
+      ${rowsHTML}
+      ${isMonthlyRate ? '' : `<tr class="es-total-row"><td colspan="2">Full contract (${bo.pctByYear.length}yr)</td><td class="num">${fmtMoney(bo.contractTotal||0)}</td></tr>`}
+    </tbody>
+  </table>`;
+}
+// Shared by both the Estimate Sheet and the Narrative Proposal. Surfaces a
+// per-year breakdown for every line item that has one -- Inspection's real
+// yearBreakdown (see inspectionYearRows), VERIFY/CCM's flat annual x years,
+// and any of the 6 Year-Breakout-eligible services when a rep has turned
+// breakout on for them (see YEAR_BREAKOUT_CATEGORY). Returns '' entirely
+// when nothing applies, same convention as
+// renderPerformanceTimelineSectionHTML below -- e.g. an offer of only
+// one-time per-unit services with breakout off shows no section at all,
+// not an empty heading. Deliberately separate from Payment Milestones
+// (different lens: which task triggers billing vs. which contract year the
+// revenue lands in -- a Modernization line item with both Year Breakout
+// AND task lines legitimately shows both).
+function renderYearByYearBreakdownSectionHTML(totals, w){
+  const items = totals.lineItems
+    .map(li => ({ li, html: lineItemYearBreakdownHTML(li, w) }))
+    .filter(x => x.html);
+  if(!items.length) return '';
+  return `
+    <h2 class="es-h2">Year-by-Year Breakdown</h2>
+    ${items.map(({li, html}) => `
+      <p style="font-size:12px; font-weight:650; margin:14px 0 6px 0;">${escapeHtml(li.svc.name)}</p>
+      ${html}`).join('')}`;
 }
 
 // Shared by both the Estimate Sheet and the Narrative Proposal. Only
@@ -3584,6 +3683,8 @@ function renderNarrativeProposalHTML(){
       </tbody>
     </table>
     <p style="font-size:11.5px; color:var(--text-muted); margin:10px 0 0 0;">Contract term: ${w.contractTermYears} year${w.contractTermYears!==1?'s':''}.</p>
+
+    ${renderYearByYearBreakdownSectionHTML(totals, w)}
 
     ${milestoneLineItems.length ? `
     <h2 class="es-h2">Payment Milestones</h2>
