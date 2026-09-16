@@ -769,7 +769,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2af';
+const APP_VERSION = 'v2ag';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1958,13 +1958,17 @@ function renderYearBreakoutBlock(svcId, baselineAmount){
   const enabled = bo && bo.enabled;
   const totalPct = enabled ? bo.pctByYear.reduce((a,p) => a + (Number(p)||0), 0) : 0;
   const overCap = category === 'capped' && totalPct > 100;
-  // v2y follow-up (Misty): General Consulting is $/mo-denominated per
-  // year, NOT a one-time/annual total like the other 6 breakout
-  // services -- each year's % scales the SAME monthly rate, it does
-  // not represent a real dollar amount that's meaningful to sum
-  // across years. So its per-year figures show "/mo", and the
-  // "full contract total" summary line (which WOULD sum real dollars
-  // for the other 6) is suppressed here as not a meaningful number.
+  // v2y follow-up (Misty): this INPUT block stays $/mo-denominated per
+  // year -- each year's % scales the SAME monthly rate the rep typed in,
+  // shown here as "/mo" with no summed total, since that's how reps
+  // think about and enter this figure.
+  // w6 (2026-09-16): this is about the input/editing experience only.
+  // OUTPUT contexts (offer totals, both proposal documents, Live
+  // Estimate) now annualize this same figure (x12) server-side so it
+  // lines up with every other service there -- see computeOfferTotals()'s
+  // retainer branch and lineItemYearBreakdownHTML/lineItemYearlyAmounts
+  // above. Deliberately not changed here; nothing about how a rep sets
+  // percentages needs to change.
   const isMonthlyRate = svcId === 'general_consulting';
   const contractTotal = enabled ? bo.pctByYear.reduce((a,p) => a + baselineAmount * (Number(p)||0) / 100, 0) : 0;
   return `
@@ -3515,12 +3519,7 @@ function renderEstimateSheetHTML(){
       <div><div class="k">Units</div><div class="v">${units.length} unit${units.length!==1?'s':''}</div></div>
     </div>
     <h2 class="es-h2">Services Included</h2>
-    <table class="es-table">
-      <thead><tr><th>Service</th><th class="num">Basis</th><th class="num">Amount</th></tr></thead>
-      <tbody>
-        ${totals.lineItems.map(li => `<tr><td>${li.svc.name}</td><td class="num">${pricingModelLabel(li.svc.pricingModel)}</td><td class="num">${fmtMoney(li.amount)}${li.isMonthly?'/mo':''}${li.isAnnual?'/yr':''}</td></tr>`).join('')}
-      </tbody>
-    </table>
+    ${renderServiceYearMatrixHTML(totals, w)}
     <h2 class="es-h2">Pricing Summary</h2>
     <table class="es-table">
       <thead><tr><th>Line Item</th><th class="num">Amount</th></tr></thead>
@@ -3560,11 +3559,26 @@ function lineItemYearBreakdownHTML(li, w){
       </tbody>
     </table>`;
   }
-  if(li.svc.pricingModel === 'verify_tiered' || li.svc.pricingModel === 'unit_tiered'){
+  if(li.svc.pricingModel === 'verify_tiered' || li.svc.pricingModel === 'unit_tiered' || li.serviceId === 'general_consulting'){
     // VERIFY/CCM: flat annual charge x contract term, no per-year variance
-    // (see CLAUDE.md's Contract Term note) -- but annualTotal/contractTotal
-    // are already computed server-side (priceVerify()/priceCcm()), so this
-    // is just laying that out as a table, not new math.
+    // (see CLAUDE.md's Contract Term note) -- annualTotal/contractTotal are
+    // already computed server-side (priceVerify()/priceCcm()), so this is
+    // just laying that out as a table, not new math.
+    // General Consulting (w6, 2026-09-16): now annualized server-side
+    // (monthly fee x12) same as the other two, so it belongs in this same
+    // branch -- with a real Year Breakout on top when a rep has turned it
+    // on for this service (li.detail.yearBreakout, now also annualized).
+    const bo = li.detail && li.detail.yearBreakout;
+    if(bo && Array.isArray(bo.pctByYear) && bo.pctByYear.length){
+      const rowsHTML = bo.pctByYear.map((pct,i) => `<tr><td>Year ${i+1}</td><td class="num">${pct}%</td><td class="num">${fmtMoney(bo.yearlyAmounts[i]||0)}</td></tr>`).join('');
+      return `<table class="es-table">
+        <thead><tr><th>Contract Year</th><th class="num">% Allocated</th><th class="num">Amount</th></tr></thead>
+        <tbody>
+          ${rowsHTML}
+          <tr class="es-total-row"><td colspan="2">Full contract (${bo.pctByYear.length}yr)</td><td class="num">${fmtMoney(bo.contractTotal||0)}</td></tr>
+        </tbody>
+      </table>`;
+    }
     const d = li.detail || {};
     const n = w.contractTermYears || 1;
     const annual = d.annualTotal != null ? d.annualTotal : li.amount;
@@ -3579,19 +3593,66 @@ function lineItemYearBreakdownHTML(li, w){
   }
   const bo = li.detail && li.detail.yearBreakout;
   if(!bo || !Array.isArray(bo.pctByYear) || !bo.pctByYear.length) return null;
-  // General Consulting is $/mo-denominated -- each year's % scales the same
-  // monthly rate, it's not a real dollar amount meaningful to sum across
-  // years, so no contract-total row. Same isMonthlyRate rule as
-  // renderYearBreakoutBlock's live editor (see its own comment).
-  const isMonthlyRate = li.serviceId === 'general_consulting';
-  const rowsHTML = bo.pctByYear.map((pct,i) => `<tr><td>Year ${i+1}</td><td class="num">${pct}%</td><td class="num">${fmtMoney(bo.yearlyAmounts[i]||0)}${isMonthlyRate?'/mo':''}</td></tr>`).join('');
+  const rowsHTML = bo.pctByYear.map((pct,i) => `<tr><td>Year ${i+1}</td><td class="num">${pct}%</td><td class="num">${fmtMoney(bo.yearlyAmounts[i]||0)}</td></tr>`).join('');
   return `<table class="es-table">
     <thead><tr><th>Contract Year</th><th class="num">% Allocated</th><th class="num">Amount</th></tr></thead>
     <tbody>
       ${rowsHTML}
-      ${isMonthlyRate ? '' : `<tr class="es-total-row"><td colspan="2">Full contract (${bo.pctByYear.length}yr)</td><td class="num">${fmtMoney(bo.contractTotal||0)}</td></tr>`}
+      <tr class="es-total-row"><td colspan="2">Full contract (${bo.pctByYear.length}yr)</td><td class="num">${fmtMoney(bo.contractTotal||0)}</td></tr>
     </tbody>
   </table>`;
+}
+// New (2026-09-16), shared by renderServiceYearMatrixHTML below. Returns
+// exactly w.contractTermYears numbers -- one per contract year -- for one
+// line item, in the same three shapes lineItemYearBreakdownHTML above
+// uses (kept in sync with it, same branching): Inspection's real per-year
+// variance, VERIFY/CCM/General Consulting's flat-or-breakout-driven annual
+// recurrence, and everything else (one-time per-unit/task-line/travel)
+// landing entirely in Year 1 with $0 in every other year -- matching how
+// that same amount already feeds the offer's near-term total elsewhere.
+// Confirmed with Michael (2026-09-16).
+function lineItemYearlyAmounts(li, w){
+  const n = w.contractTermYears || 1;
+  if(li.serviceId === 'inspection'){
+    const info = inspectionYearRows(li, n, w.offerType==='portfolio');
+    return Array.from({length:n}, (_,i) => (info && info.years[i]) ? info.years[i].amount : 0);
+  }
+  if(li.svc.pricingModel === 'verify_tiered' || li.svc.pricingModel === 'unit_tiered' || li.serviceId === 'general_consulting'){
+    const bo = li.detail && li.detail.yearBreakout;
+    if(bo && Array.isArray(bo.yearlyAmounts) && bo.yearlyAmounts.length){
+      return Array.from({length:n}, (_,i) => bo.yearlyAmounts[i] || 0);
+    }
+    const annual = (li.detail && li.detail.annualTotal != null) ? li.detail.annualTotal : li.amount;
+    return Array.from({length:n}, () => annual || 0);
+  }
+  const bo = li.detail && li.detail.yearBreakout;
+  if(bo && Array.isArray(bo.yearlyAmounts) && bo.yearlyAmounts.length){
+    return Array.from({length:n}, (_,i) => bo.yearlyAmounts[i] || 0);
+  }
+  return Array.from({length:n}, (_,i) => i===0 ? (li.amount||0) : 0);
+}
+// New (2026-09-16), shared by the Estimate Sheet and the Narrative
+// Proposal. Replaces the old flat Service/Basis/Amount table at the top of
+// both documents with each service's amount broken out across the
+// contract's actual years (columns capped at w.contractTermYears, never
+// more -- "years should only appear if the contract goes that long"),
+// plus a Total row summing each year column. Year 1's Total always equals
+// the existing Pricing Summary Subtotal exactly (every line item's Year 1
+// figure is the same number that already feeds subtotal server-side) --
+// useful as a sanity check when testing this.
+function renderServiceYearMatrixHTML(totals, w){
+  const n = w.contractTermYears || 1;
+  const years = Array.from({length:n}, (_,i) => i+1);
+  const rows = totals.lineItems.map(li => ({ name: li.svc.name, amounts: lineItemYearlyAmounts(li, w) }));
+  const totalsByYear = years.map((_,yi) => rows.reduce((a,r) => a + (r.amounts[yi]||0), 0));
+  return `
+    <table class="es-table">
+      <thead><tr><th>Service</th>${years.map(y => `<th class="num">Year ${y}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${rows.map(r => `<tr><td>${escapeHtml(r.name)}</td>${r.amounts.map(a => `<td class="num">${fmtMoney(a)}</td>`).join('')}</tr>`).join('')}
+        <tr class="es-total-row"><td>Total</td>${totalsByYear.map(a => `<td class="num">${fmtMoney(a)}</td>`).join('')}</tr>
+      </tbody>
+    </table>`;
 }
 // Shared by both the Estimate Sheet and the Narrative Proposal. Surfaces a
 // per-year breakdown for every line item that has one -- Inspection's real
@@ -3669,12 +3730,7 @@ function renderNarrativeProposalHTML(){
     }).join('')}
 
     <h2 class="es-h2">Commercial Model</h2>
-    <table class="es-table">
-      <thead><tr><th>Service</th><th class="num">Basis</th><th class="num">Amount</th></tr></thead>
-      <tbody>
-        ${totals.lineItems.map(li => `<tr><td>${escapeHtml(li.svc.name)}</td><td class="num">${pricingModelLabel(li.svc.pricingModel)}</td><td class="num">${fmtMoney(li.amount)}${li.isMonthly?'/mo':''}${li.isAnnual?'/yr':''}</td></tr>`).join('')}
-      </tbody>
-    </table>
+    ${renderServiceYearMatrixHTML(totals, w)}
     <table class="es-table" style="margin-top:10px;">
       <tbody>
         <tr><td>Subtotal</td><td class="num">${fmtMoney(totals.subtotal)}</td></tr>
