@@ -771,7 +771,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ak';
+const APP_VERSION = 'v2al';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1838,6 +1838,14 @@ function freshWizardState(){
     siteAssignLoading: false,
     siteAhj: {},
     siteRegion: {},
+    // 2026-09-17: a property marked excluded (VDA can't inspect that
+    // location) is dropped from Inspection pricing specifically -- it can
+    // still carry other services normally, see toggleSiteExcluded() and
+    // inspectionInputs.sites below. Distinct from siteAhj/siteRegion simply
+    // being unset ("Not Selected", flagged as needing attention) -- exclude
+    // is an explicit, deliberate call that a jurisdiction will never apply,
+    // not a not-yet-gotten-to state.
+    siteExcluded: {},
     // v2j: cache for the Travel Backup Detail document's Admin-edition
     // real names -- see ensureTravelAdminNames()'s comment. Sales edition
     // never needs this (always shows the anonymized code already present
@@ -2688,9 +2696,13 @@ function refreshPricing(){
       // every property needs to say how many units it actually has. Single-
       // property's unit count is sent separately (units.length, computed
       // server-side from the units array already in this same request body).
+      // Excluded properties (siteExcluded, same date) are dropped entirely
+      // rather than sent with null ahjId/region -- they're deliberately out
+      // of scope for Inspection, not "unresolved"/needing attention, so
+      // they shouldn't show up as a missing property in perSite either.
       inspectionInputs: w.offerType === 'single'
         ? { ahjId: w.confirmedAhjId, region: w.confirmedRegion }
-        : { sites: currentProperties().map(p => ({ key:p.key, property:p.property, ahjId: w.siteAhj[p.key]||null, region: w.siteRegion[p.key]||null, unitCount: p.unitCount||0 })) },
+        : { sites: currentProperties().filter(p => !w.siteExcluded[p.key]).map(p => ({ key:p.key, property:p.property, ahjId: w.siteAhj[p.key]||null, region: w.siteRegion[p.key]||null, unitCount: p.unitCount||0 })) },
       // v2j: travel is priced unconditionally against wherever the site(s)
       // actually are (see priceTravel()'s comment) -- not gated on any
       // selected service. Single-property sends its one Step-1 city/state
@@ -2970,6 +2982,16 @@ function confirmSiteRegionSuggested(idx){
   const sug = state.wizard.siteRegionSuggestions[p.key];
   if(sug && sug.region) confirmSiteRegion(idx, sug.region);
 }
+// 2026-09-17: excluding a property drops it from Inspection pricing only
+// (see inspectionInputs.sites below) -- other services on the same
+// property are unaffected. Re-including it leaves any previously
+// confirmed AHJ/region exactly as they were (toggling exclude off and on
+// doesn't clear that data), so a mis-click doesn't lose real work.
+function toggleSiteExcluded(idx){
+  const p = currentProperties()[idx]; if(!p) return;
+  const w = state.wizard;
+  setWizard({ siteExcluded: { ...w.siteExcluded, [p.key]: !w.siteExcluded[p.key] } });
+}
 function confirmAllSiteSuggestions(){
   const props = currentProperties();
   const w = state.wizard;
@@ -2997,43 +3019,66 @@ function confirmAllSiteSuggestions(){
 // aren't loaded from ahj_inspection_requirements anywhere yet. Any row
 // without a confirmed AHJ/region, or 0 units, shows "—" rather than a
 // misleading $0/blank.
-function inspectionPlaceholderColumns(p, li){
+function inspectionPlaceholderColumns(p, li, excluded){
+  if(excluded) return { inspectionsPerYear:null, costPerUnit:null, totalForBuilding:null, excluded:true };
   const perSite = li && li.detail && li.detail.perSite;
   const site = Array.isArray(perSite) ? perSite.find(s => s.key === p.key) : null;
   const priced = site && !site.unresolved && site.annualTotal != null ? site.annualTotal : null;
   const inspectionsPerYear = 1; // placeholder -- see comment above
   const totalForBuilding = priced;
   const costPerUnit = (priced != null && p.unitCount > 0) ? priced / p.unitCount : null;
-  return { inspectionsPerYear, costPerUnit, totalForBuilding };
+  return { inspectionsPerYear, costPerUnit, totalForBuilding, excluded:false };
 }
+// "Not Selected" (2026-09-17): both selects always carry this as their
+// first option now, even once confirmed -- lets a rep explicitly clear a
+// wrong pick (this is exactly how Sunset Plaza ended up tagged Alabama:
+// no real California region exists yet, but nothing stopped picking one
+// anyway). Choosing it clears siteAhj/siteRegion for that property
+// (confirmSiteAhj/confirmSiteRegion with an empty string), which the
+// unconfirmed branches below already treat as falsy. A non-excluded
+// property with nothing confirmed and no suggestion gets an explicit
+// amber "Not Selected" reminder rather than just an easy-to-miss blank
+// dropdown -- see needsAttention below.
 function renderSiteAssignmentRow(p, idx, li){
   const w = state.wizard;
+  const excluded = !!w.siteExcluded[p.key];
   const ahjSug = w.siteAhjSuggestions[p.key];
   const regionSug = w.siteRegionSuggestions[p.key];
   const confirmedAhjId = w.siteAhj[p.key];
   const confirmedRegion = w.siteRegion[p.key];
   const ahjList = state.ahjList || [];
   const regionList = state.regionList || [];
-  const ahjCell = confirmedAhjId
-    ? `<select class="select-input" onchange="confirmSiteAhj(${idx}, this.value)">${ahjList.map(a=>`<option value="${a.id}" ${confirmedAhjId===a.id?'selected':''}>${escapeHtml(a.jurisdiction_name)}</option>`).join('')}</select>`
-    : (ahjSug && ahjSug.match
-        ? `<div style="font-size:11.5px;"><span style="color:var(--amber);">${escapeHtml(ahjSug.match.jurisdiction_name)}</span><br><button class="btn btn-sm" style="margin-top:3px;" onclick="confirmSiteAhjSuggested(${idx})">Confirm</button></div>`
-        : (ahjList.length ? `<select class="select-input" onchange="confirmSiteAhj(${idx}, this.value)"><option value="">Select…</option>${ahjList.map(a=>`<option value="${a.id}">${escapeHtml(a.jurisdiction_name)}</option>`).join('')}</select>` : `<span style="color:var(--text-muted); font-size:11px;">—</span>`));
-  const regionCell = confirmedRegion
-    ? `<select class="select-input" onchange="confirmSiteRegion(${idx}, this.value)">${regionList.map(r=>`<option value="${escapeHtml(r)}" ${confirmedRegion===r?'selected':''}>${escapeHtml(r)}</option>`).join('')}</select>`
-    : (regionSug && regionSug.region
-        ? `<div style="font-size:11.5px;"><span style="color:var(--amber);">${escapeHtml(regionSug.region)}</span><br><button class="btn btn-sm" style="margin-top:3px;" onclick="confirmSiteRegionSuggested(${idx})">Confirm</button></div>`
-        : (regionList.length ? `<select class="select-input" onchange="confirmSiteRegion(${idx}, this.value)"><option value="">Select…</option>${regionList.map(r=>`<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}</select>` : `<span style="color:var(--text-muted); font-size:11px;">—</span>`));
-  const { inspectionsPerYear, costPerUnit, totalForBuilding } = inspectionPlaceholderColumns(p, li);
-  return `<tr>
+  const notSelectedFlag = `<div style="font-size:10.5px; color:var(--amber); font-weight:650; margin-bottom:3px;">⚠ Not Selected</div>`;
+  const ahjCell = excluded
+    ? `<span style="color:var(--text-muted); font-size:11px;">Excluded</span>`
+    : confirmedAhjId
+      ? `<select class="select-input" onchange="confirmSiteAhj(${idx}, this.value)"><option value="">Not Selected</option>${ahjList.map(a=>`<option value="${a.id}" ${confirmedAhjId===a.id?'selected':''}>${escapeHtml(a.jurisdiction_name)}</option>`).join('')}</select>`
+      : (ahjSug && ahjSug.match
+          ? `<div style="font-size:11.5px;"><span style="color:var(--amber);">${escapeHtml(ahjSug.match.jurisdiction_name)}</span><br><button class="btn btn-sm" style="margin-top:3px;" onclick="confirmSiteAhjSuggested(${idx})">Confirm</button></div>`
+          : (ahjList.length ? `${notSelectedFlag}<select class="select-input" onchange="confirmSiteAhj(${idx}, this.value)"><option value="" selected>Not Selected</option>${ahjList.map(a=>`<option value="${a.id}">${escapeHtml(a.jurisdiction_name)}</option>`).join('')}</select>` : `<span style="color:var(--text-muted); font-size:11px;">—</span>`));
+  const regionCell = excluded
+    ? `<span style="color:var(--text-muted); font-size:11px;">Excluded</span>`
+    : confirmedRegion
+      ? `<select class="select-input" onchange="confirmSiteRegion(${idx}, this.value)"><option value="">Not Selected</option>${regionList.map(r=>`<option value="${escapeHtml(r)}" ${confirmedRegion===r?'selected':''}>${escapeHtml(r)}</option>`).join('')}</select>`
+      : (regionSug && regionSug.region
+          ? `<div style="font-size:11.5px;"><span style="color:var(--amber);">${escapeHtml(regionSug.region)}</span><br><button class="btn btn-sm" style="margin-top:3px;" onclick="confirmSiteRegionSuggested(${idx})">Confirm</button></div>`
+          : (regionList.length ? `${notSelectedFlag}<select class="select-input" onchange="confirmSiteRegion(${idx}, this.value)"><option value="" selected>Not Selected</option>${regionList.map(r=>`<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}</select>` : `<span style="color:var(--text-muted); font-size:11px;">—</span>`));
+  const { inspectionsPerYear, costPerUnit, totalForBuilding } = inspectionPlaceholderColumns(p, li, excluded);
+  return `<tr ${excluded?'style="opacity:0.6;"':''}>
+    <td>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" ${excluded?'checked':''} onchange="toggleSiteExcluded(${idx})">
+        <span style="font-size:11px; color:var(--text-muted);">Can't inspect</span>
+      </label>
+    </td>
     <td>${escapeHtml(p.property)}</td>
     <td>${escapeHtml([p.city,p.state].filter(Boolean).join(', ')) || '—'}</td>
     <td class="num">${p.unitCount}</td>
     <td>${ahjCell}</td>
     <td>${regionCell}</td>
-    <td class="num">${inspectionsPerYear}</td>
-    <td class="num">${costPerUnit!=null ? fmtMoney(costPerUnit) : '—'}</td>
-    <td class="num">${totalForBuilding!=null ? fmtMoney(totalForBuilding) : '—'}</td>
+    <td class="num">${excluded ? '—' : inspectionsPerYear}</td>
+    <td class="num">${excluded ? '<span style="color:var(--text-muted); font-size:11px;">Excluded</span>' : (costPerUnit!=null ? fmtMoney(costPerUnit) : '—')}</td>
+    <td class="num">${excluded ? '<span style="color:var(--text-muted); font-size:11px;">Excluded</span>' : (totalForBuilding!=null ? fmtMoney(totalForBuilding) : '—')}</td>
   </tr>`;
 }
 // Shared by both offer types -- li is the 'inspection' lineItem from the
@@ -3376,23 +3421,28 @@ function renderServicePricingCard(svcId, units){
         <div class="notional-banner"><span class="ic">${icon('warn')}</span>Upload the portfolio's unit inventory on Step 2 before assigning AHJs — Inspection pricing is per property.</div>
       </div>`;
     }
-    const confirmedCount = props.filter(p => w.siteAhj[p.key] && w.siteRegion[p.key]).length;
+    // 2026-09-17: excluded properties don't count against "needs
+    // confirming" -- they're deliberately out of scope for Inspection, not
+    // outstanding work.
+    const includedProps = props.filter(p => !w.siteExcluded[p.key]);
+    const confirmedCount = includedProps.filter(p => w.siteAhj[p.key] && w.siteRegion[p.key]).length;
+    const excludedCount = props.length - includedProps.length;
     ensureAhjListLoaded(); ensureRegionListLoaded();
     return `
     <div class="card" style="margin-top:14px;">
       <div class="card-header">
         <h3 class="card-title" style="margin:0;">${svc.name}</h3>
-        <span style="font-size:11px; color:${confirmedCount===props.length?'var(--green)':'var(--amber)'}; font-weight:650;">${confirmedCount} of ${props.length} properties confirmed</span>
+        <span style="font-size:11px; color:${confirmedCount===includedProps.length?'var(--green)':'var(--amber)'}; font-weight:650;">${confirmedCount} of ${includedProps.length} properties confirmed${excludedCount>0?` · ${excludedCount} excluded`:''}</span>
       </div>
       <div class="card-pad">
-        <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Inspection pricing depends on each property's AHJ (which categories bill) and rate-sheet region (the price) — a portfolio can span multiple of each. Only confirmed properties are included in the price below.</p>
+        <p style="color:var(--text-muted); font-size:11px; margin:0 0 10px 0;">Inspection pricing depends on each property's AHJ (which categories bill) and rate-sheet region (the price) — a portfolio can span multiple of each. Only confirmed properties are included in the price below. Check "Can't inspect" for a property VDA doesn't cover — it's dropped from Inspection pricing but keeps any other services normally.</p>
         <div style="display:flex; gap:8px; margin-bottom:10px;">
           <button class="btn btn-sm btn-primary" ${w.siteAssignLoading?'disabled':''} onclick="lookupSiteAssignments()">${w.siteAssignLoading?'Looking up…':'Look up AHJ &amp; region for all properties'}</button>
           ${Object.keys(w.siteAhjSuggestions).length ? `<button class="btn btn-sm" onclick="confirmAllSiteSuggestions()">Confirm all suggested</button>` : ''}
         </div>
         <div class="table-card">
           <table class="data-table">
-            <thead><tr><th>Property</th><th>City, State</th><th class="num">Units</th><th>AHJ</th><th>Region</th><th class="num">Insp./Yr</th><th class="num">Cost/Unit</th><th class="num">Total (Building)</th></tr></thead>
+            <thead><tr><th></th><th>Property</th><th>City, State</th><th class="num">Units</th><th>AHJ</th><th>Region</th><th class="num">Insp./Yr</th><th class="num">Cost/Unit</th><th class="num">Total (Building)</th></tr></thead>
             <tbody>
               ${props.map((p,idx) => renderSiteAssignmentRow(p,idx,li)).join('')}
             </tbody>
