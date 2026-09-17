@@ -774,7 +774,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2am';
+const APP_VERSION = 'v2an';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -3100,6 +3100,27 @@ function renderSiteAssignmentRow(p, idx, li){
 // returns real per-category yearBreakdown rows, portfolio returns rows
 // summed across perSite. Returns null only when there's no detail yet
 // (still loading) -- callers handle that themselves.
+// w8 (2026-09-17): nonAnnualCategories is a once-per-contract reference
+// list (built from year 1), not a per-year table -- these are categories
+// required on a 2/3/5yr cycle (or with no frequency ever picked), which
+// this estimate deliberately excludes from the priced total since we can't
+// predict which contract year they'll actually fall due. Portfolio sums
+// each category+frequency across every confirmed property (a given
+// category can appear at more than one property/AHJ).
+function aggregateNonAnnualCategories(perSite, yearIndex){
+  const map = {};
+  for(const s of perSite || []){
+    const yb = s.yearBreakdown && s.yearBreakdown[yearIndex];
+    if(!yb || !Array.isArray(yb.nonAnnualCategories)) continue;
+    for(const c of yb.nonAnnualCategories){
+      const key = c.id + '|' + (c.frequency||'');
+      if(!map[key]) map[key] = { id:c.id, name:c.name, frequency:c.frequency, total:0, propertyCount:0 };
+      map[key].total += c.total;
+      map[key].propertyCount += 1;
+    }
+  }
+  return Object.values(map);
+}
 function inspectionYearRows(li, termYears, isPortfolio){
   const d = li && li.detail;
   if(!d) return null;
@@ -3110,9 +3131,27 @@ function inspectionYearRows(li, termYears, isPortfolio){
       amount: (d.perSite||[]).reduce((a,s) => a + (s.yearBreakdown && s.yearBreakdown[i] ? s.yearBreakdown[i].amount : 0), 0),
     }));
     const unresolvedCount = (d.perSite||[]).filter(s=>s.unresolved).length;
-    return { years, contractTotal: d.contractTotal||0, isPlaceholder: !!d.isPlaceholder, unresolvedCount };
+    const nonAnnualCategories = aggregateNonAnnualCategories(d.perSite, 0);
+    return { years, contractTotal: d.contractTotal||0, isPlaceholder: !!d.isPlaceholder, unresolvedCount, nonAnnualCategories };
   }
-  return { years: d.yearBreakdown || [], contractTotal: d.contractTotal||0, isPlaceholder: !!d.isPlaceholder, unresolvedCount: 0 };
+  const yearBreakdown = d.yearBreakdown || [];
+  const nonAnnualCategories = (yearBreakdown[0] && yearBreakdown[0].nonAnnualCategories) || [];
+  return { years: yearBreakdown, contractTotal: d.contractTotal||0, isPlaceholder: !!d.isPlaceholder, unresolvedCount: 0, nonAnnualCategories };
+}
+// w8: shared caveat + reference-price block for Inspection, used by the
+// live wizard card and both proposal documents. Always states the
+// estimate's annual-only scope (so a client never mistakes silence for "no
+// other requirements exist"); the reference price table only appears when
+// a required category was actually excluded from the total.
+function nonAnnualCaveatHTML(nonAnnualCategories, { tableClass, wrapCard, isPortfolio }){
+  const caveat = `<p style="font-size:11px; color:var(--text-muted); margin:8px 0 0 0;">This estimate reflects inspections required annually or every 6 months only. Categories required on a longer cycle aren't included in the total, since we can't predict which contract year they'll actually fall due.</p>`;
+  if(!nonAnnualCategories || !nonAnnualCategories.length) return caveat;
+  const rows = nonAnnualCategories.map(c => `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.frequency || 'Frequency not set')}</td><td class="num">${fmtMoney(c.total)}${isPortfolio && c.propertyCount>1 ? ` <span style="color:var(--text-muted); font-size:10px;">(${c.propertyCount} properties)</span>` : ''}</td></tr>`).join('');
+  const table = `<table class="${tableClass}">
+    <thead><tr><th>Category (required, not annual)</th><th>Frequency</th><th class="num">Reference Price${isPortfolio?' (all properties)':''}</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+  return caveat + (wrapCard ? `<div class="table-card" style="margin-top:6px;">${table}</div>` : `<div style="margin-top:6px;">${table}</div>`);
 }
 function renderInspectionPricingDetail(li, termYears, isPortfolio){
   if(!li || !li.detail){
@@ -3123,7 +3162,7 @@ function renderInspectionPricingDetail(li, termYears, isPortfolio){
     ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${isPortfolio?'One or more matched regions use':'This region uses'} a placeholder (not-yet-vetted) rate — treat this total as notional.</div>`
     : '';
   if(isPortfolio){
-    const { years, contractTotal, unresolvedCount } = info;
+    const { years, contractTotal, unresolvedCount, nonAnnualCategories } = info;
     return placeholderNote + `
     ${unresolvedCount>0 ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${unresolvedCount} propert${unresolvedCount===1?'y':'ies'} not yet confirmed — excluded from this total.</div>` : ''}
     <div class="table-card" style="margin-top:10px;">
@@ -3134,19 +3173,21 @@ function renderInspectionPricingDetail(li, termYears, isPortfolio){
           <tr style="font-weight:750;"><td>Full contract (${years.length}yr)</td><td class="num">${fmtMoney(contractTotal)}</td></tr>
         </tbody>
       </table>
-    </div>`;
+    </div>
+    ${nonAnnualCaveatHTML(nonAnnualCategories, { tableClass:'data-table rc-table', wrapCard:true, isPortfolio:true })}`;
   }
-  const { years, contractTotal } = info;
+  const { years, contractTotal, nonAnnualCategories } = info;
   return placeholderNote + `
   <div class="table-card" style="margin-top:10px;">
     <table class="data-table rc-table">
       <thead><tr><th>Contract Year</th><th>Categories Billed</th><th class="num">Amount</th></tr></thead>
       <tbody>
-        ${years.map(y => `<tr><td>Year ${y.year} <span style="color:var(--text-muted); font-size:10.5px;">(${y.date})</span></td><td>${y.categories.length ? y.categories.map(c=>escapeHtml(c.name)).join(', ') : '<span style="color:var(--text-muted);">none</span>'}${y.missingPriceCategoryIds && y.missingPriceCategoryIds.length ? ` <span style="color:var(--amber);">+${y.missingPriceCategoryIds.length} missing price</span>` : ''}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')}
+        ${years.map(y => `<tr><td>Year ${y.year} <span style="color:var(--text-muted); font-size:10.5px;">(${y.date})</span></td><td>${y.categories.length ? y.categories.map(c=>escapeHtml(c.name)+(c.billingNote?` <span style="color:var(--text-muted); font-size:10px;">(${c.billingNote})</span>`:'')).join(', ') : '<span style="color:var(--text-muted);">none</span>'}${y.missingPriceCategoryIds && y.missingPriceCategoryIds.length ? ` <span style="color:var(--amber);">+${y.missingPriceCategoryIds.length} missing price</span>` : ''}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')}
         <tr style="font-weight:750;"><td colspan="2">Full contract (${years.length}yr)</td><td class="num">${fmtMoney(contractTotal)}</td></tr>
       </tbody>
     </table>
-  </div>`;
+  </div>
+  ${nonAnnualCaveatHTML(nonAnnualCategories, { tableClass:'data-table rc-table', wrapCard:true, isPortfolio:false })}`;
 }
 
 function renderServicePricingCard(svcId, units){
@@ -3719,7 +3760,7 @@ function lineItemYearBreakdownHTML(li, w){
     if(!info || !info.years.length) return null;
     const rowsHTML = isPortfolio
       ? info.years.map(y => `<tr><td>Year ${y.year}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('')
-      : info.years.map(y => `<tr><td>Year ${y.year} <span style="color:var(--text-muted); font-size:10.5px;">(${y.date})</span></td><td>${y.categories && y.categories.length ? y.categories.map(c=>escapeHtml(c.name)).join(', ') : '<span style="color:var(--text-muted);">none</span>'}${y.missingPriceCategoryIds && y.missingPriceCategoryIds.length ? ` <span style="color:var(--amber);">+${y.missingPriceCategoryIds.length} missing price</span>` : ''}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('');
+      : info.years.map(y => `<tr><td>Year ${y.year} <span style="color:var(--text-muted); font-size:10.5px;">(${y.date})</span></td><td>${y.categories && y.categories.length ? y.categories.map(c=>escapeHtml(c.name)+(c.billingNote?` <span style="color:var(--text-muted); font-size:10px;">(${c.billingNote})</span>`:'')).join(', ') : '<span style="color:var(--text-muted);">none</span>'}${y.missingPriceCategoryIds && y.missingPriceCategoryIds.length ? ` <span style="color:var(--amber);">+${y.missingPriceCategoryIds.length} missing price</span>` : ''}</td><td class="num">${fmtMoney(y.amount)}</td></tr>`).join('');
     const colspan = isPortfolio ? 1 : 2;
     return `<table class="es-table">
       <thead><tr>${isPortfolio ? '<th>Contract Year</th><th class="num">Amount</th>' : '<th>Contract Year</th><th>Categories Billed</th><th class="num">Amount</th>'}</tr></thead>
@@ -3727,7 +3768,8 @@ function lineItemYearBreakdownHTML(li, w){
         ${rowsHTML}
         <tr class="es-total-row"><td colspan="${colspan}">Full contract (${info.years.length}yr)</td><td class="num">${fmtMoney(info.contractTotal)}</td></tr>
       </tbody>
-    </table>`;
+    </table>
+    ${nonAnnualCaveatHTML(info.nonAnnualCategories, { tableClass:'es-table', wrapCard:false, isPortfolio })}`;
   }
   if(li.svc.pricingModel === 'verify_tiered' || li.svc.pricingModel === 'unit_tiered' || li.serviceId === 'general_consulting'){
     // VERIFY/CCM: flat annual charge x contract term, no per-year variance
