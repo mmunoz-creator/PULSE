@@ -771,7 +771,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ai';
+const APP_VERSION = 'v2aj';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2977,7 +2977,31 @@ function confirmAllSiteSuggestions(){
   }
   setWizard({ siteAhj: nextAhj, siteRegion: nextRegion });
 }
-function renderSiteAssignmentRow(p, idx){
+// New columns (2026-09-17), confirmed with Michael: mandatory
+// inspections/year, cost/unit, and total cost for the building -- purely
+// informational/reference figures in this table, NOT a change to the real
+// quoted Inspection total (computeOfferTotals/subtotal untouched; that
+// total is priced per AHJ/category event, not per unit, and stays that
+// way here). "Mandatory # of inspections per year for the AHJ" isn't
+// loaded anywhere yet, so this hardcodes 1 (CAT1) as an explicit
+// placeholder per Michael's instruction, rather than a real count pulled
+// from ahj_inspection_requirements. Cost/unit reuses CAT1's REAL price
+// for this property's confirmed region -- already present in
+// li.detail.perSite (no new fetch) -- so at least that half is real data,
+// not fabricated; it shows "—" rather than a fake number whenever CAT1
+// isn't priced yet (not confirmed, still loading, or CAT1 genuinely isn't
+// a required category for this AHJ).
+function inspectionPlaceholderColumns(p, li){
+  const perSite = li && li.detail && li.detail.perSite;
+  const site = Array.isArray(perSite) ? perSite.find(s => s.key === p.key) : null;
+  const year1 = site && !site.unresolved && Array.isArray(site.yearBreakdown) ? site.yearBreakdown[0] : null;
+  const cat1 = year1 ? (year1.categories||[]).find(c => c.id === 'cat1') : null;
+  const inspectionsPerYear = 1; // placeholder -- see comment above
+  const costPerUnit = cat1 ? cat1.price : null;
+  const totalForBuilding = costPerUnit != null ? costPerUnit * inspectionsPerYear * (p.unitCount||0) : null;
+  return { inspectionsPerYear, costPerUnit, totalForBuilding };
+}
+function renderSiteAssignmentRow(p, idx, li){
   const w = state.wizard;
   const ahjSug = w.siteAhjSuggestions[p.key];
   const regionSug = w.siteRegionSuggestions[p.key];
@@ -2995,12 +3019,16 @@ function renderSiteAssignmentRow(p, idx){
     : (regionSug && regionSug.region
         ? `<div style="font-size:11.5px;"><span style="color:var(--amber);">${escapeHtml(regionSug.region)}</span><br><button class="btn btn-sm" style="margin-top:3px;" onclick="confirmSiteRegionSuggested(${idx})">Confirm</button></div>`
         : (regionList.length ? `<select class="select-input" onchange="confirmSiteRegion(${idx}, this.value)"><option value="">Select…</option>${regionList.map(r=>`<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}</select>` : `<span style="color:var(--text-muted); font-size:11px;">—</span>`));
+  const { inspectionsPerYear, costPerUnit, totalForBuilding } = inspectionPlaceholderColumns(p, li);
   return `<tr>
     <td>${escapeHtml(p.property)}</td>
     <td>${escapeHtml([p.city,p.state].filter(Boolean).join(', ')) || '—'}</td>
     <td class="num">${p.unitCount}</td>
     <td>${ahjCell}</td>
     <td>${regionCell}</td>
+    <td class="num">${inspectionsPerYear}</td>
+    <td class="num">${costPerUnit!=null ? fmtMoney(costPerUnit) : '—'}</td>
+    <td class="num">${totalForBuilding!=null ? fmtMoney(totalForBuilding) : '—'}</td>
   </tr>`;
 }
 // Shared by both offer types -- li is the 'inspection' lineItem from the
@@ -3359,11 +3387,12 @@ function renderServicePricingCard(svcId, units){
         </div>
         <div class="table-card">
           <table class="data-table">
-            <thead><tr><th>Property</th><th>City, State</th><th class="num">Units</th><th>AHJ</th><th>Region</th></tr></thead>
+            <thead><tr><th>Property</th><th>City, State</th><th class="num">Units</th><th>AHJ</th><th>Region</th><th class="num">Insp./Yr</th><th class="num">Cost/Unit</th><th class="num">Total (Building)</th></tr></thead>
             <tbody>
-              ${props.map((p,idx) => renderSiteAssignmentRow(p,idx)).join('')}
+              ${props.map((p,idx) => renderSiteAssignmentRow(p,idx,li)).join('')}
             </tbody>
           </table>
+          <p style="color:var(--text-muted); font-size:10.5px; margin:8px 12px 0 12px;">Insp./Yr, Cost/Unit, and Total (Building) are a placeholder reference view — 1 mandatory inspection (CAT 1) per unit per year, since real per-AHJ inspection counts aren't loaded yet. Cost/Unit is CAT 1's real rate-card price once a property's AHJ and region are confirmed; these columns don't change the priced Inspection total above/below.</p>
         </div>
         ${confirmedCount>0 ? renderInspectionPricingDetail(li, w.contractTermYears, true) : ''}
       </div>
