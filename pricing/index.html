@@ -601,6 +601,8 @@ table { border-collapse: collapse; width: 100%; }
   border-radius: var(--radius-sm); cursor:pointer; transition: all .1s; }
 .service-row:hover { border-color: var(--gray-500); }
 .service-row.checked { border-color: var(--blue); background: var(--blue-pale); }
+.service-row.disabled { cursor:not-allowed; opacity:0.5; }
+.service-row.disabled:hover { border-color: var(--border); }
 .service-row .chk { width:16px; height:16px; border-radius:4px; border:1.5px solid var(--border-strong); background:white;
   display:flex; align-items:center; justify-content:center; font-size:10px; color:white; flex-shrink:0; margin-top:1px; }
 .service-row.checked .chk { background: var(--blue); border-color: var(--blue); }
@@ -769,7 +771,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ag';
+const APP_VERSION = 'v2ah';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1149,27 +1151,50 @@ initParticles('hero-particles', { count: 60 });
      generic consulting fee (rolls into "Other consulting", never
      multiplies by device count) and is NOT used here.
    ============================================================ */
+// Every service belongs to a business segment + a category within it (see
+// SERVICE_SEGMENTS below for the segment/category definitions and display
+// order). Added 2026-09-16 alongside the Fire and Life segment -- all 9
+// pre-existing services are 'vt' (Vertical Transportation), grouped
+// Compliance / Evaluations / Advisory per Michael's explicit mapping.
 const SERVICES = [
-  { id:'verify', name:'VERIFY', pricingModel:'verify_tiered', staffPool:'consultants',
+  // -- Compliance --
+  { id:'verify', name:'VERIFY', pricingModel:'verify_tiered', staffPool:'consultants', segment:'vt', category:'compliance',
     desc:'Maintenance contract & certificate compliance oversight — invoice/proposal review, KPI scorecards, recovery tracking. Priced per the VERIFY tiered calculator.' },
-  { id:'comp_eval', name:'Comprehensive Evaluation', pricingModel:'per_unit', staffPool:'consultants',
-    desc:'Full on-site equipment condition evaluation — one of three Equipment Evaluation variants, priced per unit.' },
-  { id:'qce', name:'Quality Control Evaluation (QCE)', pricingModel:'per_unit', staffPool:'consultants',
-    desc:'Second independent evaluation pass — Equipment Evaluation variant, priced per unit.' },
-  { id:'due_diligence', name:'Due Diligence', pricingModel:'per_unit', staffPool:'consultants',
-    desc:'Pre-acquisition / pre-contract equipment assessment — Equipment Evaluation variant, priced per unit.' },
-  { id:'ccm', name:'Certificate Compliance Management (CCM)', pricingModel:'unit_tiered', staffPool:'inspectors',
+  { id:'ccm', name:'Certificate Compliance Management (CCM)', pricingModel:'unit_tiered', staffPool:'inspectors', segment:'vt', category:'compliance',
     desc:'AHJ inspection scheduling, witnessing, violation tracking, and fee/paperwork submission. Delivered by VDA’s Family of Inspection Companies. Priced per unit. Can stand alone or support the Inspection service below.' },
-  { id:'inspection', name:'Inspection', pricingModel:'per_ahj_category', staffPool:'inspectors',
+  { id:'inspection', name:'Inspection', pricingModel:'per_ahj_category', staffPool:'inspectors', segment:'vt', category:'compliance',
     desc:'AHJ-witnessed inspection event — CAT 1, Periodic, CAT 3, CAT 5, etc. Priced per inspection category AND per Authority Having Jurisdiction, since requirements and fees vary by AHJ rather than by state or city. Rates are placeholder pending real VDA pricing input.' },
-  { id:'general_consulting', name:'General Consulting', pricingModel:'retainer', staffPool:'consultants',
+  // -- Evaluations --
+  { id:'comp_eval', name:'Comprehensive Evaluation', pricingModel:'per_unit', staffPool:'consultants', segment:'vt', category:'evaluations',
+    desc:'Full on-site equipment condition evaluation — one of three Equipment Evaluation variants, priced per unit.' },
+  { id:'qce', name:'Quality Control Evaluation (QCE)', pricingModel:'per_unit', staffPool:'consultants', segment:'vt', category:'evaluations',
+    desc:'Second independent evaluation pass — Equipment Evaluation variant, priced per unit.' },
+  { id:'due_diligence', name:'Due Diligence', pricingModel:'per_unit', staffPool:'consultants', segment:'vt', category:'evaluations',
+    desc:'Pre-acquisition / pre-contract equipment assessment — Equipment Evaluation variant, priced per unit.' },
+  // -- Advisory --
+  { id:'general_consulting', name:'General Consulting', pricingModel:'retainer', staffPool:'consultants', segment:'vt', category:'advisory',
     desc:'Ongoing portfolio-level advisory — lifecycle consulting informed by VERIFY findings, inspection results, and condition data. Recurring monthly/annual fee.' },
-  { id:'project_management', name:'Project Management', pricingModel:'pm_tiered', staffPool:'consultants',
+  { id:'project_management', name:'Project Management', pricingModel:'pm_tiered', staffPool:'consultants', segment:'vt', category:'advisory',
     desc:'Good/Better/Best construction-administration support — Essential, Enhanced, or Comprehensive tier, plus optional extra hours/visits beyond what’s included.' },
-  { id:'modernization', name:'Modernization Services', pricingModel:'task_line', staffPool:'consultants',
+  { id:'modernization', name:'Modernization Services', pricingModel:'task_line', staffPool:'consultants', segment:'vt', category:'advisory',
     desc:'Feasibility through deployment — Survey, Spec, RFP, Award, Submittal Review, phased Construction, Closeout. Priced as individual task lines.' },
-    { id:'construction', name:'Construction Services', pricingModel:'task_line', staffPool:'consultants',
+  { id:'construction', name:'Construction Services', pricingModel:'task_line', staffPool:'consultants', segment:'vt', category:'advisory',
     desc:'Site visits (Progress Check, Punchlist, Final Review) plus meeting participation. Priced as individual task lines.' },
+];
+// Business segments + their categories, in display order. Fire and Life is
+// admin-only (adminOnly:true) and has no real services yet -- an
+// intentional empty "Coming soon" state (confirmed with Michael,
+// 2026-09-16), not a bug. When it does get real services, add them to
+// SERVICES with segment:'fire_life' and give this segment entry a
+// non-empty categories list (or leave services uncategorized if it turns
+// out not to need sub-groups the way Vertical Transportation does).
+const SERVICE_SEGMENTS = [
+  { id:'vt', name:'Vertical Transportation', adminOnly:false, categories:[
+      { id:'compliance', name:'Compliance' },
+      { id:'evaluations', name:'Evaluations' },
+      { id:'advisory', name:'Advisory' },
+    ] },
+  { id:'fire_life', name:'Fire and Life', adminOnly:true, categories:[] },
 ];
 
 // v2y: Year Breakout category map (Misty, 2026-09-03). 'uncapped'
@@ -2543,9 +2568,26 @@ function currentProperties(){
   }
   return Array.from(byProperty.values());
 }
+// VERIFY/CCM mutual exclusivity (2026-09-16, confirmed with Michael):
+// VERIFY's maintenance-contract oversight and CCM's AHJ scheduling/
+// paperwork aren't sold together, unlike CCM+Inspection which explicitly
+// can pair (see CCM's own desc). True "mutual" exclusivity -- checked both
+// directions below, so whichever is selected first blocks turning the
+// other one on; no reverse-order loophole into having both selected via
+// the UI. (A draft saved before this rule existed could still have both,
+// e.g. via Resume -- turning either one OFF is never blocked, so that's
+// just a manual one-click fix, not a forced auto-removal here.)
 function toggleService(id){
   const sel = state.wizard.selectedServices;
   const turningOn = !sel.includes(id);
+  if(turningOn && id === 'ccm' && sel.includes('verify')){
+    showToast("Can't add CCM while VERIFY is selected — they aren't sold together.", true);
+    return;
+  }
+  if(turningOn && id === 'verify' && sel.includes('ccm')){
+    showToast("Can't add VERIFY while CCM is selected — they aren't sold together.", true);
+    return;
+  }
   const next = turningOn ? [...sel, id] : sel.filter(x=>x!==id);
   setWizard({ selectedServices: next });
   // AHJ lookup only matters for Inspection, and only fires once there's
@@ -2557,6 +2599,46 @@ function toggleService(id){
     triggerAhjLookup();
     triggerRegionLookup();
   }
+}
+// Business segments / categories (2026-09-16) -- see SERVICE_SEGMENTS'
+// own comment for the data side. Fire and Life is filtered out entirely
+// for a non-admin session (not just visually de-emphasized) -- a sales
+// session never sees the segment header or that it exists, same pattern
+// as Rate Cards/Manage Users being absent from a sales sidebar rather
+// than shown-but-disabled.
+function renderServiceRow(svc, w){
+  const checked = w.selectedServices.includes(svc.id);
+  const disabledBy = (svc.id==='ccm' && w.selectedServices.includes('verify')) ? 'VERIFY'
+    : (svc.id==='verify' && w.selectedServices.includes('ccm')) ? 'CCM' : null;
+  return `
+  <div class="service-row ${checked?'checked':''} ${disabledBy?'disabled':''}" ${disabledBy?'':`onclick="toggleService('${svc.id}')"`}>
+    <div class="chk">${checked?icon('check'):''}</div>
+    <div class="srv-info">
+      <div class="srv-name">${svc.name} <span class="pricing-model-tag">${pricingModelLabel(svc.pricingModel)}</span>${disabledBy?` <span class="pricing-model-tag" style="color:var(--red);">Not with ${disabledBy}</span>`:''}</div>
+      <div class="srv-desc">${svc.desc}</div>
+    </div>
+  </div>`;
+}
+function renderServiceSegments(w){
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  const segments = SERVICE_SEGMENTS.filter(seg => !seg.adminOnly || isAdmin);
+  return segments.map(seg => {
+    const segServices = SERVICES.filter(s => s.segment === seg.id);
+    const body = seg.categories.length
+      ? seg.categories.map(cat => `
+        <div class="field-label" style="margin-top:12px;">${cat.name}</div>
+        <div class="service-list">
+          ${segServices.filter(s => s.category === cat.id).map(svc => renderServiceRow(svc, w)).join('')}
+        </div>`).join('')
+      : (segServices.length
+          ? `<div class="service-list">${segServices.map(svc => renderServiceRow(svc, w)).join('')}</div>`
+          : `<div class="empty-state" style="padding:24px 20px;"><div class="ic">☷</div>Coming soon.</div>`);
+    return `
+    <div style="margin-top:18px;">
+      <h3 class="card-title" style="margin-bottom:2px;">${seg.name}${seg.adminOnly?' <span class="pricing-model-tag">Admin only</span>':''}</h3>
+      ${body}
+    </div>`;
+  }).join('');
 }
 /* ============================================================
    LIVE PRICING — every dollar figure in the wizard comes from here.
@@ -2757,19 +2839,7 @@ function renderWizardStep3(){
       <div class="card card-pad" style="margin-top:14px;">
         <h2 class="section-title" style="margin-bottom:2px;">Select Services</h2>
         <p style="color:var(--text-muted); font-size:11.5px; margin:0 0 14px 0;">Each service prices differently — per unit, as a recurring retainer, or as an open task-line schedule.</p>
-        <div class="service-list">
-          ${SERVICES.map(svc => {
-            const checked = w.selectedServices.includes(svc.id);
-            return `
-            <div class="service-row ${checked?'checked':''}" onclick="toggleService('${svc.id}')">
-              <div class="chk">${checked?icon('check'):''}</div>
-              <div class="srv-info">
-                <div class="srv-name">${svc.name} <span class="pricing-model-tag">${pricingModelLabel(svc.pricingModel)}</span></div>
-                <div class="srv-desc">${svc.desc}</div>
-              </div>
-            </div>`;
-          }).join('')}
-        </div>
+        ${renderServiceSegments(w)}
       </div>
 
       ${w.selectedServices.map(svcId => renderServicePricingCard(svcId, units)).join('')}
