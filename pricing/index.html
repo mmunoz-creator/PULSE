@@ -778,7 +778,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2av';
+const APP_VERSION = 'v3a';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1323,8 +1323,33 @@ const RATE_CARD_DISPLAY_NAME = "VDA Standard Rate Card — 2026";
 // gone from this file on purpose -- they now live only in D1, read
 // through /api/price/verify, /api/price/unit-service, and
 // /api/price/offer-totals. See refreshPricing() below.
-function fmtMoney(n){ return '$' + Math.round(n).toLocaleString('en-US'); }
-function fmtMoneyDec(n){ return '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+// v3 (2026-09-18): shared currency context fmtMoney/fmtMoneyDec read
+// internally, rather than threading a currency param through their ~90
+// existing call sites. Every value passed to them is already denominated
+// in the offer's market's real local currency (a Canada rate-card row IS
+// a CAD figure, entered as such) -- this layer only ever decides how to
+// DISPLAY that number: as-is with that market's symbol ("local"), or
+// converted to a USD-equivalent with a $ prefix ("USD"), never a second
+// stored value. Reset to USD-identity at the top of every render() pass;
+// only the offer-facing render entry points opt back in via
+// setActiveCurrencyContext(w) -- see render()'s own comment.
+let activeCurrencyContext = { symbol: '$', rateToUsd: 1, mode: 'local' };
+function setActiveCurrencyContext(w){
+  if(!w || !w.market || w.market === 'US' || !state.marketList){
+    activeCurrencyContext = { symbol: '$', rateToUsd: 1, mode: 'local' };
+    return;
+  }
+  const m = state.marketList.find(x => x.id === w.market);
+  activeCurrencyContext = m
+    ? { symbol: m.currency_symbol, rateToUsd: m.rate_to_usd || 1, mode: w.currencyDisplay || 'local' }
+    : { symbol: '$', rateToUsd: 1, mode: 'local' };
+}
+function currencyDisplayAmount(n){
+  if(activeCurrencyContext.mode === 'USD') return { value: n * activeCurrencyContext.rateToUsd, symbol: '$' };
+  return { value: n, symbol: activeCurrencyContext.symbol };
+}
+function fmtMoney(n){ const { value, symbol } = currencyDisplayAmount(n); return symbol + Math.round(value).toLocaleString('en-US'); }
+function fmtMoneyDec(n){ const { value, symbol } = currencyDisplayAmount(n); return symbol + value.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function pricingModelLabel(model){
   return { verify_tiered:'tiered calculator', per_unit:'per unit', unit_tiered:'unit tier bands', retainer:'retainer', pm_tiered:'tier pick', task_line:'task lines', per_ahj_category:'per AHJ / category', travel:'mileage' }[model] || model;
 }
@@ -1803,6 +1828,17 @@ function freshWizardState(){
     draftId: null,
     draftSaving: false,
     offerType: null,        // 'single' | 'portfolio'
+    // International Market selector (v3, 2026-09-18): 'US' | 'CA' | 'UK'.
+    // The most foundational wizard field after offerType -- set in Step 1,
+    // before any AHJ/region lookup happens, since those lists (and every
+    // rate-table query server-side) are filtered by it. Defaults 'US' so
+    // every existing offer/draft (and every offer a rep doesn't touch this
+    // for) behaves exactly as it always has -- zero behavior change for
+    // the common case. currencyDisplay only ever matters once market
+    // isn't 'US' (local already IS USD for a US offer); 'local' default
+    // shows each market's real quoted currency first, not a USD estimate.
+    market: 'US',
+    currencyDisplay: 'local', // 'local' | 'USD'
     clientName: '',
     address: '',
     // Structured city/state, separate from the free-text street address
@@ -2086,6 +2122,20 @@ function setWizardSite(patch){
   Object.assign(state.wizard, patch, { confirmedAhjId: null, ahjSuggestion: null, ahjOverrideOpen: false, confirmedRegion: null, regionSuggestion: null });
   render();
 }
+// v3 (2026-09-18): same invalidation reasoning as setWizardSite above --
+// a previously confirmed AHJ/region can silently become wrong, this time
+// because it belonged to a different market entirely (a US AHJ means
+// nothing once the offer is Canada, and vice versa). Clears both the
+// single-property confirmation and every portfolio property's
+// confirmed/suggested map, since none of it is valid under the new market.
+function updateMarket(market){
+  setWizard({
+    market,
+    confirmedAhjId: null, ahjSuggestion: null, ahjOverrideOpen: false,
+    confirmedRegion: null, regionSuggestion: null,
+    siteAhj: {}, siteRegion: {}, siteAhjSuggestions: {}, siteRegionSuggestions: {},
+  });
+}
 function triggerAhjLookup(){
   clearTimeout(ahjSuggestDebounceTimer);
   const w = state.wizard;
@@ -2173,14 +2223,25 @@ function renderAhjOverridePicker(){
     ${list.map(a => `<option value="${a.id}" ${w.confirmedAhjId===a.id?'selected':''}>${escapeHtml(a.jurisdiction_name)}</option>`).join('')}
   </select>`;
 }
+// v3 (2026-09-18): both AHJ and region lists are now filtered server-side
+// by market (see the Worker's /api/ahj/list, /api/regions/list) -- the
+// cache is keyed by which market it was actually fetched for, so a rep
+// switching market in Step 1 correctly triggers a refetch (not a stale
+// US list shown under a Canada offer) without every existing call site
+// needing to change -- they already call ensureAhjListLoaded()/
+// ensureRegionListLoaded() liberally on each relevant render, and this
+// guard is a cheap no-op once warm for the current market.
 async function ensureAhjListLoaded(){
-  if(state.ahjList) return;
+  const market = (state.wizard && state.wizard.market) || 'US';
+  if(state.ahjList && state.ahjListMarket === market) return;
   try {
-    const res = await workerFetch('/api/ahj/list');
+    const res = await workerFetch(`/api/ahj/list?market=${encodeURIComponent(market)}`);
     const data = await res.json();
     state.ahjList = res.ok ? (data.authorities || []) : [];
+    state.ahjListMarket = market;
   } catch(e){
     state.ahjList = [];
+    state.ahjListMarket = market;
   }
   render();
 }
@@ -2224,13 +2285,27 @@ function triggerRegionLookup(){
 }
 function confirmRegion(region){ setWizard({ confirmedRegion: region }); }
 async function ensureRegionListLoaded(){
-  if(state.regionList) return;
+  const market = (state.wizard && state.wizard.market) || 'US';
+  if(state.regionList && state.regionListMarket === market) return;
   try {
-    const res = await workerFetch('/api/regions/list');
+    const res = await workerFetch(`/api/regions/list?market=${encodeURIComponent(market)}`);
     const data = await res.json();
     state.regionList = res.ok ? (data.regions || []) : [];
+    state.regionListMarket = market;
   } catch(e){
     state.regionList = [];
+    state.regionListMarket = market;
+  }
+  render();
+}
+async function ensureMarketListLoaded(){
+  if(state.marketList) return;
+  try {
+    const res = await workerFetch('/api/markets');
+    const data = await res.json();
+    state.marketList = res.ok ? (data.markets || []) : [];
+  } catch(e){
+    state.marketList = [];
   }
   render();
 }
@@ -2298,6 +2373,7 @@ function wizardStepHeader(){
 /* ---- Step 1: Type & Client ---- */
 function renderWizardStep1(){
   const w = state.wizard;
+  ensureMarketListLoaded();
   return `
   <div class="card card-pad">
     <h2 class="section-title" style="margin-bottom:4px;">Is this a single property or a portfolio?</h2>
@@ -2317,6 +2393,13 @@ function renderWizardStep1(){
   ${w.offerType ? `
   <div class="card card-pad" style="margin-top:14px;">
     <h2 class="section-title" style="margin-bottom:12px;">Client</h2>
+    ${(state.marketList||[]).length>1 ? `
+    <div class="field-group">
+      <label class="field-label">Market</label>
+      <select class="select-input" onchange="updateMarket(this.value)">
+        ${state.marketList.map(m => `<option value="${m.id}" ${w.market===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('')}
+      </select>
+    </div>` : ''}
     <div class="field-group">
       <label class="field-label">Client Name</label>
       <input id="w1-clientName" class="text-input" placeholder="e.g. Acme Building" value="${escapeHtml(w.clientName)}" oninput="setWizard({clientName:this.value})">
@@ -2750,6 +2833,9 @@ function refreshPricing(){
   pricingDebounceTimer = setTimeout(async () => {
     const body = {
       offerType: w.offerType,
+      // v3: market defaults 'US' server-side too if ever omitted, but
+      // always sent explicitly now that every offer carries one.
+      market: w.market || 'US',
       units: currentUnits(),
       selectedServices: w.selectedServices,
       priceAdjust: w.priceAdjust,
@@ -2983,6 +3069,8 @@ function renderWizardStep3(){
   const w = state.wizard;
   const units = currentUnits();
   const totals = computeOfferTotals();
+  ensureMarketListLoaded();
+  setActiveCurrencyContext(w);
 
   return `
   <div class="two-col">
@@ -2990,11 +3078,25 @@ function renderWizardStep3(){
       <div class="card card-pad">
         <h2 class="section-title" style="margin-bottom:2px;">Contract Term</h2>
         <p style="color:var(--text-muted); font-size:11.5px; margin:0 0 12px 0;">Sets the offer's default contract length. VERIFY's discount curve and Inspection's year-by-year requirements always use this value directly. Other services with a year breakout default to this length too, but can be set independently below.</p>
-        <div class="field-group" style="max-width:220px; margin-bottom:0;">
-          <label class="field-label">Contract Term (years)</label>
-          <select class="select-input" onchange="updateContractTermYears(this.value)">
-            ${[1,2,3,4,5].map(y=>`<option value="${y}" ${w.contractTermYears===y?'selected':''}>${y} year${y>1?'s':''}</option>`).join('')}
-          </select>
+        <div style="display:flex; gap:20px; flex-wrap:wrap;">
+          <div class="field-group" style="max-width:220px; margin-bottom:0;">
+            <label class="field-label">Contract Term (years)</label>
+            <select class="select-input" onchange="updateContractTermYears(this.value)">
+              ${[1,2,3,4,5].map(y=>`<option value="${y}" ${w.contractTermYears===y?'selected':''}>${y} year${y>1?'s':''}</option>`).join('')}
+            </select>
+          </div>
+          ${w.market && w.market!=='US' ? (() => {
+            const m = (state.marketList||[]).find(x=>x.id===w.market);
+            return `
+          <div class="field-group" style="max-width:220px; margin-bottom:0;">
+            <label class="field-label">Show Pricing In</label>
+            <select class="select-input" onchange="setWizard({currencyDisplay:this.value})">
+              <option value="local" ${w.currencyDisplay!=='USD'?'selected':''}>Local Currency${m ? ` (${m.currency_code})` : ''}</option>
+              <option value="USD" ${w.currencyDisplay==='USD'?'selected':''}>USD</option>
+            </select>
+          </div>${w.currencyDisplay==='USD' && m && m.is_placeholder ? `
+          <div class="notional-banner" style="align-self:center;"><span class="ic">${icon('warn')}</span>${m.currency_code}→USD is a placeholder exchange rate, not yet confirmed — treat this USD figure as notional.</div>` : ''}`;
+          })() : ''}
         </div>
       </div>
 
@@ -3707,6 +3809,7 @@ function toggleDeliverable(id){
 function renderWizardStep4(){
   const w = state.wizard;
   const totals = computeOfferTotals();
+  setActiveCurrencyContext(w);
   return `
   <div class="card card-pad">
     <h2 class="section-title" style="margin-bottom:4px;">What should PULSE generate?</h2>
@@ -4257,7 +4360,8 @@ function renderWizard(){
    ============================================================ */
 async function loadRateCardData(){
   try {
-    const res = await workerFetch('/api/admin/rate-cards');
+    const market = state.rateCardMarket || 'US';
+    const res = await workerFetch(`/api/admin/rate-cards?market=${encodeURIComponent(market)}`);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Could not load rate cards.');
     state.rateCardData = data;
@@ -4265,6 +4369,17 @@ async function loadRateCardData(){
     state.rateCardData = { error: e.message || 'Could not load rate cards.' };
   }
   render();
+}
+// v3 (2026-09-18): every existing loadRateCardData() call site (every
+// single-cell edit already reloads after saving) automatically respects
+// whichever market is currently selected, with no changes needed at any
+// of those call sites -- they just call loadRateCardData() with no args,
+// and it reads state.rateCardMarket internally.
+function changeRateCardMarket(market){
+  state.rateCardMarket = market;
+  state.rateCardData = null;
+  render();
+  loadRateCardData();
 }
 // v2i fix: this function used to always coerce `value` with Number(),
 // which is correct for the price/rate_factor/markup_factor fields every
@@ -4275,7 +4390,7 @@ async function loadRateCardData(){
 // numeric are named explicitly; everything else is sent as-is (already
 // a string, or already a real 0/1 number for `required`, which needs
 // no comma-stripping).
-const RATE_CARD_NUMERIC_FIELDS = ['price', 'base_rate', 'rate_factor', 'price_per_unit', 'is_placeholder', 'required', 'included_contractors', 'markup_per_unit'];
+const RATE_CARD_NUMERIC_FIELDS = ['price', 'base_rate', 'rate_factor', 'price_per_unit', 'is_placeholder', 'required', 'included_contractors', 'markup_per_unit', 'rate_to_usd', 'calls_included', 'call_adder_per_unit', 'multiyear_discount_pct_per_year'];
 async function updateRateCardCellLive(table, id, field, value){
   const rateCardId = state.rateCardData.rateCard.id;
   // Dollar-amount cells are comma-formatted text inputs (see
@@ -4289,9 +4404,19 @@ async function updateRateCardCellLive(table, id, field, value){
     ? Number(String(value).replace(/,/g, ''))
     : value;
   try {
+    // v3: market included on every save -- the Worker only actually uses
+    // it for verify_single_contractor_rule/verify_portfolio_rules (the two
+    // "one row, no id column" tables, now one row PER market), but sending
+    // it unconditionally means no other call site needs to know or care
+    // which tables that applies to. Without this, editing e.g. a Canada
+    // contractor-rule cell would silently default to 'US' server-side and
+    // overwrite the wrong row.
+    // markets.id is a real string identity ('US'/'CA'/'UK'), not a numeric
+    // row id like every other table here -- Number(id) would turn it into
+    // NaN and silently fail to match any row server-side.
     const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/cell`, {
       method: 'PATCH', headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify({ table, id: Number(id), field, value: finalValue }),
+      body: JSON.stringify({ table, id: table==='markets' ? id : Number(id), field, value: finalValue, market: state.rateCardMarket || 'US' }),
     });
     const data = await res.json();
     if(!res.ok){ showToast(data.error || 'Could not save that change.', true); return; }
@@ -5153,6 +5278,59 @@ function renderVerifyRateCardLive(bands, termCurve, portfolioTiers, contractorRu
   </div>`;
 }
 
+// v3 (2026-09-18): Markets admin tab -- manages the markets table itself
+// (currency + FX rate), separate from any one service's rate table. US is
+// excluded from the editable list on purpose: its rate_to_usd is the
+// implicit identity 1.0 and setActiveCurrencyContext() never even reads
+// the markets row for a US offer (local IS USD there by definition) --
+// showing it as an editable field would be a dead control that looks like
+// it does something but never affects any real number.
+async function cloneMarketStructure(toMarket){
+  const rateCardId = state.rateCardData.rateCard.id;
+  try {
+    const res = await workerFetch(`/api/admin/rate-cards/${rateCardId}/clone-market`, {
+      method: 'POST', headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ fromMarket: 'US', toMarket }),
+    });
+    const data = await res.json();
+    if(!res.ok){ showToast(data.error || 'Could not clone rate structure.', true); return; }
+    const skippedNote = data.skipped && data.skipped.length ? ` (${data.skipped.length} table(s) already had rows, left as-is)` : '';
+    showToast(`Cloned US structure into ${toMarket}${skippedNote}.`);
+    loadRateCardData();
+  } catch(e){
+    showToast('Could not reach the server.', true);
+  }
+}
+function renderMarketsRateCardLive(){
+  const markets = (state.marketList||[]).filter(m => m.id !== 'US');
+  return `
+  <div class="card">
+    <div class="card-header"><h3 class="card-title">Markets</h3></div>
+    <div class="card-pad">
+      <p class="row-sub" style="margin-bottom:14px;">Rates for Canada/United Kingdom are entered in that market's own real currency (via the market selector next to the tabs above) — not converted from USD. Rate to USD here is only the exchange rate used to compute the optional USD-equivalent a rep can toggle on for an offer ("Show Pricing In: USD") — it never changes what's actually quoted.</p>
+      <table class="data-table rc-table">
+        <thead><tr><th>Market</th><th>Currency Code</th><th>Symbol</th><th class="num">Rate to USD</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          ${markets.map(m => `
+            <tr>
+              <td class="row-title">${escapeHtml(m.name)}</td>
+              <td><input class="rc-cell-input" type="text" value="${escapeHtml(m.currency_code)}" onchange="updateRateCardCellLive('markets','${m.id}','currency_code',this.value)" style="width:70px;"></td>
+              <td><input class="rc-cell-input" type="text" value="${escapeHtml(m.currency_symbol)}" onchange="updateRateCardCellLive('markets','${m.id}','currency_symbol',this.value)" style="width:60px;"></td>
+              <td class="num"><input class="rc-cell-input" type="text" inputmode="decimal" value="${m.rate_to_usd}" oninput="this.value=this.value.replace(/[^0-9.]/g,'')" onchange="updateRateCardCellLive('markets','${m.id}','rate_to_usd',this.value)" style="width:90px; text-align:right;"></td>
+              <td>
+                <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                  <input type="checkbox" ${m.is_placeholder?'':'checked'} onchange="updateRateCardCellLive('markets','${m.id}','is_placeholder',this.checked?0:1)">
+                  <span style="font-size:11px; color:${m.is_placeholder?'var(--amber)':'var(--text-muted)'};">${m.is_placeholder?'Placeholder — needs confirming':'Confirmed'}</span>
+                </label>
+              </td>
+              <td><button class="btn btn-sm btn-ghost" onclick="cloneMarketStructure('${m.id}')" title="Copy every US rate table's row structure into ${escapeHtml(m.name)} (prices zeroed, flagged placeholder) for tables that don't already have rows there">${icon('admin')} Clone US structure</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
 function renderRateCards(){
   if(!state.rateCardData){
     return `<div class="page-topline">PULSE Pricing</div><h1 class="page-title">Rate Cards</h1><div class="empty-state card" style="margin-top:20px;"><div class="ic">⚙</div>Loading…</div>`;
@@ -5184,6 +5362,8 @@ function renderRateCards(){
   // reason why.
   const BULK_INCREASE_TABS = ['verify','comp_eval','qce','due_diligence','ccm','project_management'];
   const showBulkIncrease = BULK_INCREASE_TABS.includes(state.rateCardTab);
+  ensureMarketListLoaded();
+  const rcMarket = state.rateCardMarket || 'US';
   return `
   <div class="page-topline">PULSE Pricing</div>
   <div class="page-header-row">
@@ -5202,11 +5382,16 @@ function renderRateCards(){
            inside comments here, they close the template literal early. -->
       <p class="page-sub">Rates effective ${rateCard.effective_date}. Edits save immediately to the rate card.</p>
     </div>
-    <div style="display:flex; gap:8px;">
+    <div style="display:flex; gap:8px; align-items:center;">
+      ${(state.marketList||[]).length>1 && state.rateCardTab!=='markets' ? `
+      <select class="select-input" style="width:auto;" onchange="changeRateCardMarket(this.value)">
+        ${state.marketList.map(m => `<option value="${m.id}" ${rcMarket===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('')}
+      </select>` : ''}
       <button class="btn btn-sm" onclick="openAuditLog('${state.rateCardTab}')">${icon('auditlog')} Audit Log</button>
       ${showBulkIncrease ? `<button class="btn btn-sm" onclick="openBulkIncrease('${state.rateCardTab}')">${icon('admin')} Increase Rates</button>` : ''}
     </div>
   </div>
+  ${rcMarket!=='US' && state.rateCardTab!=='markets' ? `<div class="notional-banner" style="margin-bottom:10px;"><span class="ic">${icon('warn')}</span>Viewing ${escapeHtml((state.marketList||[]).find(m=>m.id===rcMarket)?.name || rcMarket)} rates. Prices below are in that market's own currency, not USD.</div>` : ''}
 
   ${state.bulkIncrease && state.bulkIncrease.tabId === state.rateCardTab ? renderBulkIncreasePanel() : ''}
   ${state.auditLog && state.auditLog.tabId === state.rateCardTab ? renderAuditLogPanel() : ''}
@@ -5217,8 +5402,10 @@ function renderRateCards(){
     ${unitTieredTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
     ${pmTieredTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
     ${otherTabs.map(s => `<div class="tab-btn ${state.rateCardTab===s.id?'active':''}" onclick="setState({rateCardTab:'${s.id}'})">${s.name}</div>`).join('')}
+    ${(state.marketList||[]).length>1 ? `<div class="tab-btn ${state.rateCardTab==='markets'?'active':''}" onclick="setState({rateCardTab:'markets'})">Markets</div>` : ''}
   </div>
 
+  ${state.rateCardTab==='markets' ? renderMarketsRateCardLive() : `
   ${svc.pricingModel==='verify_tiered' ? renderVerifyRateCardLive(verifySingleBands, verifyTermCurve, verifyPortfolioTiers, verifyContractorRule) : ''}
   ${svc.pricingModel==='per_unit' ? renderRateCardTableLive(svc.id, unitPrices) : ''}
   ${svc.pricingModel==='unit_tiered' ? renderCcmRateCardLive(ccmUnitBands) : ''}
@@ -5255,7 +5442,7 @@ function renderRateCards(){
            item in the Batch B comment (now resolved) and left the
            card showing on VERIFY's tab until now. -->
     </div>
-  </div>` : ''}
+  </div>` : ''}`}
 
   ${state.showAddRegion ? `
   <div class="modal-backdrop" onclick="if(event.target===this) closeAddRegion()">
@@ -6108,6 +6295,15 @@ function renderPlaceholder(title){
    ROOT RENDER
    ============================================================ */
 function render(){
+  // v3: reset to USD-identity at the top of every render pass -- only the
+  // offer-facing render entry points (renderWizardStep3/4,
+  // renderEstimateSheetHTML, renderNarrativeProposalHTML) opt back into a
+  // real market's currency via setActiveCurrencyContext(w). This
+  // guarantees no market context ever leaks into Rate Card admin, the
+  // Offers Roster, or any other non-offer $ display -- they simply never
+  // call it, so they always see raw fmtMoney/fmtMoneyDec output, exactly
+  // as before this feature existed.
+  activeCurrencyContext = { symbol: '$', rateToUsd: 1, mode: 'local' };
   // render() always replaces the ENTIRE #root innerHTML below -- this is
   // the app's core render pattern, used by every view. That means every
   // call destroys and recreates every DOM node, including whatever input
