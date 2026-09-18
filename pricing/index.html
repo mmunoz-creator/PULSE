@@ -774,7 +774,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ao';
+const APP_VERSION = 'v2ap';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -1865,6 +1865,18 @@ function freshWizardState(){
     uploadedSites: [],       // portfolio: reconciled site rows
     singleUnits: [{ id:'u1', equipment_type:'Hydraulic', floors_served:4 }], // single: inline unit list
     selectedServices: ['verify'],
+    // 2026-09-17: Select Services segment/category collapse state, keyed
+    // by segment id / "segId:catId". Absent from the map (the common
+    // case) means "use the default" -- expanded if it already contains a
+    // selected service, collapsed otherwise -- computed live in
+    // renderServiceSegments() rather than baked in here, so a service
+    // picked elsewhere (e.g. a resumed draft) still reveals its section
+    // without the user having to expand anything first. A value present
+    // here means the user explicitly toggled that section and overrides
+    // the default, even if it now contains (or stops containing) a
+    // selected service.
+    expandedSegments: {},
+    expandedServiceCategories: {},
     // VERIFY tiered-calculator inputs — shared contract term, plus one input
     // specific to each offer-type's real calculator (contractors for Single
     // Property, direct calls/yr for Portfolio/Key Account). See the
@@ -2630,23 +2642,62 @@ function renderServiceRow(svc, w){
     </div>
   </div>`;
 }
+// 2026-09-17: Select Services segments/categories are collapsible -- see
+// freshWizardState()'s expandedSegments/expandedServiceCategories comment
+// for the default-expand-if-selected rule. segServices/catServices are
+// recomputed here rather than cached, matching every other render
+// function in this file (cheap array filter, not worth memoizing).
+function segmentSelectedCount(seg, w){
+  return SERVICES.filter(s => s.segment === seg.id && w.selectedServices.includes(s.id)).length;
+}
+function categorySelectedCount(seg, cat, w){
+  return SERVICES.filter(s => s.segment === seg.id && s.category === cat.id && w.selectedServices.includes(s.id)).length;
+}
+function toggleServiceSegmentExpanded(segId){
+  const w = state.wizard;
+  const seg = SERVICE_SEGMENTS.find(s => s.id === segId);
+  const current = w.expandedSegments[segId] !== undefined ? w.expandedSegments[segId] : segmentSelectedCount(seg, w) > 0;
+  w.expandedSegments[segId] = !current;
+  render();
+}
+function toggleServiceCategoryExpanded(segId, catId){
+  const w = state.wizard;
+  const seg = SERVICE_SEGMENTS.find(s => s.id === segId);
+  const cat = seg.categories.find(c => c.id === catId);
+  const key = segId + ':' + catId;
+  const current = w.expandedServiceCategories[key] !== undefined ? w.expandedServiceCategories[key] : categorySelectedCount(seg, cat, w) > 0;
+  w.expandedServiceCategories[key] = !current;
+  render();
+}
 function renderServiceSegments(w){
   const isAdmin = currentUser && currentUser.role === 'admin';
   const segments = SERVICE_SEGMENTS.filter(seg => !seg.adminOnly || isAdmin);
   return segments.map(seg => {
     const segServices = SERVICES.filter(s => s.segment === seg.id);
-    const body = seg.categories.length
-      ? seg.categories.map(cat => `
-        <div class="field-label" style="margin-top:12px;">${cat.name}</div>
-        <div class="service-list">
-          ${segServices.filter(s => s.category === cat.id).map(svc => renderServiceRow(svc, w)).join('')}
-        </div>`).join('')
+    const segSelected = segmentSelectedCount(seg, w);
+    const segExpanded = w.expandedSegments[seg.id] !== undefined ? w.expandedSegments[seg.id] : segSelected > 0;
+    const body = !segExpanded ? '' : (seg.categories.length
+      ? seg.categories.map(cat => {
+          const catServices = segServices.filter(s => s.category === cat.id);
+          const catSelected = categorySelectedCount(seg, cat, w);
+          const catKey = seg.id + ':' + cat.id;
+          const catExpanded = w.expandedServiceCategories[catKey] !== undefined ? w.expandedServiceCategories[catKey] : catSelected > 0;
+          return `
+          <div style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; margin-top:12px;" onclick="toggleServiceCategoryExpanded('${seg.id}','${cat.id}')">
+            <div class="field-label" style="margin:0;">${cat.name}${catSelected ? ` <span class="pricing-model-tag">${catSelected} selected</span>` : ''}</div>
+            <button class="ir-gov-expand-btn" onclick="event.stopPropagation(); toggleServiceCategoryExpanded('${seg.id}','${cat.id}')">${catExpanded?icon('chevUp'):icon('chevDown')}</button>
+          </div>
+          ${catExpanded ? `<div class="service-list">${catServices.map(svc => renderServiceRow(svc, w)).join('')}</div>` : ''}`;
+        }).join('')
       : (segServices.length
           ? `<div class="service-list">${segServices.map(svc => renderServiceRow(svc, w)).join('')}</div>`
-          : `<div class="empty-state" style="padding:24px 20px;"><div class="ic">☷</div>Coming soon.</div>`);
+          : `<div class="empty-state" style="padding:24px 20px;"><div class="ic">☷</div>Coming soon.</div>`));
     return `
     <div style="margin-top:18px;">
-      <h3 class="card-title" style="margin-bottom:2px;">${seg.name}${seg.adminOnly?' <span class="pricing-model-tag">Admin only</span>':''}</h3>
+      <div style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;" onclick="toggleServiceSegmentExpanded('${seg.id}')">
+        <h3 class="card-title" style="margin-bottom:2px;">${seg.name}${seg.adminOnly?' <span class="pricing-model-tag">Admin only</span>':''}${segSelected ? ` <span class="pricing-model-tag">${segSelected} selected</span>` : ''}</h3>
+        <button class="ir-gov-expand-btn" onclick="event.stopPropagation(); toggleServiceSegmentExpanded('${seg.id}')">${segExpanded?icon('chevUp'):icon('chevDown')}</button>
+      </div>
       ${body}
     </div>`;
   }).join('');
