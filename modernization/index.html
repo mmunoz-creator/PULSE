@@ -7321,17 +7321,18 @@ from unitEffectiveValue() onto each checkbox). -->
   <span id="at-dot" style="width:6px;height:6px;border-radius:50%;background:var(--gray-light);flex-shrink:0;transition:background .3s"></span>
   <span id="at-label">Connecting...</span>
 </div>
-<div style="display:flex;gap:6px">
-  <button class="logout-btn" onclick="doLogout()" style="flex:1"><i class="ti ti-logout"></i>Sign out</button>
-  <!-- v68p — Hub SSO exit icon. Hidden by default; only unhidden by
-  setupPortal() when window._ssoActive is true (this session arrived via
-  Hub SSO), so a person who logged into Modernization directly (the interim
-  fallback path) never sees a "back to Hub" link that would be a dead end
-  for them. Deliberately icon-only/inconspicuous per Misty's direct spec:
-  "something inconspicuous to ordinary PULSE mod users." -->
-  <button id="sb-back-to-hub-btn" onclick="window.location.href='/home/'" title="Back to PULSE Hub" style="display:none;width:32px;padding:6px;font-size:13px;color:rgba(255,255,255,.35);background:none;border:1px solid rgba(255,255,255,.1);border-radius:var(--radius-sm);cursor:pointer;align-items:center;justify-content:center"><i class="ti ti-layout-grid"></i></button>
-</div>
-      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68o</div>
+<button class="logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i>Sign out</button>
+  <!-- v68r — Hub SSO exit button, unified with Strategy/Pricing's cross-app
+  pattern (task: "Back to Hub" button uniformity). Previously icon-only and
+  inline beside Sign out; per Misty's direct decision this round, unified
+  toward Strategy's version instead — full Sign-out visual weight (same
+  .logout-btn class, same width/padding/font-size), a visible "Back to
+  Hub" label, and stacked as its own row below Sign out rather than
+  sharing one row. Still hidden by default; only unhidden by setupPortal()
+  when window._ssoActive is true (this session arrived via Hub SSO), so a
+  person who logged into Modernization directly never sees it. -->
+  <button id="sb-back-to-hub-btn" class="logout-btn" onclick="window.location.href='/home/'" title="Back to PULSE Hub" style="display:none;margin-top:6px"><i class="ti ti-layout-grid"></i>Back to Hub</button>
+      <div id="sb-internal-build" style="display:none;font-size:9px;color:rgba(255,255,255,0.2);font-family:'Plus Jakarta Sans',sans-serif;margin-top:8px;letter-spacing:.04em;text-align:center">v68r</div>
     </div>
   </nav>
 
@@ -9506,10 +9507,36 @@ async function completeSsoLogin(roleKey, result){
   role=roleKey;
   client='park'; // only real client today — see design decision, 2026-09-13
   window._userName=result.name;
-  window._lastLoginResult={ok:true,name:result.name,recordId:result.recordId||null,needsPinSetup:false};
+  // v68r — task: Orientation persistence must extend to Hub SSO logins.
+  // The worker's /sso-login response already resolves and returns
+  // tourCompleted (see handleSsoLogin's Access PINs lookup, worker-side —
+  // confirmed already correct and unchanged this round), but this object
+  // was never reading it, so maybeAutoStartTour()'s
+  // `if(loginResult.tourCompleted)return;` guard always saw undefined and
+  // the tour re-launched on every single SSO login regardless of whether
+  // that person had already seen it. Adding tourCompleted here is the
+  // entire fix — maybeAutoStartTour() and _finishLogin()'s call to it
+  // (both already shared between the manual and SSO paths) need no
+  // changes at all.
+  window._lastLoginResult={ok:true,name:result.name,recordId:result.recordId||null,needsPinSetup:false,tourCompleted:result.tourCompleted||null};
   if(roleKey==='consultant'){
     currentConsultantName=result.name;
     sessionStorage.setItem('pulse_consultant',result.name);
+    // v68r — task #10: Hub Admin -> Consultant role picker should default
+    // to the portfolio-wide "Pulse Consultant" credential. The worker
+    // resolves the real Access PINs record and tells us via
+    // result.unrestrictedConsultant (see handleSsoLogin, worker-side) —
+    // this sets the exact same flag/sessionStorage key the manual login's
+    // "Unrestricted" checkbox already sets (see doLogin() above,
+    // window._consultantUnrestricted / 'pulse_consultant_unrestricted'),
+    // so property-scoping (propertyHasConsultant, via consultantSeesProperty)
+    // and refresh-restore (tryRestorePulseSession(), which already reads
+    // this same sessionStorage key) both behave identically regardless of
+    // whether this session arrived via manual login or Hub SSO.
+    window._consultantUnrestricted=!!result.unrestrictedConsultant;
+    if(result.unrestrictedConsultant){
+      try{sessionStorage.setItem('pulse_consultant_unrestricted','1');}catch(e){}
+    }
   }
   window._marliRecordId=result.recordId||null;
   window._marliSessionId=(result.recordId||'sso')+':'+Date.now();
