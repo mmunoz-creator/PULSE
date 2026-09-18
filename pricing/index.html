@@ -774,7 +774,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2an';
+const APP_VERSION = 'v2ao';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2837,6 +2837,52 @@ function computeOfferTotals(){
   return { lineItems, subtotal: r.subtotal, discountPct: r.discountPct, discountAmt: r.discountAmt, total: r.total, activeTier: r.activeTier };
 }
 
+// Live Estimate sidebar box (2026-09-17): two stacked breakdowns, both
+// undiscounted per-service -- Year 1 (matches Subtotal/Estimated Total
+// exactly, the real numbers computeOfferTotals() saves to the offer) and
+// Total Contract (sum of lineItemYearlyAmounts() across every contract
+// year -- the same per-year figures already shown in the Estimate
+// Sheet/Narrative Proposal's Service Year Matrix, so this always agrees
+// with the documents). The volume discount stays what it's always been --
+// a Year 1-only, once-per-offer concept picked on the Services page -- so
+// Total Contract shows its own undiscounted subtotal, then the SAME
+// discount % applied across that bigger base as a separate, clearly-
+// labeled derived figure (discount $ and after-discount total), rather
+// than implying a second, different discount exists. Confirmed with
+// Michael (2026-09-17).
+function renderLiveEstimateBreakdownHTML(totals, w){
+  const n = w.contractTermYears || 1;
+  const contractAmounts = totals.lineItems.map(li => lineItemYearlyAmounts(li, w).reduce((a,x)=>a+x, 0));
+  const contractSubtotal = contractAmounts.reduce((a,x)=>a+x, 0);
+  const contractDiscountAmt = contractSubtotal * (totals.discountPct / 100);
+  const contractAfterDiscount = contractSubtotal - contractDiscountAmt;
+  return `
+  <p style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; color:var(--text-muted); margin:0 0 8px 0;">Year 1</p>
+  <div class="kv-list">
+    ${totals.lineItems.map(li => `
+      <div class="kv-row"><span class="k">${li.svc.name}${li.isMonthly?' <span style="color:var(--text-muted);">/mo</span>':''}${li.isAnnual?' <span style="color:var(--text-muted);">/yr</span>':''}</span><span class="v">${fmtMoney(li.amount)}</span></div>
+    `).join('')}
+  </div>
+  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
+  <div class="kv-row"><span class="k">Subtotal</span><span class="v">${fmtMoney(totals.subtotal)}</span></div>
+  ${totals.discountPct>0 ? `<div class="kv-row" style="color:var(--purple);"><span class="k">Volume discount (${totals.activeTier.awardPct}% award)</span><span class="v">&minus;${fmtMoney(totals.discountAmt)}</span></div>` : ''}
+  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
+  <div class="kv-row" style="font-size:14px;"><span class="k" style="font-weight:650; color:var(--text-primary);">Year 1 Total</span><span class="v" style="font-size:17px;">${fmtMoney(totals.total)}</span></div>
+
+  <div style="border-top:1px solid var(--gridline,var(--border)); margin:18px 0 14px 0;"></div>
+  <p style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; color:var(--text-muted); margin:0 0 8px 0;">Total Contract (${n}yr)</p>
+  <div class="kv-list">
+    ${totals.lineItems.map((li,i) => `
+      <div class="kv-row"><span class="k">${li.svc.name}</span><span class="v">${fmtMoney(contractAmounts[i])}</span></div>
+    `).join('')}
+  </div>
+  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
+  <div class="kv-row"><span class="k">Contract Subtotal</span><span class="v">${fmtMoney(contractSubtotal)}</span></div>
+  ${totals.discountPct>0 ? `<div class="kv-row" style="color:var(--purple);"><span class="k">Volume discount (${totals.activeTier.awardPct}% award)</span><span class="v">&minus;${fmtMoney(contractDiscountAmt)}</span></div>` : ''}
+  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
+  <div class="kv-row" style="font-size:14px;"><span class="k" style="font-weight:650; color:var(--text-primary);">Contract Total${totals.discountPct>0?' (after discount)':''}</span><span class="v" style="font-size:17px;">${fmtMoney(contractAfterDiscount)}</span></div>`;
+}
+
 function renderWizardStep3(){
   const w = state.wizard;
   const units = currentUnits();
@@ -2904,29 +2950,7 @@ function renderWizardStep3(){
       <div class="card">
         <div class="card-header"><h3 class="card-title">Live Estimate</h3></div>
         <div class="card-pad">
-          <div class="kv-list">
-            <!-- Fix (2026-09-17): this used to label an annual line item
-                 "(N yr)" while still showing li.amount -- one year's
-                 figure, not the N-year total, since Subtotal/Estimated
-                 Total below sum per-year amounts too (Year 1 style, same
-                 as the Estimate Sheet/Narrative Proposal's year matrix --
-                 see renderServiceYearMatrixHTML). "/yr" (matching the
-                 existing "/mo" suffix on monthly items) describes what's
-                 actually shown -- a rate, not a multi-year total -- without
-                 changing any numbers or breaking that Subtotal reconciliation.
-                 The real full-contract figure already has its own place:
-                 each service's own detail card below ("Full contract value
-                 (Nyr)"), and the Year-by-Year Breakdown section on the
-                 generated documents. -->
-            ${totals.lineItems.map(li => `
-              <div class="kv-row"><span class="k">${li.svc.name}${li.isMonthly?' <span style="color:var(--text-muted);">/mo</span>':''}${li.isAnnual?' <span style="color:var(--text-muted);">/yr</span>':''}</span><span class="v">${fmtMoney(li.amount)}</span></div>
-            `).join('') || `<div style="color:var(--text-muted); font-size:12px;">${!w.selectedServices.length ? 'Select at least one service.' : (w.pricingError || 'Calculating…')}</div>`}
-          </div>
-          <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
-          <div class="kv-row"><span class="k">Subtotal</span><span class="v">${fmtMoney(totals.subtotal)}</span></div>
-          ${totals.discountPct>0 ? `<div class="kv-row" style="color:var(--purple);"><span class="k">Volume discount (${totals.activeTier.awardPct}% award)</span><span class="v">&minus;${fmtMoney(totals.discountAmt)}</span></div>` : ''}
-          <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
-          <div class="kv-row" style="font-size:14px;"><span class="k" style="font-weight:650; color:var(--text-primary);">Estimated Total</span><span class="v" style="font-size:17px;">${fmtMoney(totals.total)}</span></div>
+          ${totals.lineItems.length ? renderLiveEstimateBreakdownHTML(totals, w) : `<div style="color:var(--text-muted); font-size:12px;">${!w.selectedServices.length ? 'Select at least one service.' : (w.pricingError || 'Calculating…')}</div>`}
         </div>
       </div>
     </div>
