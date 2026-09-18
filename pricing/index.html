@@ -778,7 +778,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2au';
+const APP_VERSION = 'v2av';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2930,37 +2930,53 @@ function computeOfferTotals(){
 // labeled derived figure (discount $ and after-discount total), rather
 // than implying a second, different discount exists. Confirmed with
 // Michael (2026-09-17).
+// Shared by both stacked sections below (and the sole section shown for a
+// 1-year term) -- factored out so the two sections can't drift out of
+// sync with each other's markup.
+function liveEstimateSectionHTML({ label, rows, subtotal, discountPct, discountAwardPct, discountAmt, total, totalLabel }){
+  return `
+  ${label ? `<p style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; color:var(--text-muted); margin:0 0 8px 0;">${label}</p>` : ''}
+  <div class="kv-list">${rows}</div>
+  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
+  <div class="kv-row"><span class="k">Subtotal</span><span class="v">${fmtMoney(subtotal)}</span></div>
+  ${discountPct>0 ? `<div class="kv-row" style="color:var(--purple);"><span class="k">Volume discount (${discountAwardPct}% award)</span><span class="v">&minus;${fmtMoney(discountAmt)}</span></div>` : ''}
+  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
+  <div class="kv-row" style="font-size:14px;"><span class="k" style="font-weight:650; color:var(--text-primary);">${totalLabel}</span><span class="v" style="font-size:17px;">${fmtMoney(total)}</span></div>`;
+}
 function renderLiveEstimateBreakdownHTML(totals, w){
   const n = w.contractTermYears || 1;
+  const year1Rows = totals.lineItems.map(li => `
+    <div class="kv-row"><span class="k">${li.svc.name}${li.isMonthly?' <span style="color:var(--text-muted);">/mo</span>':''}${li.isAnnual?' <span style="color:var(--text-muted);">/yr</span>':''}</span><span class="v">${fmtMoney(li.amount)}</span></div>
+  `).join('');
+  // 1yr term: Year 1 and Total Contract are the exact same numbers (see
+  // lineItemYearlyAmounts -- every branch collapses to a single-element
+  // array equal to li.amount when n===1) -- show one section, not two
+  // identical-looking ones with different labels. Michael flagged this
+  // (2026-09-18) after the two-section box made a 1yr offer look like it
+  // had two different totals worth comparing when there's only one number.
+  if(n === 1){
+    return liveEstimateSectionHTML({
+      label: null, rows: year1Rows, subtotal: totals.subtotal,
+      discountPct: totals.discountPct, discountAwardPct: totals.activeTier?.awardPct, discountAmt: totals.discountAmt,
+      total: totals.total, totalLabel: 'Estimated Total',
+    });
+  }
   const contractAmounts = totals.lineItems.map(li => lineItemYearlyAmounts(li, w).reduce((a,x)=>a+x, 0));
   const contractSubtotal = contractAmounts.reduce((a,x)=>a+x, 0);
   const contractDiscountAmt = contractSubtotal * (totals.discountPct / 100);
   const contractAfterDiscount = contractSubtotal - contractDiscountAmt;
-  return `
-  <p style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; color:var(--text-muted); margin:0 0 8px 0;">Year 1</p>
-  <div class="kv-list">
-    ${totals.lineItems.map(li => `
-      <div class="kv-row"><span class="k">${li.svc.name}${li.isMonthly?' <span style="color:var(--text-muted);">/mo</span>':''}${li.isAnnual?' <span style="color:var(--text-muted);">/yr</span>':''}</span><span class="v">${fmtMoney(li.amount)}</span></div>
-    `).join('')}
-  </div>
-  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
-  <div class="kv-row"><span class="k">Subtotal</span><span class="v">${fmtMoney(totals.subtotal)}</span></div>
-  ${totals.discountPct>0 ? `<div class="kv-row" style="color:var(--purple);"><span class="k">Volume discount (${totals.activeTier.awardPct}% award)</span><span class="v">&minus;${fmtMoney(totals.discountAmt)}</span></div>` : ''}
-  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
-  <div class="kv-row" style="font-size:14px;"><span class="k" style="font-weight:650; color:var(--text-primary);">Year 1 Total</span><span class="v" style="font-size:17px;">${fmtMoney(totals.total)}</span></div>
-
-  <div style="border-top:1px solid var(--gridline,var(--border)); margin:18px 0 14px 0;"></div>
-  <p style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; color:var(--text-muted); margin:0 0 8px 0;">Total Contract (${n}yr)</p>
-  <div class="kv-list">
-    ${totals.lineItems.map((li,i) => `
-      <div class="kv-row"><span class="k">${li.svc.name}</span><span class="v">${fmtMoney(contractAmounts[i])}</span></div>
-    `).join('')}
-  </div>
-  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
-  <div class="kv-row"><span class="k">Contract Subtotal</span><span class="v">${fmtMoney(contractSubtotal)}</span></div>
-  ${totals.discountPct>0 ? `<div class="kv-row" style="color:var(--purple);"><span class="k">Volume discount (${totals.activeTier.awardPct}% award)</span><span class="v">&minus;${fmtMoney(contractDiscountAmt)}</span></div>` : ''}
-  <div style="border-top:1px solid var(--gridline,var(--border)); margin:12px 0;"></div>
-  <div class="kv-row" style="font-size:14px;"><span class="k" style="font-weight:650; color:var(--text-primary);">Contract Total${totals.discountPct>0?' (after discount)':''}</span><span class="v" style="font-size:17px;">${fmtMoney(contractAfterDiscount)}</span></div>`;
+  const contractRows = totals.lineItems.map((li,i) => `
+    <div class="kv-row"><span class="k">${li.svc.name}</span><span class="v">${fmtMoney(contractAmounts[i])}</span></div>
+  `).join('');
+  return liveEstimateSectionHTML({
+    label: 'Year 1', rows: year1Rows, subtotal: totals.subtotal,
+    discountPct: totals.discountPct, discountAwardPct: totals.activeTier?.awardPct, discountAmt: totals.discountAmt,
+    total: totals.total, totalLabel: 'Year 1 Total',
+  }) + `<div style="border-top:1px solid var(--gridline,var(--border)); margin:18px 0 14px 0;"></div>` + liveEstimateSectionHTML({
+    label: `Total Contract (${n}yr)`, rows: contractRows, subtotal: contractSubtotal,
+    discountPct: totals.discountPct, discountAwardPct: totals.activeTier?.awardPct, discountAmt: contractDiscountAmt,
+    total: contractAfterDiscount, totalLabel: `Contract Total${totals.discountPct>0?' (after discount)':''}`,
+  });
 }
 
 function renderWizardStep3(){
