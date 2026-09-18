@@ -774,7 +774,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v2ap';
+const APP_VERSION = 'v2aq';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -2488,6 +2488,20 @@ function handlePortfolioFile(fileInput){
   };
   reader.readAsArrayBuffer(file);
 }
+// 2026-09-17: fixes a row missing equipment_type/floors_served in place,
+// same updateSingleUnit(id, field, val) pattern already proven for the
+// single-property unit table -- without this, the only fix was editing
+// the source file and re-uploading, which wipes uploadedSites entirely
+// (and with it, any AHJ/region assignments already confirmed in Step 3
+// for OTHER properties). A silently-defaulted row is a real pricing risk,
+// not just a missing convenience: unitPriceFor() on the Worker prices a
+// missing equipment_type as Hydraulic (EQUIP_TYPES[0]) and a missing/zero
+// floors_served at the lowest stops bucket -- both silent, both wrong for
+// a rep who never meant that unit to price that way.
+function updateUploadedSiteField(id, field, val){
+  const sites = state.wizard.uploadedSites.map(s => s.id===id ? {...s, [field]: field==='floors_served'?Number(val):val} : s);
+  setWizard({ uploadedSites: sites });
+}
 function renderWizardStep2Portfolio(){
   const w = state.wizard;
   const missingEquip = w.uploadedSites.filter(s=>!s.equipment_type || !s.floors_served).length;
@@ -2521,15 +2535,20 @@ function renderWizardStep2Portfolio(){
               <td class="row-title">${escapeHtml(s.property)}<div class="row-sub">${escapeHtml(s.address)}</div></td>
               <td>${escapeHtml(s.unit_id)}</td>
               <td>${escapeHtml(s.city)}, ${escapeHtml(s.state)}</td>
-              <td>${s.equipment_type || '<span style="color:var(--red);">Missing</span>'}</td>
-              <td class="num">${s.floors_served || '<span style="color:var(--red);">Missing</span>'}</td>
+              <td>
+                <select class="select-input" style="${!s.equipment_type?'border-color:var(--red);':''}" onchange="updateUploadedSiteField('${s.id}','equipment_type',this.value)">
+                  <option value="" ${!s.equipment_type?'selected':''} disabled>Select…</option>
+                  ${EQUIP_TYPES.map(e=>`<option value="${e}" ${s.equipment_type===e?'selected':''}>${e}</option>`).join('')}
+                </select>
+              </td>
+              <td class="num"><input class="text-input" style="text-align:right; width:70px; ${!s.floors_served?'border-color:var(--red);':''}" type="text" inputmode="numeric" placeholder="Missing" value="${s.floors_served||''}" onchange="updateUploadedSiteField('${s.id}','floors_served',this.value.replace(/[^0-9]/g,''))"></td>
             </tr>`;
           }).join('')}
         </tbody>
       </table>
     </div>
   </div>
-  ${missingEquip>0 ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${missingEquip} unit(s) missing equipment/stops data — fix in the source file and re-upload, or pricing will use a default cell for them.</div>` : ''}
+  ${missingEquip>0 ? `<div class="notional-banner" style="margin-top:10px;"><span class="ic">${icon('warn')}</span>${missingEquip} unit(s) missing equipment/stops data (highlighted below) — fix directly in the table, or pricing will silently default that unit to Hydraulic / the lowest stops bucket.</div>` : ''}
   ` : ''}
 
   <div style="display:flex; justify-content:space-between; margin-top:18px;">
