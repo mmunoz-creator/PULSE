@@ -778,7 +778,7 @@ table { border-collapse: collapse; width: 100%; }
 // version"). Shown in the sidebar footer, same pattern as PULSE Mod, so
 // Misty can confirm at a glance which build is actually live after a
 // deploy rather than assuming a push took effect.
-const APP_VERSION = 'v3a';
+const APP_VERSION = 'v3b';
 
 const WORKER_URL = 'https://pulse-pricing-api.misty-munoz.workers.dev';
 let sessionToken = null;
@@ -5301,6 +5301,25 @@ async function cloneMarketStructure(toMarket){
     showToast('Could not reach the server.', true);
   }
 }
+// w10 (2026-09-18): Rate to USD is locked (read-only) by default and only
+// becomes editable after clicking "Edit" -- Michael's explicit request,
+// to prevent accidental FX rate changes (this number silently reshapes
+// every USD-equivalent figure shown on every Canada/UK offer, so it
+// shouldn't be as casually editable as a currency symbol typo fix).
+// state.editingMarketRate holds at most one market id at a time.
+function startEditMarketRate(marketId){
+  state.editingMarketRate = marketId;
+  render();
+}
+function cancelEditMarketRate(){
+  state.editingMarketRate = null;
+  render();
+}
+async function saveMarketRate(marketId, inputEl){
+  const value = inputEl.value;
+  state.editingMarketRate = null;
+  await updateRateCardCellLive('markets', marketId, 'rate_to_usd', value);
+}
 function renderMarketsRateCardLive(){
   const markets = (state.marketList||[]).filter(m => m.id !== 'US');
   return `
@@ -5311,12 +5330,28 @@ function renderMarketsRateCardLive(){
       <table class="data-table rc-table">
         <thead><tr><th>Market</th><th>Currency Code</th><th>Symbol</th><th class="num">Rate to USD</th><th>Status</th><th></th></tr></thead>
         <tbody>
-          ${markets.map(m => `
+          ${markets.map(m => {
+            const editing = state.editingMarketRate === m.id;
+            return `
             <tr>
               <td class="row-title">${escapeHtml(m.name)}</td>
               <td><input class="rc-cell-input" type="text" value="${escapeHtml(m.currency_code)}" onchange="updateRateCardCellLive('markets','${m.id}','currency_code',this.value)" style="width:70px;"></td>
               <td><input class="rc-cell-input" type="text" value="${escapeHtml(m.currency_symbol)}" onchange="updateRateCardCellLive('markets','${m.id}','currency_symbol',this.value)" style="width:60px;"></td>
-              <td class="num"><input class="rc-cell-input" type="text" inputmode="decimal" value="${m.rate_to_usd}" oninput="this.value=this.value.replace(/[^0-9.]/g,'')" onchange="updateRateCardCellLive('markets','${m.id}','rate_to_usd',this.value)" style="width:90px; text-align:right;"></td>
+              <td class="num">
+                ${editing ? `
+                <div style="display:flex; align-items:center; gap:6px; justify-content:flex-end;">
+                  <input id="market-rate-input-${m.id}" class="rc-cell-input" type="text" inputmode="decimal" value="${m.rate_to_usd}" oninput="this.value=this.value.replace(/[^0-9.]/g,'')" style="width:90px; text-align:right;">
+                  <button class="btn btn-sm btn-primary" onclick="saveMarketRate('${m.id}', document.getElementById('market-rate-input-${m.id}'))">Save</button>
+                  <button class="btn btn-sm btn-ghost" onclick="cancelEditMarketRate()">Cancel</button>
+                </div>` : `
+                <div style="display:flex; align-items:center; gap:10px; justify-content:flex-end;">
+                  <div>
+                    <div style="font-weight:650;">${m.rate_to_usd}</div>
+                    <div style="font-size:10px; color:var(--text-muted); white-space:nowrap;">${m.rate_to_usd_updated_at ? `Confirmed ${escapeHtml(m.rate_to_usd_updated_at)}` : 'Never confirmed'}</div>
+                  </div>
+                  <button class="btn btn-sm btn-ghost" onclick="startEditMarketRate('${m.id}')">${icon('admin')} Edit</button>
+                </div>`}
+              </td>
               <td>
                 <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
                   <input type="checkbox" ${m.is_placeholder?'':'checked'} onchange="updateRateCardCellLive('markets','${m.id}','is_placeholder',this.checked?0:1)">
@@ -5324,7 +5359,8 @@ function renderMarketsRateCardLive(){
                 </label>
               </td>
               <td><button class="btn btn-sm btn-ghost" onclick="cloneMarketStructure('${m.id}')" title="Copy every US rate table's row structure into ${escapeHtml(m.name)} (prices zeroed, flagged placeholder) for tables that don't already have rows there">${icon('admin')} Clone US structure</button></td>
-            </tr>`).join('')}
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>
